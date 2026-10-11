@@ -6,5 +6,6 @@ them.
 """
 
 from . import cogs, gdal, geotiff, netcdf, safe, zarr
+from .cogs import CogFile
 
-__all__ = ["cogs", "gdal", "geotiff", "netcdf", "safe", "zarr"]
+__all__ = ["CogFile", "cogs", "gdal", "geotiff", "netcdf", "safe", "zarr"]

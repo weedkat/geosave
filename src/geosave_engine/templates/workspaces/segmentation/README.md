@@ -30,24 +30,26 @@ requirements, and model-specific preparation stay with the model document.
 
 ## Prepare training items
 
-`prepare_dense_data` writes one folder per sample, holding one raster per layer,
-and a `manifest.parquet` listing each sample's rasters as STAC items, one row
-per raster, grouped by `geosave:stack`. Run it once per
-split, so training and validation each have their own manifest:
+`spec.prepare` is not settled yet and raises `NotImplementedError`. Until it
+is, write each split's model inputs and labels as COGs and catalogue them in one
+item table per split:
 
-```bash
-uv run geosave workflow prepare-dense-data --labels labels/train --output data/train --spec configs/model_spec.yaml
-uv run geosave workflow prepare-dense-data --labels labels/val --output data/val --spec configs/model_spec.yaml
+```python
+import geosave_engine as gs
+
+files = sample.gs.to_cog({"image": "data/train/s0/image/image_{time:%Y%m%d}.tif",
+                          "label": "data/train/s0/label.tif"})
+gs.stac.create_items(files, id="s0").gs.to_geoparquet("data/train.parquet")
 ```
 
-Samples stay raw on disk. `supervised.DataModule` reads them through
+`supervised.DataModule` reads the prepared item tables through
 `configs/model_spec.yaml`:
 
 | Section | What it does | Where it runs |
 | --- | --- | --- |
-| `preprocessing` | nodata, unpacking, band order | per sample, reading from disk |
-| `tiles` | cuts every sample into model-sized tiles | reading from disk |
-| `inputs` | names what the model chain takes | per tile |
+| `preprocessing` | nodata, unpacking, band order | once, before the catalog is written |
+| `chips` | cuts every sample into model-sized chips | from the catalog, no file opened |
+| `inputs` | names what the model chain takes | per chip |
 | `transforms` | tensor transforms such as normalization | on the device, every split |
 
 `data.init_args.augmentations` in `configs/train.yaml` run on the device while
@@ -59,7 +61,7 @@ code 255 ignored. Validation merges tile predictions back onto each sample and
 scores every sample whole.
 
 To change the encoder, edit `model.init_args.model_chain.encoder` in
-`configs/train.yaml`. Enable the matching row-based `context` recipe in the spec
+`configs/train.yaml`. Enable the matching `context` recipe in the spec
 for Prithvi TL or Clay. The default DINOv3 starter leaves context disabled.
 Clay wavelengths and GSD are explicit encoder constructor settings.
 
@@ -69,28 +71,37 @@ uv run python main.py fit --config configs/train.yaml
 
 ## Release and inference
 
-Restore the selected checkpoint, then publish its native inference graph with
-the model-owned processing contract:
+Publish the selected checkpoint's native inference graph, the processing
+contract, and this workspace with the run's checkpoints:
 
-```python
-from geosave_engine.ml.segmentation import supervised
-from geosave_engine.model.release import publish_model
-
-task = supervised.Module.load_from_checkpoint("checkpoints/best.ckpt")
-commit = publish_model(
-    task.model,
-    "your-account/your-model",
-    spec="configs/model_spec.yaml",
-)
+```bash
+python scripts/publish.py your-account/your-model \
+    artifacts/my_model/version_0/checkpoints/<best>.ckpt
 ```
 
-Deployment loads the two release parts independently at the returned commit:
+The repository root holds `config.json`, `model.safetensors`, and
+`model_spec.yaml`; `workspace/` holds the code, configs, and checkpoints for
+resuming or fine-tuning. Only the files `scripts/publish.py` allows are
+uploaded, so `.env`, data, and logs stay local.
+
+Deployment loads the model and its spec at the printed commit:
 
 ```python
-from geosave_engine.model.release import load_model, load_spec
+import geosave_engine.model.release  # registers GeoSaveModel with AutoModel
+from transformers import AutoModel
+from geosave_engine.model.spec import ModelSpec
 
-spec = load_spec("your-account/your-model", revision=commit)
-model = load_model("your-account/your-model", revision=commit).eval()
+model = AutoModel.from_pretrained("your-account/your-model", revision=commit).eval()
+spec = ModelSpec.load(f"hf://your-account/your-model@{commit}/model_spec.yaml")
+encoder = model.chain.encoder  # plain nn.Module for downstream tasks
+```
+
+Resume or fine-tune from the released workspace:
+
+```bash
+hf download your-account/your-model --include "workspace/*" --revision <commit> --local-dir release
+cd release/workspace
+python main.py fit --config configs/train.yaml --ckpt_path artifacts/my_model/version_0/checkpoints/last.ckpt
 ```
 
 The spec owns raster requirements, acquisition, and preprocessing. The native
@@ -99,29 +110,23 @@ inference code owns tiling, iterative execution, aggregation, and output
 interpretation when those behaviors are needed.
 
 Library supervised batches contain `(model_inputs, target, ids, valid)`.
-The reference ID identifies the prepared scene/frame tile; validation/test
-assemble logits and score the original parent labels. Validity excludes input
-nodata before zero filling. Augmentation stays in the training DataModule.
-
-For development prediction, build a method-owned PyTorch Dataset that reads
-`cuts.select_pixels(parent, reference.loc[id])` and prepares tensors with
-`geosave_engine.ml.inputs.model_inputs(spec, tile.gs.rasters, row)`. Ordinary
-asset rows and tiled rows use the same raster reader; tiled rows add a pixel
-window. The shared `ml.datasets.TileDataset` has been removed.
+`ids` are the chips' positions in the dataset's `windows` table;
+validation/test assemble logits and score each frame's original labels.
+Validity excludes input nodata before zero filling. Augmentation stays in the
+training DataModule.
 
 Cut windows from the item table with `geosave_engine.geodata.cuts`:
-`cuts.stacks(items)` lists each saved sample, and `spec.frames.cut(...)` and
-`spec.chips.cut(...)` split it in time and space without reading pixels. Each
-ID identifies a parent, its chip number, window, exact grid, and per-raster
-timestamps. Supervised references retain annotations and `stack` for
-provenance. The sample's own paths do not store the prepared pixels: use
-`cuts.select_pixels(parents[row.parent], row)`.
-Register saved prepared parents separately to obtain readable `assets`.
+`cuts.stacks(items, on="label")` lists one window per label, and
+`spec.frames.cut(...)` and `spec.chips.cut(...)` split it in time and space
+without reading pixels. A row reads its own pixels with `row.gs.to_stack()`;
+`geosave_engine.ml.inputs.model_inputs(spec, rasters)`
+turns them into tensors.
 
-Enable the encoder's row-based `context` recipe in `model_spec.yaml` when its
-metadata is available. The template leaves context disabled for its default
-DINOv3 encoder. Context encoding is shared by training and inference; cached
-values are an optional explicit argument, not a different inference recipe.
+Enable the encoder's `context` recipe in `model_spec.yaml` when the rasters
+carry time labels and a georeferenced grid. The template leaves context
+disabled for its default DINOv3 encoder. Context encoding is shared by
+training and inference; cached values are an optional explicit argument, not a
+different inference recipe.
 
 Native `tiler.Merger` accepts the row's integer tile ID and numpy prediction.
 Convert tensors with `detach().cpu().numpy()` in ML. Keep tilers and halo widths

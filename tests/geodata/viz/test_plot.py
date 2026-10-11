@@ -4,9 +4,8 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-import geosave_engine.geodata.attrs as attrs
 from geosave_engine.geodata.core.anchor import GeoAnchor
-from geosave_engine.geodata.core.raster import raster as build_raster
+from geosave_engine.geodata.core.constructors import raster as build_raster
 from geosave_engine.geodata.core.stack import stack as build_stack
 from geosave_engine.geodata.utils.geolocator import Place
 
@@ -36,11 +35,7 @@ def geobox() -> GeoBox:
 def optical() -> xr.Dataset:
     values = np.arange(16, dtype="uint16").reshape(4, 4) * 100
     raster = build_raster({"B04": (("y", "x"), values)}, geobox())
-    return raster.gs.rebase(
-        attrs.Packing(scale_factor=1e-4, add_offset=0.0),
-        attrs.Nodata(fill_value=0),
-        target="B04",
-    )
+    return raster.gs.write_packing(1e-4, target="B04").gs.write_nodata(0, target="B04")
 
 
 @pytest.fixture
@@ -50,9 +45,9 @@ def labels() -> xr.Dataset:
         [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
     )
     raster = build_raster({"landcover": (("y", "x"), codes)}, geobox())
-    return raster.gs.rebase(
-        attrs.Legend(class_map={0: "water", 1: "trees", 8: "snow"}),
-        attrs.Legend(color_map={0: "#419bdf", 1: "#397d49", 8: "#b39fe1"}),
+    return raster.gs.write_legend(
+        {0: "water", 1: "trees", 8: "snow"},
+        {0: "#419bdf", 1: "#397d49", 8: "#b39fe1"},
         target="landcover",
     )
 
@@ -68,9 +63,7 @@ def rgb() -> xr.Dataset:
         },
         geobox(),
     )
-    for name, colour in (("B04", "red"), ("B03", "green"), ("B02", "blue")):
-        raster = raster.gs.rebase(attrs.GDALVariable(colorinterp=colour), target=name)
-    return raster
+    return raster.gs.write_rgb("B04", "B03", "B02")
 
 
 def drawn_values(element) -> np.ndarray:
@@ -89,9 +82,7 @@ class TestPacking:
         assert not np.isnan(drawn_values(optical.gs.plot("B04"))).any()
 
     def test_identity_packing_is_left_alone(self, labels: xr.Dataset) -> None:
-        packed = labels.gs.rebase(
-            attrs.Packing(scale_factor=1.0, add_offset=0.0), target="landcover"
-        )
+        packed = labels.gs.write_packing(1.0, 0.0, target="landcover")
         assert packed.gs.plot("landcover") is not None
 
 
@@ -114,11 +105,9 @@ class TestClassMap:
         ]
 
     def test_accepts_an_rgb_tuple_palette(self, labels: xr.Dataset) -> None:
-        recoloured = labels.gs.rebase(
-            attrs.Legend(class_map={0: "water", 1: "trees", 8: "snow"}),
-            attrs.Legend(
-                color_map={0: (65, 155, 223), 1: (57, 125, 73), 8: (179, 159, 225)}
-            ),
+        recoloured = labels.gs.write_legend(
+            {0: "water", 1: "trees", 8: "snow"},
+            {0: (65, 155, 223), 1: (57, 125, 73), 8: (179, 159, 225)},
             target="landcover",
         )
         style = (
@@ -133,10 +122,8 @@ class TestClassMap:
             [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
         )
         raster = build_raster({"cover": (("y", "x"), codes)}, geobox(), nodata=0)
-        raster = raster.gs.rebase(
-            attrs.Legend(class_map={1: "trees", 8: "snow"}),
-            attrs.Legend(color_map={1: "#397d49", 8: "#b39fe1"}),
-            target="cover",
+        raster = raster.gs.write_legend(
+            {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target="cover"
         )
         drawn = drawn_values(raster.gs.plot("cover"))
         assert np.isnan(drawn).any()
@@ -146,10 +133,8 @@ class TestClassMap:
         raster = build_raster(
             {"cover": (("y", "x"), np.zeros((4, 4), dtype="uint8"))}, geobox()
         )
-        raster = raster.gs.rebase(
-            attrs.Legend(class_map={0: "water", 1: "trees"}),
-            attrs.Legend(color_map={0: "#419bdf"}),
-            target="cover",
+        raster = raster.gs.write_legend(
+            {0: "water", 1: "trees"}, {0: "#419bdf"}, target="cover"
         )
         with pytest.raises(ValueError, match="carry no colour"):
             raster.gs.plot("cover")
@@ -213,3 +198,45 @@ class TestOutput:
             "labels",
             "optical",
         }
+
+
+class TestExplore:
+    def test_draws_over_web_map_tiles_with_bokeh(self, labels: xr.Dataset) -> None:
+        pane = labels.gs.explore()
+
+        assert pane.backend == "bokeh"
+        assert [type(layer).__name__ for layer in pane.object] == ["Tiles", "Image"]
+
+    def test_draws_a_copy_on_the_web_map_grid(self, labels: xr.Dataset) -> None:
+        image = labels.gs.explore().object.get(1)
+
+        assert labels.gs.crs_name == "EPSG:32749"
+        assert image.range("x")[0] > 1e7  # Web Mercator metres, not UTM
+
+    def test_names_classes_on_the_colorbar(self, labels: xr.Dataset) -> None:
+        image = labels.gs.explore().object.get(1)
+
+        ticks = hv.Store.lookup_options("bokeh", image, "plot").kwargs["cticks"]
+        assert [name for _, name in ticks] == ["water", "trees", "snow"]
+
+    def test_draws_a_band(self, labels: xr.Dataset) -> None:
+        assert labels["landcover"].gs.explore().backend == "bokeh"
+
+    def test_draws_the_one_date_of_a_dated_raster(self, rgb: xr.Dataset) -> None:
+        dated = rgb.expand_dims(time=[np.datetime64("2024-03-05")])
+
+        assert type(dated.gs.explore().object.get(1)).__name__ == "RGB"
+
+    def test_refuses_several_dates(self, rgb: xr.Dataset) -> None:
+        dated = rgb.expand_dims(
+            time=[np.datetime64("2024-03-05"), np.datetime64("2024-03-06")]
+        )
+
+        with pytest.raises(ValueError, match="isel"):
+            dated.gs.explore()
+
+    def test_leaves_static_plots_on_matplotlib(self, labels: xr.Dataset) -> None:
+        labels.gs.explore()
+
+        assert hv.Store.current_backend == "matplotlib"
+        assert panel_axes(labels.gs.plot())

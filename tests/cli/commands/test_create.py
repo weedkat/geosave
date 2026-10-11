@@ -8,7 +8,9 @@ from typer.testing import CliRunner
 from geosave_engine.cli.main import app
 
 
-@pytest.mark.parametrize("workspace", ["segmentation", "custom_lightning", "blank"])
+@pytest.mark.parametrize(
+    "workspace", ["segmentation", "regression", "custom_lightning", "blank"]
+)
 def test_create_selects_workspace(tmp_path, monkeypatch, workspace):
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(

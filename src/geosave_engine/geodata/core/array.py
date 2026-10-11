@@ -8,12 +8,10 @@ import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import pandas as pd
 import xarray as xr
-from odc.geo.geobox import GeoBox
 
 import geosave_engine.geodata.attrs as attrs
-from geosave_engine.geodata.transform import nodata
 
-from .base import GeoRasterAccessor
+from .base import GeoRasterAccessor, as_tensor
 from geosave_engine.geodata.utils.statistics import statistics
 from geosave_engine.geodata.conventions import (
     BAND_DIMENSION,
@@ -21,59 +19,23 @@ from geosave_engine.geodata.conventions import (
 )
 
 if TYPE_CHECKING:
+    from geosave_engine.geodata.io.raster.cogs import CogFile
+    from geosave_engine.geodata.utils.color import Palette
+    import panel as pn
+    import torch
     from collections.abc import Mapping, Sequence
     from os import PathLike
-    from pathlib import Path
+    from upath import UPath
 
     import holoviews as hv
     from numpy.typing import DTypeLike
 
     from geosave_engine.geodata.io.storage import StorageOptions
     from geosave_engine.geodata.io.raster.geotiff import (
-        COGWriteOptions,
         GTiffWriteOptions,
     )
 
     from geosave_engine.geodata import DataArray, Dataset, GeoDataFrame
-
-
-def array(
-    pixels: Any,
-    geobox: GeoBox | None = None,
-    /,
-    *,
-    dims: Sequence[str],
-    coords: Mapping[str, Any] | None = None,
-    nodata: float | int | None = None,
-) -> DataArray:
-    """Build an array with explicit dimensions and optional grid placement.
-
-    Args:
-        pixels: NumPy or lazy array data.
-        geobox: Grid placing `y` and `x` for any CRS. None leaves pixels unreferenced.
-        dims: All dimensions in pixel-axis order, ending with `y` and `x`.
-        coords: Native xarray coordinates, independent of dimension order.
-            Omit a coordinate to leave its dimension unlabelled.
-        nodata: Stored value marking absent pixels. None writes no fill value.
-
-    Returns:
-        Unnamed native DataArray preserving pixel dtype and laziness.
-
-    Raises:
-        ValueError: Dimensions, coordinates, or grid shape are incompatible.
-
-    Examples:
-        >>> band = array(
-        ...     logits, geobox, dims=("class", "y", "x"),
-        ...     coords={"class": ["water", "urban", "crop"]},
-        ... )
-        >>> band.dims
-        ('class', 'y', 'x')
-    """
-    from .raster import raster
-
-    built = raster({"pixels": (dims, pixels)}, geobox, coords=coords, nodata=nodata)
-    return cast("DataArray", built["pixels"].rename(None))
 
 
 @xr.register_dataarray_accessor("gs")
@@ -120,13 +82,28 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
     @property
     def nodata(self) -> float | int | None:
         """Read the stored value standing for nodata, or None where none is set."""
-        return nodata.fill_value(self._data)
+        found = attrs.parse(self._data, attrs.Nodata)
+        return None if found is None else found.value
+
+    @property
+    def legend(self) -> attrs.Legend | None:
+        """Read what this band's values mean, or None where they are no classes."""
+        return attrs.parse(self._data, attrs.Legend)
+
+    @property
+    def packing(self) -> attrs.Packing | None:
+        """Read how this band's stored values decode, or None where they are physical."""
+        return attrs.parse(self._data, attrs.Packing)
+
+    @property
+    def spectral(self) -> attrs.Spectral | None:
+        """Read where in the spectrum this band was measured, or None."""
+        return attrs.parse(self._data, attrs.Spectral)
 
     def write_nodata(self, value: float | int | None) -> DataArray:
         """Write the stored value standing for this band's nodata pixels.
 
-        `Nodata` mirrors the value across both `_FillValue` and odc's own
-        `nodata`, so no reader can find the two naming different pixels.
+        It is written as CF's `_FillValue`, which odc and rioxarray read too.
 
         Args:
             value: Stored value marking nodata, of this band's own type. None
@@ -142,9 +119,93 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
             >>> ds["red"].gs.write_nodata(0).attrs["_FillValue"]
             0
         """
-        if value is not None:
-            nodata.check_fill_fits(value, self._data.dtype, str(self._data.name))
-        return attrs.rebase(self._data, attrs.Nodata(fill_value=value))
+        stated = None if value is None else attrs.Nodata(value=value)
+        return attrs.stamp(self._data, attrs.Nodata, stated)
+
+    def write_legend(
+        self, class_map: Mapping[int, str] | None, color_map: Palette | None = None
+    ) -> DataArray:
+        """Write the class each of this band's stored values stands for.
+
+        Args:
+            class_map: Stored value mapped to class name. None removes the
+                legend.
+            color_map: Stored value mapped to hex or RGB colour. None writes
+                names only.
+
+        Returns:
+            New DataArray carrying the legend.
+
+        Raises:
+            ValueError: `color_map` colours a value `class_map` does not name,
+                or a value does not fit this band's dtype.
+
+        Examples:
+            >>> ds["label"].gs.write_legend({0: "water", 1: "trees"})
+        """
+        stated = (
+            None
+            if class_map is None
+            else attrs.Legend(classes=class_map, color_map=color_map)
+        )
+        return attrs.stamp(self._data, attrs.Legend, stated)
+
+    def write_packing(
+        self, scale_factor: float | None, add_offset: float = 0.0
+    ) -> DataArray:
+        """Write how this band's stored values decode to physical values.
+
+        Args:
+            scale_factor: Multiplier applied to each stored value. None
+                removes the packing.
+            add_offset: Value added after scaling.
+
+        Returns:
+            New DataArray carrying the packing; its pixels are unchanged.
+
+        Examples:
+            >>> ds["B04"].gs.write_packing(1e-4, -0.1).gs.packing.scale_factor
+            0.0001
+        """
+        stated = (
+            None
+            if scale_factor is None
+            else attrs.Packing(scale_factor=scale_factor, add_offset=add_offset)
+        )
+        return attrs.stamp(self._data, attrs.Packing, stated)
+
+    def write_spectral(
+        self,
+        common_name: str | None,
+        *,
+        center_wavelength: float | None = None,
+        full_width_half_max: float | None = None,
+    ) -> DataArray:
+        """Write where in the spectrum this band was measured.
+
+        Args:
+            common_name: Band name shared across sensors, e.g. `"red"`. None
+                with no wavelength removes the spectral description.
+            center_wavelength: Centre of the band, in micrometres.
+            full_width_half_max: Width at half peak response, in micrometres.
+
+        Returns:
+            New DataArray carrying the description.
+
+        Examples:
+            >>> ds["B04"].gs.write_spectral("red", center_wavelength=0.665)
+        """
+        fields = {
+            "common_name": common_name,
+            "center_wavelength": center_wavelength,
+            "full_width_half_max": full_width_half_max,
+        }
+        stated = (
+            attrs.Spectral(**fields)
+            if any(value is not None for value in fields.values())
+            else None
+        )
+        return attrs.stamp(self._data, attrs.Spectral, stated)
 
     def to_numpy(self, *, dtype: DTypeLike | None = None) -> np.ndarray:
         """Read this band as one model-input array.
@@ -172,6 +233,27 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         ordered = self._data.transpose(*ahead, *SPATIAL_DIMENSIONS).values
         return ordered if dtype is None else ordered.astype(dtype)
 
+    def to_tensor(self, *, dtype: str | torch.dtype | None = None) -> torch.Tensor:
+        """Read this band as one model-input tensor, laid out as `to_numpy`.
+
+        Args:
+            dtype: Torch dtype or its string name. None keeps the pixel dtype.
+
+        Returns:
+            Tensor shaped `(*axes, band, y, x)`, or `(*axes, y, x)` where this
+            band spans no `band` axis.
+
+        Raises:
+            ValueError: A dtype name is unknown.
+            TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
+                dtype has no tensor equivalent.
+
+        Examples:
+            >>> ds["ndvi"].gs.to_tensor(dtype="float32").shape
+            torch.Size([2, 256, 256])
+        """
+        return as_tensor(self.to_numpy, dtype)
+
     def to_cog(
         self,
         path: str | PathLike[str],
@@ -179,39 +261,40 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         map_scale: float | None = None,
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
-        **options: Unpack[COGWriteOptions],
-    ) -> Path | str:
-        """Write this band as a Cloud Optimized GeoTIFF.
+        **keywords: Any,
+    ) -> tuple[CogFile, ...]:
+        """Write this band as Cloud Optimized GeoTIFFs, as its path template names.
+
+        Written as `Dataset.gs.to_cog` writes the one-band raster this band
+        is; `{band}` is this band's name.
 
         Args:
-            path: Output path ending in `.tif` or `.tiff`.
+            path: Local path or fsspec URL ending in `.tif`, a template as
+                `Dataset.gs.to_cog` takes it.
             map_scale: Map denominator used to write pixels per centimetre.
             overwrite: Replace an existing file when true.
             storage_options: Options for the filesystem a URL names.
-            **options: COG creation options.
+            **keywords: COG creation options and template fields.
 
         Returns:
-            The written path.
+            One `CogFile` per file written, in time order.
 
         Raises:
-            ValueError: This array names none of the bands it spans, carries
-                no `.name` to write a sole band under, or carries a `time`
-                dimension rather than a scalar coordinate.
-            FileExistsError: `path` exists and `overwrite` is false.
+            ValueError: This array names none of the bands it spans or carries
+                no `.name`, or the path cannot be filled as
+                `Dataset.gs.to_cog` explains.
+            FileExistsError: A file exists and `overwrite` is false.
 
         Examples:
-            >>> ds["ndvi"].gs.to_cog("ndvi.tif")
-            PosixPath('ndvi.tif')
+            >>> ds["ndvi"].gs.to_cog("ndvi_{time:%Y%m%d}.tif")[0].bands
+            ('ndvi',)
         """
-        from geosave_engine.geodata.io import geotiff
-
-        return geotiff.write_cog(
-            self.to_raster(),
+        return self.to_raster().gs.to_cog(
             path,
             map_scale=map_scale,
             overwrite=overwrite,
             storage_options=storage_options,
-            **options,
+            **keywords,
         )
 
     def to_gtiff(
@@ -222,7 +305,7 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **options: Unpack[GTiffWriteOptions],
-    ) -> Path | str:
+    ) -> UPath:
         """Write this band as a plain GeoTIFF.
 
         Reach for `to_cog` unless a consumer needs a striped or otherwise
@@ -296,9 +379,8 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         spanning no band axis becomes a one-variable raster named after it.
 
         Returns:
-            Dataset holding one variable per band. Each band carries its own
-            attrs from `StackedAttrs` under the array's own attrs, which every
-            band shares; the Dataset root gets the attrs it was stacked from.
+            Dataset holding one variable per band, each carrying this array's
+            attrs, which every band of it shares.
 
         Raises:
             ValueError: This array spans a `band` axis carrying no labels to
@@ -320,22 +402,19 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
                 f"{BAND_DIMENSION!r} coordinate first"
             )
 
-        source = self.attrs
-        preserved = source.coords[BAND_DIMENSION].get(attrs.StackedAttrs)
         raster = cast("Dataset", self._data.to_dataset(dim=BAND_DIMENSION))
-        header = (preserved or attrs.StackedAttrs()).to_header(
-            variables=(str(name) for name in raster.data_vars), shared=source.root
-        )
         raster.attrs = {}
-        attrs.rebase(raster, header, inplace=True)
+        for band in raster.data_vars.values():
+            band.attrs = dict(self._data.attrs)
         return raster
 
     def statistics(self) -> pd.DataFrame:
         """Summarise present pixels, with one table row per band.
 
-        NaN and each band's own fill value are excluded. This eagerly reads
-        every band. A `band` axis is split through `to_raster`, preserving its
-        labels and each band's metadata. Other axes are reduced together.
+        NaN and the fill value are excluded. This eagerly reads every band. A
+        `band` axis is split through `to_raster`, every band taking the
+        array's own attrs, so a fill value counts only where all bands share
+        it. Other axes are reduced together.
 
         Returns:
             DataFrame with minimum, maximum, mean, population stddev, and
@@ -379,6 +458,28 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
 
         return cast("DataArray", color.colorize(self._data))
 
+    def explore(self, *, alpha: float = 0.7) -> pn.pane.HoloViews:
+        """Draw this band over a web map, the way `plot` draws it.
+
+        Needs the `viz` extra. The map shows one date; select it with
+        `.isel(time=...)` first where there are several.
+
+        Args:
+            alpha: Opacity of the band over the map.
+
+        Returns:
+            Panel pane drawing the band over OpenStreetMap with bokeh.
+
+        Raises:
+            ValueError: This band holds more than one date.
+
+        Examples:
+            >>> ds["label"].gs.explore()
+        """
+        from geosave_engine.geodata.viz import explore
+
+        return explore(self._data, lambda band: band.gs.plot(xlabel=""), alpha=alpha)
+
     def plot(
         self,
         *,
@@ -420,14 +521,14 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         """
         from geosave_engine.geodata.viz import plot
 
-        legend = attrs.Legend.from_attrs(self._data.attrs)
+        legend = self.legend
         place = self.anchor.locate() if xlabel is None else None
         caption = place.to_address() if place is not None else xlabel
         return plot(
             self._data,
             cmap=cmap,
             clim=clim,
-            class_map=legend.class_map if legend else None,
+            class_map=legend.classes if legend else None,
             color_map=legend.color_map if legend else None,
             cols=cols,
             title=title,

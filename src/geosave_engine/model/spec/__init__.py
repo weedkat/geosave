@@ -8,7 +8,6 @@ from .stage import StageSpec
 from .rasters import (
     AttrsRequirement,
     FieldRequirement,
-    NamespaceRequirement,
     RasterRequirement,
 )
 from .stac import QueryConfig, SortConfig, StacRecipe
@@ -21,7 +20,6 @@ __all__ = [
     "FramesSpec",
     "ModelSpec",
     "Name",
-    "NamespaceRequirement",
     "QueryConfig",
     "RasterRequirement",
     "Ref",

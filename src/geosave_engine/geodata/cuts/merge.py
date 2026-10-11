@@ -2,98 +2,126 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+import os
+from typing import TYPE_CHECKING, Literal, cast
 
 import geopandas as gpd
-import xarray as xr
-from affine import Affine
-from odc.geo.geobox import GeoBox
+import numpy as np
 from tiler import Merger
 
 from geosave_engine.geodata.conventions import SPATIAL_DIMENSIONS
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 
 from .chips import layout
 
 if TYPE_CHECKING:
     from geosave_engine.geodata import Dataset
 
+# How overlapping chips are weighed, as the window `tiler` names.
+type Taper = Literal[
+    "boxcar",
+    "hamming",
+    "triang",
+    "bartlett",
+    "hann",
+    "barthann",
+    "bohman",
+    "parzen",
+    "blackman",
+    "nuttall",
+    "blackmanharris",
+    "overlap-tile",
+]
+
 
 def merge(
     parents: gpd.GeoDataFrame,
-    windows: gpd.GeoDataFrame,
-    outputs: xr.DataArray,
+    chips: gpd.GeoDataFrame,
+    predictions: gpd.GeoDataFrame,
     *,
-    taper: str | None = None,
-) -> dict[str, Dataset]:
-    """Merge the outputs of chips into one raster per window they were cut from.
+    taper: Taper | None = None,
+) -> dict[int, Dataset]:
+    """Merge saved chip outputs onto the grid of each window they were cut from.
 
-    The layout a cut used is rebuilt from the same shape and settings, so
-    nothing but the two tables and the outputs is needed, and chips may
-    arrive in any order and from several writers.
+    The layout a cut used is rebuilt from the parent's shape and the chips'
+    settings, so chips may have been predicted in any order and by several
+    writers. Overlaps are weighed and summed, as logits are; classes are
+    taken after merging, with `argmax`.
 
     Args:
         parents: The windows the chips were cut from, as given to `chips`.
-        windows: The chips, as `chips` returned them.
-        outputs: One output per chip along `id`, shaped `(id, y, x)` or with
-            one more axis between, as `(id, band, y, x)`.
+        chips: The chips, as `chips` returned them.
+        predictions: Item table of the saved outputs, one per chip, with a
+            `chip` column holding the chip's row position.
         taper: How overlapping chips are weighed, as a window name such as
             `"hann"`. None weighs every chip alike.
 
     Returns:
         {
-            "<parent id>": Dataset on the parent's grid, holding the merged
-                output under the name `outputs` carries, or `"output"`,
+            <parent position>: Dataset on the parent's grid, holding the
+                merged output as `(band, y, x)` under the bands' shared name,
+                or `"output"`,
         }
-        One entry per parent that has chips in `windows`.
 
     Raises:
-        ValueError: A parent's chip has no output.
+        ValueError: A parent's chip has no saved output, or `taper` is given
+            for chips cut without overlap.
 
     Examples:
-        >>> merged = merge(frames, chips, outputs, taper="hann")
-        >>> merged["s0/frame-0"]["logits"].shape
-        (3, 512, 512)
+        >>> merged = merge(frames, chips, ChipWriter.read("runs/pred"), taper="hann")
+        >>> merged[0]["logits"].argmax("band")
+        <xarray.DataArray 'logits' (y: 512, x: 512)> ...
     """
-    name = str(outputs.name) if outputs.name is not None else "output"
-    leading = [dim for dim in outputs.dims if dim not in ("id", *SPATIAL_DIMENSIONS)]
-    available = set(outputs["id"].values.tolist())
+    from geosave_engine.geodata.io.readers import open_raster
+    from geosave_engine.geodata.stac._item import cog_files
+    from geosave_engine.geodata.io.vector.stac_geoparquet import to_items
 
-    merged: dict[str, Dataset] = {}
-    for parent in parents.to_dict("records"):
-        chips = windows[windows["parent"] == parent["id"]]
-        if chips.empty:
-            continue
-        absent = [chip for chip in chips["id"] if chip not in available]
+    outputs = {
+        int(position): cog_files(item.to_dict())
+        for position, item in zip(
+            predictions["chip"], to_items(predictions), strict=True
+        )
+    }
+    merged: dict[int, Dataset] = {}
+    # A tapered edge weighs nearly nothing, so only an overlapping chip restores it.
+    if taper is not None and (chips["overlap"] == 0).any():
+        raise ValueError(
+            f"a {taper!r} taper fades every chip edge, and chips cut without "
+            f"overlap leave no neighbour to cover it; cut chips with overlap or "
+            f"pass taper=None"
+        )
+    for key, members in chips.groupby("parent", sort=True):
+        # pandas types a group key as Hashable; `parent` holds window positions.
+        parent = int(cast("int", key))
+        absent = [int(p) for p in members.index if int(p) not in outputs]
         if absent:
             raise ValueError(
-                f"{parent['id']!r} cannot be merged: its chips {absent} have no "
+                f"window {parent} cannot be merged: chips {absent} have no "
                 f"output; predict them first"
             )
-
-        first = chips.iloc[0]
-        shape = (int(parent["height"]), int(parent["width"]))
+        grid = parents.iloc[parent].gs.geobox
+        height, width = grid.shape
+        first = members.iloc[0]
+        chip_height, chip_width = (int(edge) for edge in first["proj:shape"])
         tiler, halo = layout(
-            shape,
-            (int(first["height"]), int(first["width"])),
+            (height, width),
+            (chip_height, chip_width),
             overlap=int(first["overlap"]),
             mode=first["mode"],
         )
-        merger = Merger(
-            tiler,
-            logits=outputs.sizes[leading[0]] if leading else 0,
-            window=taper,
-            save_visits=False,
-        )
-        for chip in chips.itertuples():
-            merger.add(int(chip.chip), outputs.sel(id=chip.id).values)
-        values = merger.merge(extra_padding=halo)
-
-        dims = (*leading, *SPATIAL_DIMENSIONS)
-        # Unreferenced pixels merge as pixels; a located parent keeps its grid.
-        if isinstance(parent["crs"], str):
-            grid = GeoBox(shape, Affine(*parent["transform"]), parent["crs"])
-            merged[parent["id"]] = raster({name: (dims, values)}, grid)
-        else:
-            merged[parent["id"]] = cast("Dataset", xr.Dataset({name: (dims, values)}))
+        merger = None
+        name = "output"
+        for position, number in zip(members.index, members["chip"], strict=True):
+            output = open_raster(outputs[int(position)])
+            bands = list(output.gs.variables)
+            name = os.path.commonprefix(bands).rstrip("_") or "output"
+            values = np.stack([output[band].values.squeeze() for band in bands])
+            if merger is None:
+                merger = Merger(
+                    tiler, logits=len(bands), window=taper, save_visits=False
+                )
+            merger.add(int(number), values)
+        assert merger is not None
+        data = merger.merge(extra_padding=halo)
+        merged[parent] = raster({name: (("band", *SPATIAL_DIMENSIONS), data)}, grid)
     return merged

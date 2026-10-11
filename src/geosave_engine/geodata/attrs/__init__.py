@@ -1,74 +1,34 @@
-"""What an xarray object's attrs mean, as typed models.
+"""Attr groups: a few attr keys that mean one value together.
 
-Flat attrs are a namespace odc, rioxarray and user code all write to. This
-package does not own that namespace; it decodes, encodes, and says what a key
-means. Whoever changes the data owns the attrs describing it.
+xarray's attrs stay plain mappings, kept through operations by xarray. A
+group validates the keys GeoSave decides on or translates at a format
+boundary; `gs` reads each one as a property and writes it with `write_*`.
+Joins pass `combine_attrs=attrs.combine`.
 """
 
-from .header import AttrsHeader, DroppedAttr
-from .model import (
-    MUST_AGREE,
-    AttrsModel,
-    FlatAttrs,
-    attrs_equal,
-    common_attrs,
-    parse_field_value,
-)
-from .models import (
-    ACDD,
-    CELL_METHODS,
-    MODELS,
-    CFCoordinate,
-    CFVariable,
-    GDALVariable,
-    GeoTIFFTags,
-    Legend,
-    Nodata,
-    Packing,
-    Scope,
-    Spectral,
-    StacItem,
-    StacMetadata,
-    StackedAttrs,
-    TimeSpec,
-    model_scope,
-    resolve_model,
-)
-from .namespace import AttrsNamespace
-from .xarray import AttrsEdit, XarrayObject, create_header, is_flag, merge, rebase
+from .base import AttrsGroup, Decoded, Join, decode, parse, stamp
+from .combine import combine, shared
+from .gdal import GDALBand
+from .legend import Legend, is_flag
+from .nodata import Nodata
+from .packing import Packing
+from .spectral import Spectral
+from .timespec import TimeSpec
 
 __all__ = [
-    "ACDD",
-    "CELL_METHODS",
-    "MUST_AGREE",
-    "MODELS",
-    "Scope",
-    "AttrsEdit",
-    "AttrsHeader",
-    "AttrsNamespace",
-    "AttrsModel",
-    "CFCoordinate",
-    "CFVariable",
-    "DroppedAttr",
-    "FlatAttrs",
-    "GDALVariable",
-    "GeoTIFFTags",
+    "AttrsGroup",
+    "Decoded",
+    "GDALBand",
+    "Join",
     "Legend",
     "Nodata",
     "Packing",
     "Spectral",
-    "StacItem",
-    "StacMetadata",
-    "StackedAttrs",
     "TimeSpec",
+    "combine",
+    "decode",
     "is_flag",
-    "merge",
-    "attrs_equal",
-    "common_attrs",
-    "XarrayObject",
-    "create_header",
-    "rebase",
-    "model_scope",
-    "resolve_model",
-    "parse_field_value",
+    "parse",
+    "shared",
+    "stamp",
 ]

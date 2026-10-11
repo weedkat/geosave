@@ -25,12 +25,17 @@ import numpy as np
 import pytest
 from shapely.geometry import box
 
-from geosave_engine.geodata import configure_gdal, read_raster, read_vector, stack
+from geosave_engine.geodata import (
+    configure_gdal,
+    open_raster,
+    open_stack,
+    open_vector,
+    stack,
+)
 from geosave_engine.geodata.io import storage
 from geosave_engine.geodata import stac
-from geosave_engine.geodata.stac import table
 
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import build_raster, read_items
 
 pytestmark = pytest.mark.integration
 
@@ -50,8 +55,7 @@ def _refuse(*args, **kwargs):
 
 
 def _size(url: str, options: dict) -> int:
-    filesystem, path = storage.filesystem_path(url, options)
-    return filesystem.size(path)
+    return storage.location(url, options).stat().st_size
 
 
 def _s3_service() -> tuple[str, dict, str]:
@@ -63,9 +67,7 @@ def _s3_service() -> tuple[str, dict, str]:
         "secret": os.environ.get("AWS_SECRET_ACCESS_KEY", "minioadmin"),
         "client_kwargs": {"endpoint_url": endpoint},
     }
-    filesystem, _ = storage.filesystem_path(f"s3://{bucket}", options)
-    if not filesystem.exists(bucket):
-        filesystem.mkdir(bucket)
+    storage.location(f"s3://{bucket}", options).mkdir(exist_ok=True)
     return f"s3://{bucket}", options, endpoint
 
 
@@ -103,20 +105,22 @@ def remote(request):
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-        filesystem, path = storage.filesystem_path(prefix, options)
-        if filesystem.exists(path):
-            filesystem.rm(path, recursive=True)
+        folder = storage.location(prefix, options)
+        if folder.exists():
+            folder.fs.rm(folder.path, recursive=True)
 
 
 def test_cogs_round_trip_lazily(remote) -> None:
     prefix, options = remote
     source = build_raster(times=2)
 
-    paths = source.gs.to_cog(f"{prefix}/forest", storage_options=options)
+    paths = source.gs.to_cog(
+        f"{prefix}/forest_{{time:%Y%m%d}}.tif", storage_options=options
+    )
 
     assert all(str(path).startswith(prefix) for path in paths)
     with dask.config.set(scheduler=_refuse):
-        restored = read_raster(list(paths), chunks={})
+        restored = open_raster(list(paths), chunks={})
     np.testing.assert_array_equal(restored.red.values, source.red.values)
     restored.close()
 
@@ -128,9 +132,19 @@ def test_a_zarr_store_round_trips_lazily(remote) -> None:
     store = source.gs.to_zarr(f"{prefix}/forest.zarr", storage_options=options)
 
     with dask.config.set(scheduler=_refuse):
-        restored = read_raster(store, chunks={}, storage_options=options)
+        restored = open_raster(store, chunks={}, storage_options=options)
     np.testing.assert_array_equal(restored.red.values, source.red.values)
     restored.close()
+
+
+def test_a_stack_round_trips_through_a_upath_carrying_its_options(remote) -> None:
+    prefix, options = remote
+    folder = storage.location(f"{prefix}/s0", options)
+    sample = stack({"optical": build_raster(times=2), "label": build_raster()})
+
+    sample.gs.to_zarr(folder)
+
+    assert open_stack(folder).gs.groups == ("label", "optical")
 
 
 def test_a_netcdf_file_uploads(remote) -> None:
@@ -175,7 +189,7 @@ def test_geoparquet_reads_back_with_a_bbox(remote) -> None:
         f"{prefix}/plots.parquet", write_covering_bbox=True, storage_options=options
     )
 
-    selected = read_vector(written, bbox=(-1, -1, 2, 2), storage_options=options)
+    selected = open_vector(written, bbox=(-1, -1, 2, 2), storage_options=options)
 
     assert selected["name"].tolist() == ["near"]
 
@@ -183,32 +197,19 @@ def test_geoparquet_reads_back_with_a_bbox(remote) -> None:
 def test_an_item_table_of_cogs_loads_back(remote) -> None:
     prefix, options = remote
     source = build_raster(times=2)
-    paths = source.gs.to_cog(f"{prefix}/forest", storage_options=options)
+    paths = source.gs.to_cog(
+        f"{prefix}/forest_{{time:%Y%m%d}}.tif", storage_options=options
+    )
     # GDAL reads a remote TIFF with the keys in its environment, not fsspec options.
-    items = stac.create_items(paths)
+    rows = stac.create_items(paths)
 
-    catalog = table.write(items, f"{prefix}/catalog.parquet", storage_options=options)
-
-    rows = table.read(catalog, storage_options=options)
-    assert rows.iloc[0]["assets"]["image"]["href"] == str(paths[0])
-    with dask.config.set(scheduler=_refuse):
-        restored = table.load(table.to_items(rows))
-    np.testing.assert_array_equal(restored.red.values, source.red.values)
-    restored.close()
-
-
-def test_an_item_table_of_a_stack_store_loads_each_group(remote) -> None:
-    prefix, options = remote
-    optical = build_raster(times=2)
-    sample = stack({"optical": optical, "label": build_raster(times=2)})
-    stores = sample.gs.to_zarr(f"{prefix}/s0", storage_options=options)
-    items = stac.create_stack_items(stores, name="s0", storage_options=options)
-    catalog = table.write(items, f"{prefix}/catalog.parquet", storage_options=options)
-
-    rows = table.read(catalog, storage_options=options)
-    restored = table.load(
-        table.to_items(rows[rows["collection"] == "optical"]), storage_options=options
+    catalog = rows.gs.to_geoparquet(
+        f"{prefix}/catalog.parquet", storage_options=options
     )
 
-    np.testing.assert_array_equal(restored.red.values, optical.red.values)
+    rows = open_vector(catalog, storage_options=options)
+    assert rows.iloc[0]["assets"]["image"]["href"] == str(paths[0])
+    with dask.config.set(scheduler=_refuse):
+        restored = read_items(rows)
+    np.testing.assert_array_equal(restored.red.values, source.red.values)
     restored.close()

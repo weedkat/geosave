@@ -6,6 +6,7 @@ import warnings
 
 import geopandas as gpd
 import numpy as np
+import orjson
 import pandas as pd
 import pytest
 from shapely.geometry import box
@@ -24,26 +25,33 @@ RADAR = ["2024-03-05", "2024-04-04", "2024-07-01"]
 
 
 def windows(**groups: list[str | None] | None) -> gpd.GeoDataFrame:
-    """Build one whole window whose groups observe on the given dates."""
-    times = {
-        name: None
-        if labels is None
-        else [None if label is None else f"{label}T00:00:00" for label in labels]
-        for name, labels in groups.items()
-    }
+    """Build one whole window whose collections observe on the given dates.
+
+    A collection given None holds one undated item, as a static layer does.
+    """
+    sources = {}
+    for name, labels in groups.items():
+        dates = [None] if labels is None else labels
+        sources[name] = [
+            {
+                "id": f"{name}_{index}",
+                "collection": name,
+                "properties": {}
+                if label is None
+                else {"datetime": f"{label}T00:00:00Z"},
+                "assets": {},
+            }
+            for index, label in enumerate(dates)
+        ]
     row = {
-        "id": "s0",
+        "anchor": "s0",
         "parent": None,
-        "stack": "s0",
-        "times": times,
+        "sources": orjson.dumps(sources).decode(),
         "start_datetime": None,
         "end_datetime": None,
-        "crs": "EPSG:4326",
-        "transform": [1.0, 0.0, 0.0, 0.0, -1.0, 2.0],
-        "row_off": 0,
-        "col_off": 0,
-        "height": 2,
-        "width": 2,
+        "proj:code": "EPSG:4326",
+        "proj:transform": [1.0, 0.0, 0.0, 0.0, -1.0, 2.0],
+        "proj:shape": [2, 2],
         "geometry": box(0, 0, 2, 2),
     }
     return gpd.GeoDataFrame([row], geometry="geometry", crs="EPSG:4326")
@@ -59,7 +67,10 @@ def months(count: int) -> gpd.GeoDataFrame:
 
 
 def dates(cut: gpd.GeoDataFrame, group: str) -> list[list[str]]:
-    return [[label[:10] for label in times[group]] for times in cut["times"]]
+    return [
+        [item["properties"]["datetime"][:10] for item in orjson.loads(sources)[group]]
+        for sources in cut["sources"]
+    ]
 
 
 def quiet_frames(*args, **kwargs) -> gpd.GeoDataFrame:
@@ -169,11 +180,6 @@ def test_a_gap_exactly_the_tolerance_still_reaches_a_scene() -> None:
     assert dates(paired, "b") == [["2024-01-06", "2024-01-11"]]
 
 
-def test_a_group_spanning_no_instants_refuses() -> None:
-    with pytest.raises(ValueError, match="spans no instants at all"):
-        cuts.frames(windows(a=[], b=RADAR), 1, tolerance="5D")
-
-
 def test_an_unlabelled_instant_refuses_rather_than_reading_as_disorder() -> None:
     ragged = ["2024-03-06", None, "2024-03-20"]
 
@@ -186,10 +192,11 @@ def test_a_tolerance_that_is_no_duration_refuses() -> None:
         cuts.frames(scene(), 2, tolerance=np.timedelta64("NaT"))
 
 
-def test_unchronological_or_repeated_labels_refuse() -> None:
+def test_unordered_items_are_sorted_but_a_repeated_instant_refuses() -> None:
     shuffled = [OPTICAL[index] for index in (2, 0, 1, 3, 4)]
-    with pytest.raises(ValueError, match="not chronological"):
-        cuts.frames(windows(a=shuffled, b=RADAR), 1, tolerance="5D")
+    assert dates(quiet_frames(windows(a=shuffled, b=RADAR), 1, tolerance="10D"), "a")[
+        0
+    ] == ["2024-03-08"]
 
     twice = ["2024-03-05", "2024-03-05"]
     with pytest.raises(ValueError, match="same instant more than once"):

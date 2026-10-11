@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import geosave_engine.geodata  # noqa: F401  — registers the .gs accessor
 import geosave_engine.geodata.attrs as attrs
 
 
@@ -12,7 +13,7 @@ def band(**band_attrs: object) -> xr.DataArray:
 
 
 def test_a_legend_marks_class_codes() -> None:
-    coded = attrs.rebase(band(), attrs.Legend(class_map={0: "bg", 1: "palm"}))
+    coded = band().gs.write_legend({0: "bg", 1: "palm"})
 
     assert attrs.is_flag(coded)
 

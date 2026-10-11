@@ -1,46 +1,47 @@
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any, cast
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 import numpy as np
-from tiler import Merger
-
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import rank_zero_warn
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
-from geosave_engine.ml.segmentation.metrics import SemanticSegmentationMetrics
-from .data import _read_target
-from geosave_engine.ml.builders import (
-    build_criterion,
-    build_optimizer,
-    build_scheduler,
-)
+from tiler import Merger
+
+from geosave_engine.geodata.conventions import SPATIAL_DIMENSIONS
+from geosave_engine.ml.metrics import MulticlassMetrics
+from geosave_engine.ml.builders import build_criterion, build_optimizer, build_scheduler
 from geosave_engine.model.chain import ModelChain
 from geosave_engine.model.registry import build_model
 from geosave_engine.geodata.warnings import GeoSaveWarning
-from geosave_engine.geodata.conventions import SPATIAL_DIMENSIONS
+
+from .data import Dataset, _read_target
+
+
+def _dataset(loaders: Any, dataloader_idx: int) -> Any:
+    """Return the dataset of the loader Lightning is reading."""
+    if isinstance(loaders, (list, tuple)):
+        loaders = loaders[dataloader_idx]
+    return loaders.dataset
 
 
 @dataclass
 class _Evaluation:
-    """Per-loader completion and native accumulation state."""
+    """Chips one loader has still to deliver, and the rasters left open."""
 
-    remaining: set[str]
-    mergers: dict[str, Merger] = field(default_factory=dict)
-    halos: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    remaining: set[int]
+    mergers: dict[int, Merger] = field(default_factory=dict)
+    halos: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 class Module(LightningModule):
     """Train and evaluate a segmentation model chain on tile batches.
 
-    A batch is ``(model_inputs, target, ids, valid)``. Training scores each tile;
-    validation and test merge tile logits and score each raster whole, so
-    their datasets supply original parents and the window table their ids
-    name. Scene evaluation currently requires a single device;
-    tile-sharded distributed evaluation cannot complete the local scenes.
+    Training scores each tile; validation and test merge tile logits and
+    score each raster whole, on a single device.
 
     Args:
         model_chain: Ordered stage construction specifications. Each selects a
@@ -49,8 +50,7 @@ class Module(LightningModule):
         ignore_index: Class index excluded from loss and metrics.
         criterion: Loss class and arguments. Defaults to CrossEntropyLoss with
             ignore_index; an explicit criterion ignore_index takes precedence.
-        optimizer: Optimizer class, arguments, and stage groups. Defaults to
-            AdamW with a learning rate of 1e-3.
+        optimizer: Optimizer class, arguments, and groups by stage. Defaults to AdamW with a learning rate of 1e-3.
         lr_scheduler: Scheduler class, arguments, and Lightning metadata.
             None disables scheduling.
         metrics: Metric names in dot notation (e.g. ``["iou.macro", "f1.macro"]``).
@@ -148,7 +148,7 @@ class Module(LightningModule):
         )
 
         # Lightning runs setup before configure_model, so metrics are built here.
-        metrics = SemanticSegmentationMetrics(
+        metrics = MulticlassMetrics(
             num_classes=num_classes,
             ignore_index=self.ignore_index,
             metrics=self.metrics_config,
@@ -159,10 +159,8 @@ class Module(LightningModule):
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizer = build_optimizer(self.optimizer_spec, self.model)
-
         if self.scheduler_spec is None:
             return optimizer
-
         return cast(
             OptimizerLRScheduler,
             {
@@ -194,7 +192,7 @@ class Module(LightningModule):
 
     def training_step(
         self,
-        batch: tuple[dict[str, Any], torch.Tensor, Sequence[str], torch.Tensor],
+        batch: tuple[dict[str, Any], torch.Tensor, Sequence[int], torch.Tensor],
         batch_idx: int,
     ) -> torch.Tensor:
         model_inputs, target, _, _ = batch
@@ -255,90 +253,9 @@ class Module(LightningModule):
                 category=GeoSaveWarning,
             )
 
-    def _merge(
-        self,
-        logits: torch.Tensor,
-        ids: Sequence[str],
-        valid: torch.Tensor,
-        loader: Any,
-        dataloader_idx: int,
-    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Assemble logits and pair completed parents with their original labels."""
-        if isinstance(loader, (list, tuple)):
-            loader = loader[dataloader_idx]
-        dataset = loader.dataset
-        if dataloader_idx not in self._evaluation:
-            self._evaluation[dataloader_idx] = _Evaluation(set(dataset.reference.id))
-        state = self._evaluation[dataloader_idx]
-        rows = dataset.reference.loc[list(ids)]
-        pixels = logits.detach().float().cpu().numpy()
-        masks = valid.cpu().numpy() & np.isfinite(pixels).all(axis=1)
-        for sample_id, (_, row), values, mask in zip(
-            ids, rows.iterrows(), pixels, masks, strict=True
-        ):
-            if sample_id not in state.remaining:
-                raise ValueError(f"prediction {sample_id!r} was already accumulated")
-            parent_id = row.parent
-            if parent_id not in state.mergers:
-                # The layout a cut used is rebuilt from the same shape and settings.
-                tiler, state.halos[parent_id] = dataset.spec.chips.layout(
-                    tuple(dataset.parents[parent_id].gs.anchor.geobox.shape)
-                )
-                state.mergers[parent_id] = Merger(
-                    tiler,
-                    logits=self.num_classes + 1,
-                    window=dataset.spec.chips.window,
-                    save_visits=False,
-                    data_dtype=np.float64,
-                    weights_dtype=np.float64,
-                )
-            # Coverage uses the same native taper as logits, excluding invalid tiles.
-            contribution = np.concatenate([np.where(mask, values, 0), mask[None]])
-            state.mergers[parent_id].add(int(row.chip), contribution)
-            state.remaining.remove(sample_id)
-
-        completed = []
-        for parent_id in rows.parent.unique():
-            expected = dataset.reference.loc[
-                dataset.reference.parent == parent_id, "id"
-            ]
-            if state.remaining.intersection(expected):
-                continue
-            sums = state.mergers.pop(parent_id).merge(
-                extra_padding=state.halos.pop(parent_id),
-                normalize_by_weights=False,
-            )
-            coverage = sums[-1]
-            values = np.full(sums[:-1].shape, np.nan, dtype=np.float32)
-            np.divide(sums[:-1], coverage, out=values, where=coverage > 0)
-            parent = dataset.parents[parent_id]
-            image = next(iter(parent.gs.rasters.values()))
-            labels = parent[dataset.target].dataset
-            if image.gs.geobox != labels.gs.geobox or tuple(
-                image.sizes[d] for d in SPATIAL_DIMENSIONS
-            ) != tuple(labels.sizes[d] for d in SPATIAL_DIMENSIONS):
-                raise ValueError(
-                    f"target grid differs from prediction for {parent_id!r}"
-                )
-            target = _read_target(labels, self.ignore_index).to(self.device)
-            raster_logits = torch.from_numpy(values).to(self.device)
-            covered = torch.isfinite(raster_logits).all(dim=0)
-            if target.shape != covered.shape:
-                raise ValueError(
-                    f"target shape differs from prediction for {parent_id!r}"
-                )
-            target = target.masked_fill(~covered, self.ignore_index)
-            self._raster_count += 1
-            if (target != self.ignore_index).any():
-                completed.append(
-                    (torch.nan_to_num(raster_logits).unsqueeze(0), target.unsqueeze(0))
-                )
-
-        return completed
-
     def validation_step(
         self,
-        batch: tuple[dict[str, Any], torch.Tensor, Sequence[str], torch.Tensor],
+        batch: tuple[dict[str, Any], torch.Tensor, Sequence[int], torch.Tensor],
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> dict[str, torch.Tensor]:
@@ -355,9 +272,9 @@ class Module(LightningModule):
         model_inputs, target, ids, valid = batch
         logits = self(**model_inputs)
 
-        loaders = self.trainer.val_dataloaders
+        dataset = _dataset(self.trainer.val_dataloaders, dataloader_idx)
         for raster_logits, raster_target in self._merge(
-            logits, ids, valid, loaders, dataloader_idx
+            logits, ids, valid, dataset, dataloader_idx
         ):
             self.log(
                 "val_loss",
@@ -379,7 +296,7 @@ class Module(LightningModule):
 
     def test_step(
         self,
-        batch: tuple[dict[str, Any], torch.Tensor, Sequence[str], torch.Tensor],
+        batch: tuple[dict[str, Any], torch.Tensor, Sequence[int], torch.Tensor],
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> dict[str, torch.Tensor]:
@@ -396,9 +313,9 @@ class Module(LightningModule):
         model_inputs, target, ids, valid = batch
         logits = self(**model_inputs)
 
-        loaders = self.trainer.test_dataloaders
+        dataset = _dataset(self.trainer.test_dataloaders, dataloader_idx)
         for raster_logits, raster_target in self._merge(
-            logits, ids, valid, loaders, dataloader_idx
+            logits, ids, valid, dataset, dataloader_idx
         ):
             self.test_metrics.update(raster_logits, raster_target)
             self.log_dict(
@@ -410,13 +327,126 @@ class Module(LightningModule):
             )
         return {"logits": logits, "label": target}
 
+    def _merge(
+        self,
+        logits: torch.Tensor,
+        ids: Sequence[int],
+        valid: torch.Tensor,
+        dataset: Dataset,
+        dataloader_idx: int = 0,
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Add chip logits to their rasters and return the rasters they complete.
+
+        Chips may arrive in any order. A raster is released once every chip
+        cut from it has been added, paired with its original labels, so
+        evaluation scores whole rasters and never blends chip targets.
+
+        Args:
+            logits: ``(B, classes, y, x)`` chip logits.
+            ids: Each chip's row in `dataset.windows`.
+            valid: ``(B, y, x)`` pixels whose inputs were valid.
+            dataset: Dataset the chips were read from.
+            dataloader_idx: Loader the chips came from; loaders merge apart.
+
+        Returns:
+            ``(logits, target)`` per completed raster holding a scored pixel,
+            shaped ``(1, classes, y, x)`` and ``(1, y, x)``.
+
+        Raises:
+            ValueError: A chip was added twice, or the target grid differs
+                from the prediction grid.
+        """
+        if dataloader_idx not in self._evaluation:
+            self._evaluation[dataloader_idx] = _Evaluation(
+                set(range(len(dataset.windows)))
+            )
+        state = self._evaluation[dataloader_idx]
+        chips = dataset.spec.chips
+        assert chips is not None, "a dataset is cut from a spec declaring chips"
+        positions = [int(index) for index in ids]
+        rows = dataset.windows.iloc[positions]
+        pixels = logits.detach().float().cpu().numpy()
+        masks = valid.cpu().numpy() & np.isfinite(pixels).all(axis=1)
+
+        # Accumulate every chip into the merger of its raster.
+        for sample_id, (_, row), values, mask in zip(
+            positions, rows.iterrows(), pixels, masks, strict=True
+        ):
+            if sample_id not in state.remaining:
+                raise ValueError(f"prediction {sample_id!r} was already accumulated")
+            parent_id = int(row.parent)
+            if parent_id not in state.mergers:
+                # The layout a cut used is rebuilt from the same shape and settings.
+                shape = dataset.frames.iloc[parent_id]["proj:shape"]
+                height, width = (int(edge) for edge in shape)
+                tiler, state.halos[parent_id] = chips.layout((height, width))
+                state.mergers[parent_id] = Merger(
+                    tiler,
+                    logits=self.num_classes + 1,
+                    window=chips.window,
+                    save_visits=False,
+                    data_dtype=np.float64,
+                    weights_dtype=np.float64,
+                )
+            # Coverage uses the same taper as logits, excluding invalid pixels.
+            contribution = np.concatenate([np.where(mask, values, 0), mask[None]])
+            state.mergers[parent_id].add(int(row.chip), contribution)
+            state.remaining.remove(sample_id)
+
+        # Release every raster whose chips have all arrived.
+        completed = []
+        for parent_id in (int(parent) for parent in rows.parent.unique()):
+            expected = dataset.windows.index[dataset.windows["parent"] == parent_id]
+            if state.remaining.intersection(int(index) for index in expected):
+                continue
+            raster = self._complete(state, parent_id, dataset, logits.device)
+            if raster is not None:
+                completed.append(raster)
+        return completed
+
+    def _complete(
+        self,
+        state: _Evaluation,
+        parent_id: int,
+        dataset: Dataset,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Divide a raster's logit sums by coverage and pair them with its labels."""
+        sums = state.mergers.pop(parent_id).merge(
+            extra_padding=state.halos.pop(parent_id),
+            normalize_by_weights=False,
+        )
+        coverage = sums[-1]
+        values = np.full(sums[:-1].shape, np.nan, dtype=np.float32)
+        np.divide(sums[:-1], coverage, out=values, where=coverage > 0)
+
+        # The original labels are read whole, never stitched from chip targets.
+        parent = dataset.frames.iloc[parent_id].gs.to_stack()
+        image = next(iter(parent.gs.rasters.values()))
+        labels = parent[dataset.target].dataset
+        image_shape = tuple(image.sizes[d] for d in SPATIAL_DIMENSIONS)
+        label_shape = tuple(labels.sizes[d] for d in SPATIAL_DIMENSIONS)
+        if image.gs.geobox != labels.gs.geobox or image_shape != label_shape:
+            raise ValueError(f"target grid differs from prediction for {parent_id!r}")
+        target = _read_target(labels, self.ignore_index).to(device)
+        logits = torch.from_numpy(values).to(device)
+        covered = torch.isfinite(logits).all(dim=0)
+        if target.shape != covered.shape:
+            raise ValueError(f"target shape differs from prediction for {parent_id!r}")
+        target = target.masked_fill(~covered, self.ignore_index)
+        self._raster_count += 1
+
+        if not (target != self.ignore_index).any():
+            return None
+        return torch.nan_to_num(logits).unsqueeze(0), target.unsqueeze(0)
+
     def predict_step(
         self,
-        batch: tuple[dict[str, Any], Sequence[str]],
+        batch: tuple[dict[str, Any], Sequence[int]],
         batch_idx: int,
         dataloader_idx: int = 0,
-    ) -> tuple[torch.Tensor, Sequence[str]]:
-        """Return raw tile logits beside their reference IDs.
+    ) -> tuple[torch.Tensor, Sequence[int]]:
+        """Return raw chip logits beside their window positions.
 
         Args:
             batch: ``(model_inputs, ids)`` from a method-owned prediction Dataset.
@@ -424,7 +454,7 @@ class Module(LightningModule):
             dataloader_idx: Lightning prediction loader number.
 
         Returns:
-            ``(logits, ids)``. IDs identify rows in the dataset's reference.
+            ``(logits, ids)``. IDs are the chips' rows in the dataset's `windows`.
         """
         model_inputs, ids = batch
         return self(**model_inputs), ids

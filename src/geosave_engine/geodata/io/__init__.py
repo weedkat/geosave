@@ -6,13 +6,13 @@ files, and `readers` picks a format by suffix.
 
 Format modules have a `read`; writable formats also have a `write`, except GeoTIFF
 (`write_cog`, `write_gtiff`) and `cogs`, which arranges one raster as several
-GeoTIFFs that `read_raster` reads back. Reach for them module-qualified:
+GeoTIFFs that `open_raster` reads back. Reach for them module-qualified:
 
 Examples:
     >>> from geosave_engine.geodata import io
     >>> raster = io.zarr.read("scene.zarr", mask_and_scale=True)
     >>> io.geotiff.write_cog(raster, "scene.tif")
-    >>> io.read_raster("scene.zarr")  # by suffix, when the format is not known
+    >>> io.open_raster("scene.zarr")  # by suffix, when the format is not known
 
 The fluent `to_cog`, `to_zarr`, and `to_netcdf` names belong to the `gs`
 accessors, not here.
@@ -33,10 +33,12 @@ from .raster.geotiff import (
 )
 from .raster.netcdf import NetCDFOpenOptions, NetCDFWriteOptions
 from .raster.zarr import ZarrOpenOptions, ZarrWriteOptions
-from .readers import read_raster, read_stack, read_vector
+from .raster.cogs import CogFile
+from .readers import open_raster, open_stack, open_vector
 
 __all__ = [
     "COGWriteOptions",
+    "CogFile",
     "GTiffWriteOptions",
     "GeoJSONOpenOptions",
     "GeoPackageOpenOptions",
@@ -57,9 +59,9 @@ __all__ = [
     "geotiff",
     "netcdf",
     "raster",
-    "read_raster",
-    "read_stack",
-    "read_vector",
+    "open_raster",
+    "open_stack",
+    "open_vector",
     "safe",
     "storage",
     "vector",

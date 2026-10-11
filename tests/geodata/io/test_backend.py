@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import read_raster, read_stack, stack
+from geosave_engine.geodata import open_raster, open_stack, stack
 
 from tests.geodata.conftest import build_raster
 
@@ -25,14 +25,14 @@ def test_the_engine_opens_what_read_raster_opens(tmp_path: Path, write: str) -> 
         tmp_path / ("scene.zarr" if write == "to_zarr" else "scene.nc")
     )
 
-    with xr.open_dataset(path, engine="geosave") as opened, read_raster(path) as ours:
+    with xr.open_dataset(path, engine="geosave") as opened, open_raster(path) as ours:
         assert opened.identical(ours)
         assert opened.gs.geobox == ours.gs.geobox
 
 
 def test_the_engine_joins_the_files_of_one_raster(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    paths = source.gs.to_cog(tmp_path / "forest")
+    paths = source.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
 
     with xr.open_dataset(list(paths), engine="geosave") as opened:
         assert dict(opened.sizes) == {"time": 2, "y": 2, "x": 2}
@@ -65,7 +65,7 @@ def test_the_engine_opens_a_stack_as_a_tree(tmp_path: Path) -> None:
     sample.gs.to_zarr(tmp_path / "s0")
 
     with xr.open_datatree(tmp_path / "s0", engine="geosave") as opened:
-        assert opened.identical(read_stack(tmp_path / "s0"))
+        assert opened.identical(open_stack(tmp_path / "s0"))
         assert sorted(opened.children) == ["dem", "optical"]
 
 

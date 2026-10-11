@@ -6,7 +6,6 @@ from huggingface_hub import hf_hub_download
 from terratorch.datasets.utils import HLSBands
 from terratorch.tasks import PixelwiseRegressionTask
 
-from geosave_engine.model.chain import chain_step
 from geosave_engine.model.registry import register_model
 
 _REPO_ID = "ibm-granite/granite-geospatial-biomass"
@@ -66,6 +65,7 @@ class GraniteGeospatialBiomass(nn.Module):
             ignore_index=-1,
         )
         self.model = task.model
+        self.variables = ["biomass"]
 
         if pretrained:
             ckpt_path = hf_hub_download(repo_id=_REPO_ID, filename=_CKPT_FILENAME)
@@ -87,8 +87,5 @@ class GraniteGeospatialBiomass(nn.Module):
         Returns:
             (B, 1, H, W) biomass prediction tensor.
         """
-        return self.model(image).output
-
-    @chain_step(head=True)
-    def forward_logits(self, image: torch.Tensor) -> torch.Tensor:
-        return self.forward(image)
+        # The task squeezes its single channel; the variable axis is restored.
+        return self.model(image).output.unsqueeze(1)

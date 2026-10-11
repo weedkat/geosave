@@ -6,8 +6,6 @@ from dask.base import compute
 import pandas as pd
 import xarray as xr
 
-from geosave_engine.geodata.attrs import Nodata
-
 
 def statistics(variables: Mapping[Hashable, xr.DataArray]) -> pd.DataFrame:
     """Summarise variables while computing shared pixel sources only once.
@@ -25,12 +23,8 @@ def statistics(variables: Mapping[Hashable, xr.DataArray]) -> pd.DataFrame:
     """
     reductions = []
     for band in variables.values():
-        fill = Nodata.from_attrs(band.attrs)
-        values = (
-            band
-            if fill is None or fill.fill_value is None
-            else band.where(band != fill.fill_value)
-        )
+        fill = band.gs.nodata
+        values = band if fill is None else band.where(band != fill)
         present = values.notnull().sum()
         reductions.append(
             xr.Dataset(

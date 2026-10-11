@@ -165,9 +165,29 @@ def test_a_module_offering_two_steps_uses_whichever_resolves_first(x):
     assert [step.method.name for step in chain._steps][1] == "from_image"
 
 
-def test_a_module_with_no_chain_step_is_refused():
+def test_a_stage_with_no_chain_step_beside_others_is_refused():
     with pytest.raises(TypeError, match="no @chain_step method found"):
-        ModelChain(nn.Identity())
+        ModelChain(nn.Identity(), nn.Identity())
+
+
+def test_a_lone_model_without_chain_step_runs_its_forward():
+    class EndToEnd(nn.Module):
+        def forward(
+            self, image: torch.Tensor, scale: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            return image * 2 if scale is None else image * scale
+
+    chain = ModelChain(model=EndToEnd())
+    image = torch.ones(1, 2)
+
+    assert chain.inputs == {"image": torch.Tensor}
+    torch.testing.assert_close(chain(image=image), image * 2)
+    torch.testing.assert_close(chain(image=image, scale=torch.tensor(3.0)), image * 3)
+
+
+def test_a_lone_model_without_forward_is_refused():
+    with pytest.raises(TypeError, match="no @chain_step method found"):
+        ModelChain(nn.Module())
 
 
 def test_two_steps_ready_at_once_are_refused_as_ambiguous():
@@ -373,3 +393,54 @@ def test_mixed_terminals_preserve_gradients(x):
 def test_repr_reports_native_terminal_type():
     chain = ModelChain(objects=Detector())
     assert "-> list[dict[str, torch.Tensor]]" in repr(chain)
+
+
+class Masked(nn.Module):
+    @chain_step(head=True)
+    def logits(
+        self, decoded: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        return decoded if mask is None else decoded * mask
+
+
+def test_repr_marks_optional_inputs():
+    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Masked())
+
+    assert (
+        "head: Masked.logits(decoded: Tensor, mask?: torch.Tensor | None) -> Tensor"
+        in repr(chain)
+    )
+
+
+def test_mermaid_draws_each_value_from_its_producer():
+    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Masked())
+
+    assert chain.to_mermaid().splitlines() == [
+        "flowchart LR",
+        '    input_image(["image: Tensor"])',
+        '    input_mask(["mask: torch.Tensor | None"])',
+        '    encoder["encoder: Encode.encode"]',
+        '    decoder["decoder: Decode.decode"]',
+        '    head["head: Masked.logits"]',
+        '    result_head(["Tensor"])',
+        '    input_image -->|"image"| encoder',
+        '    encoder -->|"feature_map: Tensor"| decoder',
+        '    decoder -->|"decoded: Tensor"| head',
+        '    input_mask -.->|"mask"| head',
+        "    head --> result_head",
+    ]
+
+
+def test_mermaid_ends_a_feature_chain_at_its_unconsumed_outputs():
+    chain = ModelChain(Split(), Merge())
+
+    lines = chain.to_mermaid().splitlines()
+
+    assert '    stage_0 -->|"low: Tensor"| stage_1' in lines
+    assert '    stage_1 -->|"merged: Tensor"| result_merged(["merged"])' in lines
+
+
+def test_notebooks_render_the_chain_as_a_mermaid_block():
+    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
+
+    assert chain._repr_markdown_() == f"```mermaid\n{chain.to_mermaid()}\n```"

@@ -1,252 +1,117 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-
-import gc
-import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import torch
+import xarray as xr
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from geosave_engine.geodata import cuts, stack
-from geosave_engine.geodata.stac import table
-from geosave_engine.geodata.stac.extensions.geosave import STACK_PROP
-from geosave_engine.ml.inputs import model_inputs, to_tensor
-from geosave_engine.ml.transforms import DataKey, ImageAugmenter
+from geosave_engine.geodata import cuts, open_vector
+from geosave_engine.ml.inputs import model_inputs
+from geosave_engine.ml.transforms import DataKey, ImageAugmenter, cutmix_boxes
 from geosave_engine.model.spec import ModelSpec
 
 if TYPE_CHECKING:
     import geopandas as gpd
-    import pystac
-    import xarray as xr
+
+type Batch = tuple[dict[str, torch.Tensor], torch.Tensor, Sequence[int], torch.Tensor]
 
 
 def _read_target(data: xr.Dataset, ignore_index: int) -> torch.Tensor:
     """Read categorical labels using one nodata-to-ignore conversion."""
-    target = to_tensor(data).squeeze(0)
+    target = data.gs.to_tensor().squeeze(0)
     if target.is_floating_point():
         target = torch.where(torch.isfinite(target), target, ignore_index)
     return target.long()
 
 
 class Dataset(
-    TorchDataset[tuple[dict[str, torch.Tensor], torch.Tensor, str, torch.Tensor]]
+    TorchDataset[tuple[dict[str, torch.Tensor], torch.Tensor, int, torch.Tensor]]
 ):
-    """Read a manifest's samples as model inputs and targets, one chip each.
+    """Read a prepared catalog's samples as model inputs and targets, one chip each.
 
-    Every sample is cut as the model spec declares: frames along time, its
-    preprocessing on each frame, then chips in space. Every chip of every frame
-    is one sample; nothing is drawn at random.
+    One window per target item, frames along time, then chips in space; every
+    chip of every frame is one sample.
 
     Args:
-        manifest: Item table with one row per group; rows sharing
-            `geosave:stack` form one sample.
-        spec: Model spec declaring `chips`, `inputs`, and optionally `frames`
-            and `preprocessing`.
-        target: Layer holding the labels, read raw.
+        catalog: Prepared item table.
+        spec: Model spec declaring `chips`, `inputs`, and optionally `frames`.
+        target: Collection holding the labels, read raw.
         ignore_index: Label a target pixel takes where its raster has none.
 
-    Raises:
-        ValueError: The spec declares no `chips` or no `inputs`, or a row
-            lacks an asset the spec or `target` names.
-
     Examples:
-        >>> dataset = Dataset(read_vector("data/train/manifest.parquet"), spec)
-        >>> model_inputs, target, window_id, valid = dataset[0]
+        >>> dataset = Dataset(open_vector("data/train.parquet"), spec)
+        >>> model_inputs, target, index, valid = dataset[0]
         >>> model_inputs["image"].shape, target.shape
         (torch.Size([4, 224, 224]), torch.Size([224, 224]))
     """
 
     def __init__(
         self,
-        manifest: gpd.GeoDataFrame,
+        catalog: gpd.GeoDataFrame,
         spec: ModelSpec,
         *,
         target: str = "label",
         ignore_index: int = 255,
     ) -> None:
-        """Open every sample lazily and number its chips."""
-        if spec.chips is None:
-            raise ValueError("the model spec declares no chips to cut samples into")
-        if not spec.inputs:
-            raise ValueError("the model spec declares no inputs for the model")
+        assert spec.chips is not None, "the model spec declares no chips"
         self.spec = spec
         self.target = target
         self.ignore_index = ignore_index
 
-        self._groups = (*spec.rasters, target)
-        absent = [
-            name
-            for name in (STACK_PROP, "collection", "assets")
-            if name not in manifest
-        ]
-        if absent:
-            raise ValueError(
-                f"the manifest has no {absent} column; build it from each saved "
-                f"sample with stac.create_stack_items"
-            )
-        if not manifest["id"].is_unique:
-            raise ValueError("manifest IDs must be unique")
-
-        # A sample is the rows saved from one stack, one group per collection.
-        self._samples = {
-            str(name): rows for name, rows in manifest.groupby(STACK_PROP, sort=False)
-        }
-        for sample_id, rows in self._samples.items():
-            present = set(rows["collection"])
-            missing = [name for name in self._groups if name not in present]
-            if missing:
-                raise ValueError(
-                    f"sample {sample_id!r} has no {missing} group; its groups are "
-                    f"{sorted(present)}"
-                )
-
-        # Cut from the table alone: one window per frame, then its chips.
-        wanted = manifest[manifest["collection"].isin(self._groups)]
-        whole = cuts.stacks(cast("gpd.GeoDataFrame", wanted))
-        self._frames = whole if spec.frames is None else spec.frames.cut(whole)
-        self._chips = spec.chips.cut(self._frames)
-
-        self._parents: dict[str, xr.DataTree] | None = None
-        self._pid: int | None = None
-        parents = self._prepare()
-        self.reference = self._make_reference(parents)
-        del parents
-        gc.collect()
-
-    def _make_reference(self, parents: dict[str, xr.DataTree]) -> gpd.GeoDataFrame:
-        """Describe prepared windows, annotations and source provenance."""
-        reference = self._chips.copy()
-        # A model reads what preprocessing made, so each chip states those rasters' dates.
-        prepared = {}
-        for frame in self._frames.itertuples():
-            parent = parents[frame.id]
-            if tuple(parent.gs.anchor.geobox.shape) != (frame.height, frame.width):
-                raise ValueError(
-                    f"preprocessing left {frame.id!r} on a grid of "
-                    f"{tuple(parent.gs.anchor.geobox.shape)}, not the "
-                    f"{(frame.height, frame.width)} it was saved on, so its "
-                    f"chips would name other pixels; keep the sample's grid"
-                )
-            prepared[frame.id] = {
-                name: None
-                if raster.gs.times is None
-                else [stamp.isoformat() for stamp in raster.gs.times]
-                for name, raster in parent.gs.rasters.items()
-            }
-        reference["times"] = [prepared[parent] for parent in reference["parent"]]
-
-        # Stored STAC fields describe the raw sample, not these prepared pixels.
-        records = [self._source_rows[parent] for parent in reference["parent"]]
-        properties = [record.properties for record in records]
-        annotations = dict.fromkeys(key for fields in properties for key in fields)
-        for column in annotations:
-            if column not in reference:
-                reference[column] = [fields.get(column) for fields in properties]
-        return cast(
-            "gpd.GeoDataFrame",
-            reference.set_index("id", drop=False, verify_integrity=True),
-        )
-
-    def _prepare(self) -> dict[str, xr.DataTree]:
-        """Open each sample once and prepare the rasters of each of its frames."""
-        parents = {}
-        self._source_rows = {}
-        opened: dict[str, xr.DataTree] = {}
-        records: dict[str, pystac.Item] = {}
-        for frame in self._frames.to_dict("records"):
-            source_id = frame["stack"]
-            if source_id not in opened:
-                rows = self._samples[source_id]
-                items = {
-                    name: table.to_items(rows[rows["collection"] == name])
-                    for name in self._groups
-                }
-                opened[source_id] = stack(
-                    {name: table.load(part) for name, part in items.items()}
-                )
-                # The target's Item is the sample's record: it carries the annotations.
-                records[source_id] = items[self.target][0]
-            self._source_rows[frame["id"]] = records[source_id]
-            rasters = cuts.select_times(opened[source_id], frame).gs.rasters
-            results = self.spec.preprocess(rasters)
-            parents[frame["id"]] = stack(
-                {
-                    **{name: results[name] for name in self.spec.input_rasters},
-                    self.target: rasters[self.target],
-                }
-            )
-        return parents
-
-    @property
-    def parents(self) -> dict[str, xr.DataTree]:
-        """Return prepared rasters opened by the current reading process."""
-        if self._parents is None or self._pid != os.getpid():
-            parents = self._prepare()
-            if not self._make_reference(parents).equals(self.reference):
-                raise ValueError(
-                    "reopened parent frames differ from the reference snapshot"
-                )
-            self._parents = parents
-            self._pid = os.getpid()
-        return self._parents
-
-    def __getstate__(self) -> dict[str, object]:
-        """Serialize metadata; workers reopen their own parent readers."""
-        return {**self.__dict__, "_parents": None, "_pid": None}
+        # Cut from the table alone: a window per label, its frames, then chips.
+        windows = cuts.stacks(catalog, on=target)
+        self.frames = windows if spec.frames is None else spec.frames.cut(windows)
+        self.windows = spec.chips.cut(self.frames)
 
     def __len__(self) -> int:
         """Count the chips of every frame of every sample."""
-        return len(self.reference)
+        return len(self.windows)
 
     def __getitem__(
         self, index: int
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, str, torch.Tensor]:
-        """Read the tile this number names.
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, int, torch.Tensor]:
+        """Read the chip this number names.
 
         Args:
-            index: Tile number in `range(len(self))`.
+            index: Chip number in `range(len(self))`, its row in `windows`.
 
         Returns:
-            ``(model_inputs, target, ids, valid)``. ``model_inputs`` holds the
-            inputs the spec declares; target is int64 and validity is boolean,
-            both shaped ``(y, x)``. Validity requires finite values across all
-            named pixel inputs, including their channels and time axes.
-
-        Raises:
-            IndexError: `index` falls outside the cut.
+            ``(model_inputs, target, index, valid)``: the inputs the spec
+            declares, int64 labels shaped ``(y, x)``, and the ``(y, x)``
+            pixels whose inputs are finite in every band and instant.
         """
-        row = self.reference.iloc[index]
-        tile = cuts.select_pixels(self.parents[row.parent], row.to_dict())
-        rasters = tile.gs.rasters
+        rasters = self.windows.iloc[index].gs.to_stack().gs.rasters
+        inputs = model_inputs(self.spec, rasters)
         target = _read_target(rasters[self.target], self.ignore_index)
-        inputs = model_inputs(self.spec, rasters, row)
+
         valid = torch.ones(target.shape, dtype=torch.bool)
         for name in self.spec.pixel_inputs:
             pixels = inputs[name]
-            valid &= torch.isfinite(pixels).reshape(-1, *target.shape[-2:]).all(dim=0)
-        return inputs, target, row.id, valid
+            valid &= torch.isfinite(pixels).reshape(-1, *target.shape).all(dim=0)
+        return inputs, target, index, valid
 
 
 class DataModule(LightningDataModule):
-    """Feed supervised segmentation from sample manifests and one model spec.
+    """Feed supervised segmentation from prepared catalogs and one model spec.
 
-    Each split is its own manifest. Samples are cut as the model spec declares,
-    then every batch is finished on the device: augmentations while training,
-    the spec's transforms in every split, and NaN pixels set to zero.
+    Batches are finished on the device: augmentations while training, the
+    spec's transforms in every split, and NaN pixels set to zero.
 
     Args:
         spec: Model spec file declaring `chips`, `inputs`, and `transforms`.
-        train: Training manifest.
-        val: Validation manifest.
-        test: Test manifest. None leaves the test split unavailable.
+        train: Prepared training item table (`.parquet`).
+        val: Prepared validation item table (`.parquet`).
+        test: Prepared test item table (`.parquet`). None leaves the test split unavailable.
         target: Layer holding the labels.
         augmentations: Kornia augmentations by ``name`` and ``init_args``, run
             on the pixel inputs and the target together while training.
+        cutmix: Probability a training sample gets a box of its batch
+            neighbour pasted in, pixels and labels alike, after augmentation.
         ignore_index: Label a target pixel takes where its raster has none or
             an augmentation invented it. Match the module's `ignore_index`.
         batch_size: Samples per batch.
@@ -258,11 +123,15 @@ class DataModule(LightningDataModule):
           class_path: geosave_engine.ml.segmentation.supervised.DataModule
           init_args:
             spec: configs/model_spec.yaml
-            train: data/train/manifest.parquet
-            val: data/val/manifest.parquet
+            train: data/train
+            val: data/val
             augmentations:
               - {name: RandomHorizontalFlip, init_args: {p: 0.5}}
     """
+
+    train_dataset: Dataset
+    val_dataset: Dataset
+    test_dataset: Dataset
 
     def __init__(
         self,
@@ -273,26 +142,28 @@ class DataModule(LightningDataModule):
         test: str | Path | None = None,
         target: str = "label",
         augmentations: list[dict[str, Any]] | None = None,
+        cutmix: float = 0.0,
         ignore_index: int = 255,
         batch_size: int = 8,
         num_workers: int = 4,
     ) -> None:
         super().__init__()
         self.spec = ModelSpec.load(spec)
-        self.manifests = {"train": train, "val": val, "test": test}
+        self.catalogs = {"train": train, "val": val, "test": test}
         self.target = target
         self.augmentations = augmentations or []
+        self.cutmix = cutmix
         self.ignore_index = ignore_index
         self.batch_size = batch_size
         self.num_workers = num_workers
 
     def _dataset(self, split: str) -> Dataset:
-        """Read one split's manifest as a dataset."""
-        manifest = self.manifests[split]
-        if manifest is None:
-            raise ValueError(f"no {split} manifest; pass {split}= to the datamodule")
+        """Read one split's catalog as a dataset."""
+        folder = self.catalogs[split]
+        if folder is None:
+            raise ValueError(f"no {split} catalog; pass {split}= to the datamodule")
         return Dataset(
-            table.read(manifest),
+            open_vector(folder),
             self.spec,
             target=self.target,
             ignore_index=self.ignore_index,
@@ -302,8 +173,7 @@ class DataModule(LightningDataModule):
         """Build the datasets the stage reads and the batch pipelines.
 
         Raises:
-            ValueError: The stage needs a manifest that was not given, or a
-                manifest or the spec cannot feed the model.
+            ValueError: The stage needs a catalog that was not given.
         """
         if stage in (None, "fit"):
             self.train_dataset = self._dataset("train")
@@ -311,7 +181,6 @@ class DataModule(LightningDataModule):
             self.val_dataset = self._dataset("val")
         if stage == "test":
             self.test_dataset = self._dataset("test")
-
         assert self.spec.chips is not None
         size = self.spec.chips.shape
         self._augmenter = ImageAugmenter(self.augmentations, size)
@@ -320,7 +189,7 @@ class DataModule(LightningDataModule):
             for name, steps in self.spec.transforms.items()
         }
 
-    def _loader(self, dataset: Dataset, *, shuffle: bool) -> DataLoader:
+    def _loader(self, dataset: TorchDataset, *, shuffle: bool) -> DataLoader:
         # A forked worker inherits open rasters and reader threads it cannot use.
         return DataLoader(
             dataset,
@@ -331,25 +200,19 @@ class DataModule(LightningDataModule):
             persistent_workers=bool(self.num_workers),
         )
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> Any:
         """Return shuffled training batches."""
         return self._loader(self.train_dataset, shuffle=True)
 
-    def val_dataloader(self) -> DataLoader:
-        """Return validation batches in tile order."""
+    def val_dataloader(self) -> Any:
+        """Return validation batches in chip order."""
         return self._loader(self.val_dataset, shuffle=False)
 
-    def test_dataloader(self) -> DataLoader:
-        """Return test batches in tile order."""
+    def test_dataloader(self) -> Any:
+        """Return test batches in chip order."""
         return self._loader(self.test_dataset, shuffle=False)
 
-    def on_after_batch_transfer(
-        self,
-        batch: tuple[
-            dict[str, torch.Tensor], torch.Tensor, Sequence[str], torch.Tensor
-        ],
-        dataloader_idx: int,
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, Sequence[str], torch.Tensor]:
+    def on_after_batch_transfer(self, batch: Batch, dataloader_idx: int) -> Batch:
         """Finish a batch on its device.
 
         Args:
@@ -357,50 +220,95 @@ class DataModule(LightningDataModule):
             dataloader_idx: Lightning loader number.
 
         Returns:
-            The batch with its pixel inputs augmented while training,
-            transformed, and free of NaN. IDs and context inputs pass through.
-            Evaluation validity is intersected with transformed finite pixels.
-            Training uses the original validity only as lineage; it is not a
-            mask for the augmented geometry and the training module ignores it.
+            The batch with its pixel inputs augmented and mixed while
+            training, transformed, and free of NaN. IDs and context inputs
+            pass through. Validity is intersected with transformed finite
+            pixels; while training it does not follow the augmented geometry
+            and the training module ignores it.
         """
         model_inputs, target, ids, valid = batch
-        names = self.spec.pixel_inputs
-        images = [model_inputs[name] for name in names]
+        images = [model_inputs[name] for name in self.spec.pixel_inputs]
         if self.trainer is not None and self.trainer.training:
-            images, target = self._augment(images, target)
+            # Labels shift up by one, leaving zero for pixels an augmentation invents.
+            images, shifted = self._augment(images, (target + 1).float())
+            target = shifted.round().long() - 1
+            target[target < 0] = self.ignore_index
+            if self.cutmix:
+                images, target = self._mix(images, target)
 
-        model_inputs = dict(model_inputs)
-        training = self.trainer is not None and self.trainer.training
-        for name, image in zip(names, images, strict=True):
+        model_inputs, valid = self._finish(model_inputs, images, valid)
+        return model_inputs, target, ids, valid
+
+    def _augment(
+        self, images: list[torch.Tensor], mask: torch.Tensor
+    ) -> tuple[list[torch.Tensor], torch.Tensor]:
+        """Run the augmentations on every pixel input and a mask together.
+
+        Args:
+            images: Pixel inputs, ``(B, ..., band, y, x)``.
+            mask: ``(B, y, x)`` values that move with nearest-neighbour
+                sampling; pixels an augmentation invents read zero.
+
+        Returns:
+            The moved images and mask, in the shapes given.
+        """
+        # Time joins the bands, so every instant of a sample moves the same way.
+        shapes = [image.shape[1:-2] for image in images]
+        keys: list[DataKey] = ["input" for _ in images]
+        keys.append("mask")
+        *images, mask = self._augmenter(
+            *(image.flatten(1, -3) for image in images),
+            mask.unsqueeze(1),
+            data_keys=keys,
+        )
+        unflattened = [
+            image.unflatten(1, shape)
+            for image, shape in zip(images, shapes, strict=True)
+        ]
+        return unflattened, mask.squeeze(1)
+
+    def _finish(
+        self,
+        model_inputs: dict[str, torch.Tensor],
+        images: list[torch.Tensor],
+        valid: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Transform the pixel inputs and set their NaN pixels to zero.
+
+        Args:
+            model_inputs: Batch inputs; context inputs pass through.
+            images: Pixel inputs in `spec.pixel_inputs` order, replacing theirs.
+            valid: ``(B, y, x)`` pixels with real inputs.
+
+        Returns:
+            The finished inputs, and `valid` without pixels a transform left
+            non-finite in any band or instant.
+        """
+        finished = dict(model_inputs)
+        for name, image in zip(self.spec.pixel_inputs, images, strict=True):
             if name in self._transforms:
                 # Per-band statistics apply to each instant, so time joins the batch.
                 leading = image.shape[:-3]
                 image = self._transforms[name](image.flatten(0, -4)).unflatten(
                     0, leading
                 )
-            if not training:
-                valid = valid & torch.isfinite(image).reshape(
-                    image.shape[0], -1, *image.shape[-2:]
-                ).all(dim=1)
-            model_inputs[name] = torch.nan_to_num(image, nan=0.0)
-        return model_inputs, target, ids, valid
+            valid = valid & torch.isfinite(image).reshape(
+                image.shape[0], -1, *image.shape[-2:]
+            ).all(dim=1)
+            finished[name] = torch.nan_to_num(image, nan=0.0)
+        return finished, valid
 
-    def _augment(
+    def _mix(
         self, images: list[torch.Tensor], target: torch.Tensor
     ) -> tuple[list[torch.Tensor], torch.Tensor]:
-        """Run the augmentations on every pixel input and the target together."""
-        # Time joins the bands, so every instant of a sample moves the same way.
-        shapes = [image.shape[1:-2] for image in images]
-        # Labels shift up by one, leaving zero for pixels an augmentation invents.
-        mask = (target + 1).unsqueeze(1).float()
-        keys: list[DataKey] = ["input" for _ in images]
-        keys.append("mask")
-        *images, mask = self._augmenter(
-            *(image.flatten(1, -3) for image in images), mask, data_keys=keys
+        """Paste a box of the previous sample in the batch into each sample."""
+        height, width = target.shape[-2:]
+        box = cutmix_boxes(
+            len(target), (height, width), p=self.cutmix, device=target.device
         )
-        target = mask.squeeze(1).round().long() - 1
-        target[target < 0] = self.ignore_index
-        return [
-            image.unflatten(1, shape)
-            for image, shape in zip(images, shapes, strict=True)
-        ], target
+        pasted = []
+        for image in images:
+            # One box spans every instant and band of a sample.
+            spread = box.reshape(len(box), *([1] * (image.ndim - 3)), height, width)
+            pasted.append(torch.where(spread, image.roll(1, 0), image))
+        return pasted, torch.where(box, target.roll(1, 0), target)

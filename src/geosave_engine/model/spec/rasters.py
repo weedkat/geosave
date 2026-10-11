@@ -1,4 +1,4 @@
-"""Requirements on native raster structure and registered metadata models."""
+"""Requirements on native raster structure and its attrs."""
 
 from __future__ import annotations
 
@@ -8,24 +8,24 @@ from typing import Annotated, Literal, Self
 import numpy as np
 from pydantic import Field, JsonValue, model_validator
 import xarray as xr
+from xarray.core.utils import equivalent
 
 from geosave_engine.geodata import attrs
-from geosave_engine.geodata.attrs.models import scope_keys
 
 from .base import SpecModel, Text
 from .stac import StacRecipe
 
 
 class FieldRequirement(SpecModel):
-    """Require fields, exact values, or one of several accepted values.
+    """Require attr keys, exact values, or one of several accepted values.
 
-    Registered values use the attrs field's parser, so requirements share its
-    native types. Predicate consistency is checked when bound to a namespace.
+    Both sides compare after the text decoding attr groups use, so a
+    GeoTIFF's `"0"` meets a requirement of `0`, and `"[0, 1]"` one of `[0, 1]`.
 
     Args:
-        required: Fields that must have non-null values.
-        equals: Fields that must equal the supplied values.
-        one_of: Fields whose values must belong to the supplied alternatives.
+        required: Keys that must have non-null values.
+        equals: Keys that must equal the supplied values.
+        one_of: Keys whose values must belong to the supplied alternatives.
     """
 
     required: tuple[Text, ...] = ()
@@ -35,164 +35,45 @@ class FieldRequirement(SpecModel):
     )
 
     @model_validator(mode="after")
-    def _validate_required_fields(self) -> Self:
+    def _validate_predicates(self) -> Self:
         if len(self.required) != len(set(self.required)):
             raise ValueError("required must not contain duplicate names")
+        for key in self.equals.keys() & self.one_of.keys():
+            expected = attrs.decode(self.equals[key])
+            if not any(
+                equivalent(expected, attrs.decode(value)) for value in self.one_of[key]
+            ):
+                raise ValueError(f"Conflicting equals and one_of for {key!r}")
         return self
 
     @property
-    def fields(self) -> set[str]:
-        """Return every field constrained by these requirements."""
+    def keys(self) -> set[str]:
+        """Return every key constrained by these requirements."""
         return set(self.required) | self.equals.keys() | self.one_of.keys()
 
-    def _parse_predicates(
-        self, model: type[attrs.AttrsModel] | None
-    ) -> tuple[dict[str, object], dict[str, tuple[object, ...]]]:
-        """Read expected values through their owner without building a partial model."""
-        if model is not None and (unknown := self.fields - model.model_fields.keys()):
-            raise ValueError(
-                f"Unknown fields for attrs model {model.__name__!r}: {sorted(unknown)}"
-            )
+    def validate_attrs(self, found: Mapping[str, object], *, where: str) -> None:
+        """Check one attrs mapping without reading pixels.
 
-        def parse(field: str, value: JsonValue) -> object:
-            parsed = (
-                value if model is None else attrs.parse_field_value(model, field, value)
-            )
-            if parsed is None:
-                raise ValueError(f"Metadata requirement {field!r} must be non-null")
-            return parsed
-
-        equals = {field: parse(field, value) for field, value in self.equals.items()}
-        one_of = {
-            field: tuple(parse(field, value) for value in choices)
-            for field, choices in self.one_of.items()
-        }
-        for field in equals.keys() & one_of.keys():
-            if not any(
-                attrs.attrs_equal(equals[field], value) for value in one_of[field]
-            ):
-                raise ValueError(f"Conflicting equals and one_of for {field!r}")
-        return equals, one_of
-
-    def validate_values(
-        self,
-        values: Mapping[str, object],
-        *,
-        where: str,
-        model: type[attrs.AttrsModel] | None = None,
-    ) -> None:
-        """Check typed metadata fields without serializing them or reading pixels.
-
-        Args:
-            values: Native metadata fields, as read by the attrs module.
-            where: Scope used in validation errors.
-            model: Registered field owner, or None for foreign metadata.
+        Not settled yet: redesigned with raster selection.
 
         Raises:
-            ValueError: A required field is absent or a value differs.
+            NotImplementedError: Always.
         """
-        equals, one_of = self._parse_predicates(model)
-        for field in sorted(self.fields):
-            value = values.get(field)
-            if value is None:
-                raise ValueError(f"{where}.{field} is required")
-            if field in equals and not attrs.attrs_equal(value, equals[field]):
-                raise ValueError(f"{where}.{field} must equal {self.equals[field]!r}")
-            if field in one_of and not any(
-                attrs.attrs_equal(value, choice) for choice in one_of[field]
-            ):
-                raise ValueError(
-                    f"{where}.{field} must be one of {self.one_of[field]!r}"
-                )
-
-
-class NamespaceRequirement(SpecModel):
-    """Requirements on one root, variable, or coordinate attrs namespace.
-
-    Args:
-        models: Registered attrs model names mapped to field requirements.
-        foreign: Requirements on keys that have no registered owner.
-    """
-
-    models: dict[Text, FieldRequirement] = Field(default_factory=dict)
-    foreign: FieldRequirement = Field(default_factory=FieldRequirement)
-
-    @model_validator(mode="after")
-    def _validate_registered_predicates(self) -> Self:
-        self.foreign._parse_predicates(None)
-        for name, requirement in self.models.items():
-            try:
-                model = attrs.resolve_model(name)
-            except KeyError as error:
-                raise ValueError(str(error)) from error
-            requirement._parse_predicates(model)
-        return self
-
-    def validate_scope(self, scope: attrs.Scope, *, where: str) -> None:
-        """Refuse models and foreign keys that do not belong in `scope`.
-
-        Args:
-            scope: Scope of the attrs these requirements describe.
-            where: Section name for errors.
-
-        Raises:
-            ValueError: A model belongs to another scope, or a foreign key is
-                written by a model of `scope`.
-        """
-        if collision := self.foreign.fields & scope_keys(scope):
-            raise ValueError(f"{where}: use models for attrs {sorted(collision)}")
-        for name in self.models:
-            if (owner := attrs.model_scope(name)) != scope:
-                raise ValueError(f"{where}.{name} belongs on a {owner}, not a {scope}")
-
-    def validate_namespace(
-        self, namespace: attrs.AttrsNamespace, *, where: str
-    ) -> None:
-        """Check a namespace already parsed by `attrs.create_header`.
-
-        Args:
-            namespace: Native typed attrs namespace.
-            where: Root, variable, or coordinate path for errors.
-
-        Raises:
-            ValueError: A required model or field is absent or incompatible.
-        """
-        for name, requirement in self.models.items():
-            model = namespace.get(name)
-            if model is None:
-                raise ValueError(f"{where}.{name} metadata is required")
-            requirement.validate_values(
-                {field: getattr(model, field) for field in requirement.fields},
-                model=type(model),
-                where=f"{where}.{name}",
-            )
-        self.foreign.validate_values(namespace.foreign, where=f"{where}.foreign")
+        raise NotImplementedError("FieldRequirement.validate_attrs is not settled")
 
 
 class AttrsRequirement(SpecModel):
-    """Keep the root, data-variable, and coordinate metadata scopes distinct.
+    """Requirements on the root, data-variable, and coordinate attrs.
 
     Args:
-        root: Metadata required on the Dataset itself.
+        root: Attrs required on the Dataset itself.
         data_vars: Per-variable requirements; `*` applies to selected variables.
         coords: Per-coordinate requirements; `*` applies to all coordinates.
     """
 
-    root: NamespaceRequirement = Field(default_factory=NamespaceRequirement)
-    data_vars: dict[Text, NamespaceRequirement] = Field(default_factory=dict)
-    coords: dict[Text, NamespaceRequirement] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_scopes(self) -> Self:
-        self.root.validate_scope("dataset", where="root")
-        scopes: tuple[tuple[str, attrs.Scope, dict[str, NamespaceRequirement]], ...] = (
-            ("data_vars", "variable", self.data_vars),
-            ("coords", "coordinate", self.coords),
-        )
-        for section, scope, requirements in scopes:
-            for name, requirement in requirements.items():
-                requirement.validate_scope(scope, where=f"{section}.{name}")
-        return self
+    root: FieldRequirement = Field(default_factory=FieldRequirement)
+    data_vars: dict[Text, FieldRequirement] = Field(default_factory=dict)
+    coords: dict[Text, FieldRequirement] = Field(default_factory=dict)
 
 
 class RasterRequirement(SpecModel):
@@ -208,7 +89,7 @@ class RasterRequirement(SpecModel):
         dtypes: Accepted stored dtypes, if constrained.
         require_crs: Require a locatable geospatial grid.
         resolution: Positive pixel size, scalar or (x, y), in CRS units.
-        attrs: Metadata requirements in the existing attrs vocabulary.
+        attrs: Requirements on the raster's attrs, by key.
     """
 
     type: Literal["raster"] = "raster"
@@ -259,117 +140,10 @@ class RasterRequirement(SpecModel):
     def select_raster(self, raster: xr.Dataset) -> xr.Dataset:
         """Return a selected lazy view after checking structure and metadata.
 
-        Args:
-            raster: Native xarray Dataset, possibly backed by Dask.
-
-        Returns:
-            Dataset with the declared variables or first N channels. A scalar
-            `time` coordinate becomes a length-one axis where `dims` names it.
+        Not settled yet: redesigned together with frames, chips, inputs and
+        context.
 
         Raises:
-            TypeError: The supplied value is not a Dataset.
-            KeyError: A declared variable or coordinate is absent.
-            ValueError: Selection is ambiguous or a requirement is unsatisfied.
+            NotImplementedError: Always.
         """
-        if not isinstance(raster, xr.Dataset):
-            raise TypeError("Raster requirements expect an xarray.Dataset")
-        selected = (
-            self._select_variables(raster)
-            if self.variables is not None
-            else self._select_channels(raster)
-        )
-        if (
-            self.dims is not None
-            and "time" in self.dims
-            and "time" in selected.coords
-            and "time" not in selected.dims
-        ):
-            # A single-date raster, such as a GeoTIFF, dates itself with a scalar.
-            selected = selected.expand_dims("time").transpose(
-                *self.dims, ..., missing_dims="ignore"
-            )
-        self._validate_coordinates(selected)
-        self._validate_grid(selected)
-        self._validate_variables(selected)
-        self._validate_attrs(selected)
-        return selected
-
-    def _validate_coordinates(self, raster: xr.Dataset) -> None:
-        """Check that required coordinate arrays are present."""
-        if missing := set(self.coordinates) - raster.coords.keys():
-            raise KeyError(f"Missing raster coordinates: {sorted(missing)}")
-
-    def _select_variables(self, raster: xr.Dataset) -> xr.Dataset:
-        """Select named data variables in their declared order."""
-        variables = self.variables
-        if variables is None:
-            raise ValueError("Named variable selection requires variables")
-        if missing := set(variables) - raster.data_vars.keys():
-            raise KeyError(f"Missing raster variables: {sorted(missing)}")
-        return raster[list(variables)]
-
-    def _select_channels(self, raster: xr.Dataset) -> xr.Dataset:
-        """Select channels from ordinary variables or a single band variable."""
-        channels = self.channels
-        if channels is None:
-            raise ValueError("Positional selection requires channels")
-        names = list(raster.data_vars)
-        if any("band" in variable.dims for variable in raster.data_vars.values()):
-            if len(names) != 1:
-                raise ValueError(
-                    "Positional channels are ambiguous with multiple band variables"
-                )
-            count = raster.sizes["band"]
-            if count < channels:
-                raise ValueError(f"Raster requires {channels} channels, got {count}")
-            return raster.isel(band=slice(channels))
-        if len(names) < channels:
-            raise ValueError(f"Raster requires {channels} channels, got {len(names)}")
-        return raster[names[:channels]]
-
-    def _validate_variables(self, raster: xr.Dataset) -> None:
-        """Check dimensions and stored dtypes of the selected variables."""
-        dtypes = None if self.dtypes is None else tuple(map(np.dtype, self.dtypes))
-        for name, variable in raster.data_vars.items():
-            if self.dims is not None and variable.dims != self.dims:
-                raise ValueError(
-                    f"{name} requires dimensions {self.dims}, got {variable.dims}"
-                )
-            if dtypes is not None and variable.dtype not in dtypes:
-                raise ValueError(
-                    f"{name} requires dtype in {self.dtypes}, got {variable.dtype}"
-                )
-
-    def _validate_grid(self, raster: xr.Dataset) -> None:
-        """Check that the raster has the required CRS and pixel size."""
-        if self.require_crs and raster.odc.geobox is None:
-            raise ValueError("Raster requires a locatable CRS and grid")
-        if self.resolution is not None:
-            box = raster.odc.geobox
-            if box is None:
-                raise ValueError("Raster resolution requires a locatable CRS and grid")
-            expected = (
-                (self.resolution, self.resolution)
-                if isinstance(self.resolution, float)
-                else self.resolution
-            )
-            actual = (abs(box.resolution.x), abs(box.resolution.y))
-            if not np.allclose(actual, expected, rtol=1e-6, atol=0):
-                raise ValueError(f"Raster requires resolution {expected}, got {actual}")
-
-    def _validate_attrs(self, raster: xr.Dataset) -> None:
-        """Check metadata on the raster, its bands and its coordinates."""
-        header = attrs.create_header(raster)
-        self.attrs.root.validate_namespace(header.root, where="root")
-        for declarations, namespaces, scope in (
-            (self.attrs.data_vars, header.data_vars, "data_vars"),
-            (self.attrs.coords, header.coords, "coords"),
-        ):
-            for selector, requirement in declarations.items():
-                targets = tuple(namespaces) if selector == "*" else (selector,)
-                for name in targets:
-                    if name not in namespaces:
-                        raise ValueError(f"Missing {scope}.{name}")
-                    requirement.validate_namespace(
-                        namespaces[name], where=f"{scope}.{name}"
-                    )
+        raise NotImplementedError("RasterRequirement.select_raster is not settled")

@@ -95,9 +95,7 @@ def test_explicit_arguments_override_published_values(model_factories: None) -> 
 
 def test_unknown_constructor_arguments_are_not_dropped(model_factories: None) -> None:
     with pytest.raises(TypeError, match="featre_channels") as caught:
-        build_model(
-            {"encoder": {"name": "test", "init_args": {"featre_channels": 7}}}
-        )
+        build_model({"encoder": {"name": "test", "init_args": {"featre_channels": 7}}})
     assert caught.value.__notes__ == ["While building stage 'encoder'"]
 
 
@@ -220,9 +218,18 @@ def test_build_model_saves_initial_arguments_before_factory_mutation(
 @pytest.mark.parametrize(
     ("encoder", "inputs"),
     [
-        ({"name": "dinov3", "init_args": {"pretrained": False}}, ["image"]),
         (
-            {"name": "prithvi_tl", "init_args": {"model_name": "prithvi_eo_v2_tiny_tl"}},
+            {"name": "dinov3", "init_args": {"pretrained": False, "in_channels": 4}},
+            ["image"],
+        ),
+        (
+            {
+                "name": "prithvi_tl",
+                "init_args": {
+                    "model_name": "prithvi_eo_v2_tiny_tl",
+                    "bands": ["BLUE", "GREEN", "RED", "NIR_NARROW"],
+                },
+            },
             ["image", "temporal_coords", "location_coords"],
         ),
         (
@@ -230,6 +237,7 @@ def test_build_model_saves_initial_arguments_before_factory_mutation(
                 "name": "clay",
                 "init_args": {
                     "model_name": "clay_v15_tiny",
+                    "in_channels": 4,
                     "waves": [0.49, 0.56, 0.665, 0.842],
                     "gsd": 10.0,
                 },
@@ -241,11 +249,9 @@ def test_build_model_saves_initial_arguments_before_factory_mutation(
 def test_registered_encoders_chain_into_a_decoder_and_head(
     encoder: dict[str, Any], inputs: list[str]
 ) -> None:
-    encoder = deepcopy(encoder)
-    encoder["init_args"]["in_channels"] = 4
     model = build_model(
         {
-            "encoder": encoder,
+            "encoder": deepcopy(encoder),
             "decoder": {"name": "dpt"},
             "head": {
                 "name": "segmentation",
@@ -254,3 +260,57 @@ def test_registered_encoders_chain_into_a_decoder_and_head(
         }
     )
     assert list(model.inputs) == inputs
+
+
+def test_build_model_accepts_classes_and_wires_published_values() -> None:
+    model = build_model({"encoder": Encoder, "head": Head})
+
+    assert model(torch.tensor(3.0)).item() == 8.0
+    assert model.stage_specs == {
+        "encoder": {
+            "class_path": f"{__name__}.Encoder",
+            "init_args": {"feature_channels": 2},
+        },
+        "head": {
+            "class_path": f"{__name__}.Head",
+            "init_args": {"feature_channels": 2},
+        },
+    }
+
+
+def test_build_model_builds_a_class_no_import_path_reaches() -> None:
+    class Local(nn.Module):
+        @chain_step(head=True)
+        def forward(self, image: torch.Tensor) -> torch.Tensor:
+            return image + 1
+
+    assert build_model({"head": Local})(torch.tensor(1.0)).item() == 2.0
+
+
+def test_build_model_mixes_classes_with_stage_specifications(
+    model_factories: None,
+) -> None:
+    model = build_model({"encoder": Encoder, "head": {"name": "test"}})
+
+    assert model(torch.tensor(3.0)).item() == 8.0
+
+
+def test_build_model_refuses_a_class_that_is_not_a_module() -> None:
+    with pytest.raises(TypeError, match="nn.Module"):
+        build_model({"encoder": dict})
+
+
+def test_build_model_takes_a_built_stage_and_wires_what_it_publishes() -> None:
+    encoder = Encoder(feature_channels=5)
+
+    model = build_model({"encoder": encoder, "head": Head})
+
+    assert model.get_submodule("encoder") is encoder
+    assert model(torch.tensor(3.0)).item() == 11.0
+
+
+def test_a_chain_holding_a_built_stage_has_no_recipe_to_export() -> None:
+    model = build_model({"encoder": Encoder(), "head": Head})
+
+    with pytest.raises(ValueError, match="'encoder'"):
+        model.stage_specs

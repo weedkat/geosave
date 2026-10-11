@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from upath import UPath
 from shapely.geometry import box, mapping
 
 from geosave_engine.geodata import GeoVector, io
@@ -38,20 +39,18 @@ def test_plain_geojson_nested_assets_remain_mappings(tmp_path):
 def test_nullable_assets_on_an_ordinary_vector_survive_geoparquet(tmp_path):
     source = GeoVector.from_geometry(box(0, 0, 1, 1), properties={"assets": None})
     path = source.gs.to_geoparquet(tmp_path / "plain.parquet")
-    restored = io.read_vector(path)
+    restored = io.open_vector(path)
     assert sorted(restored.columns) == ["assets", "geometry"]
     assert len(restored) == 1
 
 
 def test_geojson_writes_to_a_remote_url(bucket: str) -> None:
-    import fsspec
-
     plots = GeoVector.from_geometry(box(0, 0, 1, 1), properties={"name": "a"})
 
     written = plots.gs.to_geojson(f"{bucket}/plots.geojson")
 
-    assert written == f"{bucket}/plots.geojson"
-    stored = json.loads(fsspec.open(written).open().read())
+    assert written == UPath(f"{bucket}/plots.geojson")
+    stored = json.loads(written.read_text())
     assert [feature["properties"]["name"] for feature in stored["features"]] == ["a"]
 
 

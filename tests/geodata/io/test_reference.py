@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from geosave_engine.geodata import read_vector
+from geosave_engine.geodata import open_vector
 
 
 @pytest.mark.parametrize("georeferenced", [True, False])
@@ -30,7 +30,7 @@ def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
     # A plain table's columns are stored as given, hrefs included.
     stored = pq.read_table(path).column("assets")[0].as_py()
     assert stored["image"]["href"] == str(tmp_path / "image.nc")
-    restored = read_vector(path)
+    restored = open_vector(path)
     assert restored.crs == frame.crs
     assert restored.iloc[0].assets["image"]["href"] == str(tmp_path / "image.nc")
 
@@ -38,10 +38,10 @@ def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
 @pytest.mark.parametrize("format", ["netcdf", "zarr"])
 def test_unindexed_pixel_raster_needs_no_geographic_id(tmp_path, format):
     import xarray as xr
-    from geosave_engine.geodata import read_raster
+    from geosave_engine.geodata import open_raster
 
     source = xr.Dataset({"image": (("y", "x"), np.arange(4).reshape(2, 2))})
     suffix = ".nc" if format == "netcdf" else ".zarr"
     saved = getattr(source.gs, f"to_{format}")(tmp_path / f"pixels{suffix}")
-    with read_raster(saved) as restored:
+    with open_raster(saved) as restored:
         xr.testing.assert_equal(restored, source)

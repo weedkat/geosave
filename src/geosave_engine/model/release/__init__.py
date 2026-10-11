@@ -1,5 +1,8 @@
-"""Publish and load complete native model artifacts."""
+"""Release native model chains as Transformers models.
 
-from .artifact import load_model, load_spec, publish_model, save_model
+Importing this package registers `GeoSaveModel` with `AutoModel`.
+"""
 
-__all__ = ["load_model", "load_spec", "publish_model", "save_model"]
+from .huggingface import GeoSaveConfig, GeoSaveModel
+
+__all__ = ["GeoSaveConfig", "GeoSaveModel"]

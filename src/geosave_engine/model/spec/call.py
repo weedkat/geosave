@@ -11,20 +11,33 @@ from pydantic import ConfigDict, Field, field_validator
 
 from .base import SpecModel
 
-_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+# An importable call: dotted names only.
+_CALL_PATH = re.compile(rf"{_NAME}(?:\.{_NAME})*")
+# A reference step: `.attribute`, or `["key"]` for a name no attribute can
+# spell, such as the STAC property `view:sun_azimuth`.
+_STEP = re.compile(rf'\.({_NAME})|\["([^"\]]+)"\]')
+_REF_PATH = re.compile(rf'({_NAME})(?:\.{_NAME}|\["[^"\]]+"\])*')
 
 
 class Ref:
-    """Name a supplied value or one of its Python attributes.
+    """Name a supplied value, one of its attributes, or one of its keys.
+
+    Inside a YAML flow mapping, quote a path holding a key:
+    `{azimuth: !ref 'scene["view:sun_azimuth"]'}`.
 
     Args:
-        path: Value name followed by optional dot-separated attributes.
+        path: Value name followed by `.attribute` and `["key"]` steps.
+
+    Examples:
+        >>> Ref('scene["view:sun_azimuth"]').resolve({"scene": {"view:sun_azimuth": 151.2}})
+        151.2
     """
 
     __slots__ = ("_path",)
 
     def __init__(self, path: str) -> None:
-        if not isinstance(path, str) or not _PATH.fullmatch(path):
+        if not isinstance(path, str) or not _REF_PATH.fullmatch(path):
             raise ValueError(f"Invalid reference path: {path!r}")
         self._path = path
 
@@ -36,14 +49,24 @@ class Ref:
     @property
     def root(self) -> str:
         """Return the name required in the supplied inputs."""
-        return self.path.split(".", 1)[0]
+        match = _REF_PATH.match(self.path)
+        assert match is not None
+        return match.group(1)
 
     def resolve(self, inputs: Mapping[str, object]) -> object:
-        """Retrieve the value, following attributes without calling methods."""
-        name, *attributes = self.path.split(".")
-        result = inputs[name]
-        for attribute in attributes:
-            result = getattr(result, attribute)
+        """Retrieve the value, following attributes and keys without calling methods.
+
+        Raises:
+            KeyError: A value or key is absent; the note names this path.
+            AttributeError: An attribute is absent; the note names this path.
+        """
+        try:
+            result = inputs[self.root]
+            for attribute, key in _STEP.findall(self.path, len(self.root)):
+                result = getattr(result, attribute) if attribute else result[key]
+        except (KeyError, AttributeError) as error:
+            error.add_note(f"While resolving !ref {self.path}")
+            raise
         return result
 
     def __repr__(self) -> str:
@@ -75,7 +98,7 @@ class CallSpec(SpecModel):
         """Require a reference or an importable module-level call path."""
         if isinstance(value, Ref):
             return value
-        if not _PATH.fullmatch(value):
+        if not _CALL_PATH.fullmatch(value):
             raise ValueError(f"Invalid call path: {value!r}")
         if "." not in value:
             raise ValueError("An imported call needs a module and callable name")

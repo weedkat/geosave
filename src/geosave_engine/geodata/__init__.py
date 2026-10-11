@@ -1,6 +1,7 @@
 """Public geodata surface."""
 
-from typing import TYPE_CHECKING
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import xarray as xr
@@ -12,15 +13,17 @@ from .core import (
     GeoRaster,
     GeoStack,
     GeoVector,
+    array,
     raster,
     stack,
 )
 from . import io
 from .io.raster.gdal import configure_gdal
-from .io import read_raster, read_stack, read_vector
+from .io import open_raster, open_stack, open_vector
 
 
 if TYPE_CHECKING:
+    from . import cuts, features, stac
 
     class DataArray(xr.DataArray):
         """Xarray DataArray carrying GeoSave's `gs` accessor.
@@ -65,6 +68,20 @@ else:
     GeoDataFrame = gpd.GeoDataFrame
 
 
+# STAC brings its own heavy dependencies, so these load on first use.
+_LAZY = ("cuts", "features", "stac")
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY:
+        return import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY})
+
+
 __all__ = [
     "GeoAnchor",
     "GeoArray",
@@ -75,12 +92,16 @@ __all__ = [
     "GeoRaster",
     "GeoStack",
     "GeoVector",
+    "array",
     "configure_gdal",
+    "cuts",
+    "features",
     "io",
     "raster",
-    "read_raster",
-    "read_stack",
-    "read_vector",
+    "open_raster",
+    "open_stack",
+    "open_vector",
+    "stac",
     "stack",
     "transform",
 ]

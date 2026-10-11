@@ -3,8 +3,8 @@ from dask.delayed import delayed
 import numpy as np
 import pytest
 
-from geosave_engine.geodata import read_stack
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata import open_stack
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.geodata import io
 import geosave_engine.workflow.tasks.sample as save_module
 
@@ -31,7 +31,7 @@ def test_write_sample_publishes_flat_geotiff_assets(raw, tmp_path) -> None:
 
     assert result == str(output)
     assert {path.name for path in output.iterdir()} == {"label.tif", "optical.tif"}
-    with read_stack(output) as restored:
+    with open_stack(output) as restored:
         assert restored.gs.groups == ("label", "optical")
         assert restored.gs.geobox == rasters["label"].gs.geobox
         assert tuple(restored["label"].data_vars) == ("class",)
@@ -79,16 +79,16 @@ def test_write_sample_does_not_depend_on_raster_order(raw, tmp_path) -> None:
     assert result == str(tmp_path / "sample")
 
 
-def test_write_sample_keeps_a_singleton_time_as_a_scalar(raw, tmp_path) -> None:
+def test_write_sample_keeps_a_singleton_time_as_an_axis(raw, tmp_path) -> None:
     rasters = _sample_rasters(raw)
     instant = np.datetime64("2025-01-15T12:00:00")
     rasters["optical"] = rasters["optical"].expand_dims(time=[instant])
 
     save_module.write_sample(rasters, tmp_path / "sample")
 
-    with read_stack(tmp_path / "sample") as restored:
-        assert restored["optical"].time.dims == ()
-        assert restored["optical"].time.values == instant
+    with open_stack(tmp_path / "sample") as restored:
+        assert restored["optical"].time.dims == ("time",)
+        assert restored["optical"].time.values.tolist() == [instant]
 
 
 def test_write_sample_refuses_a_multitemporal_geotiff(raw, tmp_path) -> None:
@@ -103,7 +103,7 @@ def test_write_sample_refuses_a_multitemporal_geotiff(raw, tmp_path) -> None:
     assert not (tmp_path / "sample").exists()
 
 
-@pytest.mark.parametrize("option", ["layout", "split_bands", "overwrite", "compute"])
+@pytest.mark.parametrize("option", ["layout", "overwrite", "compute"])
 def test_write_sample_reserves_publication_options(
     raw, tmp_path, monkeypatch, option
 ) -> None:
@@ -158,7 +158,7 @@ def test_write_sample_zarr_round_trip(raw, tmp_path) -> None:
     assert save_module.write_sample(rasters, output, format="zarr") == str(output)
 
     assert {path.name for path in output.iterdir()} == {"label.zarr", "optical.zarr"}
-    with read_stack(output) as restored:
+    with open_stack(output) as restored:
         assert restored.gs.groups == ("label", "optical")
         np.testing.assert_array_equal(
             restored["label"]["class"], rasters["label"]["class"]
@@ -172,7 +172,7 @@ def test_a_zarr_sample_keeps_a_time_series(raw, tmp_path) -> None:
 
     save_module.write_sample(rasters, tmp_path / "sample", format="zarr")
 
-    with read_stack(tmp_path / "sample") as restored:
+    with open_stack(tmp_path / "sample") as restored:
         assert restored["optical"].sizes["time"] == 2
 
 

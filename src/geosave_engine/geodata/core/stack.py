@@ -23,21 +23,26 @@ Examples:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Unpack, cast, overload
+from upath import UPath
+from typing import TYPE_CHECKING, Any, Literal, Unpack, cast, overload
 
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import pandas as pd
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-import geosave_engine.geodata.attrs as attrs
 from geosave_engine.geodata.transform import warp
 
 from .base import GeoRasterAccessor
-from geosave_engine.geodata.conventions import CRS_COORDINATE, SPATIAL_DIMENSIONS
+from geosave_engine.geodata.conventions import (
+    CRS_COORDINATE,
+    SPATIAL_DIMENSIONS,
+    TIME_COORDINATE,
+)
 
 if TYPE_CHECKING:
+    from geosave_engine.geodata.io.raster.cogs import CogFile
+    import torch
     from collections.abc import Callable
 
     from dask.delayed import Delayed
@@ -55,9 +60,8 @@ if TYPE_CHECKING:
 
     from odc.geo import SomeResolution
     from geosave_engine.geodata import DataTree, Dataset
-    from geosave_engine.geodata.io.raster.geotiff import COGWriteOptions
     from geosave_engine.geodata.io.raster.zarr import ZarrWriteOptions
-    from geosave_engine.geodata.io.storage import StorageOptions
+    from geosave_engine.geodata.io.storage import Location, StorageOptions
 
     from .anchor import GeoAnchor
 
@@ -148,15 +152,16 @@ def map_groups(
         ('sentinel-2-l2a', 'dem')
     """
     changed = stack({name: change(raster) for name, raster in tree.gs.rasters.items()})
-    return attrs.rebase(changed, tree.gs.attrs.root)
+    changed.attrs = dict(tree.attrs)
+    return changed
 
 
 @xr.register_datatree_accessor("gs")
 class GeoStack(GeoRasterAccessor["DataTree"]):
     """Read and persist one raster-stack DataTree.
 
-    `attrs` reads only the root's own attrs; groups carry their own, read
-    through `rasters["<group>"].gs.attrs`.
+    The root carries the stack's own attrs; each group's raster carries its
+    own, read through `rasters["<group>"].gs`.
 
     Args:
         data: Flat DataTree whose direct children are raster Datasets.
@@ -456,68 +461,134 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
             for name, raster in self.rasters.items()
         }
 
+    def to_tensor(
+        self, *, dtype: str | torch.dtype | None = None
+    ) -> dict[str, torch.Tensor]:
+        """Stack each group's variables into one model-input tensor.
+
+        Args:
+            dtype: Torch dtype or its string name, applied to every group.
+                None keeps each group's own dtype.
+
+        Returns:
+            {
+                group name: tensor shaped `(*axes, band, y, x)`,
+            }
+
+        Raises:
+            ValueError: A dtype name is unknown, or a group's `to_numpy`
+                refuses it.
+            TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
+                dtype has no tensor equivalent.
+
+        Examples:
+            >>> {name: t.shape for name, t in scene.gs.to_tensor().items()}
+            {'image': torch.Size([4, 256, 256]), 'label': torch.Size([1, 256, 256])}
+        """
+        return {
+            name: raster.gs.to_tensor(dtype=dtype)
+            for name, raster in self.rasters.items()
+        }
+
     def to_cog(
         self,
-        destination: str | PathLike[str],
+        path: str | PathLike[str] | Mapping[str, str | PathLike[str]],
         *,
-        split_bands: bool = False,
         map_scale: float | None = None,
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
-        **options: Unpack[COGWriteOptions],
-    ) -> dict[str, tuple[Path | str, ...]]:
-        """Write every group as Cloud Optimized GeoTIFFs named after the group.
+        **keywords: Any,
+    ) -> tuple[CogFile, ...]:
+        """Write every layer as Cloud Optimized GeoTIFFs, as its path template names.
+
+        Each layer is written as `Dataset.gs.to_cog` writes a raster, with one
+        more field, `collection`, naming the layer. Layers whose dates differ,
+        as a dated image beside an undated elevation model, take a template
+        each.
 
         Args:
-            destination: Directory or fsspec URL the groups are written into.
-            split_bands: Give each variable its own single-band file, rather
-                than keeping them as bands of one file per instant.
+            path: One template for every layer, as `"out/{collection}.tif"`, or
+                layer names mapped to their own templates.
             map_scale: Map denominator used to write pixels per centimetre in
                 every file.
             overwrite: Replace files that already exist.
             storage_options: Options for the filesystem a URL names.
-            **options: COG creation options passed to every file.
+            **keywords: COG creation options and template fields, as
+                `Dataset.gs.to_cog` takes them.
 
         Returns:
-            Group names mapped to exactly the files written for each group,
-            which `read_stack` reads back.
+            One `CogFile` per file, layers in order, each naming its layer as
+            `collection`.
 
         Raises:
+            ValueError: Two groups would share a file, a group without dates
+                is given `{time}`, a template mapping misses a group, or a
+                group cannot be written as `Dataset.gs.to_cog` explains.
+            TypeError: A keyword repeats a built-in field.
+            KeyError: A template names a field nothing fills.
             FileExistsError: A file exists and `overwrite` is false.
-            ValueError: A group spans a non-spatial axis other than time.
 
         Examples:
-            >>> paths = scene.gs.to_cog("scene")
-            >>> paths["dem"]
-            (PosixPath('scene/dem.tif'),)
+            >>> scene.gs.to_cog("out/{collection}_{time:%Y%m%d}.tif")
+            >>> scene.gs.to_cog({"optical": "out/optical_{time:%Y%m%d}.tif", "dem": "out/dem.tif"})
         """
         from geosave_engine.geodata.io import cogs
 
-        return {
-            name: cogs.write(
-                raster,
-                f"{str(destination).rstrip('/')}/{name}",
-                split_bands=split_bands,
+        options, fields = cogs.split_keywords(keywords)
+        if isinstance(path, Mapping):
+            missing = [name for name in self.groups if name not in path]
+            if missing:
+                raise ValueError(f"the templates name no path for groups {missing}")
+            templates = {name: str(path[name]) for name in self.groups}
+        else:
+            templates = {name: str(path) for name in self.groups}
+
+        # Every group is planned before any file is written, so a clash writes nothing.
+        planned = {}
+        owners: dict[str, str] = {}
+        for name, raster in self.rasters.items():
+            dated = TIME_COORDINATE in raster.dims
+            if not dated and TIME_COORDINATE in cogs.fields_named(templates[name]):
+                raise ValueError(
+                    f"group {name!r} has no dates, so {{time}} cannot be filled; "
+                    f"give a template per group, as "
+                    f'to_cog({{{name!r}: "out/{name}.tif", ...}})'
+                )
+            planned[name] = cogs.layout(
+                raster, templates[name], collection=name, fields=fields
+            )
+            for file in planned[name]:
+                if file.path in owners:
+                    raise ValueError(
+                        f"2 layers would share {file.path}; add {{collection}} to "
+                        f"the path, as out/{{collection}}.tif"
+                    )
+                owners[file.path] = name
+
+        return tuple(
+            written
+            for files in planned.values()
+            for written in cogs.write_files(
+                files,
                 map_scale=map_scale,
                 overwrite=overwrite,
                 storage_options=storage_options,
                 **options,
             )
-            for name, raster in self.rasters.items()
-        }
+        )
 
     def to_zarr(
         self,
-        destination: str | PathLike[str],
+        destination: Location,
         *,
         compute: bool = True,
         overwrite: bool = False,
         **write_options: Unpack[ZarrWriteOptions],
-    ) -> dict[str, Path | str] | Delayed:
+    ) -> dict[str, UPath] | Delayed:
         """Write every group as its own Zarr store named after the group.
 
         Args:
-            destination: Directory or fsspec URL the stores are written into.
+            destination: Directory, fsspec URL, or UPath the stores are written into.
             compute: False defers writing pixels.
             overwrite: Replace stores that already exist.
             **write_options: Supported xarray Zarr write options, applied to
@@ -525,7 +596,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Returns:
             Group names mapped to the store written for each, which
-            `read_stack` reads back, or a delayed task returning that mapping
+            `open_stack` reads back, or a delayed task returning that mapping
             when `compute=False`.
 
         Raises:
@@ -534,18 +605,19 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Examples:
             >>> sample.gs.to_zarr("samples/s0")
-            {'optical': PosixPath('samples/s0/optical.zarr'),
-             'label': PosixPath('samples/s0/label.zarr')}
+            {'optical': PosixUPath('samples/s0/optical.zarr'),
+             'label': PosixUPath('samples/s0/label.zarr')}
         """
         from dask.delayed import delayed
 
-        from geosave_engine.geodata.io import zarr
+        from geosave_engine.geodata.io import storage, zarr
 
+        folder = storage.location(destination)
         written = {}
         for name, raster in self.rasters.items():
             written[name] = zarr.write(
                 raster,
-                f"{str(destination).rstrip('/')}/{name}.zarr",
+                folder / f"{name}.zarr",
                 compute=compute,
                 overwrite=overwrite,
                 **write_options,
@@ -556,18 +628,18 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
     def to_netcdf(
         self,
-        destination: str | PathLike[str],
+        destination: Location,
         *,
         compute: bool = True,
         engine: NetCDFEngine = "netcdf4",
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[NetCDFWriteOptions],
-    ) -> dict[str, Path | str] | Delayed:
+    ) -> dict[str, UPath] | Delayed:
         """Write every group as its own netCDF file named after the group.
 
         Args:
-            destination: Directory or fsspec URL the files are written into.
+            destination: Directory, fsspec URL, or UPath the files are written into.
             compute: False defers writing pixels.
             engine: Concrete xarray netCDF writing engine.
             overwrite: Replace files that already exist.
@@ -577,7 +649,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Returns:
             Group names mapped to the file written for each, which
-            `read_stack` reads back, or a delayed task returning that mapping
+            `open_stack` reads back, or a delayed task returning that mapping
             when `compute=False`.
 
         Raises:
@@ -587,22 +659,22 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Examples:
             >>> sample.gs.to_netcdf("samples/s0")
-            {'optical': PosixPath('samples/s0/optical.nc'),
-             'label': PosixPath('samples/s0/label.nc')}
+            {'optical': PosixUPath('samples/s0/optical.nc'),
+             'label': PosixUPath('samples/s0/label.nc')}
         """
         from dask.delayed import delayed
 
-        from geosave_engine.geodata.io import netcdf
+        from geosave_engine.geodata.io import netcdf, storage
 
+        folder = storage.location(destination, storage_options)
         written = {}
         for name, raster in self.rasters.items():
             written[name] = netcdf.write(
                 raster,
-                f"{str(destination).rstrip('/')}/{name}.nc",
+                folder / f"{name}.nc",
                 compute=compute,
                 overwrite=overwrite,
                 engine=engine,
-                storage_options=storage_options,
                 **write_options,
             )
         if not compute:

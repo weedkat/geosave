@@ -31,9 +31,10 @@ def test_call_invokes_imports_bound_methods_and_nested_references() -> None:
         "literal": {"ref": "source"},
         "text": "!ref source",
     }
-    assert CallSpec(call=Ref("number.as_integer_ratio")).invoke(
-        {"number": 1.5}
-    ) == (3, 2)
+    assert CallSpec(call=Ref("number.as_integer_ratio")).invoke({"number": 1.5}) == (
+        3,
+        2,
+    )
 
 
 def test_call_selects_only_referenced_roots() -> None:
@@ -79,10 +80,25 @@ def test_call_binds_none_as_the_complete_result() -> None:
     assert items == {"answer": 42}
 
 
-@pytest.mark.parametrize("path", ["", "a..b", ".a", "a.", "a[0]", "a()"])
+@pytest.mark.parametrize(
+    "path",
+    ["", "a..b", ".a", "a.", "a[0]", "a()", 'a["x"', 'a[""]', 'a["x"]b', '["x"]'],
+)
 def test_reference_rejects_non_attribute_paths(path: str) -> None:
     with pytest.raises(ValueError):
         Ref(path)
+
+
+def test_reference_reads_a_key_no_attribute_can_name() -> None:
+    reference = Ref('scene["view:sun_azimuth"].real')
+
+    assert reference.root == "scene"
+    assert reference.resolve({"scene": {"view:sun_azimuth": 1.5}}) == 1.5
+
+
+def test_a_call_path_holds_no_key_lookup() -> None:
+    with pytest.raises(ValidationError, match="call path"):
+        CallSpec(call='module["name"].function')
 
 
 @pytest.mark.parametrize(
@@ -135,8 +151,9 @@ def test_call_rejects_missing_and_noncallable_attributes() -> None:
 
     with pytest.raises(TypeError, match="callable"):
         CallSpec(call=Ref("source.value")).invoke({"source": Source()})
-    with pytest.raises(AttributeError):
+    with pytest.raises(AttributeError) as caught:
         CallSpec(call=Ref("source.missing")).invoke({"source": Source()})
+    assert "While resolving !ref source.missing" in caught.value.__notes__
 
 
 def test_call_error_note_identifies_the_declared_target() -> None:

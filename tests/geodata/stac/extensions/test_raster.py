@@ -10,8 +10,7 @@ import numpy as np
 import pytest
 from pystac.extensions.raster import RasterBand, RasterExtension
 
-from geosave_engine.geodata import read_raster
-from geosave_engine.geodata.attrs import CFVariable, Packing
+from geosave_engine.geodata import open_raster
 from geosave_engine.geodata.stac.extensions import raster
 
 from tests.geodata.conftest import build_raster
@@ -28,10 +27,10 @@ def _asset(href: str = "scene.tif") -> pystac.Asset:
 
 
 def test_a_saved_cog_states_what_it_stores(scene, tmp_path) -> None:
-    path = scene.gs.to_cog(tmp_path / "forest")[0]
+    path = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")[0].href
     asset = _asset(str(path))
 
-    with read_raster(path) as saved, dask.config.set(scheduler=_refuse):
+    with open_raster(path) as saved, dask.config.set(scheduler=_refuse):
         raster.write(asset, saved)
 
     bands = RasterExtension.ext(asset).bands
@@ -41,7 +40,8 @@ def test_a_saved_cog_states_what_it_stores(scene, tmp_path) -> None:
 
 
 def test_packing_and_units_reach_the_band() -> None:
-    scene = build_raster(packed=True).gs.rebase(CFVariable(units="1"), target="red")
+    scene = build_raster(packed=True)
+    scene = scene.assign(red=scene.red.assign_attrs(units="1"))
     asset = _asset()
 
     raster.write(asset, scene)
@@ -86,11 +86,8 @@ def test_a_nonfinite_fill_uses_stac_strings(fill, expected) -> None:
 def test_packing_and_units_are_read_from_a_band() -> None:
     band = RasterBand.create(nodata=0, unit="1", scale=0.0001, offset=-0.1)
 
-    assert raster.read(band) == [
-        Packing(scale_factor=0.0001, add_offset=-0.1),
-        CFVariable(units="1"),
-    ]
+    assert raster.read(band) == {"scale_factor": 0.0001, "add_offset": -0.1, "units": "1"}
 
 
 def test_a_band_stating_only_its_type_reads_nothing() -> None:
-    assert raster.read(RasterBand({"data_type": "float32", "nodata": 0})) == []
+    assert raster.read(RasterBand({"data_type": "float32", "nodata": 0})) == {}

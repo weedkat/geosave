@@ -12,7 +12,8 @@ from tiler import Tiler
 if TYPE_CHECKING:
     from geosave_engine.geodata import GeoDataFrame
 
-type ChipMode = Literal["reflect", "edge", "constant", "wrap"]
+# No "wrap": a chip reads only its own pixels, never the far edge a wrap needs.
+type ChipMode = Literal["reflect", "edge", "constant"]
 
 
 def layout(
@@ -68,64 +69,56 @@ def chips(
         mode: How a chip reaching past its window is filled.
 
     Returns:
-        One row per chip, windows in the order given. `id` gains
-        `/chip-<n>`, `parent` names the window cut, `chip` is its number in
-        that window's layout, `row_off`, `col_off`, `height`, `width`,
-        `transform` and `geometry` state its own pixels, and `halo`,
-        `overlap` and `mode` state the layout, which a read past the window's
-        edge and a later merge both use.
+        One row per chip, windows in the order given. `parent` is the
+        position of the window cut, `chip` its number in that window's
+        layout, `proj:transform`, `proj:shape` and `geometry` its own grid,
+        `halo`, `overlap` and `mode` the layout a merge rebuilds, and `pad`
+        the pixels of this chip past the window, filled as `mode` states.
 
     Examples:
-        >>> cut = chips(stacks(items), 224, overlap=32)
-        >>> cut.iloc[0][["id", "chip", "height", "width"]].tolist()
-        ['s0/chip-0', 0, 224, 224]
+        >>> cut = chips(stacks(items, on="label"), 224, overlap=32)
+        >>> cut.iloc[0][["parent", "chip", "proj:shape"]].tolist()
+        [0, 0, [224, 224]]
     """
     side = (size, size) if isinstance(size, int) else (size[0], size[1])
     cut = []
-    for _, window in windows.iterrows():
-        tiler, halo = layout(
-            (int(window["height"]), int(window["width"])),
-            side,
-            overlap=overlap,
-            mode=mode,
-        )
-        # Unreferenced pixels have a layout and offsets, but no footprint.
-        located = isinstance(window["crs"], str)
-        grid = GeoBox(
-            (int(window["height"]), int(window["width"])),
-            Affine(*window["transform"]),
-            window["crs"] if located else None,
-        )
+    for position, (_, window) in enumerate(windows.iterrows()):
+        grid = window.gs.geobox
+        height, width = grid.shape
+        tiler, halo = layout((height, width), side, overlap=overlap, mode=mode)
         for number in range(len(tiler)):
             near, far = tiler.get_tile_bbox(number)
             row = int(near[0]) - halo[0][0]
             column = int(near[1]) - halo[1][0]
-            height, width = (int(edge) for edge in far - near)
-            chip = grid.translate_pix(column, row).crop((height, width))
+            h, w = (int(edge) for edge in far - near)
+            chip = GeoBox(
+                (h, w), grid.transform * Affine.translation(column, row), grid.crs
+            )
             cut.append(
                 {
                     **window.to_dict(),
-                    "id": f"{window['id']}/chip-{number}",
-                    "parent": window["id"],
+                    "parent": position,
                     "chip": number,
-                    "row_off": int(window["row_off"]) + row,
-                    "col_off": int(window["col_off"]) + column,
-                    "height": height,
-                    "width": width,
-                    "transform": list(chip.transform)[:6],
+                    "proj:transform": list(chip.transform)[:6],
+                    "proj:shape": [h, w],
                     "halo": [list(widths) for widths in halo],
                     "overlap": overlap,
                     "mode": mode,
-                    "geometry": chip.extent.to_crs("EPSG:4326").geom
-                    if located
-                    else None,
+                    # This chip's pixels past the window, read by filling, not reading.
+                    "pad": [
+                        [max(0, -row), max(0, row + h - height)],
+                        [max(0, -column), max(0, column + w - width)],
+                    ],
+                    "geometry": chip.extent.to_crs("EPSG:4326").geom,
                 }
             )
     # No window cut leaves an empty table, which still names its columns.
     columns = list(
-        dict.fromkeys([*windows.columns, *["chip", "halo", "overlap", "mode"]])
+        dict.fromkeys([*windows.columns, "chip", "halo", "overlap", "mode", "pad"])
     )
     return cast(
         "GeoDataFrame",
-        gpd.GeoDataFrame(cut, columns=columns, geometry="geometry", crs=windows.crs),
+        gpd.GeoDataFrame(
+            cut, columns=columns, geometry="geometry", crs=windows.crs
+        ).reset_index(drop=True),
     )

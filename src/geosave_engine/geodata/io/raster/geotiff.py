@@ -7,6 +7,8 @@ keeps one, a metadata tag otherwise. rioxarray is left the pixels and the grid.
 from __future__ import annotations
 
 from pathlib import Path
+
+from upath import UPath
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
 
@@ -22,26 +24,20 @@ from rasterio.shutil import copy  # type: ignore[import-untyped]  # ty: ignore[u
 import orjson
 import xarray as xr
 from xarray.conventions import encode_cf_variable
+from xarray.core.utils import equivalent
 
-from geosave_engine.geodata.attrs import (
-    AttrsHeader,
-    GDALVariable,
-    GeoTIFFTags,
-    Nodata,
-    create_header,
-    rebase,
-)
-from geosave_engine.geodata.attrs.model import attrs_equal
+import geosave_engine.geodata.attrs as attrs
 
 from geosave_engine.geodata.conventions import TIME_COORDINATE
 from geosave_engine.geodata.utils.color import parse_color
 
 from .. import storage
 from ..storage import StorageOptions
+from .tags import GeoTIFFTags
 
 if TYPE_CHECKING:
     from rasterio.io import DatasetWriter
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from os import PathLike
 
     from geosave_engine.geodata import Dataset
@@ -129,7 +125,7 @@ def write_cog(
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> Path | str:
+) -> UPath:
     """Write one Dataset as a Cloud Optimized GeoTIFF, a band per variable.
 
     Each variable names itself in its band's metadata. A scalar `time`
@@ -155,7 +151,7 @@ def write_cog(
 
     Examples:
         >>> write_cog(ds, "scene.tif", compress="DEFLATE")
-        PosixPath('scene.tif')
+        PosixUPath('scene.tif')
     """
     return _write(
         ds,
@@ -176,7 +172,7 @@ def write_gtiff(
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **options: Unpack[GTiffWriteOptions],
-) -> Path | str:
+) -> UPath:
     """Write one Dataset as a plain GeoTIFF, a band per variable.
 
     Reach for `write_cog` unless a consumer needs a striped or otherwise
@@ -201,7 +197,7 @@ def write_gtiff(
 
     Examples:
         >>> write_gtiff(ds, "scene.tif", tiled=True, blockxsize=512)
-        PosixPath('scene.tif')
+        PosixUPath('scene.tif')
     """
     return _write(
         ds,
@@ -223,7 +219,7 @@ def _write(
     overwrite: bool,
     storage_options: StorageOptions | None,
     options: Mapping[str, Any],
-) -> Path | str:
+) -> UPath:
     """Encode one cube through the GDAL driver `driver` names.
 
     Args:
@@ -236,7 +232,7 @@ def _write(
         options: Creation options the driver supports.
 
     Returns:
-        The written path, or the URL a remote file was uploaded to.
+        The written file, as a UPath.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -253,7 +249,6 @@ def _write(
         )
 
     ds = _repack(ds)
-    header = create_header(ds)
 
     cube = ds
     # One file holds one instant, however the axis spells it.
@@ -271,28 +266,19 @@ def _write(
         cube = cube.drop_vars(TIME_COORDINATE)
 
     names = [str(name) for name in cube.data_vars]
-    bands = [header.data_vars[name] for name in names]
 
     # GDAL writes one fill value for the whole file, so the bands must share one.
-    fill_values = [(band.get(Nodata) or Nodata()).fill_value for band in bands]
-    if not all(attrs_equal(fill_value, fill_values[0]) for fill_value in fill_values):
+    fill_values = [cube[name].gs.nodata for name in names]
+    if not all(equivalent(fill_value, fill_values[0]) for fill_value in fill_values):
         raise ValueError(
             f"one GeoTIFF holds one fill value, but these bands declare "
             f"{dict(zip(names, fill_values, strict=True))}; write one across "
             f"them with raster.gs.write_nodata(...) first"
         )
 
-    written = rebase(cube, tags)
+    root = {**cube.attrs, **tags.model_dump(mode="json", exclude_none=True)}
     # A band names itself in its own metadata; GDAL owns the interpretation.
-    for name in names:
-        written = rebase(written, GDALVariable(variable_name=name), target=name)
-
-    # A header names its variables; the cube's order decides their bands.
-    snapshot = create_header(written)
-    header = AttrsHeader(
-        root=snapshot.root,
-        data_vars={name: snapshot.data_vars[name] for name in names},
-    )
+    bands = [_named(cube[name], name) for name in names]
 
     # rioxarray turns any attr it is handed into a tag, so it is handed none.
     cube = cube.copy(deep=False)
@@ -319,7 +305,7 @@ def _write(
             )
             # GDAL honours metadata on an open dataset, not as creation options.
             with rasterio.open(source, "r+") as dst:
-                write_header(dst, header)
+                write_header(dst, root, bands)
 
             if driver == "COG":
                 copy(source, target, driver="COG", **options)
@@ -333,7 +319,9 @@ def _write(
     )
 
 
-def write_header(dst: DatasetWriter, header: AttrsHeader) -> None:
+def write_header(
+    dst: DatasetWriter, root: Mapping[str, Any], bands: Sequence[xr.DataArray]
+) -> None:
     """Write every attr onto an open GDAL raster, in the slot GDAL reads it from.
 
     GDAL keeps the description, unit, scale, offset, fill value, interpretation
@@ -341,42 +329,38 @@ def write_header(dst: DatasetWriter, header: AttrsHeader) -> None:
     every other attr is a plain metadata item, and none is stated twice.
 
     Args:
-        dst: Raster open for update, its bands in the header's data-variable
-            order.
-        header: Attrs to write.
+        dst: Raster open for update.
+        root: Attrs of the whole file.
+        bands: One variable per band of `dst`, in band order.
 
     Raises:
-        ValueError: The header does not describe every band of `dst`.
+        ValueError: `bands` does not hold one variable per band of `dst`.
 
     Examples:
         >>> with rasterio.open(path, "r+") as dst:
-        ...     write_header(dst, create_header(ds))
+        ...     write_header(dst, ds.attrs, list(ds.data_vars.values()))
     """
-    bands = list(header.data_vars.values())
     if len(bands) != dst.count:
         raise ValueError(
-            f"{dst.name} holds {dst.count} bands but the header describes "
-            f"{len(bands)}; pass one namespace per band, in band order"
+            f"{dst.name} holds {dst.count} bands but {len(bands)} variables "
+            f"describe them; pass one variable per band, in band order"
         )
 
-    dst.update_tags(**_as_text(header.root.to_attrs()))
+    dst.update_tags(**_as_text(root))
 
+    owned = {*attrs.Packing.KEYS, *attrs.Nodata.KEYS, "color_map", "colorinterp"}
     scales: list[float] = []
     offsets: list[float] = []
     interpretations: list[ColorInterp] = []
     for index, band in enumerate(bands, start=1):
-        tags = band.to_attrs()
+        packing = band.gs.packing
+        legend = band.gs.legend
+        identity = attrs.parse(band, attrs.GDALBand)
+        tags = {key: value for key, value in band.attrs.items() if key not in owned}
 
         # Each of these leaves the tags for a band property GDAL keeps it in.
         description = tags.pop("long_name", None)
         unit = tags.pop("units", None)
-        scale = tags.pop("scale_factor", None)
-        offset = tags.pop("add_offset", None)
-        palette = tags.pop("color_map", None)
-        interpretation = tags.pop("colorinterp", None)
-        tags.pop("_FillValue", None)
-        tags.pop("nodata", None)
-
         dst.update_tags(index, **_as_text(tags))
 
         if description is not None:
@@ -384,10 +368,15 @@ def write_header(dst: DatasetWriter, header: AttrsHeader) -> None:
         if unit is not None:
             dst.set_band_unit(index, unit)
 
-        scales.append(1.0 if scale is None else scale)
-        offsets.append(0.0 if offset is None else offset)
+        scales.append(1.0 if packing is None else packing.scale_factor)
+        offsets.append(0.0 if packing is None else packing.add_offset)
+        palette = None if legend is None else legend.color_map
+        interpretation = None if identity is None else identity.colorinterp
+        # A colour table makes a band a palette, whatever it was read as.
         interpretations.append(
-            ColorInterp[interpretation or ColorInterp.undefined.name]
+            ColorInterp.palette
+            if palette is not None
+            else ColorInterp[interpretation or ColorInterp.undefined.name]
         )
 
         if palette is not None:
@@ -407,9 +396,17 @@ def write_header(dst: DatasetWriter, header: AttrsHeader) -> None:
     if any(band is not ColorInterp.undefined for band in interpretations):
         dst.colorinterp = interpretations
 
-    shared = (bands[0].get(Nodata) or Nodata()).fill_value
+    shared = bands[0].gs.nodata if bands else None
     if shared is not None:
         dst.nodata = shared
+
+
+def _named(band: xr.DataArray, name: str) -> xr.DataArray:
+    """Return the band stating its variable name, its interpretation kept."""
+    known = attrs.parse(band, attrs.GDALBand) or attrs.GDALBand()
+    return attrs.stamp(
+        band, attrs.GDALBand, known.model_copy(update={"variable_name": name})
+    )
 
 
 def _as_text(attrs: Mapping[str, Any]) -> dict[str, str]:

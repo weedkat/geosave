@@ -47,8 +47,8 @@ data:
   class_path: geosave_engine.ml.segmentation.supervised.DataModule
   init_args:
     spec: configs/model_spec.yaml
-    train: data/train/manifest.parquet
-    val: data/val/manifest.parquet
+    train: data/train.parquet
+    val: data/val.parquet
     target: label
     ignore_index: 255
     batch_size: 8

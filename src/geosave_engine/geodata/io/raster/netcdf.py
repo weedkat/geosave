@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
 from pathlib import Path
+
+from upath import UPath
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast, overload
 
 import xarray as xr
@@ -12,11 +14,9 @@ from dask.delayed import delayed
 from geosave_engine.geodata.conventions import to_yx
 
 from .. import storage
-from ..storage import StorageOptions, absolute_location
+from ..storage import Location, StorageOptions, absolute_location
 
 if TYPE_CHECKING:
-    from os import PathLike
-
     from dask.delayed import Delayed
     from xarray.coding.times import CFDatetimeCoder, CFTimedeltaCoder
 
@@ -63,7 +63,7 @@ class NetCDFWriteOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     *,
     engine: NetCDFEngine = "netcdf4",
     chunks: NetCDFChunkSpec = None,
@@ -74,7 +74,7 @@ def read(
     """Open a netCDF file as a raster Dataset.
 
     Args:
-        source: Local netCDF path or URI.
+        source: Local netCDF path, `file://` URL, or UPath.
         engine: Xarray netCDF backend.
         chunks: Chunk configuration for the opened arrays.
         mask_and_scale: Decode CF packing to physical values instead of
@@ -94,7 +94,7 @@ def read(
             f"it first, or store the raster as Zarr"
         )
     opened = xr.open_dataset(
-        source,
+        storage.local_path(source),
         engine=engine,
         # A grid mapping variable is a coordinate; the CF default leaves it a data variable.
         decode_coords="all",
@@ -112,20 +112,20 @@ def read(
 @overload
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: Literal[True] = True,
     engine: NetCDFEngine = "netcdf4",
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **write_options: Unpack[NetCDFWriteOptions],
-) -> Path | str: ...
+) -> UPath: ...
 
 
 @overload
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: Literal[False],
     engine: NetCDFEngine = "netcdf4",
@@ -137,14 +137,14 @@ def write(
 
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: bool = True,
     engine: NetCDFEngine = "netcdf4",
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **write_options: Unpack[NetCDFWriteOptions],
-) -> Path | str | Delayed:
+) -> UPath | Delayed:
     """Write a raster to a netCDF file.
 
     Args:
@@ -181,7 +181,7 @@ def write(
                 f"{destination} is remote, and a NetCDF file is uploaded once "
                 f"written; pass compute=True"
             )
-        path = storage.local_path(destination)
+        path = storage.location(destination)
         if path.suffix not in _FILE_SUFFIXES:
             raise ValueError(
                 f"destination {path.name!r} must end in one of {list(_FILE_SUFFIXES)}"

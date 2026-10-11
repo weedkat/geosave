@@ -8,20 +8,30 @@ from pathlib import Path
 import dask
 import numpy as np
 import pytest
+import xarray as xr
 from odc.geo.geobox import GeoBox
 from pystac.extensions.classification import ClassificationExtension
-from pystac.extensions.datacube import DatacubeExtension
+from pystac.extensions.eo import EOExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import RasterExtension
 
 from geosave_engine.geodata import io, raster, stac, stack
-from geosave_engine.geodata.attrs import Legend
-from geosave_engine.geodata.stac import table
-from geosave_engine.geodata.stac.extensions import GeosaveExtension, ZarrExtension
+from geosave_engine.geodata import open_vector
+from geosave_engine.geodata.io.vector import stac_geoparquet as table
 
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import build_raster, cog_template, stack_templates
 
 IDS = ["forest_20250601T000000", "forest_20250602T000000"]
+
+
+def _saved(data, root, name, *, by_band=False):
+    """Write a raster or stack in the layout these Items are named after."""
+    if isinstance(data, xr.DataTree):
+        return data.gs.to_cog(stack_templates(data, root / name))
+    template = cog_template(root, name, dated="time" in data.dims)
+    if by_band:
+        template = template.removesuffix(".tif") + "/{band}.tif"
+    return data.gs.to_cog(template)
 
 
 def _refuse(*args, **kwargs):
@@ -31,7 +41,7 @@ def _refuse(*args, **kwargs):
 @pytest.mark.integration
 def test_items_validate_against_the_stac_schemas(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    for built in stac.create_items(source.gs.to_cog(tmp_path / "forest")):
+    for built in table.to_items(stac.create_items(_saved(source, tmp_path, "forest"))):
         built.validate()
 
 
@@ -43,7 +53,7 @@ def test_a_footprint_is_built_for_a_grid_without_an_epsg_code(tmp_path: Path) ->
     ).assign_coords(time=np.datetime64("2025-01-15T12:00:00"))
     path = io.geotiff.write_cog(label, tmp_path / "laea.tif")
 
-    built = stac.create_item({"label": path}, id="laea")
+    (built,) = table.to_items(stac.create_item({"label": path}, id="laea"))
 
     assert built.bbox[0] == pytest.approx(56.78, abs=0.01)
     assert built.bbox[1] == pytest.approx(12.34, abs=0.01)
@@ -51,39 +61,27 @@ def test_a_footprint_is_built_for_a_grid_without_an_epsg_code(tmp_path: Path) ->
 
 def test_items_survive_the_table(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    items = stac.create_items(source.gs.to_cog(tmp_path / "forest", split_bands=True))
+    rows = stac.create_items(_saved(source, tmp_path, "forest", by_band=True))
 
-    saved = table.write(items, tmp_path / "catalog.parquet")
+    saved = rows.gs.to_geoparquet(tmp_path / "catalog.parquet")
 
-    restored = table.to_items(table.read(saved))
+    restored = table.to_items(open_vector(saved))
     assert [entry.id for entry in restored] == IDS
     assert sorted(restored[0].assets) == ["nir", "red"]
     assert RasterExtension.ext(restored[0].assets["red"]).bands[0].data_type == "uint16"
 
 
-def test_a_store_is_one_item_with_no_collection(scene, tmp_path):
-    path = scene.gs.to_zarr(tmp_path / "forest.zarr")
-
-    (built,) = stac.create_items(path)
-
-    assert built.id == "forest"
-    assert built.collection_id is None
-    assert list(built.assets) == ["image"]
-    assert built.assets["image"].href == str(path)
-    assert built.properties["start_datetime"] == "2025-06-01T00:00:00Z"
-
-
 def test_one_file_per_scene_is_one_item_per_instant(scene, tmp_path):
-    paths = scene.gs.to_cog(tmp_path / "forest")
+    paths = _saved(scene, tmp_path, "forest")
 
-    built = stac.create_items(paths)
+    built = table.to_items(stac.create_items(paths))
 
     assert [each.id for each in built] == [
         "forest_20250601T000000",
         "forest_20250611T000000",
     ]
     assert [list(each.assets) for each in built] == [["image"], ["image"]]
-    assert built[1].assets["image"].href == str(paths[1])
+    assert built[1].assets["image"].href == paths[1].href
     assert built[1].datetime == datetime(2025, 6, 11, tzinfo=UTC)
     assert [each.datetime.isoformat() for each in built] == [
         "2025-06-01T00:00:00+00:00",
@@ -93,68 +91,76 @@ def test_one_file_per_scene_is_one_item_per_instant(scene, tmp_path):
 
 
 def test_split_bands_become_one_asset_per_variable(scene, tmp_path):
-    paths = scene.gs.to_cog(tmp_path / "forest", split_bands=True)
+    paths = _saved(scene, tmp_path, "forest", by_band=True)
 
-    built = stac.create_items(paths)
+    built = table.to_items(stac.create_items(paths))
 
     assert [each.id for each in built] == [
         "forest_20250601T000000",
         "forest_20250611T000000",
     ]
-    assert list(built[0].assets) == ["red", "nir"]
-    assert built[1].assets["nir"].href == str(paths[3])
+    assert sorted(built[0].assets) == ["nir", "red"]
+    assert built[1].assets["nir"].href == paths[3].href
 
 
 def test_items_take_the_id_of_their_collection_without_a_link(scene, tmp_path):
     forest = stac.create_collection("forest", description="Forest samples")
 
-    built = stac.create_items(scene.gs.to_cog(tmp_path / "forest"), collection=forest)
+    built = table.to_items(
+        stac.create_items(_saved(scene, tmp_path, "forest"), collection=forest)
+    )
 
     assert [each.collection_id for each in built] == ["forest", "forest"]
     assert [each.links for each in built] == [[], []]
 
 
 def test_two_files_claiming_one_asset_key_refuse(scene, tmp_path):
-    first = io.geotiff.write_cog(scene.isel(time=0), tmp_path / "a.tif")
-    second = io.geotiff.write_cog(scene.isel(time=0), tmp_path / "b.tif")
+    (first,) = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/a_{{time:%Y%m%d}}.tif")
+    (second,) = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/b_{{time:%Y%m%d}}.tif")
 
-    with pytest.raises(ValueError, match="same time"):
+    with pytest.raises(ValueError, match="both be the asset 'image'"):
         stac.create_items([first, second])
 
 
 def test_an_item_states_what_the_file_stores(tmp_path):
     source = build_raster(times=2)[["red"]]
-    path = source.gs.to_netcdf(tmp_path / "small.nc", encoding={"red": {"dtype": "u1"}})
+    path = tmp_path / "small.tif"
+    # A GeoTIFF written by another tool stores the type it was told to.
+    source.red.isel(time=0).rio.to_raster(path, dtype="uint8")
 
-    (built,) = stac.create_items(path)
+    (built,) = table.to_items(
+        stac.create_item(
+            {"red": path}, id="small", datetime=datetime(2025, 6, 1, tzinfo=UTC)
+        )
+    )
 
     assert source.red.dtype == "uint16"
     assert RasterExtension.ext(built.assets["red"]).bands[0].data_type == "uint8"
 
 
 def test_no_paths_refuse():
-    with pytest.raises(ValueError, match="paths a writer returned"):
+    with pytest.raises(ValueError, match="records to_cog returned"):
         stac.create_items([])
 
 
 def test_an_id_template_is_filled_per_scene(scene, tmp_path):
-    paths = scene.gs.to_cog(tmp_path / "forest")
+    paths = _saved(scene, tmp_path, "forest")
 
-    built = stac.create_items(paths, id="{lat:.2f}N_{start:%Y%m%d}")
+    built = table.to_items(stac.create_items(paths, id="{lat:.2f}N_{start:%Y%m%d}"))
 
     assert [each.id for each in built] == ["45.13N_20250601", "45.13N_20250611"]
-    assert built[0].assets["image"].href == str(paths[0])
+    assert built[0].assets["image"].href == paths[0].href
 
 
 def test_an_id_template_that_repeats_refuses(scene, tmp_path):
-    paths = scene.gs.to_cog(tmp_path / "forest")
+    paths = _saved(scene, tmp_path, "forest")
 
     with pytest.raises(ValueError, match="same id"):
         stac.create_items(paths, id="{lat:.2f}N")
 
 
 def test_building_items_computes_no_pixels(scene, tmp_path):
-    paths = scene.gs.to_cog(tmp_path / "forest")
+    paths = _saved(scene, tmp_path, "forest")
 
     with dask.config.set(scheduler=_refuse):
         built = stac.create_items(paths, chunks={})
@@ -163,91 +169,66 @@ def test_building_items_computes_no_pixels(scene, tmp_path):
 
 
 def test_a_timeless_raster_needs_a_time(label, tmp_path):
-    (path,) = label.gs.to_cog(tmp_path / "label")
+    files = _saved(label, tmp_path, "label")
 
     with pytest.raises(ValueError, match="pass datetime="):
-        stac.create_items(path)
+        stac.create_items(files)
 
-    (built,) = stac.create_items(path, datetime=datetime(2025, 6, 1, tzinfo=UTC))
+    (built,) = table.to_items(
+        stac.create_items(files, datetime=datetime(2025, 6, 1, tzinfo=UTC))
+    )
     assert built.datetime == datetime(2025, 6, 1, tzinfo=UTC)
 
 
 def test_the_caller_names_the_assets_of_one_item(scene, label, tmp_path):
-    optical = scene.gs.to_zarr(tmp_path / "optical.zarr")
-    (classes,) = label.gs.to_cog(tmp_path / "label")
+    (optical, _) = (file.href for file in _saved(scene, tmp_path, "optical"))
+    (classes,) = (file.href for file in _saved(label, tmp_path, "label"))
 
-    built = stac.create_item({"optical": optical, "label": classes}, id="s0")
+    (built,) = table.to_items(
+        stac.create_item({"optical": optical, "label": classes}, id="s0")
+    )
 
     assert built.id == "s0"
-    assert list(built.assets) == ["optical", "label"]
+    assert sorted(built.assets) == ["label", "optical"]
     assert built.assets["label"].href == str(classes)
-    # The timeless label rides on the span its dated sibling covers.
-    assert built.properties["start_datetime"] == "2025-06-01T00:00:00Z"
+    # The timeless label rides on the instant its dated sibling covers.
+    assert built.datetime == datetime(2025, 6, 1, tzinfo=UTC)
 
 
-def test_a_stack_of_cogs_is_one_item_per_group_scene(scene, label, tmp_path):
-    tree = stack({"optical": scene, "label": label})
-    paths = tree.gs.to_cog(tmp_path / "s0")
+def test_a_named_asset_cannot_be_a_datacube_store(scene, tmp_path) -> None:
+    store = scene.gs.to_zarr(tmp_path / "cube.zarr")
 
-    built = stac.create_stack_items(paths, name="s0")
-
-    assert [each.id for each in built] == [
-        "s0/optical_20250601T000000",
-        "s0/optical_20250611T000000",
-        "s0/label",
-    ]
-    assert [each.collection_id for each in built] == ["optical", "optical", "label"]
-    assert {GeosaveExtension.ext(each).stack for each in built} == {"s0"}
-    # The timeless label takes the span its dated sibling covers.
-    assert built[2].properties["start_datetime"] == "2025-06-01T00:00:00Z"
-
-
-def test_a_stack_of_stores_is_one_item_per_group(scene, label, tmp_path):
-    tree = stack({"optical": scene, "label": label})
-    paths = tree.gs.to_zarr(tmp_path / "s0")
-
-    optical, classes = stac.create_stack_items(paths, name="s0")
-
-    assert (optical.id, classes.id) == ("s0/optical", "s0/label")
-    assert (optical.collection_id, classes.collection_id) == ("optical", "label")
-    assert optical.assets["image"].href == str(tmp_path / "s0/optical.zarr")
-    assert "xarray:open_kwargs" not in optical.assets["image"].extra_fields
-    assert classes.assets["label"].href == str(tmp_path / "s0/label.zarr")
-    assert classes.properties["start_datetime"] == "2025-06-01T00:00:00Z"
-
-
-def test_a_timeless_stack_needs_a_time(label, tmp_path):
-    tree = stack({"label": label})
-    paths = tree.gs.to_cog(tmp_path / "s0")
-
-    with pytest.raises(ValueError, match="pass datetime="):
-        stac.create_stack_items(paths, name="s0")
+    with pytest.raises(ValueError, match="to_cog"):
+        stac.create_item({"image": store}, id="cube")
 
 
 def test_a_label_item_declares_only_what_it_uses(label, tmp_path: Path) -> None:
-    classes = label.gs.rebase(Legend(class_map={1: "forest"}), target="label")
-    (path,) = classes.gs.to_cog(tmp_path / "label")
+    classes = label.gs.write_legend({1: "forest"}, target="label")
+    (path,) = (file.href for file in _saved(classes, tmp_path, "label"))
 
-    built = stac.create_item(
-        {"label": path}, id="label", datetime=datetime(2025, 1, 1, tzinfo=UTC)
+    (built,) = table.to_items(
+        stac.create_item(
+            {"label": path}, id="label", datetime=datetime(2025, 1, 1, tzinfo=UTC)
+        )
     )
 
     assert set(built.stac_extensions) == {
         ProjectionExtension.get_schema_uri(),
         RasterExtension.get_schema_uri(),
+        EOExtension.get_schema_uri(),
         ClassificationExtension.get_schema_uri(),
     }
 
 
 def test_a_plain_scene_declares_its_grid_bands_and_time(scene, tmp_path: Path) -> None:
-    (path, _) = scene.gs.to_cog(tmp_path / "scene")
+    (path, _) = (file.href for file in _saved(scene, tmp_path, "scene"))
 
-    built = stac.create_item({"image": path}, id="scene")
+    (built,) = table.to_items(stac.create_item({"image": path}, id="scene"))
 
     assert built.stac_extensions == [
         ProjectionExtension.get_schema_uri(),
         RasterExtension.get_schema_uri(),
-        DatacubeExtension.get_schema_uri(),
+        EOExtension.get_schema_uri(),
     ]
 
 
@@ -262,11 +243,104 @@ def test_a_collection_starts_with_an_open_extent() -> None:
 
 
 def test_every_extension_module_writes_onto_each_asset(scene, tmp_path) -> None:
-    (store,) = stac.create_items(scene.gs.to_zarr(tmp_path / "cube.zarr"))
+    (path, _) = (file.href for file in _saved(scene, tmp_path, "scene"))
+    (built,) = table.to_items(stac.create_item({"image": path}, id="scene"))
 
-    asset = store.assets["image"]
+    asset = built.assets["image"]
     assert ProjectionExtension.ext(asset).code == "EPSG:32633"
     assert len(RasterExtension.ext(asset).bands) == 2
-    assert ZarrExtension.ext(asset).node_type == "group"
-    assert asset.media_type == "application/vnd+zarr"
+    assert asset.media_type == "image/tiff; application=geotiff"
     assert asset.roles == ["data"]
+
+
+def test_odc_stac_names_a_multiband_asset_after_its_bands(tmp_path: Path) -> None:
+    import odc.stac
+
+    scene = build_raster()
+    (built,) = table.to_items(
+        stac.create_items(
+            _saved(scene, tmp_path, "forest"),
+            datetime=datetime(2025, 6, 1, tzinfo=UTC),
+        )
+    )
+
+    loaded = odc.stac.load([built], geobox=scene.gs.geobox, chunks={})
+
+    assert list(loaded.data_vars) == ["red", "nir"]
+
+
+def test_create_item_returns_one_row(label, tmp_path: Path) -> None:
+    (path,) = (file.href for file in _saved(label, tmp_path, "label"))
+
+    rows = stac.create_item(
+        {"label": path}, id="s0", datetime=datetime(2025, 6, 1, tzinfo=UTC)
+    )
+
+    assert rows["id"].tolist() == ["s0"]
+    assert list(rows["assets"].iloc[0]) == ["label"]
+
+
+def test_records_become_one_item_per_scene(scene, tmp_path) -> None:
+    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
+
+    rows = stac.create_items(files)
+
+    assert len(rows) == 2
+    item = table.to_items(rows)[0]
+    assert sorted(item.assets) == ["nir", "red"]
+    assert [b.name for b in EOExtension.ext(item.assets["red"]).bands] == ["red"]
+
+
+def test_a_multiband_file_is_one_image_asset_with_bands_in_order(scene, tmp_path) -> None:
+    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
+
+    item = table.to_items(stac.create_items(files))[0]
+
+    assert list(item.assets) == ["image"]
+    names = [b.name for b in EOExtension.ext(item.assets["image"]).bands]
+    assert names == ["red", "nir"]
+
+
+def test_a_stacks_layers_become_collections(scene, label, tmp_path) -> None:
+    files = stack({"optical": scene, "label": label}).gs.to_cog(
+        {
+            "optical": f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif",
+            "label": f"{tmp_path}/{{collection}}.tif",
+        }
+    )
+
+    rows = stac.create_items(files, id="s0")
+
+    assert rows["collection"].tolist() == ["optical", "optical", "label"]
+    assert rows["id"].tolist()[2] == "s0/label"
+    assert str(rows.iloc[2]["start_datetime"])[:10] == "2025-06-01"
+
+
+def test_a_collection_cannot_override_named_layers(scene, tmp_path) -> None:
+    files = stack({"optical": scene}).gs.to_cog(
+        f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif"
+    )
+
+    with pytest.raises(ValueError, match="already name"):
+        stac.create_items(
+            files, collection=stac.create_collection("x", description="x")
+        )
+
+
+def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
+    from geosave_engine.geodata.stac._item import cog_files
+
+    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
+    item = table.to_items(stac.create_items(files))[0]
+
+    back = cog_files(item.to_dict())
+
+    assert sorted(f.bands for f in back) == [("nir",), ("red",)]
+    assert {f.datetime for f in back} == {files[0].datetime}
+
+
+def test_paths_are_not_records(scene, tmp_path) -> None:
+    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
+
+    with pytest.raises(TypeError, match="CogFile"):
+        stac.create_items([file.href for file in files])

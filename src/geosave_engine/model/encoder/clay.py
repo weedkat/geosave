@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-import pandas as pd
+import xarray as xr
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from terratorch.models.backbones.clay_v15.model import Encoder
@@ -180,12 +180,11 @@ def build_clay(
     return encoder
 
 
-def time(row: pd.Series, *, raster: str = "image") -> torch.Tensor:
+def time(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     """Encode one acquisition timestamp as ISO week and hour.
 
     Args:
-        row: Sample reference row with acquisition metadata.
-        raster: Prepared raster supplying the frame.
+        raster: Raster supplying the frame.
 
     Returns:
         Float32 tensor shaped (2,).
@@ -193,30 +192,29 @@ def time(row: pd.Series, *, raster: str = "image") -> torch.Tensor:
     Raises:
         ValueError: More than one frame was selected.
     """
-    times = time_labels(row, raster=raster)
+    times = time_labels(raster)
     if len(times) != 1:
         raise ValueError("Clay requires one time label; select a single frame first")
     when = times[0]
     return torch.tensor([when.isocalendar().week, when.hour], dtype=torch.float32)
 
 
-def latlon(row: pd.Series) -> torch.Tensor:
-    """Return the sample grid centre as a float32 latitude/longitude tensor."""
-    return torch.tensor(geographic_center(row), dtype=torch.float32)
+def latlon(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
+    """Return the raster's grid centre as a float32 latitude/longitude tensor."""
+    return torch.tensor(geographic_center(raster), dtype=torch.float32)
 
 
-def model_context(row: pd.Series, *, raster: str = "image") -> dict[str, torch.Tensor]:
-    """Encode sample metadata for Clay's time/location inputs.
+def model_context(raster: xr.Dataset | xr.DataArray) -> dict[str, torch.Tensor]:
+    """Encode the raster's time and place for Clay's time/location inputs.
 
     Args:
-        row: Reference row describing the actual input window.
-        raster: Prepared raster supplying the frame.
+        raster: Raster the encoder receives, as the window read it.
 
     Returns:
         ISO week/hour and latitude/longitude float32 tensors shaped (2,).
         Wavelengths and GSD retain the encoder's constructor defaults.
     """
-    return {"time": time(row, raster=raster), "latlon": latlon(row)}
+    return {"time": time(raster), "latlon": latlon(raster)}
 
 
 @register_model("encoder", "clay")
@@ -224,7 +222,7 @@ class Clay(nn.Module):
     """Clay v1.5 encoder conditioned on band wavelengths and geographic context.
 
     Supply prepared image tensors, ordered wavelengths in micrometres, and GSD
-    in metres. `model_context` reads time and location from one sample reference row.
+    in metres. `model_context` reads time and location from the raster it encodes.
     """
 
     pyramid_channels: Published[list[int]]

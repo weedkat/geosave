@@ -33,6 +33,11 @@ def _runtime_type(expected: type) -> type | tuple[type, ...]:
     return runtime[0] if len(runtime) == 1 else runtime
 
 
+def type_name(kind: object) -> str:
+    """Return an annotation as written, such as `Tensor` or `list[int]`."""
+    return str(kind) if get_origin(kind) else getattr(kind, "__name__", str(kind))
+
+
 def _validate_value(value: object, expected: type, where: str) -> None:
     """Check the outer runtime type of one annotated value.
 
@@ -45,12 +50,9 @@ def _validate_value(value: object, expected: type, where: str) -> None:
         TypeError: The value does not match its annotation.
     """
     if not isinstance(value, _runtime_type(expected)):
-        name = (
-            str(expected)
-            if get_origin(expected)
-            else getattr(expected, "__name__", str(expected))
+        raise TypeError(
+            f"{where} expected {type_name(expected)}, got {type(value).__name__}"
         )
-        raise TypeError(f"{where} expected {name}, got {type(value).__name__}")
 
 
 @dataclass(frozen=True)
@@ -193,80 +195,129 @@ def chain_step(
         raise TypeError("head=True cannot declare outputs")
 
     def decorate(method: Callable[_P, _R]) -> Callable[_P, _R]:
-        hints = get_type_hints(method)
-        inputs: dict[str, type] = {}
-        optional: dict[str, type] = {}
-        for name, parameter in inspect.signature(method).parameters.items():
-            if name == "self":
-                continue
-            if name not in hints:
-                raise TypeError(
-                    f"{method.__qualname__}: missing type hint(s) for {name!r}"
-                )
-            if parameter.kind not in (
-                parameter.POSITIONAL_OR_KEYWORD,
-                parameter.KEYWORD_ONLY,
-            ):
-                raise TypeError(
-                    f"{method.__qualname__}: {name!r} must accept a keyword argument"
-                )
-            target = inputs if parameter.default is parameter.empty else optional
-            target[name] = hints[name]
-
-        result_type = hints.get("return")
-        returns_tuple = get_origin(result_type) is tuple
-        provided: dict[str, type] = {}
         if head:
-            if result_type is None or result_type is type(None):
-                raise TypeError(
-                    f"{method.__qualname__}: terminal result needs a runtime return annotation"
-                )
-            try:
-                _runtime_type(result_type)
-            except TypeError as error:
-                raise TypeError(
-                    f"{method.__qualname__}: terminal result {error}"
-                ) from error
-            returns_tuple = False
-        else:
-            if result_type is None or result_type is type(None) or result_type is tuple:
-                raise TypeError(
-                    f"{method.__qualname__}: return types must be concrete and fixed-arity"
-                )
-            return_types: tuple[type, ...] = (
-                get_args(result_type) if returns_tuple else (result_type,)
+            setattr(method, "_chain_step", terminal_step(method))
+            return method
+        hints = get_type_hints(method)
+        inputs, optional = _declared_inputs(method, hints)
+        provided, returns_tuple = _declared_outputs(method, hints, outputs)
+        if set(inputs.items()) & set(provided.items()):
+            raise TypeError(
+                f"{method.__qualname__}: self-cycle; use different output names"
             )
-            if not return_types or Ellipsis in return_types:
-                raise TypeError(
-                    f"{method.__qualname__}: return types must be fixed-arity"
-                )
-            names = _infer_output_names(method) if outputs is None else outputs
-            if (
-                not isinstance(names, tuple)
-                or not names
-                or any(not isinstance(name, str) or not name for name in names)
-                or len(set(names)) != len(names)
-            ):
-                raise TypeError("outputs must be a non-empty tuple of unique names")
-            if len(names) != len(return_types):
-                raise TypeError("Output names and return annotation arity must match")
-            provided = dict(zip(names, return_types))
-            if set(inputs.items()) & set(provided.items()):
-                raise TypeError(
-                    f"{method.__qualname__}: self-cycle; use different output names"
-                )
-        setattr(
-            method,
-            "_chain_step",
-            Step(
-                method.__name__,
-                inputs,
-                optional,
-                provided,
-                returns_tuple,
-                result_type if head else None,
-            ),
-        )
+        step = Step(method.__name__, inputs, optional, provided, returns_tuple)
+        setattr(method, "_chain_step", step)
         return method
 
     return decorate
+
+
+def terminal_step(method: Callable[..., object]) -> Step:
+    """Declare a method that returns a terminal result from its annotated inputs.
+
+    Args:
+        method: Function whose parameters name its inputs.
+
+    Returns:
+        A head step for `method`.
+
+    Raises:
+        TypeError: A parameter or the return lacks a usable annotation.
+    """
+    hints = get_type_hints(method)
+    inputs, optional = _declared_inputs(method, hints)
+    return Step(
+        method.__name__,
+        inputs,
+        optional,
+        outputs={},
+        result_type=_terminal_type(method, hints),
+    )
+
+
+def _declared_inputs(
+    method: Callable[..., object], hints: dict[str, Any]
+) -> tuple[dict[str, type], dict[str, type]]:
+    """Split annotated parameters into required and defaulted inputs.
+
+    Raises:
+        TypeError: A parameter has no annotation or cannot be passed by keyword.
+    """
+    inputs: dict[str, type] = {}
+    optional: dict[str, type] = {}
+    for name, parameter in inspect.signature(method).parameters.items():
+        if name == "self":
+            continue
+        if name not in hints:
+            raise TypeError(f"{method.__qualname__}: missing type hint(s) for {name!r}")
+        if parameter.kind not in (
+            parameter.POSITIONAL_OR_KEYWORD,
+            parameter.KEYWORD_ONLY,
+        ):
+            raise TypeError(
+                f"{method.__qualname__}: {name!r} must accept a keyword argument"
+            )
+        target = inputs if parameter.default is parameter.empty else optional
+        target[name] = hints[name]
+    return inputs, optional
+
+
+def _terminal_type(method: Callable[..., object], hints: dict[str, Any]) -> type:
+    """Return a head's return annotation, which must have a runtime outer type.
+
+    Raises:
+        TypeError: The return annotation is absent, None, or not checkable.
+    """
+    result_type = hints.get("return")
+    if result_type is None or result_type is type(None):
+        raise TypeError(
+            f"{method.__qualname__}: terminal result needs a runtime return annotation"
+        )
+    try:
+        _runtime_type(result_type)
+    except TypeError as error:
+        raise TypeError(f"{method.__qualname__}: terminal result {error}") from error
+    return result_type
+
+
+def _declared_outputs(
+    method: Callable[..., object],
+    hints: dict[str, Any],
+    outputs: tuple[str, ...] | None,
+) -> tuple[dict[str, type], bool]:
+    """Pair output names with return annotation types.
+
+    Args:
+        method: Decorated method.
+        hints: Its resolved annotations.
+        outputs: Explicit names, or None to infer them from the return statement.
+
+    Returns:
+        Output names mapped to types, and whether the result is a tuple to unpack.
+
+    Raises:
+        TypeError: The return annotation is not fixed-arity, or the names are
+            empty, repeated, or a different count from the annotation.
+    """
+    result_type = hints.get("return")
+    if result_type is None or result_type is type(None) or result_type is tuple:
+        raise TypeError(
+            f"{method.__qualname__}: return types must be concrete and fixed-arity"
+        )
+    returns_tuple = get_origin(result_type) is tuple
+    return_types: tuple[type, ...] = (
+        get_args(result_type) if returns_tuple else (result_type,)
+    )
+    if not return_types or Ellipsis in return_types:
+        raise TypeError(f"{method.__qualname__}: return types must be fixed-arity")
+    names = _infer_output_names(method) if outputs is None else outputs
+    if (
+        not isinstance(names, tuple)
+        or not names
+        or any(not isinstance(name, str) or not name for name in names)
+        or len(set(names)) != len(names)
+    ):
+        raise TypeError("outputs must be a non-empty tuple of unique names")
+    if len(names) != len(return_types):
+        raise TypeError("Output names and return annotation arity must match")
+    return dict(zip(names, return_types)), returns_tuple

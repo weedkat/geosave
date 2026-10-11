@@ -10,7 +10,6 @@ import xarray as xr
 import geosave_engine.geodata as gs
 
 from geosave_engine.geodata import GeoAnchor, GeoArray, GeoRaster, GeoStack, GeoVector
-from geosave_engine.geodata.attrs import CFVariable
 from geosave_engine.geodata.utils.geolocator import Place
 
 from tests.geodata.conftest import build_raster
@@ -54,14 +53,6 @@ def test_every_xarray_accessor_names_its_variables(
 
 def test_unnamed_array_has_no_variable_identity(raster: xr.Dataset) -> None:
     assert raster.red.rename(None).gs.variables == ()
-
-
-def test_typed_variable_attrs_round_trip(raster: xr.Dataset) -> None:
-    metadata = CFVariable(long_name="red reflectance", units="1")
-
-    stamped = raster.gs.rebase(metadata, target="red")
-
-    assert stamped.gs.attrs.data_vars["red"].get(CFVariable) == metadata
 
 
 def test_unbucketed_time_covers_only_its_own_instants() -> None:
@@ -203,22 +194,6 @@ def test_unbucketed_time_covers_what_its_labels_spell(
     assert raster.gs.timespan == tuple(dt.fromisoformat(edge) for edge in span)
 
 
-def test_the_accessor_rebases_a_header_and_a_namespace() -> None:
-    import xarray as xr
-
-    from geosave_engine.geodata import attrs
-
-    source = xr.Dataset({"red": ("x", [1], {"units": "1"})}, attrs={"title": "S2"})
-    target = xr.Dataset({"red": ("x", [2])})
-
-    restored = target.gs.rebase(attrs.create_header(source))
-    patched = target.gs.rebase(source.gs.attrs.data_vars["red"], target="red")
-
-    assert restored.attrs == {"title": "S2"}
-    assert restored.red.attrs == {"units": "1"}
-    assert patched.red.attrs == {"units": "1"}
-
-
 def _foreign() -> xr.Dataset:
     from affine import Affine
     from odc.geo.geobox import GeoBox
@@ -303,3 +278,14 @@ def test_times_reads_a_scalar_time_coordinate() -> None:
     assert one_date.gs.times.strftime("%Y%m%d").tolist() == [
         build_raster(times=2).gs.times[0].strftime("%Y%m%d")
     ]
+
+
+
+def test_a_band_read_from_disk_decodes_to_float32(tmp_path) -> None:
+    from geosave_engine.geodata import open_raster
+
+    (written,) = build_raster(packed=True).gs.to_cog(f"{tmp_path}/scene.tif")
+
+    decoded = open_raster(written.href).gs.mask_and_scale()
+
+    assert decoded.red.dtype == np.float32

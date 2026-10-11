@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-
 import numpy as np
 import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 
 UTM = "EPSG:32633"
 
@@ -56,7 +55,7 @@ def optical(shape: tuple[int, int] = (8, 8), *, times: int = 2) -> xr.Dataset:
             ),
         },
         box,
-        coords={"time": labels},
+        time=labels,
     ).gs.write_nodata(0)
 
 
@@ -161,3 +160,92 @@ def test_a_band_casts_the_way_a_raster_does() -> None:
     band = optical()["B04"]
 
     assert band.gs.to_numpy(dtype="float32").dtype == np.float32
+
+
+torch = pytest.importorskip("torch")
+
+
+def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout() -> None:
+    tensor = optical().gs.to_tensor()
+
+    assert tensor.dtype is torch.uint16
+    assert tuple(tensor.shape) == (2, 2, 8, 8)
+    assert tensor.is_contiguous()
+    torch.testing.assert_close(tensor, torch.tensor(optical().gs.to_numpy()))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected"),
+    [
+        ("float32", torch.float32),
+        (torch.int16, torch.int16),
+        (torch.bfloat16, torch.bfloat16),
+    ],
+)
+def test_to_tensor_casts_to_a_named_or_torch_dtype(dtype, expected) -> None:
+    assert optical().gs.to_tensor(dtype=dtype).dtype is expected
+    assert optical().B04.gs.to_tensor(dtype=dtype).dtype is expected
+
+
+def test_to_tensor_refuses_an_unknown_dtype_name() -> None:
+    with pytest.raises(ValueError, match="not-a-dtype"):
+        optical().gs.to_tensor(dtype="not-a-dtype")
+
+
+def test_a_band_converts_without_gaining_a_band_axis() -> None:
+    tensor = optical().B04.gs.to_tensor()
+
+    assert tensor.dtype is torch.uint16
+    assert tuple(tensor.shape) == (2, 8, 8)
+
+
+def test_a_stack_converts_each_group_on_its_own_dtype() -> None:
+    from geosave_engine.geodata.core.stack import stack
+
+    scene = stack(
+        {"optical": optical(), "height": optical()[["B04"]].astype("float32")}
+    )
+
+    tensors = scene.gs.to_tensor()
+    assert tuple(tensors) == ("optical", "height")
+    assert tensors["optical"].dtype is torch.uint16
+    assert tensors["height"].dtype is torch.float32
+    assert scene.gs.to_tensor(dtype="float32")["optical"].dtype is torch.float32
+
+
+def test_to_tensor_copies_read_only_pixels() -> None:
+    band = optical().B04
+    band.values.flags.writeable = False
+    before = band.values.copy()
+
+    tensor = band.gs.to_tensor()
+    tensor.fill_(0)
+
+    np.testing.assert_array_equal(band.values, before)
+
+
+def test_to_tensor_computes_a_lazy_raster() -> None:
+    tensor = optical().chunk({"y": 4}).gs.to_tensor()
+
+    assert tuple(tensor.shape) == (2, 2, 8, 8)
+    tensor.fill_(0)
+
+
+def test_to_tensor_refuses_variables_on_different_dtypes() -> None:
+    mixed = optical().assign(B08=optical().B08.astype("float32"))
+
+    with pytest.raises(ValueError, match="dtype"):
+        mixed.gs.to_tensor()
+
+
+def test_to_tensor_refuses_a_dtype_that_is_not_torch_before_reading() -> None:
+    import dask
+
+    lazy = optical().chunk({"y": 4})
+
+    def fail(*_):
+        raise AssertionError("pixels were read")
+
+    with dask.callbacks.Callback(pretask=fail):
+        with pytest.raises(TypeError, match="torch dtype"):
+            lazy.gs.to_tensor(dtype=np.float32)

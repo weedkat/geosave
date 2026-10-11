@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from upath import UPath
 import xarray as xr
 from dask.delayed import Delayed
 
@@ -23,6 +24,14 @@ def test_netcdf_round_trip_preserves_the_profile(
     assert restored.red.dtype == np.dtype("uint16")
     assert int(restored.red.values.ravel()[0]) == 1000
     assert restored["y"].attrs["standard_name"] == written["y"].attrs["standard_name"]
+
+
+def test_netcdf_reads_a_file_url(tmp_path: Path) -> None:
+    written = build_raster()
+    netcdf.write(written, tmp_path / "scene.nc")
+
+    with netcdf.read((tmp_path / "scene.nc").as_uri()) as restored:
+        np.testing.assert_array_equal(restored["red"], written["red"])
 
 
 def test_netcdf_refuses_an_existing_destination(tmp_path: Path) -> None:
@@ -50,22 +59,19 @@ def test_netcdf_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:
 
 
 def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> None:
-    import fsspec
 
-    from geosave_engine.geodata import read_raster
+    from geosave_engine.geodata import open_raster
 
     written = build_raster(times=2)
 
     saved = written.gs.to_netcdf(f"{bucket}/scene.nc", storage_options={})
 
-    assert saved == f"{bucket}/scene.nc"
-    fsspec.filesystem("memory").get(
-        saved.removeprefix("memory:/"), str(tmp_path / "copy.nc")
-    )
-    with read_raster(tmp_path / "copy.nc") as restored:
+    assert saved == UPath(f"{bucket}/scene.nc")
+    saved.fs.get(saved.path, str(tmp_path / "copy.nc"))
+    with open_raster(tmp_path / "copy.nc") as restored:
         np.testing.assert_array_equal(restored.red, written.red)
     with pytest.raises(ValueError, match="local"):
-        read_raster(saved)
+        open_raster(saved)
     with pytest.raises(ValueError, match="compute"):
         written.gs.to_netcdf(f"{bucket}/later.nc", compute=False)
 

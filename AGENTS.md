@@ -40,7 +40,7 @@ It contains `common/` startup, `workspaces/` starters, and optional `scaffolds/`
 Public geospatial I/O lives in `geodata/io/`; original benchmark downloads live
 in `geodata/benchmarks/`. Internal helpers stay with their owning package.
 
-Dependencies point one way: `geodata <- model <- ml`. `geodata` imports no torch, and `model` does not import `ml`.
+Dependencies point one way: `geodata <- model <- ml`. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`.
 
 ## Design
 

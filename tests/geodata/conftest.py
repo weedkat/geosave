@@ -1,9 +1,11 @@
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
+from geosave_engine.geodata.core.constructors import raster as build
 from geosave_engine.geodata.core.stack import stack as build_stack
 
 
@@ -74,70 +76,82 @@ def stack(raster: xr.Dataset) -> xr.DataTree:
 
 
 @pytest.fixture
-def bucket():
-    """Yield a unique `memory://` prefix and empty it afterwards."""
-    import uuid
-
-    import fsspec
-
-    filesystem = fsspec.filesystem("memory")
-    prefix = f"memory://geosave-tests/{uuid.uuid4()}"
-    yield prefix
-    if filesystem.exists(prefix):
-        filesystem.rm(prefix, recursive=True)
+def grid() -> GeoBox:
+    return GeoBox.from_bbox(
+        (300000, 5000000, 300640, 5000640), "EPSG:32633", resolution=10
+    )
 
 
-def whole_windows(parents):
-    """List rasters held in memory as whole windows, as `cuts.stacks` lists saved ones.
+@pytest.fixture
+def scene(grid):
+    """Two dates of two uint16 bands with a fill value."""
+    times = pd.to_datetime(["2025-06-01", "2025-06-11"])
+    cube = np.arange(2 * 64 * 64, dtype="uint16").reshape(2, 64, 64)
+    data = build(
+        {"red": (("time", "y", "x"), cube), "nir": (("time", "y", "x"), cube + 1)},
+        grid,
+        time=times,
+    )
+    for name in data.data_vars:
+        data[name].attrs["_FillValue"] = np.uint16(0)
+    return data
+
+
+@pytest.fixture
+def label(grid):
+    """One timeless uint8 class plane on the same grid."""
+    return build({"label": (("y", "x"), np.ones((64, 64), dtype="uint8"))}, grid)
+
+
+def cog_template(root, name: str, *, dated: bool) -> str:
+    """Spell, as a `to_cog` template, the layout one raster's files are expected in.
+
+    A dated raster is a folder named after it holding one file per instant; an
+    undated one is one file.
+    """
+    if dated:
+        return f"{root}/{name}/{name}_{{time:%Y%m%dT%H%M%S}}.tif"
+    return f"{root}/{name}.tif"
+
+
+def stack_templates(sample, root) -> dict[str, str]:
+    """Give every group of a stack its `cog_template` under `root`."""
+    return {
+        name: cog_template(root, name, dated="time" in raster.dims)
+        for name, raster in sample.gs.rasters.items()
+    }
+
+
+def read_items(rows):
+    """Read an item table's files as one raster, as a window reads one collection."""
+    from geosave_engine.geodata.io.raster import cogs
+    from geosave_engine.geodata.stac._item import cog_files
+    from geosave_engine.geodata.io.vector.stac_geoparquet import to_items
+
+    return cogs.read([f for item in to_items(rows) for f in cog_files(item.to_dict())])
+
+
+def titled(obj, title: str = "scene"):
+    """Return a copy of a raster or stack whose root names its title."""
+    copied = obj.copy()
+    copied.attrs = {**obj.attrs, "title": title}
+    return copied
+
+
+def geobox(*, crs: str = "EPSG:32633", shape: tuple[int, int] = (8, 8)) -> GeoBox:
+    """Build one grid for a raster-construction test.
 
     Args:
-        parents: Window id mapped to a DataArray, Dataset or stack. A lone
-            raster is the group `image`.
+        crs: CRS the grid sits in.
+        shape: Grid height and width in pixels.
 
     Returns:
-        One window per parent, stating each group's time labels as they are
-        and the parent's grid, or no grid for unreferenced pixels.
+        Grid of `shape` at ten-unit pixels.
     """
-    import geopandas as gpd
-    import numpy as np
-    import xarray as xr
-    from odc.geo.geobox import GeoBox
-
-    rows = []
-    for name, parent in parents.items():
-        rasters = (
-            parent.gs.rasters if isinstance(parent, xr.DataTree) else {"image": parent}
-        )
-        times = {}
-        for group, each in rasters.items():
-            stamps = each.coords.get("time")
-            if stamps is None:
-                times[group] = None
-            elif np.issubdtype(stamps.dtype, np.datetime64):
-                labels = np.atleast_1d(stamps.values).astype("datetime64[us]")
-                times[group] = np.datetime_as_string(labels).tolist()
-            else:
-                times[group] = list(np.atleast_1d(stamps.values))
-        first = next(iter(rasters.values()))
-        grid = first.gs.geobox
-        located = isinstance(grid, GeoBox) and grid.crs is not None
-        rows.append(
-            {
-                "id": name,
-                "parent": None,
-                "stack": name,
-                "times": times,
-                "start_datetime": None,
-                "end_datetime": None,
-                "crs": str(grid.crs) if located else None,
-                "transform": list(grid.transform)[:6]
-                if located
-                else [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                "row_off": 0,
-                "col_off": 0,
-                "height": first.sizes["y"],
-                "width": first.sizes["x"],
-                "geometry": grid.extent.to_crs("EPSG:4326").geom if located else None,
-            }
-        )
-    return gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
+    left, bottom = 300_000.0, 5_000_000.0
+    return GeoBox.from_bbox(
+        (left, bottom, left + shape[1] * 10, bottom + shape[0] * 10),
+        crs=crs,
+        shape=shape,
+        tight=True,
+    )

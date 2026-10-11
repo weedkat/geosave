@@ -15,7 +15,7 @@ from geosave_engine.geodata import io
 type SampleFormat = Literal["geotiff", "zarr"]
 
 _SUFFIXES = {"geotiff": ".tif", "zarr": ".zarr"}
-_PUBLICATION_OPTIONS = {"compute", "layout", "overwrite", "split_bands"}
+_PUBLICATION_OPTIONS = {"compute", "layout", "overwrite"}
 
 
 def write_sample(

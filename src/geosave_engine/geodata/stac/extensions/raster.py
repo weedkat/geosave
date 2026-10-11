@@ -13,7 +13,9 @@ from pystac.extensions.raster import (
     RasterExtension,
 )
 
-from geosave_engine.geodata.attrs import AttrsModel, CFVariable, Nodata, Packing
+from typing import Any
+
+import geosave_engine.geodata.attrs as attrs
 
 
 def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
@@ -21,7 +23,7 @@ def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
 
     Args:
         asset: Asset already added to its Item.
-        raster: Raster as `read_raster` opens it, holding stored values. No
+        raster: Raster as `open_raster` opens it, holding stored values. No
             pixel is read.
 
     Examples:
@@ -29,15 +31,11 @@ def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
         >>> RasterExtension.ext(asset).bands[0].scale
         0.0001
     """
-    header = raster.gs.attrs
     bands = []
     for name in raster.gs.variables:
-        variable = header.data_vars[name]
-        nodata = variable.get(Nodata)
-        packing = variable.get(Packing)
-        semantics = variable.get(CFVariable)
-
-        fill = None if nodata is None else nodata.fill_value
+        variable = raster[name]
+        packing = variable.gs.packing
+        fill = variable.gs.nodata
         if isinstance(fill, float) and not isfinite(fill):
             fill = NoDataStrings(str(fill))
         dtype = raster[name].dtype.name
@@ -49,14 +47,14 @@ def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
                 else DataType.OTHER,
                 scale=None if packing is None else packing.scale_factor,
                 offset=None if packing is None else packing.add_offset,
-                unit=None if semantics is None else semantics.units,
+                unit=variable.attrs.get("units"),
             )
         )
     RasterExtension.ext(asset, add_if_missing=True).apply(bands)
 
 
-def read(band: RasterBand) -> list[AttrsModel]:
-    """Read the attrs models one Raster band states.
+def read(band: RasterBand) -> dict[str, Any]:
+    """Read the CF attrs one Raster band states.
 
     `nodata` and `data_type` describe the file, and the loader that opens it
     states them, so neither is read.
@@ -65,16 +63,20 @@ def read(band: RasterBand) -> list[AttrsModel]:
         band: One band of an asset's Raster listing.
 
     Returns:
-        `Packing` where the band states a scale or an offset, then
-        `CFVariable` where it states a unit. Empty where it states neither.
+        The band's packing as `scale_factor` and `add_offset`, and its unit
+        as `units`. Empty where it states neither.
 
     Examples:
         >>> read(RasterBand.create(unit="1", scale=0.0001))
-        [Packing(scale_factor=0.0001, add_offset=None), CFVariable(units='1', ...)]
+        {'scale_factor': 0.0001, 'units': '1'}
     """
-    models: list[AttrsModel] = []
+    found: dict[str, Any] = {}
     if band.scale is not None or band.offset is not None:
-        models.append(Packing(scale_factor=band.scale, add_offset=band.offset))
+        packing = attrs.Packing(
+            scale_factor=1.0 if band.scale is None else band.scale,
+            add_offset=0.0 if band.offset is None else band.offset,
+        )
+        found |= packing.to_attrs()
     if band.unit is not None:
-        models.append(CFVariable(units=band.unit))
-    return models
+        found["units"] = band.unit
+    return found

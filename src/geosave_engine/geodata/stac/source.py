@@ -11,8 +11,7 @@ import odc.stac
 from odc.stac.model import PropertyLoadRequest
 from pydantic import BaseModel, ConfigDict, Field
 
-from geosave_engine.geodata.attrs import rebase
-from geosave_engine.geodata.attrs.headers.stac import create_header, read_asset_fields
+from ._bands import load_attrs, read_asset_fields
 from geosave_engine.geodata.conventions import to_yx
 from geosave_engine.geodata.errors import AnchorFetchError
 from geosave_engine.geodata.transform.warp import Resampling
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
     import pystac
 
     from geosave_engine.geodata.core import GeoAnchor
-    from geosave_engine.geodata import Dataset
+    from geosave_engine.geodata import Dataset, GeoDataFrame
 
 Bands = list[str] | tuple[str, ...]
 StacGroupby = Literal["solar_day", "id", "time"]
@@ -38,7 +37,7 @@ def _default_chunks() -> dict[str, ChunkSize]:
 class SearchClient(Protocol):
     """Any client that can run a STAC search and read a collection."""
 
-    def search(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]: ...
+    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]: ...
 
     def collection(self, collection: str) -> pystac.Collection: ...
 
@@ -57,14 +56,10 @@ class StacSourceConfig(BaseModel):
         nodata: Nodata value, paired with `dtype`. None keeps each asset's own.
         fail_on_error: False skips a scene that fails to read instead of
             raising.
-        item_properties: Item properties captured per acquisition, e.g.
-            `("platform", "eo:cloud_cover")`. Empty captures identity only;
-            None captures every property each item publishes.
-        with_properties: Native odc-stac item-property requests loaded along
-            `time`, as property names or request mappings with `key` and optional
-            `name`, `dtype`, `nodata`, `units`, and `fuser`.
-        asset_fields: Asset fields captured onto the variable they describe.
-            Empty captures none; None captures every field each asset publishes.
+        with_properties: Item properties loaded as coordinates along `time`,
+            as property names or request mappings with `key` and optional
+            `name`, `dtype`, `nodata`, `units`, and `fuser`, e.g.
+            `("view:sun_azimuth", "eo:cloud_cover")`.
         stac_cfg: Per-collection band overrides odc-stac applies, correcting
             nodata, dtype, or asset aliases a catalog publishes wrongly.
         pool: Reader threads odc-stac uses. None takes its default.
@@ -75,7 +70,7 @@ class StacSourceConfig(BaseModel):
             rather than sorting them by time.
 
     Examples:
-        >>> StacSourceConfig(bands=["B04", "B08"], item_properties=None)
+        >>> StacSourceConfig(bands=["B04", "B08"], with_properties=["eo:cloud_cover"])
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
@@ -87,9 +82,7 @@ class StacSourceConfig(BaseModel):
     dtype: str | None = None
     nodata: float | None = None
     fail_on_error: bool = True
-    item_properties: tuple[str, ...] | None = ()
     with_properties: tuple[str | dict[str, Any], ...] | None = None
-    asset_fields: tuple[str, ...] | None = ()
     stac_cfg: dict[str, Any] | None = None
     pool: int | None = None
     progress: Any | None = None
@@ -97,10 +90,8 @@ class StacSourceConfig(BaseModel):
     preserve_original_order: bool = False
 
     def to_load_kwargs(self) -> dict[str, Any]:
-        """Return native odc-stac settings, excluding provenance selection."""
-        options = self.model_dump(
-            exclude={"item_properties", "asset_fields"}, exclude_none=True
-        )
+        """Return native odc-stac settings."""
+        options = self.model_dump(exclude_none=True)
         # None explicitly selects eager loading; ODC otherwise chooses its default.
         options["chunks"] = self.chunks
         if self.with_properties is not None:
@@ -126,9 +117,8 @@ class StacSource:
         >>> from geosave_engine.geodata import configure_gdal
         >>> configure_gdal(aws_no_sign_request=True, gdal_http_max_retry=3)
         >>> source = client.source("sentinel-2-l2a").set_config(bands=["B04", "B08"])
+        >>> rows = source.search(anchor)              # the Items load reads
         >>> ds = source.load(anchor)
-        >>> ds.gs.attrs.root.get(StacMetadata).properties()
-        ('eo:cloud_cover', 'platform')
     """
 
     def __init__(self, client: SearchClient, *, collection: str) -> None:
@@ -139,7 +129,7 @@ class StacSource:
             collection: Collection ID to load.
         """
         self.client = client
-        self.collection = collection
+        self._collection = collection
         self.config = StacSourceConfig()
         self.query = StacQuery(collections=[collection])
 
@@ -153,9 +143,7 @@ class StacSource:
         dtype: str | None = _UNSET,
         nodata: float | None = _UNSET,
         fail_on_error: bool = _UNSET,
-        item_properties: Sequence[str] | None = _UNSET,
         with_properties: Sequence[str | Mapping[str, Any]] | None = _UNSET,
-        asset_fields: Sequence[str] | None = _UNSET,
         stac_cfg: dict[str, Any] | None = _UNSET,
         pool: int | None = _UNSET,
         progress: Any | None = _UNSET,
@@ -179,12 +167,7 @@ class StacSource:
                 own.
             fail_on_error: False skips a scene that fails to read instead of
                 raising.
-            item_properties: Item properties captured per acquisition. Empty
-                captures identity only; None captures every property.
-            with_properties: Native odc-stac item properties loaded along time.
-            asset_fields: Asset fields captured onto the variable they
-                describe. Empty captures none; None captures every field each
-                asset publishes.
+            with_properties: Item properties loaded as coordinates along time.
             stac_cfg: Per-collection band overrides odc-stac applies.
             pool: Reader threads odc-stac uses. None takes its default.
             progress: Progress bar odc-stac reports reads through. None is
@@ -210,9 +193,7 @@ class StacSource:
             "dtype": dtype,
             "nodata": nodata,
             "fail_on_error": fail_on_error,
-            "item_properties": item_properties,
             "with_properties": with_properties,
-            "asset_fields": asset_fields,
             "stac_cfg": stac_cfg,
             "pool": pool,
             "progress": progress,
@@ -266,7 +247,7 @@ class StacSource:
             ... )
         """
         query = StacQuery(
-            collections=[self.collection],
+            collections=[self._collection],
             bbox=bbox,
             intersects=intersects,
             datetime=datetime,
@@ -290,7 +271,7 @@ class StacSource:
         lines = "\n".join(
             f"  {key}: {value!r}" for key, value in self.config.model_dump().items()
         )
-        return f"{type(self).__name__}\n  collection: {self.collection!r}\n{lines}"
+        return f"{type(self).__name__}\n  collection: {self._collection!r}\n{lines}"
 
     def sample_item(self) -> pystac.Item | None:
         """Fetch one item from the collection to read its shape.
@@ -301,15 +282,16 @@ class StacSource:
         Returns:
             One item, or None when the collection is empty.
         """
-        found = self.client.search(
-            StacQuery(collections=[self.collection], max_items=1)
+        found = self.client.search_items(
+            StacQuery(collections=[self._collection], max_items=1)
         )
         return found[0] if found else None
 
     def list_item_properties(self) -> tuple[str, ...]:
         """Name the per-acquisition properties this collection publishes.
 
-        These are the names `StacSourceConfig.item_properties` accepts.
+        These are the names `StacSourceConfig.with_properties` loads as
+        coordinates, and the columns of `search(anchor)`.
 
         Returns:
             Property names, sorted. Empty when the collection has no items.
@@ -324,7 +306,7 @@ class StacSource:
     def list_asset_fields(self) -> tuple[str, ...]:
         """Name the asset fields this collection publishes.
 
-        These are the names `StacSourceConfig.asset_fields` accepts.
+        They are the fields of each asset in `search(anchor)["assets"]`.
 
         Returns:
             Field names, sorted. Empty when the collection has no items.
@@ -346,11 +328,35 @@ class StacSource:
             )
         )
 
+    @property
+    def collection(self) -> pystac.Collection:
+        """Return the Collection this source loads, as its catalog publishes it."""
+        return self.client.collection(self._collection)
+
+    def search(self, anchor: GeoAnchor) -> GeoDataFrame:
+        """List the Items `load(anchor)` reads, as an item table.
+
+        Args:
+            anchor: Grid and datetime window to search.
+
+        Returns:
+            One row per matching Item, read through `gs` as a catalog. Empty
+            where nothing matches.
+
+        Examples:
+            >>> source.search(anchor)["eo:cloud_cover"].tolist()
+            [4.2, 11.0]
+        """
+        from geosave_engine.geodata.io.vector import stac_geoparquet
+
+        return stac_geoparquet.from_items(
+            self.client.search_items(self._search_query(anchor))
+        )
+
     def load(self, anchor: GeoAnchor) -> Dataset:
         """Load this collection onto an anchor's grid.
 
-        Collection metadata becomes `ACDD` and the matched items become
-        `StacMetadata`. Each variable carries effective loader nodata and units, plus its
+        Collection metadata becomes ACDD root attrs. Each variable carries effective loader nodata and units, plus its
         resolved source band's packing. Pixels stay the published DN.
 
         Args:
@@ -367,13 +373,13 @@ class StacSource:
 
         Examples:
             >>> ds = source.load(anchor)
-            >>> ds.gs.attrs.root.get(StacMetadata).properties()
-            ('eo:cloud_cover', 'platform')
+            >>> ds.attrs["title"]
+            'Sentinel-2 Level-2A'
         """
-        matched = self.client.search(self._search_query(anchor))
+        matched = self.client.search_items(self._search_query(anchor))
         if not matched:
             raise AnchorFetchError(
-                f"no {self.collection!r} items matched the anchor's extent and window"
+                f"no {self._collection!r} items matched the anchor's extent and window"
             )
 
         # odc-stac names a geographic grid latitude/longitude.
@@ -389,16 +395,8 @@ class StacSource:
             ]
             # odc-stac loads auxiliary properties as time-indexed variables.
             data = data.set_coords(property_names)
-        header = create_header(
-            matched,
-            self.client.collection(self.collection),
-            data,
-            groupby=self.config.groupby,
-            item_properties=self.config.item_properties,
-            asset_fields=self.config.asset_fields,
-            stac_cfg=self.config.stac_cfg,
-        )
-        return rebase(data, header).gs.write_crs()
+        data = load_attrs(matched, self.collection, data, stac_cfg=self.config.stac_cfg)
+        return data.gs.write_crs()
 
     def _search_query(self, anchor: GeoAnchor) -> StacQuery:
         """Narrow this source's search to one anchor.

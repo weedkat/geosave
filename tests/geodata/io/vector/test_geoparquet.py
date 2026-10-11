@@ -1,4 +1,3 @@
-from geosave_engine.geodata import cuts
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,56 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import Point, box
 
-from geosave_engine.geodata import GeoVector, read_vector
-
-
-@pytest.mark.parametrize("kind", ["geo", "plain", "mixed", "wkt"])
-def test_tile_reference_round_trip_preserves_exact_grids(tmp_path, kind):
-    import numpy as np
-    import xarray as xr
-    from affine import Affine
-    from odc.geo.geobox import GeoBox
-    from odc.geo.xr import xr_coords
-
-    from geosave_engine.geodata.io import geoparquet
-    from tests.geodata.conftest import whole_windows
-
-    crs = (
-        "EPSG:32748"
-        if kind != "wkt"
-        else "+proj=aeqd +lat_0=17.123 +lon_0=42.456 +datum=WGS84 +units=m +no_defs"
-    )
-    grid = GeoBox((12, 16), Affine(10, 0, 100, 0, -10, 500), crs)
-    geo = xr.Dataset({"B": (("y", "x"), np.ones((12, 16)))}, coords=xr_coords(grid))
-    plain = xr.Dataset({"B": (("y", "x"), np.ones((12, 16)))})
-    sources = [plain] if kind == "plain" else [geo, plain] if kind == "mixed" else [geo]
-    parent_ids = [f"parent-{position}" for position in range(len(sources))]
-    parents = dict(zip(parent_ids, sources, strict=True))
-    reference = cuts.chips(whole_windows(parents), (6, 8), overlap=2)
-    path = geoparquet.write(reference, tmp_path / "reference.parquet", index=False)
-    restored = geoparquet.read(path).sample(frac=1, random_state=41)
-    lookup = restored.set_index("id", verify_integrity=True)
-
-    assert set(lookup.index) == set(reference.id)
-    assert restored.crs == reference.crs
-    for sample_id in reference.id:
-        row = lookup.loc[sample_id]
-        actual = parents[row.parent].gs.geobox
-        assert row.chip == reference.set_index("id").loc[sample_id, "chip"]
-        if actual is not None:
-            actual = actual.translate_pix(row.col_off, row.row_off).crop(
-                (row.height, row.width)
-            )
-        if actual is None:
-            assert row.geometry is None
-            assert row["crs"] is None
-        else:
-            recovered = GeoBox(
-                (row.height, row.width), Affine(*row["transform"]), row["crs"]
-            )
-            assert recovered == actual
-            if kind == "wkt":
-                assert not row["crs"].startswith("EPSG:")
+from geosave_engine.geodata import GeoVector, open_vector
 
 
 def test_geoparquet_catalog_supports_bbox_and_column_filtering(
@@ -72,7 +22,7 @@ def test_geoparquet_catalog_supports_bbox_and_column_filtering(
         tmp_path / "catalog.parquet", write_covering_bbox=True
     )
 
-    selected = read_vector(path, bbox=(-1, -1, 2, 2), columns=["name", "geometry"])
+    selected = open_vector(path, bbox=(-1, -1, 2, 2), columns=["name", "geometry"])
 
     assert list(selected.name) == ["near"]
 
@@ -100,7 +50,7 @@ def test_empty_geoparquet_catalog_round_trips(tmp_path: Path) -> None:
     empty = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs="EPSG:4326"))
     path = empty.gs.to_geoparquet(tmp_path / "catalog.parquet")
 
-    restored = read_vector(path)
+    restored = open_vector(path)
 
     assert len(restored) == 0
     assert restored.crs.to_epsg() == 4326
@@ -118,7 +68,7 @@ def test_a_row_without_assets_stays_without() -> None:
 
     vector.gs.to_geoparquet(destination)
 
-    assert read_vector(destination).assets.isna().all()
+    assert open_vector(destination).assets.isna().all()
 
 
 def test_remote_write_refuses_existing_catalog() -> None:
@@ -138,7 +88,7 @@ def test_file_url_returns_a_usable_local_path(tmp_path: Path) -> None:
     )
 
     assert written == destination
-    assert len(read_vector(written)) == 1
+    assert len(open_vector(written)) == 1
 
 
 def test_invalid_remote_suffix_creates_nothing() -> None:

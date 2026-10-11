@@ -11,7 +11,9 @@ from geosave_engine.model.registry import build_model, list_models
 
 
 def test_the_classes_fix_the_channel_count() -> None:
-    head = SegmentationHead(classes=["background", "oil_palm", "water"], feature_channels=4)
+    head = SegmentationHead(
+        classes=["background", "oil_palm", "water"], feature_channels=4
+    )
 
     logits = head.forward_logits(torch.rand(2, 4, 8, 8))
 
@@ -48,7 +50,10 @@ def test_the_registered_name_builds_a_head_whose_classes_survive_json() -> None:
         {
             "head": {
                 "name": "segmentation",
-                "init_args": {"classes": ["background", "oil_palm"], "feature_channels": 4},
+                "init_args": {
+                    "classes": ["background", "oil_palm"],
+                    "feature_channels": 4,
+                },
             }
         }
     )

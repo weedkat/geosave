@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast, get_origin
+from typing import cast
 
 from torch import nn
 
 from .routing import ordered_steps, required_inputs
+from .step import type_name
 
 
 class ModelChain(nn.Module):
@@ -34,6 +35,9 @@ class ModelChain(nn.Module):
         self._steps = ordered_steps(modules)
         self._inputs = required_inputs(self._steps, list(modules))
         self._stage_specs: dict[str, dict[str, object]] | None = None
+        # Stages handed over already built; `build_model` narrows this to the
+        # ones it did not construct itself.
+        self._prebuilt: tuple[str, ...] = tuple(modules)
 
     @property
     def stage_specs(self) -> dict[str, dict[str, object]]:
@@ -43,10 +47,14 @@ class ModelChain(nn.Module):
             Stage selectors and resolved constructor arguments.
 
         Raises:
-            ValueError: The chain was composed directly from module instances.
+            ValueError: A stage was given as a built module.
         """
         if self._stage_specs is None:
-            raise ValueError("Build with stage specifications before export")
+            raise ValueError(
+                f"stages {list(self._prebuilt)} were given as built modules, which "
+                f"carry no construction recipe; give them to `build_model` as "
+                f"classes or stage specifications before export"
+            )
         return deepcopy(self._stage_specs)
 
     @property
@@ -84,26 +92,86 @@ class ModelChain(nn.Module):
     def __repr__(self) -> str:
         """Return external inputs, execution order, and registered modules."""
 
-        def describe(values: dict[str, type]) -> str:
-            return ", ".join(
-                f"{name}: {getattr(kind, '__name__', kind)}"
-                for name, kind in values.items()
-            )
+        def describe(values: dict[str, type], mark: str = "") -> list[str]:
+            return [f"{name}{mark}: {type_name(kind)}" for name, kind in values.items()]
 
-        lines = [f"inputs: {describe(self._inputs)}", "", "data flow:"]
+        lines = [f"inputs: {', '.join(describe(self._inputs))}", "", "data flow:"]
         for step in self._steps:
             method = step.method
-            result_type = method.result_type
+            arguments = describe(method.inputs) + describe(method.optional_inputs, "?")
             output = (
-                (
-                    str(result_type)
-                    if get_origin(result_type)
-                    else getattr(result_type, "__name__", str(result_type))
-                )
+                type_name(method.result_type)
                 if method.head
-                else f"{{{describe(method.outputs)}}}"
+                else f"{{{', '.join(describe(method.outputs))}}}"
             )
             lines.append(
-                f"  {step.stage}: {step.name}({describe(method.inputs)}) -> {output}"
+                f"  {step.stage}: {step.name}({', '.join(arguments)}) -> {output}"
             )
         return "\n".join(lines) + f"\n\n{super().__repr__()}"
+
+    def to_mermaid(self) -> str:
+        """Return the data flow as a Mermaid flowchart.
+
+        Each edge carries one value from its producer, or from an external
+        input; dashed edges feed optional inputs.
+
+        Returns:
+            Mermaid source, rendered by GitHub, JupyterLab, and the Mermaid CLI.
+
+        Examples:
+            >>> print(model.to_mermaid())
+            flowchart LR
+                input_image(["image: Tensor"])
+                ...
+        """
+        producers = {name: step for step in self._steps for name in step.method.outputs}
+        consumed = {
+            name
+            for step in self._steps
+            for name in step.method.inputs | step.method.optional_inputs
+        }
+        optional = {
+            name: kind
+            for step in self._steps
+            for name, kind in step.method.optional_inputs.items()
+            if name not in producers and name not in self._inputs
+        }
+        nodes = [
+            f'input_{name}(["{name}: {type_name(kind)}"])'
+            for name, kind in (self._inputs | optional).items()
+        ]
+        nodes += [f'{step.stage}["{step.stage}: {step.name}"]' for step in self._steps]
+        nodes += [
+            f'result_{step.stage}(["{type_name(step.method.result_type)}"])'
+            for step in self._steps
+            if step.method.head
+        ]
+
+        edges = []
+        for step in self._steps:
+            method = step.method
+            for name, arrow in [
+                *((name, "-->") for name in method.inputs),
+                *((name, "-.->") for name in method.optional_inputs),
+            ]:
+                producer = producers.get(name)
+                if producer is None:
+                    edges.append(f'input_{name} {arrow}|"{name}"| {step.stage}')
+                else:
+                    kind = type_name(producer.method.outputs[name])
+                    edges.append(
+                        f'{producer.stage} {arrow}|"{name}: {kind}"| {step.stage}'
+                    )
+            if method.head:
+                edges.append(f"{step.stage} --> result_{step.stage}")
+            for name, kind in method.outputs.items():
+                if name not in consumed:
+                    edges.append(
+                        f'{step.stage} -->|"{name}: {type_name(kind)}"| '
+                        f'result_{name}(["{name}"])'
+                    )
+        return "\n".join(["flowchart LR", *(f"    {line}" for line in nodes + edges)])
+
+    def _repr_markdown_(self) -> str:
+        """Render the data flow in notebooks that display Mermaid."""
+        return f"```mermaid\n{self.to_mermaid()}\n```"

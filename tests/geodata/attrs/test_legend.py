@@ -1,98 +1,93 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+import xarray as xr
 
-from geosave_engine.geodata.attrs import Legend
-
-
-def test_a_class_map_is_written_the_way_cf_spells_it() -> None:
-    flags = Legend(class_map={1: "palm", 0: "bg"})
-
-    assert flags.flag_values == [0, 1]
-    assert flags.flag_meanings == "bg palm"
-    assert flags.to_attrs() == {"flag_values": [0, 1], "flag_meanings": "bg palm"}
+from geosave_engine.geodata import attrs
 
 
-def test_the_class_map_reads_back_off_the_cf_pair() -> None:
-    flags = Legend(flag_values=[0, 1], flag_meanings="bg palm")
+def test_classes_are_spelled_as_cf_flags() -> None:
+    legend = attrs.Legend(classes={1: "palm", 0: "bg"})
 
-    assert flags.class_map == {0: "bg", 1: "palm"}
-
-
-def test_a_class_map_is_derived_rather_than_stored() -> None:
-    # Nothing to sync: the listing is the one stored fact.
-    assert "class_map" not in Legend.field_keys
-    assert "class_map" not in Legend(class_map={0: "bg"}).to_attrs()
+    assert legend.model_dump(by_alias=True, exclude_none=True) == {
+        "flag_values": [0, 1],
+        "flag_meanings": "bg palm",
+    }
+    assert legend.classes == {0: "bg", 1: "palm"}
 
 
-def test_a_bitfield_listing_enumerates_no_values() -> None:
-    flags = Legend(flag_masks=[1, 2, 4], flag_meanings="cloud shadow snow")
+def test_cf_flags_read_back_as_classes() -> None:
+    legend = attrs.Legend.model_validate(
+        {"flag_values": [0, 1], "flag_meanings": "bg palm"}
+    )
 
-    assert flags.class_map is None
-    assert flags.flag_masks == [1, 2, 4]
-
-
-def test_a_class_map_rejects_names_with_whitespace() -> None:
-    with pytest.raises(ValueError, match="whitespace"):
-        Legend(class_map={0: "palm oil"})
+    assert legend.classes == {0: "bg", 1: "palm"}
 
 
-def test_codes_and_names_must_match_in_number() -> None:
-    with pytest.raises(ValidationError, match="names 3 classes"):
-        Legend(flag_values=[0, 1], flag_meanings="bg palm shrub")
+def test_gdal_text_flags_and_colours_read_as_native_values() -> None:
+    legend = attrs.Legend.model_validate(
+        {
+            "flag_values": "[0, 1]",
+            "flag_meanings": "bg palm",
+            "color_map": '{"0": [0, 0, 0], "1": [46, 139, 87]}',
+        }
+    )
+
+    assert legend.classes == {0: "bg", 1: "palm"}
+    assert legend.color_map == {0: (0, 0, 0), 1: (46, 139, 87)}
 
 
-def test_codes_and_names_are_set_together() -> None:
-    with pytest.raises(ValidationError, match="flag_meanings names no classes"):
-        Legend(flag_values=[0, 1])
+def test_a_bitfield_lists_masks_and_no_classes() -> None:
+    legend = attrs.Legend.model_validate(
+        {"flag_masks": [1, 2], "flag_meanings": "cloud shadow"}
+    )
 
-    with pytest.raises(ValidationError, match="no flag_values or flag_masks"):
-        Legend(flag_meanings="bg palm")
-
-
-def test_flag_values_must_be_ascending_and_unique() -> None:
-    with pytest.raises(ValidationError, match="ascending"):
-        Legend(flag_values=[2, 0, 1], flag_meanings="a b c")
+    assert legend.classes is None
 
 
-def test_codes_read_back_from_the_text_a_gdal_tag_holds() -> None:
-    flags = Legend(flag_values="[0, 1]", flag_meanings="bg palm")
-
-    assert flags.flag_values == [0, 1]
+def test_a_legend_may_carry_colours_without_classes() -> None:
+    assert attrs.Legend(color_map={0: "#000000"}).classes is None
 
 
-def test_a_legend_carries_colour_without_a_listing() -> None:
-    legend = Legend(color_map={0: "#000000", 1: "#00ff00"})
-
-    # to_attrs is JSON-native, so a mapping's keys come out as strings.
-    assert legend.to_attrs() == {"color_map": {"0": "#000000", "1": "#00ff00"}}
-
-
-def test_a_colour_keyed_to_no_listed_class_is_refused() -> None:
-    with pytest.raises(ValidationError, match="does not name"):
-        Legend(class_map={0: "bg", 1: "palm"}, color_map={0: "#000000", 5: "#00ff00"})
-
-
-def test_colours_may_cover_fewer_classes_than_the_listing_names() -> None:
-    legend = Legend(class_map={0: "bg", 1: "palm"}, color_map={0: "#000000"})
-
-    assert legend.class_map == {0: "bg", 1: "palm"}
+@pytest.mark.parametrize(
+    ("given", "match"),
+    [
+        ({"flag_values": [0, 1], "flag_meanings": "bg"}, "2 codes"),
+        ({"flag_values": [0, 1]}, "flag_meanings"),
+        ({"flag_meanings": "bg"}, "flag_values"),
+        ({"flag_values": [1, 0], "flag_meanings": "a b"}, "ascending"),
+        ({"classes": {0: "two words"}}, "whitespace"),
+        ({"classes": {0: "bg"}, "color_map": {1: "#000000"}}, r"\[1\]"),
+    ],
+)
+def test_a_listing_that_does_not_line_up_is_refused(given, match) -> None:
+    with pytest.raises(ValueError, match=match):
+        attrs.Legend.model_validate(given)
 
 
-def test_assigning_a_class_map_rewrites_both_cf_fields() -> None:
-    flags = Legend(class_map={0: "bg", 1: "palm"})
+def test_codes_must_fit_the_bands_dtype() -> None:
+    import numpy as np
 
-    flags.class_map = {0: "bg", 1: "oil", 2: "water"}
+    band = xr.DataArray(
+        np.zeros(2, "uint8"),
+        dims="x",
+        attrs={"flag_values": [0, 300], "flag_meanings": "bg palm"},
+    )
 
-    assert flags.flag_values == [0, 1, 2]
-    assert flags.flag_meanings == "bg oil water"
+    with pytest.raises(ValueError, match="uint8"):
+        attrs.parse(band, attrs.Legend)
 
 
-def test_editing_a_cf_field_shows_in_the_class_map() -> None:
-    flags = Legend(class_map={0: "bg", 1: "palm"})
+def test_the_keys_cover_what_it_writes() -> None:
+    written = attrs.Legend(classes={0: "bg"}, color_map={0: "#000000"}).model_dump(
+        by_alias=True
+    )
+    assert set(written) <= set(attrs.Legend.KEYS)
 
-    flags.flag_meanings = "sea land"
 
-    # One stored fact, so the view follows without anything keeping it in step.
-    assert flags.class_map == {0: "sea", 1: "land"}
+def test_a_float_band_holds_class_codes_exactly() -> None:
+    import numpy as np
+
+    band = xr.DataArray(np.zeros(2, "float32"), dims="x")
+    legend = attrs.Legend(classes={0: "bg", 1: "palm"}).held_by(band)
+    assert legend.classes == {0: "bg", 1: "palm"}

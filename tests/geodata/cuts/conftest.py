@@ -3,8 +3,8 @@ import pandas as pd
 import pytest
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import raster, stac, stack
-from geosave_engine.geodata.stac import table
+from geosave_engine.geodata import open_vector, raster, stac, stack
+from tests.geodata.conftest import stack_templates
 
 GROUPS = ("s2", "s1", "dem", "label")
 
@@ -21,7 +21,7 @@ def _series(name: str, dates: list[str], grid: GeoBox):
     times = pd.to_datetime(dates)
     rng = np.random.default_rng(len(dates))
     values = rng.integers(1, 9000, (len(times), *grid.shape)).astype("uint16")
-    return raster({name: (("time", "y", "x"), values)}, grid, coords={"time": times})
+    return raster({name: (("time", "y", "x"), values)}, grid, time=times)
 
 
 @pytest.fixture
@@ -47,25 +47,9 @@ def sample(grid):
     )
 
 
-@pytest.fixture(params=["zarr", "cog"])
-def items(request, sample, tmp_path):
-    """The item table of the sample saved as stores, and as one file per scene."""
-    root = tmp_path / "s0"
-    paths = (
-        sample.gs.to_zarr(root) if request.param == "zarr" else sample.gs.to_cog(root)
-    )
-    built = stac.create_stack_items(paths, name="s0")
-    return table.read(table.write(built, tmp_path / "items.parquet"))
-
-
 @pytest.fixture
-def opened(items):
-    """The saved sample opened lazily, one group per collection."""
-    tree = stack(
-        {
-            group: table.load(table.to_items(items[items["collection"] == group]))
-            for group in GROUPS
-        }
-    )
-    yield tree
-    tree.close()
+def items(sample, tmp_path):
+    """The sample written as COGs and catalogued, read back from its table."""
+    files = sample.gs.to_cog(stack_templates(sample, tmp_path / "s0"))
+    rows = stac.create_items(files, id="s0")
+    return open_vector(rows.gs.to_geoparquet(tmp_path / "items.parquet"))

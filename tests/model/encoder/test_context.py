@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from geosave_engine.ml.inputs import to_tensor
-
 from pathlib import Path
 
 import numpy as np
@@ -12,10 +10,9 @@ from torch import nn
 from torch.utils.data import default_collate
 from transformers import AutoModel
 
-from geosave_engine.geodata import Dataset, cuts, raster
+from geosave_engine.geodata import Dataset, raster
+from geosave_engine.geodata import attrs
 from geosave_engine.geodata.attrs import TimeSpec
-from tests.geodata.conftest import whole_windows
-from tests.ml.test_inputs import _samples
 from geosave_engine.model.encoder import clay, prithvi
 from geosave_engine.model.encoder.prithvi import (
     BACKBONE_REGISTRY,
@@ -37,41 +34,30 @@ def scene() -> Dataset:
             )
         },
         grid,
-        coords={
-            "time": np.array(
-                ["2024-12-31T14:00", "2024-01-01T03:00"], dtype="datetime64[m]"
-            )
-        },
+        time=np.array(["2024-12-31T14:00", "2024-01-01T03:00"], dtype="datetime64[m]"),
     )
 
 
-def _row(data):
-    whole = whole_windows({"scene": data})
-    return cuts.chips(whole, (data.sizes["y"], data.sizes["x"])).iloc[0]
+def _chip(data, column=0):
+    return data.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
 
 
-def test_encoder_model_context_uses_one_row_contract(scene):
-    context = prithvi.model_context(_row(scene))
+def test_encoder_model_context_reads_the_raster_it_encodes(scene):
+    context = prithvi.model_context(scene)
     torch.testing.assert_close(
         context["temporal_coords"], torch.tensor([[2024.0, 365.0], [2024.0, 0.0]])
     )
     torch.testing.assert_close(context["location_coords"], torch.tensor([51.0, 11.0]))
-    context = clay.model_context(_row(scene.isel(time=0)))
+    context = clay.model_context(scene.isel(time=0))
     torch.testing.assert_close(context["time"], torch.tensor([1.0, 14.0]))
     torch.testing.assert_close(context["latlon"], torch.tensor([51.0, 11.0]))
-
-
-def test_location_context_accepts_wkt_only_catalog_rows(scene):
-    row = _row(scene)
-    row["crs"] = scene.gs.geobox.crs.to_wkt()
-    torch.testing.assert_close(prithvi.location_coords(row), torch.tensor([51.0, 11.0]))
 
 
 def test_prithvi_context_preserves_frame_order_and_calendar_values(
     scene: Dataset,
 ) -> None:
-    times = prithvi.temporal_coords(_row(scene))
-    centre = prithvi.location_coords(_row(scene))
+    times = prithvi.temporal_coords(scene)
+    centre = prithvi.location_coords(scene)
     torch.testing.assert_close(times, torch.tensor([[2024.0, 365.0], [2024.0, 0.0]]))
     torch.testing.assert_close(centre, torch.tensor([51.0, 11.0]))
     assert times.dtype == centre.dtype == torch.float32
@@ -79,71 +65,58 @@ def test_prithvi_context_preserves_frame_order_and_calendar_values(
 
 def test_clay_scalar_time_has_no_frame_axis(scene: Dataset) -> None:
     single = scene.isel(time=0)
-    torch.testing.assert_close(clay.time(_row(single)), torch.tensor([1.0, 14.0]))
-    torch.testing.assert_close(clay.latlon(_row(single)), torch.tensor([51.0, 11.0]))
-    torch.testing.assert_close(clay.time(_row(single["red"])), clay.time(_row(single)))
-    torch.testing.assert_close(
-        clay.latlon(_row(single["red"])), clay.latlon(_row(single))
-    )
+    torch.testing.assert_close(clay.time(single), torch.tensor([1.0, 14.0]))
+    torch.testing.assert_close(clay.latlon(single), torch.tensor([51.0, 11.0]))
+    torch.testing.assert_close(clay.time(single["red"]), clay.time(single))
+    torch.testing.assert_close(clay.latlon(single["red"]), clay.latlon(single))
 
 
 def test_context_encodes_bucket_label_not_midpoint(scene: Dataset) -> None:
-    monthly = scene.isel(time=slice(1, 2)).gs.rebase(
-        TimeSpec.from_resample("MS"), target="time"
+    single = scene.isel(time=slice(1, 2))
+    monthly = single.assign_coords(
+        time=attrs.stamp(single.time, TimeSpec, TimeSpec.from_resample("MS"))
     )
     torch.testing.assert_close(
-        prithvi.temporal_coords(_row(monthly)), torch.tensor([[2024.0, 0.0]])
+        prithvi.temporal_coords(monthly), torch.tensor([[2024.0, 0.0]])
     )
-    torch.testing.assert_close(clay.time(_row(monthly)), torch.tensor([1.0, 3.0]))
+    torch.testing.assert_close(clay.time(monthly), torch.tensor([1.0, 3.0]))
 
 
 @pytest.mark.parametrize("read_time", [clay.time, prithvi.temporal_coords])
-@pytest.mark.parametrize(
-    "labels", [[], [np.datetime64("NaT", "ns")], [42], ["invalid"]]
-)
+@pytest.mark.parametrize("labels", [[], [np.datetime64("NaT", "ns")]])
 def test_invalid_time_labels_raise(scene: Dataset, read_time, labels: list) -> None:
-    bad = scene.isel(time=slice(0, len(labels))).assign_coords(time=labels)
+    bad = scene.isel(time=slice(0, len(labels))).assign_coords(
+        time=np.asarray(labels, dtype="datetime64[ns]")
+    )
     with pytest.raises(ValueError, match="time labels"):
-        read_time(_row(bad))
+        read_time(bad)
 
 
 @pytest.mark.parametrize("read_time", [clay.time, prithvi.temporal_coords])
 def test_missing_time_raises(scene: Dataset, read_time) -> None:
     with pytest.raises(ValueError, match="time"):
-        read_time(_row(scene.isel(time=0, drop=True)))
+        read_time(scene.isel(time=0, drop=True))
 
 
 @pytest.mark.parametrize("read_centre", [clay.latlon, prithvi.location_coords])
 def test_missing_grid_raises(read_centre) -> None:
     with pytest.raises(ValueError, match="grid"):
-        read_centre(
-            _row(
-                raster(
-                    {
-                        "red": (
-                            ("y", "x"),
-                            np.zeros((2, 2), dtype="float32"),
-                        )
-                    }
-                )
-            )
-        )
+        read_centre(raster({"red": (("y", "x"), np.zeros((2, 2), dtype="float32"))}))
 
 
 def test_clay_refuses_multiple_frames(scene: Dataset) -> None:
     with pytest.raises(ValueError, match="single frame"):
-        clay.time(_row(scene))
+        clay.time(scene)
 
 
-def test_prithvi_context_batches_per_tile(scene: Dataset) -> None:
-    tiles = _samples({"scene": scene}, (4, 4))
+def test_prithvi_context_batches_per_chip(scene: Dataset) -> None:
     batch = default_collate(
         [
             {
-                "temporal_coords": prithvi.temporal_coords(tiles.reference.iloc[index]),
-                "location_coords": prithvi.location_coords(tiles.reference.iloc[index]),
+                "temporal_coords": prithvi.temporal_coords(_chip(scene, column)),
+                "location_coords": prithvi.location_coords(_chip(scene, column)),
             }
-            for index in range(2)
+            for column in range(2)
         ]
     )
     assert batch["temporal_coords"].shape == (2, 2, 2)
@@ -152,11 +125,9 @@ def test_prithvi_context_batches_per_tile(scene: Dataset) -> None:
     )
 
 
-def test_clay_context_batches_per_tile(scene: Dataset) -> None:
-    tiles = _samples({"scene": scene.isel(time=0)}, (4, 4))
-    batch = default_collate(
-        [clay.time(tiles.reference.iloc[index]) for index in range(2)]
-    )
+def test_clay_context_batches_per_chip(scene: Dataset) -> None:
+    single = scene.isel(time=0)
+    batch = default_collate([clay.time(_chip(single, column)) for column in range(2)])
     torch.testing.assert_close(batch, torch.tensor([[1.0, 14.0], [1.0, 14.0]]))
 
 
@@ -235,7 +206,7 @@ def test_transformers_reload_runs_on_prithvi_context(
                 "init_args": {
                     "out_indices": [0],
                     "num_frames": 2,
-                    "in_channels": 1,
+                    "bands": ["BLUE"],
                     "input_size": 8,
                 },
             }
@@ -257,15 +228,13 @@ def test_transformers_reload_runs_on_prithvi_context(
     torch.testing.assert_close(
         restored_encoder.model.state_dict()["scale"], torch.tensor(7.0)
     )
-    tiles = _samples({"scene": scene}, (4, 4))
     inputs = default_collate(
         [
             {
-                "image": to_tensor(tiles.read(index)),
-                "temporal_coords": prithvi.temporal_coords(tiles.reference.iloc[index]),
-                "location_coords": prithvi.location_coords(tiles.reference.iloc[index]),
+                "image": _chip(scene, column).gs.to_tensor(),
+                **prithvi.model_context(_chip(scene, column)),
             }
-            for index in range(2)
+            for column in range(2)
         ]
     )
     torch.testing.assert_close(

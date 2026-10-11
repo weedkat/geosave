@@ -37,7 +37,6 @@ import geosave_engine.geodata.attrs as attrs
 from geosave_engine.geodata.conventions import SPATIAL_DIMENSIONS, to_yx
 from geosave_engine import __path__ as _package_paths
 from geosave_engine.geodata.warnings import AssumedFillWarning
-from geosave_engine.geodata.transform import nodata
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,7 +52,6 @@ type Resampling = Literal[
     "lanczos",
     "average",
     "mode",
-    "gauss",
     "max",
     "min",
     "med",
@@ -92,13 +90,18 @@ def _zoom_ratio(source: GeoBox, target: GeoBox) -> int:
         already agree.
 
     Raises:
-        ValueError: `target` is the coarser of the two, or the sizes stand in
-            no whole-numbered ratio.
+        ValueError: The grids have different CRSs, `target` is coarser, or
+            the sizes do not share one integer ratio on both axes.
 
     Examples:
         >>> _zoom_ratio(sixty_metre, ten_metre)
         6
     """
+    if source.crs != target.crs:
+        raise ValueError(
+            "native resolution requires a shared CRS; reproject onto one CRS "
+            "before nesting grids"
+        )
     along_x = abs(source.resolution.x) / abs(target.resolution.x)
     along_y = abs(source.resolution.y) / abs(target.resolution.y)
     ratio = round(along_x)
@@ -135,17 +138,23 @@ def _variable_resampling(
 
     Raises:
         KeyError: A mapping names neither `variable` nor `"*"`.
+        ValueError: The kernel is not supported for reprojection.
     """
-    if not isinstance(resampling, Mapping):
-        return resampling
-    if variable in resampling:
-        return resampling[variable]
-    if "*" in resampling:
-        return resampling["*"]
-    raise KeyError(
-        f"{variable!r} names no resampling kernel and the mapping carries no '*' "
-        f"to answer it; name it, or give '*' the kernel the rest warp with"
-    )
+    if isinstance(resampling, Mapping):
+        if variable in resampling:
+            kernel = resampling[variable]
+        elif "*" in resampling:
+            kernel = resampling["*"]
+        else:
+            raise KeyError(
+                f"{variable!r} names no resampling kernel and the mapping carries "
+                "no '*'; name it, or provide a default kernel"
+            )
+    else:
+        kernel = resampling
+    if kernel not in get_args(Resampling.__value__):
+        raise ValueError(f"unsupported resampling kernel {kernel!r}")
+    return kernel
 
 
 def _group_resampling(
@@ -175,7 +184,7 @@ def _group_resampling(
 
 
 def _finest(grids: Sequence[GeoBox]) -> GeoBox:
-    """Pick the grid whose pixels cover least ground, so none is coarsened.
+    """Pick the grid with the smallest pixel area in its CRS.
 
     Pixel sizes rank against each other only within one CRS, degrees and metres
     naming no common scale, so grids spread across several leave the first of
@@ -189,15 +198,15 @@ def _finest(grids: Sequence[GeoBox]) -> GeoBox:
     """
     if len({grid.crs for grid in grids}) > 1:
         return grids[0]
-    return min(grids, key=lambda grid: abs(grid.resolution.x))
+    return min(grids, key=lambda grid: abs(grid.transform.determinant))
 
 
 def _source_geobox(data: xr.DataArray | xr.Dataset | xr.DataTree) -> GeoBox | None:
     """Read the grid a raster's pixels currently sit on.
 
-    A stack need not publish a grid at its root, in which case the finest of
-    its groups' grids is the one it warps from, so no group is coarsened for
-    sitting later in the stack than another.
+    A stack need not publish a grid at its root. In that case, select the
+    group grid with the smallest pixel area when the groups share a CRS,
+    or the first group grid otherwise.
 
     Args:
         data: Raster of any kind.
@@ -231,8 +240,8 @@ def _target_geobox(
         target: Grid to land on, a raster already on one, or a CRS.
         resolution: Output pixel size. None takes the target's own, or
             `source`'s ground sampling where the target names only a CRS.
-            `"native"` keeps `source`'s pixel size either way, nesting it onto
-            a target grid's lattice.
+            `"native"` nests the source pixel size onto a grid in the same CRS.
+            For a bare CRS, it uses ODC's automatic output resolution.
 
     Returns:
         The exact grid to warp onto.
@@ -265,6 +274,10 @@ def _target_geobox(
             crs, resolution=cast("Literal['auto', 'fit', 'same']", scale)
         )
 
+    if geobox.crs is None:
+        raise ValueError(
+            "the target grid carries no CRS; supply a georeferenced target"
+        )
     if resolution == NATIVE:
         return geobox.zoom_out(_zoom_ratio(source, geobox))
     if resolution is not None:
@@ -290,7 +303,7 @@ def _warp_band(band: xr.DataArray, geobox: GeoBox, kernel: Resampling) -> xr.Dat
         dtype's far end where integer, the maximum where unsigned and the
         minimum where signed.
     """
-    fill = nodata.fill_value(band)
+    fill = band.gs.nodata
     if fill is None and band.dtype.kind in "iuf":
         if band.dtype.kind == "f":
             fill = float("nan")
@@ -306,8 +319,10 @@ def _warp_band(band: xr.DataArray, geobox: GeoBox, kernel: Resampling) -> xr.Dat
         )
         band = band.gs.write_nodata(fill)
 
-    # odc names a geographic target latitude/longitude.
-    warped = to_yx(band.odc.reproject(geobox, resampling=kernel)).rename(band.name)
+    # ODC needs the spatial axes last; the caller's order returns afterwards.
+    ordered = band.transpose(..., *SPATIAL_DIMENSIONS)
+    warped = to_yx(ordered.odc.reproject(geobox, resampling=kernel))
+    warped = warped.transpose(*band.dims).rename(band.name)
     # odc drops a NaN fill value from attrs and narrows a float one to int.
     return warped if fill is None else warped.gs.write_nodata(fill)
 
@@ -338,6 +353,10 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
             whole, so it reaches past the source's own bounds. `"native"` keeps
             each variable's own pixel size instead, nesting it onto the target's
             lattice, so a stack's groups come out at their own resolutions.
+            Nesting requires a shared CRS and one integer scale ratio on both axes.
+            For a single array or Dataset with a bare CRS target, `"native"`
+            uses ODC's automatic resolution. Preserving separate stack
+            resolutions requires all groups and the target to share a CRS.
 
     Returns:
         New object of the same kind on the target grid, carrying its own
@@ -357,8 +376,13 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
         ValueError: `data` or `target` sits on no locatable grid, `data` holds
             no data variable, `resolution` contradicts a target grid or stands
             in no whole-numbered ratio to it, a variable of `data` does not
-            span its own grid, or `resampling` would blend a variable whose
-            values are class codes.
+            span its own grid, the kernel is unsupported, or `resampling`
+            would blend a variable whose values are class codes.
+
+    Notes:
+        ODC's lazy reprojection can differ from eager GDAL results at chunk
+        boundaries for interpolating kernels, including bilinear and cubic.
+        Increasing chunk size alone does not guarantee identical pixels.
 
     Examples:
         The target grid comes from whatever already defines it — another
@@ -388,7 +412,8 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
         >>> reproject(landcover, scene, resampling="bilinear")
         Traceback (most recent call last):
         ValueError: ['landcover'] hold class codes, which ['bilinear'] would blend ...
-        >>> reproject(scene, target, resampling={"*": "bilinear", "labels/mask": "mode"})
+        >>> kernels = {"*": "bilinear", "labels/mask": "mode"}
+        >>> reproject(scene, target, resampling=kernels)
     """
     if not isinstance(data, xr.DataArray | xr.Dataset | xr.DataTree):
         raise TypeError(
@@ -396,10 +421,26 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
             f"{type(data).__name__}"
         )
 
-    # A stack's names are group-qualified, as its `resampling` mapping keys them.
+    # Collect every band by name, since a DataTree's indexing can return groups.
+    if isinstance(data, xr.DataTree):
+        bands = [
+            (f"{group}/{name}", band)
+            for group, raster in data.gs.rasters.items()
+            for name, band in raster.data_vars.items()
+        ]
+    elif isinstance(data, xr.DataArray):
+        bands = [(str(data.name), data)]
+    else:
+        bands = [(str(name), band) for name, band in data.data_vars.items()]
+    if not bands:
+        raise ValueError(f"{type(data).__name__} holds no data variables to warp")
     blended: dict[str, Resampling] = {}
-    for name in data.gs.variables:
-        band = data if isinstance(data, xr.DataArray) else data[name]
+    for name, band in bands:
+        if not set(SPATIAL_DIMENSIONS) <= set(band.dims):
+            raise ValueError(
+                f"{name!r} spans {list(band.dims)}, not the grid "
+                f"{list(SPATIAL_DIMENSIONS)}; select spatial variables before warping"
+            )
         kernel = _variable_resampling(resampling, name)
         if attrs.is_flag(band) and kernel not in _VALUE_PRESERVING:
             blended[name] = kernel
@@ -413,7 +454,7 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
         )
 
     source = _source_geobox(data)
-    if source is None:
+    if source is None or source.crs is None:
         raise ValueError(
             f"{type(data).__name__} sits on no locatable grid, so nothing says "
             f"where its pixels start from; open it georeferenced first"
@@ -422,21 +463,28 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
         from geosave_engine.geodata.core.stack import stack
 
         rasters = data.gs.rasters
-        lattice = _target_geobox(
-            source, target, None if resolution == NATIVE else resolution
-        )
+        if isinstance(target, GeoBox | xr.DataArray | xr.Dataset | xr.DataTree):
+            lattice = _target_geobox(
+                source, target, None if resolution == NATIVE else resolution
+            )
+        else:
+            # A CRS fixes no extent: retain the ground covered by every group.
+            lattice = common_grid(
+                list(rasters.values()), target=target, resolution=resolution
+            )
         warped = stack(
             {
                 name: reproject(
                     raster,
                     lattice,
                     resampling=_group_resampling(resampling, name),
-                    resolution=resolution,
+                    resolution=NATIVE if resolution == NATIVE else None,
                 )
                 for name, raster in rasters.items()
             }
         )
-        return cast("T", attrs.rebase(warped, data.gs.attrs.root))
+        warped.attrs = dict(data.attrs)
+        return cast("T", warped)
 
     geobox = _target_geobox(source, target, resolution)
     if geobox == source:
@@ -449,24 +497,12 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
 
     # odc's Dataset path keeps the old spatial_ref attrs, so it reports the source.
     raster = cast("xr.Dataset", data)
-    if not raster.data_vars:
-        raise ValueError(
-            "the Dataset holds no data variable, so it names no pixels to warp; "
-            "select the variables you mean before warping"
-        )
-    data_vars: dict[str, xr.DataArray] = {}
-    for variable, values in raster.data_vars.items():
-        if not set(SPATIAL_DIMENSIONS) <= set(values.dims):
-            raise ValueError(
-                f"{str(variable)!r} spans {list(values.dims)}, not the grid "
-                f"{list(SPATIAL_DIMENSIONS)}, so it names no pixels to warp; drop it "
-                f"or place it on the grid first"
-            )
-        data_vars[str(variable)] = _warp_band(
-            values, geobox, _variable_resampling(resampling, str(variable))
-        )
+    data_vars = {
+        name: _warp_band(band, geobox, _variable_resampling(resampling, str(name)))
+        for name, band in raster.data_vars.items()
+    }
     warped = xr.Dataset(data_vars).gs.write_crs()
-    return cast("T", attrs.rebase(warped, raster.gs.attrs.root))
+    return cast("T", warped.assign_attrs(raster.attrs))
 
 
 def common_grid(
@@ -485,12 +521,14 @@ def common_grid(
     Args:
         rasters: Rasters to measure, at least one, each on a locatable grid.
         target: Grid to align onto, a raster already on one, or a CRS the
-            finest raster's grid is carried into. None takes the finest
-            raster's grid as it stands, so none is coarsened for its place in
-            the order.
+            reference grid is carried into. None selects the smallest pixel
+            area within one CRS, or the first grid across different CRSs.
+            For rectangular pixels, one axis may still be coarsened; pass an
+            explicit target to control both axes.
         extent: Ground the grid covers. `"union"` reaches every raster;
-            `"intersection"` keeps only the ground they all cover; `"match"`
-            adopts the reference's own.
+            `"intersection"` intersects their grid-aligned footprint envelopes,
+            retaining partially covered boundary pixels; `"match"` adopts
+            the reference's own.
         resolution: Pixel size of the grid. None takes the reference's own.
             `"native"` returns the lattice the rasters nest on instead, at the
             finest of their pixel sizes and shaped so every one of them divides
@@ -520,17 +558,21 @@ def common_grid(
         )
 
     grids: list[GeoBox] = []
-    for ordinal, raster in enumerate(rasters):
-        geobox = _source_geobox(raster)
-        if geobox is None:
-            raise ValueError(
-                f"raster {ordinal} sits on no locatable grid, so nothing says "
-                f"where its pixels land against the rest; open it georeferenced "
-                f"first"
-            )
-        grids.append(geobox)
+    for ordinal, data in enumerate(rasters):
+        groups = data.gs.rasters.values() if isinstance(data, xr.DataTree) else (data,)
+        if not groups:
+            raise ValueError(f"raster {ordinal} holds no groups on a locatable grid")
+        for raster in groups:
+            geobox = raster.gs.geobox
+            if not isinstance(geobox, GeoBox):
+                raise ValueError(
+                    f"raster {ordinal} sits on no locatable grid, so nothing says "
+                    f"where its pixels land against the rest; open it georeferenced "
+                    f"first"
+                )
+            grids.append(geobox)
 
-    # The finest raster is the reference, so none is coarsened for its place.
+    # Rank pixel areas only within a shared CRS.
     reference = _finest(grids)
     if target is not None:
         reference = _target_geobox(
@@ -562,9 +604,9 @@ def common_grid(
         # An undivided shape makes zoom_out round up, off the shared ground.
         step = lcm(*(_zoom_ratio(grid, common) for grid in grids))
         if extent == "intersection":
-            kept = common.shape.y - common.shape.y % step
-            across = common.shape.x - common.shape.x % step
-            common = common[:kept, :across]
+            height = common.shape.y - common.shape.y % step
+            width = common.shape.x - common.shape.x % step
+            common = common[:height, :width]
         else:
             common = common.pad_wh(step)
 
@@ -589,13 +631,14 @@ def align[T: xr.DataArray | xr.Dataset | xr.DataTree](
     Args:
         rasters: Rasters to align, at least one, each on a locatable grid.
         target: Grid to align onto, a raster already on one, or a CRS the
-            finest raster's grid is carried into. None takes the finest
-            raster's grid as it stands, so none is coarsened for its place in
-            the order.
+            reference grid is carried into. None selects the smallest pixel
+            area within one CRS, or the first grid across different CRSs.
+            For rectangular pixels, one axis may still be coarsened; pass an
+            explicit target to control both axes.
         extent: Ground the aligned rasters cover. `"union"` reaches every
-            raster, holding fill where one does not; `"intersection"` drops
-            every edge outside the ground they all cover; `"match"` adopts the
-            reference's own.
+            raster, holding fill where one does not; `"intersection"` intersects
+            their grid-aligned footprint envelopes, retaining partially covered
+            boundary pixels; `"match"` adopts the reference's own.
         resampling: One GDAL kernel for every variable, or a mapping naming
             each variable's own, which `"*"` answers the rest of. Pixels move
             only where a raster does not already sit on the grid they align
@@ -624,7 +667,8 @@ def align[T: xr.DataArray | xr.Dataset | xr.DataTree](
         >>> {r.gs.geobox for r in (optical, radar, dem)} == {optical.gs.geobox}
         True
 
-        Keeping only the ground every raster reaches leaves no fill behind:
+        Intersecting the grid-aligned extents trims the output. Partly covered
+        pixels and source nodata can still leave fill values:
 
         >>> [r.gs.geobox.shape for r in align(scenes, extent="intersection")]
         [Shape2d(x=180, y=180), Shape2d(x=180, y=180)]

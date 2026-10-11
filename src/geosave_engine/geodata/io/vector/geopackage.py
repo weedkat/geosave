@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
 
 import geopandas as gpd
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+
+from upath import UPath
 
 from .. import storage
 from ..storage import StorageOptions
@@ -94,7 +96,7 @@ def write(
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
     overwrite: bool = False,
     **write_options: Unpack[GeoPackageWriteOptions],
-) -> Path | str:
+) -> UPath:
     """Write one GeoDataFrame as a layer in a GeoPackage.
 
     A GeoPackage holds the frame in its own CRS, so nothing is reprojected.
@@ -108,7 +110,8 @@ def write(
         **write_options: Supported GeoPandas and file-driver write options.
 
     Returns:
-        Local writes return a path; URL writes return the supplied URL.
+        Local writes return a PosixUPath; URL writes return a UPath carrying
+        its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -120,7 +123,7 @@ def write(
     if "engine" in driver_options:
         raise ValueError("driver_options must not contain engine; use engine=")
     # The layer is named after the file asked for, not the one being staged.
-    name = layer if layer is not None else PurePosixPath(str(path)).stem
+    name = layer if layer is not None else storage.location(path).stem
 
     def save(target: Path) -> None:
         gdf.to_file(

@@ -9,6 +9,8 @@ import geopandas as gpd
 
 from pathlib import Path
 
+from upath import UPath
+
 from .. import storage
 from ..storage import StorageOptions
 
@@ -76,7 +78,7 @@ def write(
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
     overwrite: bool = False,
     **write_options: Unpack[GeoJSONWriteOptions],
-) -> Path | str:
+) -> UPath:
     """Write one GeoDataFrame as a GeoJSON file.
 
     Geometry is serialized in WGS84.
@@ -89,7 +91,8 @@ def write(
         **write_options: Supported GeoPandas and file-driver write options.
 
     Returns:
-        Local writes return a path; URL writes return the supplied URL.
+        Local writes return a PosixUPath; URL writes return a UPath carrying
+        its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.

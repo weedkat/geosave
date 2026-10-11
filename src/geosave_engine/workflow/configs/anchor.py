@@ -50,7 +50,7 @@ class GeoJSONAnchorConfig(ConfigModel):
     def open(self) -> GeoAnchor:
         """Read the geometry and build its native anchor."""
         return GeoAnchor.from_geometry(
-            io.read_vector(self.path).gs.footprint,
+            io.open_vector(self.path).gs.footprint,
             **self.model_dump(exclude={"kind", "path"}, exclude_none=True),
         )
 
@@ -63,7 +63,7 @@ class RasterAnchorConfig(ConfigModel):
 
     def open(self) -> GeoAnchor:
         """Read the raster's native anchor."""
-        with io.read_raster(self.path) as raster:
+        with io.open_raster(self.path) as raster:
             return raster.gs.anchor
 
 

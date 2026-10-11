@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import geopandas as gpd
 import numpy as np
+import orjson
 import pandas as pd
 
 from geosave_engine import __path__ as _package_paths
+from geosave_engine.geodata.stac._item import instant
 from geosave_engine.geodata.warnings import (
     DroppedFramesWarning,
     DroppedInstantsWarning,
@@ -38,15 +40,14 @@ def frames(
     stride: int | None = None,
     mode: FrameMode = "strict",
 ) -> GeoDataFrame:
-    """Cut each window into frames, joining groups that observe on their own dates.
+    """Cut each window into frames, joining collections that observe on their own dates.
 
-    Groups need not observe together: their instants are laid onto one joint
-    axis, each instant of which takes the scene every group observed nearest
-    to it. Each group keeps its own dates, and a timeless one joins whole.
+    Collections need not observe together: their instants are laid onto one
+    joint axis, each instant of which takes the item every collection observed
+    nearest to it. A collection with one item, as a label, joins every frame.
 
     Args:
-        windows: Windows as `stacks` or `chips` lists them, each stating the
-            time labels of its groups.
+        windows: Windows as `stacks` or `chips` lists them.
         length: Joint instants each frame holds, at most the axis length.
         tolerance: How far an instant may reach for a scene, e.g. `"10D"`. A
             gap exactly this long still reaches; an instant equidistant from
@@ -58,13 +59,12 @@ def frames(
 
     Returns:
         One row per frame, windows in the order given and frames in time
-        order. `id` gains `/frame-<n>`, `parent` names the window cut, and
-        `times`, `start_datetime` and `end_datetime` state the frame's own
-        instants.
+        order. `parent` is the position of the window cut, `sources` keeps
+        only the items of the frame's instants, one per instant, and
+        `start_datetime` and `end_datetime` state what they span.
 
     Raises:
-        ValueError: `mode` names no mode; `tolerance` is not a positive
-            duration; a window has no dated group; `length` or `stride` is
+        ValueError: `tolerance` is not a positive duration; a window has no collection of several items; `length` or `stride` is
             below 1; `length` exceeds the joint axis; a group's labels are
             unchronological or repeat; the groups share no interval; a group
             matches no instant; or `mode` is `"strict"` and a frame covers an
@@ -86,17 +86,12 @@ def frames(
                    [--------------]                 frame 0
                                    [-------------]  frame 1
 
-        >>> cut = frames(stacks(items), 2, tolerance="10D")
-        >>> cut["id"].tolist()
-        ['s0/frame-0', 's0/frame-1']
-        >>> cut.iloc[0]["times"]["s2"]
-        ['2024-03-08T00:00:00', '2024-03-28T00:00:00']
+        >>> cut = frames(stacks(items, on="label"), 2, tolerance="10D")
+        >>> cut["parent"].tolist()
+        [0, 0]
+        >>> [i["properties"]["datetime"][:10] for i in orjson.loads(cut.iloc[0]["sources"])["s2"]]
+        ['2024-03-08', '2024-03-28']
     """
-    if mode not in ("strict", "drop"):
-        raise ValueError(
-            f"{mode!r} is not a frame mode; refuse an incomplete instant with "
-            f"'strict' or skip over it with 'drop'"
-        )
     reach = pd.Timedelta(tolerance)
     if not isinstance(reach, pd.Timedelta) or reach <= pd.Timedelta(0):
         raise ValueError(
@@ -106,21 +101,28 @@ def frames(
 
     cut = []
     skips = 0
-    for _, window in windows.iterrows():
-        series = {
-            name: pd.DatetimeIndex(labels)
-            for name, labels in window["times"].items()
-            if labels is not None
-        }
-        if not series:
-            raise ValueError(
-                f"no group of {window['id']!r} states time labels, so it holds "
-                f"no sequence to cut into frames; save it over time first"
+    for position, (_, window) in enumerate(windows.iterrows()):
+        members = orjson.loads(window["sources"])
+        # A collection with one item is static, as a label or an elevation model.
+        dated = {
+            name: sorted(
+                listed, key=lambda item: (instant(item) is None, instant(item))
             )
+            for name, listed in members.items()
+            if len(listed) > 1
+        }
+        if not dated:
+            raise ValueError(
+                f"no collection of window {position} holds more than one item, so "
+                f"it states no time labels to cut into frames; save it over time first"
+            )
+        series = {
+            name: pd.DatetimeIndex([instant(item) for item in listed])
+            for name, listed in dated.items()
+        }
         table = _joint_axis(series, reach)
         complete = (table.to_numpy() != -1).all(axis=1)
 
-        emitted = 0
         for span in _spans(table.index.to_numpy(), length, stride):
             rows = table.iloc[span]
             if not complete[span].all():
@@ -137,32 +139,28 @@ def frames(
                     )
                 skips += 1
                 continue
-            taken = {
-                name: series[name][rows[name].to_numpy()] if name in series else None
-                for name in window["times"]
+            # One item per instant, so a scene nearest two instants appears twice.
+            kept = {
+                name: (
+                    [dated[name][index] for index in rows[name].to_numpy()]
+                    if name in dated
+                    else listed
+                )
+                for name, listed in members.items()
             }
-            dated = [
-                stamp
-                for stamps in taken.values()
-                if stamps is not None
-                for stamp in stamps
-            ]
+            # `_joint_axis` refused unlabelled instants, so every stamp is a time.
+            stamps = pd.DatetimeIndex(
+                [instant(item) for name in dated for item in kept[name]]
+            )
             cut.append(
                 {
                     **window.to_dict(),
-                    "id": f"{window['id']}/frame-{emitted}",
-                    "parent": window["id"],
-                    "times": {
-                        name: None
-                        if stamps is None
-                        else [s.isoformat() for s in stamps]
-                        for name, stamps in taken.items()
-                    },
-                    "start_datetime": min(dated),
-                    "end_datetime": max(dated),
+                    "parent": position,
+                    "sources": orjson.dumps(kept).decode(),
+                    "start_datetime": stamps.min(),
+                    "end_datetime": stamps.max(),
                 }
             )
-            emitted += 1
     if skips:
         warnings.warn(
             f"{skips} of {skips + len(cut)} frames cover an instant some "
@@ -172,10 +170,11 @@ def frames(
             skip_file_prefixes=tuple(_package_paths),
         )
     # No window cut leaves an empty table, which still names its columns.
-    columns = list(dict.fromkeys([*windows.columns, *[]]))
     return cast(
         "GeoDataFrame",
-        gpd.GeoDataFrame(cut, columns=columns, geometry="geometry", crs=windows.crs),
+        gpd.GeoDataFrame(
+            cut, columns=list(windows.columns), geometry="geometry", crs=windows.crs
+        ).reset_index(drop=True),
     )
 
 

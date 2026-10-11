@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import pytest
 
 from geosave_engine.geodata.io.raster.gdal import configure_gdal, hf_to_s3
@@ -61,3 +62,24 @@ def test_gdal_configuration_can_skip_sidecar_probes(monkeypatch) -> None:
     configure_gdal(gdal_disable_readdir_on_open="EMPTY_DIR")
 
     assert os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
+
+
+
+def test_band_slots_and_tags_read_as_one_variables_attrs() -> None:
+    from rasterio.io import MemoryFile
+
+    from geosave_engine.geodata.io.raster.gdal import _attrs
+
+    with MemoryFile() as memory:
+        with memory.open(driver="GTiff", width=1, height=1, count=1, dtype="uint8") as dst:
+            dst.write(np.array([[[1]]], dtype="uint8"))
+            dst.set_band_description(1, "Red reflectance")
+            dst.update_tags(1, variable_name="red", units="1")
+
+        with memory.open() as src:
+            _, bands = _attrs(src)
+
+    assert list(bands) == ["red"]
+    assert bands["red"]["long_name"] == "Red reflectance"
+    assert bands["red"]["units"] == "1"
+    assert bands["red"]["variable_name"] == "red"

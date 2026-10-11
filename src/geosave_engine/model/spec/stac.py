@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import cache
 from typing import Any, Annotated, Literal, Self
 
 from pydantic import (
@@ -16,13 +15,10 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pystac_client.exceptions import APIError
-from requests.exceptions import RequestException
 import xarray as xr
 
 from geosave_engine.geodata.core import GeoAnchor
-from geosave_engine.geodata.errors import CollectionNotFoundError
-from geosave_engine.geodata.stac.client import StacClient, StacProvider
+from geosave_engine.geodata.stac.client import StacProvider
 from geosave_engine.geodata.stac.query import StacQuery
 from geosave_engine.geodata.stac.source import StacSourceConfig
 
@@ -112,59 +108,15 @@ class StacRecipe(SpecModel):
         return self
 
     def load_raster(self, anchor: GeoAnchor, /) -> xr.Dataset:
-        """Load a lazy raster on an anchor from the first available endpoint."""
-        endpoints = tuple(str(endpoint) for endpoint in self.endpoints)
-        client = _open_client(self.collection, endpoints)
-        source = client.source(self.collection)
-        source.query = self.query.to_query(self.collection)
-        source.config = self.load
-        return source.load(anchor)
+        """Load a lazy raster on an anchor from the first available endpoint.
 
+        Not settled yet: read rasters from a catalog through `cuts.stacks`
+        and `row.gs.to_stack()` instead.
 
-def _endpoint_unavailable(error: Exception) -> bool:
-    """Return whether an endpoint failure is safe to retry elsewhere."""
-    if isinstance(error, APIError):
-        status = getattr(error, "status_code", None)
-        if status is not None:
-            return status == 404 or status >= 500
-        cause = error.__cause__ or error.__context__
-        seen = {id(error)}
-        while cause is not None and id(cause) not in seen:
-            if isinstance(cause, RequestException) and not isinstance(
-                cause, ValueError
-            ):
-                return True
-            seen.add(id(cause))
-            cause = cause.__cause__ or cause.__context__
-        return False
-    return isinstance(error, RequestException) and not isinstance(error, ValueError)
-
-
-@cache
-def _open_client(collection: str, endpoints: tuple[str, ...]) -> StacClient:
-    """Open and cache the first catalog publishing a collection."""
-    failures = []
-    last_error: Exception | None = None
-    for endpoint in endpoints:
-        try:
-            client = StacClient.open(endpoint)
-            try:
-                metadata = client.collection(collection)
-            except CollectionNotFoundError:
-                metadata = None
-        except (RequestException, APIError) as error:
-            if not _endpoint_unavailable(error):
-                raise
-            last_error = error
-        else:
-            if metadata is not None and metadata.id == collection:
-                return client
-            last_error = LookupError(f"Collection {collection!r} not found")
-        status = getattr(last_error, "status_code", None)
-        cause = (
-            f"HTTP {status}: {last_error}" if status is not None else str(last_error)
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(
+            "StacRecipe.load_raster is not settled; read rasters from a catalog "
+            "with cuts.stacks and row.gs.to_stack()"
         )
-        failures.append(f"{endpoint}: {cause}")
-    raise ConnectionError(
-        "STAC endpoints unavailable: " + "; ".join(failures)
-    ) from last_error

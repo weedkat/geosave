@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from geosave_engine.ml.inputs import to_tensor
-
 import gc
 import os
 from datetime import UTC, datetime
@@ -10,6 +8,7 @@ from types import SimpleNamespace
 
 import geopandas as gpd
 import numpy as np
+import orjson
 import pytest
 import torch
 import xarray as xr
@@ -17,17 +16,24 @@ from lightning import LightningDataModule
 from odc.geo.geobox import GeoBox
 from torch.utils.data import DataLoader
 
-from geosave_engine.geodata import cuts, raster, stack
-from geosave_engine.geodata.stac import create_stack_items, table
+from geosave_engine.geodata import GeoVector, raster, open_vector, stack
+from geosave_engine.geodata.stac import create_items
 from geosave_engine.ml.segmentation import supervised
 from geosave_engine.model.spec import ModelSpec, Ref
+from tests.geodata.conftest import stack_templates
+
+
+_spec_processing_not_settled = pytest.mark.xfail(
+    raises=NotImplementedError,
+    strict=True,
+    reason="ModelSpec processing is a stub until frames, chips, inputs and context are redesigned",
+)
 
 SIZE = 20
 
 
 def test_batch_augmentation_uses_default_crop_size(tmp_path):
-    data = _training(_data(tmp_path, augmentations=[{"name": "RandomCrop"}]), True)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, augmentations=[{"name": "RandomCrop"}]), True)
     image, target, _, _ = data.on_after_batch_transfer(_batch(), 0)
     assert image["image"].shape[-2:] == (8, 8)
     assert target.shape[-2:] == (8, 8)
@@ -38,10 +44,10 @@ def double(data: xr.Dataset) -> xr.Dataset:
     return data * 2
 
 
-def location_context(row):
+def location_context(raster):
     from geosave_engine.model.encoder.prithvi import location_coords
 
-    return {"location_coords": location_coords(row)}
+    return {"location_coords": location_coords(raster)}
 
 
 def _pixels(index: int, times: int = 0) -> np.ndarray:
@@ -49,9 +55,9 @@ def _pixels(index: int, times: int = 0) -> np.ndarray:
     return np.stack([plane + day for day in range(times)]) if times else plane
 
 
-def _manifest(root: Path, *, times: int = 0, label: bool = True) -> gpd.GeoDataFrame:
-    """Write two samples and return the manifest listing their groups."""
-    items = []
+def _samples(*, times: int = 0, label: bool = True) -> list[dict[str, xr.Dataset]]:
+    """Two samples side by side, each an optical raster and, unless left out, a label."""
+    samples = []
     for index in range(2):
         left = 500_000 + index * 1000
         grid = GeoBox.from_bbox(
@@ -63,41 +69,60 @@ def _manifest(root: Path, *, times: int = 0, label: bool = True) -> gpd.GeoDataF
             [f"2025-06-{day + 1:02d}" for day in range(times)], "datetime64[ns]"
         )
         dims = ("time", "y", "x") if times else ("y", "x")
-        optical = raster(
-            {
-                "red": (
-                    dims,
-                    _pixels(index, times),
-                ),
-                "nir": (
-                    dims,
-                    _pixels(index, times) + 0.5,
-                ),
-            },
-            grid,
-            coords={"time": days} if times else None,
-        )
-        classes = raster(
-            {"class": (("y", "x"), np.full((SIZE, SIZE), index, "uint8"))},
-            grid,
-        )
-        groups = {"optical": optical}
+        groups = {
+            "optical": raster(
+                {
+                    "red": (dims, _pixels(index, times)),
+                    "nir": (dims, _pixels(index, times) + 0.5),
+                },
+                grid,
+                **({"time": days} if times else {}),
+            )
+        }
         if label or index == 0:
-            groups["label"] = classes
+            groups["label"] = raster(
+                {"class": (("y", "x"), np.full((SIZE, SIZE), index, "uint8"))},
+                grid,
+            )
+        samples.append(groups)
+    return samples
+
+
+def _catalog(root: Path, samples: list[dict[str, xr.Dataset]]) -> gpd.GeoDataFrame:
+    """Write each sample as COGs and return the item table listing them."""
+    items = []
+    for index, groups in enumerate(samples):
         sample = stack(groups)
-        # Dated samples are one store per group; timeless ones are COGs dated by hand.
-        if times:
-            paths = sample.gs.to_zarr(root / f"s{index}")
-            when = None
-        else:
-            paths = sample.gs.to_cog(root / f"s{index}")
-            when = datetime(2025, 6, 1, tzinfo=UTC)
-        items.extend(create_stack_items(paths, name=f"s{index}", datetime=when))
-    root.mkdir(parents=True, exist_ok=True)
-    path = table.write(items, root / "manifest.parquet")
+        files = sample.gs.to_cog(stack_templates(sample, root / f"s{index}"))
+        # Timeless samples are dated by hand.
+        dated = any("time" in raster.dims for raster in groups.values())
+        when = None if dated else datetime(2025, 6, 1, tzinfo=UTC)
+        items.append(create_items(files, id=f"s{index}", datetime=when))
+    path = GeoVector.concat(items).gs.to_geoparquet(root / "catalog.parquet")
     # Building read each sample lazily; collect, so no test starts with them open.
     gc.collect()
-    return table.read(path)
+    return open_vector(path)
+
+
+def _manifest(root: Path, *, times: int = 0, label: bool = True) -> gpd.GeoDataFrame:
+    """Write two raw samples and return the manifest listing their groups."""
+    return _catalog(root, _samples(times=times, label=label))
+
+
+def _prepared(
+    root: Path, spec: ModelSpec | None = None, **options: object
+) -> gpd.GeoDataFrame:
+    """Write two samples as the spec's model inputs beside their labels."""
+    spec = spec or _spec()
+    prepared = []
+    for groups in _samples(**options):
+        results = spec.preprocess(groups)
+        inputs = {name: results[name] for name in spec.input_rasters}
+        prepared.append({**inputs, **{k: v for k, v in groups.items() if k == "label"}})
+    rows = _catalog(root / "prepared", prepared)
+    # A prepared catalog states the spec that made it.
+    spec.save(root / "prepared" / "model_spec.yaml")
+    return rows
 
 
 def _spec(**changes: object) -> ModelSpec:
@@ -117,13 +142,14 @@ def _spec(**changes: object) -> ModelSpec:
             },
             "context": {
                 "call": f"{__name__}.location_context",
-                "kwargs": {"row": Ref("row")},
+                "kwargs": {"raster": Ref("image")},
             },
             **changes,
         }
     )
 
 
+@_spec_processing_not_settled
 def test_an_input_bound_to_a_raster_reads_the_variables_its_spec_selects(
     tmp_path: Path,
 ) -> None:
@@ -131,31 +157,34 @@ def test_an_input_bound_to_a_raster_reads_the_variables_its_spec_selects(
         rasters={"optical": {"variables": ["nir"]}},
         preprocessing={},
         inputs={"image": Ref("optical")},
+        context=None,
     )
 
-    model_inputs, _, _, _ = supervised.Dataset(_manifest(tmp_path), spec)[0]
+    model_inputs, _, _, _ = supervised.Dataset(_prepared(tmp_path, spec), spec)[0]
 
     # The samples hold red and nir; nir alone ends in a half.
     assert model_inputs["image"].shape == (1, 8, 8)
     assert torch.all(model_inputs["image"] % 1 == 0.5)
 
 
+@_spec_processing_not_settled
 def test_a_dataset_numbers_every_tile_of_every_sample(tmp_path: Path) -> None:
-    dataset = supervised.Dataset(_manifest(tmp_path), _spec())
+    dataset = supervised.Dataset(_prepared(tmp_path), _spec())
 
     # A 20-pixel side takes four 8-pixel tiles stepping by 6, so 16 per sample.
     assert len(dataset) == 32
-    assert dataset.reference["parent"].value_counts().tolist() == [16, 16]
+    assert dataset.windows["parent"].value_counts().tolist() == [16, 16]
 
 
+@_spec_processing_not_settled
 def test_a_sample_holds_the_declared_inputs_a_target_and_its_number(
     tmp_path: Path,
 ) -> None:
-    dataset = supervised.Dataset(_manifest(tmp_path), _spec())
+    dataset = supervised.Dataset(_prepared(tmp_path), _spec())
 
     model_inputs, target, index, valid = dataset[21]
 
-    assert index == "s1/chip-5"
+    assert index == 21
     assert valid.shape == target.shape
     assert sorted(model_inputs) == ["image", "location_coords"]
     assert model_inputs["image"].shape == (2, 8, 8)
@@ -169,8 +198,9 @@ def test_a_sample_holds_the_declared_inputs_a_target_and_its_number(
     np.testing.assert_array_equal(model_inputs["image"][0].numpy(), expected)
 
 
+@_spec_processing_not_settled
 def test_each_tile_reads_its_own_location(tmp_path: Path) -> None:
-    dataset = supervised.Dataset(_manifest(tmp_path), _spec())
+    dataset = supervised.Dataset(_prepared(tmp_path), _spec())
 
     first = dataset[0][0]["location_coords"]
     last = dataset[15][0]["location_coords"]
@@ -179,9 +209,10 @@ def test_each_tile_reads_its_own_location(tmp_path: Path) -> None:
     assert first[1] < last[1]  # columns run east
 
 
+@_spec_processing_not_settled
 def test_a_target_pixel_the_raster_lacks_is_ignored(tmp_path: Path) -> None:
     spec = _spec(chips={"size": 8, "overlap": 2, "mode": "constant"})
-    dataset = supervised.Dataset(_manifest(tmp_path), spec, ignore_index=7)
+    dataset = supervised.Dataset(_prepared(tmp_path, spec), spec, ignore_index=7)
 
     model_inputs, target, _, _ = dataset[0]
 
@@ -189,15 +220,33 @@ def test_a_target_pixel_the_raster_lacks_is_ignored(tmp_path: Path) -> None:
     assert model_inputs["image"][:, :3].isnan().all()
 
 
+@_spec_processing_not_settled
 def test_a_row_lacking_a_layer_is_refused_by_name(tmp_path: Path) -> None:
-    manifest = _manifest(tmp_path, label=False)
+    manifest = _prepared(tmp_path)
+    manifest = manifest[manifest["id"] != "s1/image"]
 
-    with pytest.raises(ValueError, match=r"'s1'.*\['label'\]"):
+    with pytest.raises(ValueError, match=r"s1/label.*\['image'\]"):
         supervised.Dataset(manifest, _spec())
 
 
+@_spec_processing_not_settled
+def test_building_a_dataset_computes_no_pixels(tmp_path: Path) -> None:
+    import dask
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the dataset computed pixels")
+
+    manifest = _prepared(tmp_path)
+
+    with dask.config.set(scheduler=refuse):
+        dataset = supervised.Dataset(manifest, _spec())
+
+    assert len(dataset) == 32
+
+
+@_spec_processing_not_settled
 def test_a_spec_without_chips_or_inputs_is_refused(tmp_path: Path) -> None:
-    manifest = _manifest(tmp_path)
+    manifest = _prepared(tmp_path)
 
     with pytest.raises(ValueError, match="chips"):
         supervised.Dataset(manifest, _spec(chips=None))
@@ -205,31 +254,33 @@ def test_a_spec_without_chips_or_inputs_is_refused(tmp_path: Path) -> None:
         supervised.Dataset(manifest, _spec(inputs={}))
 
 
+@_spec_processing_not_settled
 def test_merged_tiles_rebuild_every_sample(tmp_path: Path) -> None:
     from tiler import Merger
 
-    dataset = supervised.Dataset(_manifest(tmp_path), _spec())
-    layouts = {key: dataset.spec.chips.layout((SIZE, SIZE)) for key in dataset.parents}
-    mergers = {
-        key: Merger(layout, logits=2, window="hann", save_visits=False)
-        for key, (layout, _) in layouts.items()
-    }
+    dataset = supervised.Dataset(_prepared(tmp_path), _spec())
+    layout, halo = dataset.spec.chips.layout((SIZE, SIZE))
+    mergers = [
+        Merger(layout, logits=2, window="hann", save_visits=False)
+        for _ in range(len(dataset.frames))
+    ]
     for number in range(len(dataset)):
-        model_inputs, _, sample_id, _ = dataset[number]
-        row = dataset.reference.loc[sample_id]
-        mergers[row.parent].add(int(row.chip), model_inputs["image"].numpy())
+        model_inputs, _, position, _ = dataset[number]
+        row = dataset.windows.iloc[position]
+        mergers[int(row.parent)].add(int(row.chip), model_inputs["image"].numpy())
     for index in range(2):
-        key = f"s{index}"
-        rebuilt = mergers[key].merge(extra_padding=layouts[key][1])
+        rebuilt = mergers[index].merge(extra_padding=halo)
         np.testing.assert_allclose(rebuilt[0], 2 * _pixels(index), rtol=1e-5)
-        labels = to_tensor(dataset.parents[key][dataset.target].dataset)
+        parent = dataset.frames.iloc[index].gs.to_stack()
+        labels = parent[dataset.target].dataset.gs.to_tensor()
         assert labels.shape == (1, SIZE, SIZE)
         assert (labels == index).all()
 
 
+@_spec_processing_not_settled
 def test_frames_put_a_time_axis_ahead_of_the_bands(tmp_path: Path) -> None:
     spec = _spec(frames={"length": 2, "tolerance": "1D"})
-    dataset = supervised.Dataset(_manifest(tmp_path, times=4), spec)
+    dataset = supervised.Dataset(_prepared(tmp_path, spec, times=4), spec)
 
     model_inputs, target, _, _ = dataset[16]
 
@@ -247,9 +298,10 @@ def _open_rasters() -> list[str]:
     return [str(link.resolve()) for link in links if link.resolve().suffix == ".tif"]
 
 
+@_spec_processing_not_settled
 @pytest.mark.skipif(not Path("/proc/self/fd").exists(), reason="needs /proc")
 def test_a_built_dataset_leaves_no_raster_open(tmp_path: Path) -> None:
-    manifest = _manifest(tmp_path)
+    manifest = _prepared(tmp_path)
     before = _open_rasters()
 
     dataset = supervised.Dataset(manifest, _spec())
@@ -267,9 +319,8 @@ def test_worker_processes_read_their_own_rasters(tmp_path: Path) -> None:
             "kwargs": {"data": Ref("optical")},
         }
     }
-    dataset = supervised.Dataset(
-        _manifest(tmp_path), _spec(preprocessing=library_call, context=None)
-    )
+    spec = _spec(preprocessing=library_call, context=None)
+    dataset = supervised.Dataset(_prepared(tmp_path, spec), spec)
     dataset[0]  # this process has read pixels, which a forked worker would hang on
 
     loader = DataLoader(
@@ -277,24 +328,33 @@ def test_worker_processes_read_their_own_rasters(tmp_path: Path) -> None:
     )
     batches = list(loader)
 
-    numbers = [key for _, _, keys, _ in batches for key in keys]
+    numbers = [int(key) for _, _, keys, _ in batches for key in keys]
     images = torch.cat([model_inputs["image"] for model_inputs, _, _, _ in batches])
-    assert set(numbers) == set(dataset.reference.id)
-    lookup = {key: i for i, key in enumerate(dataset.reference.id)}
-    for key, image in zip(numbers, images, strict=True):
-        assert torch.equal(image, dataset[lookup[key]][0]["image"])
+    assert sorted(numbers) == list(range(len(dataset)))
+    for number, image in zip(numbers, images, strict=True):
+        assert torch.equal(image, dataset[number][0]["image"])
 
 
 def _data(tmp_path: Path, spec: ModelSpec | None = None, **options: object):
-    _manifest(tmp_path / "train")
-    _manifest(tmp_path / "val")
+    _prepared(tmp_path / "train", spec)
+    _prepared(tmp_path / "val", spec)
     path = (spec or _spec()).save(tmp_path / "model_spec.yaml")
     return supervised.DataModule(
         spec=path,
-        train=tmp_path / "train/manifest.parquet",
-        val=tmp_path / "val/manifest.parquet",
+        train=tmp_path / "train/prepared/catalog.parquet",
+        val=tmp_path / "val/prepared/catalog.parquet",
         **{"batch_size": 4, "num_workers": 0, **options},
     )
+
+
+def _batches(
+    tmp_path: Path, spec: ModelSpec | None = None, **options: object
+) -> supervised.DataModule:
+    """Build only the batch pipelines, so batch tests read no catalog."""
+    path = (spec or _spec()).save(tmp_path / "model_spec.yaml")
+    data = supervised.DataModule(spec=path, train=tmp_path, val=tmp_path, **options)
+    data.setup("predict")
+    return data
 
 
 def _batch(
@@ -306,7 +366,7 @@ def _batch(
     return (
         {"image": image, "location_coords": torch.ones(2, 2)},
         target,
-        ["s0/chip-4", "s0/chip-9"],
+        torch.tensor([4, 9]),
         torch.ones((2, 8, 8), dtype=torch.bool),
     )
 
@@ -316,6 +376,7 @@ def _training(data: supervised.DataModule, training: bool) -> supervised.DataMod
     return data
 
 
+@_spec_processing_not_settled
 def test_setup_reads_each_split_from_its_own_manifest(tmp_path: Path) -> None:
     data = _data(tmp_path)
 
@@ -328,11 +389,10 @@ def test_setup_reads_each_split_from_its_own_manifest(tmp_path: Path) -> None:
     assert model_inputs["location_coords"].shape == (4, 2)
     assert target.shape == (4, 8, 8)
     assert len(index) == 4
-    assert list(next(iter(data.val_dataloader()))[2]) == [
-        f"s0/chip-{i}" for i in range(4)
-    ]
+    assert next(iter(data.val_dataloader()))[2].tolist() == [0, 1, 2, 3]
 
 
+@_spec_processing_not_settled
 def test_the_test_split_needs_its_manifest(tmp_path: Path) -> None:
     data = _data(tmp_path)
     with pytest.raises(ValueError, match="test="):
@@ -340,15 +400,16 @@ def test_the_test_split_needs_its_manifest(tmp_path: Path) -> None:
 
     data = supervised.DataModule(
         spec=tmp_path / "model_spec.yaml",
-        train=tmp_path / "train/manifest.parquet",
-        val=tmp_path / "val/manifest.parquet",
-        test=tmp_path / "val/manifest.parquet",
+        train=tmp_path / "train/prepared/catalog.parquet",
+        val=tmp_path / "val/prepared/catalog.parquet",
+        test=tmp_path / "val/prepared/catalog.parquet",
         num_workers=0,
     )
     data.setup("test")
     assert len(data.test_dataloader().dataset) == 32
 
 
+@_spec_processing_not_settled
 def test_workers_start_without_this_process_state(tmp_path: Path) -> None:
     data = _data(tmp_path, num_workers=2)
     data.setup("fit")
@@ -370,8 +431,7 @@ NORMALIZE = {
 def test_augmentations_move_image_and_target_together_while_training(
     tmp_path: Path,
 ) -> None:
-    data = _training(_data(tmp_path, augmentations=FLIP), True)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, augmentations=FLIP), True)
     model_inputs, target, index, valid = _batch()
 
     augmented, moved, numbers, _ = data.on_after_batch_transfer(_batch(), 0)
@@ -380,12 +440,23 @@ def test_augmentations_move_image_and_target_together_while_training(
     assert torch.equal(moved, target.flip(-1))
     assert moved.dtype == torch.int64
     assert torch.equal(augmented["location_coords"], model_inputs["location_coords"])
-    assert numbers == index
+    assert torch.equal(numbers, index)
+
+
+def test_cutmix_pastes_the_same_box_into_pixels_and_labels(tmp_path: Path) -> None:
+    data = _training(_batches(tmp_path, cutmix=1.0), True)
+    model_inputs, target, _, _ = _batch(times=3)
+
+    mixed, labels, _, _ = data.on_after_batch_transfer(_batch(times=3), 0)
+
+    # Every pixel value is unique, so the box is wherever pixels changed.
+    box = (mixed["image"] != model_inputs["image"]).flatten(1, 2).all(dim=1)
+    assert box.any()
+    assert torch.equal(labels, torch.where(box, target.roll(1, 0), target))
 
 
 def test_augmentations_do_not_run_outside_training(tmp_path: Path) -> None:
-    data = _training(_data(tmp_path, augmentations=FLIP), False)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, augmentations=FLIP), False)
     model_inputs, target, _, _ = _batch()
 
     kept, same, _, _ = data.on_after_batch_transfer(_batch(), 0)
@@ -399,8 +470,7 @@ def test_transforms_run_in_every_split_after_augmentation(
     tmp_path: Path, training: bool
 ) -> None:
     spec = _spec(transforms=NORMALIZE)
-    data = _training(_data(tmp_path, spec, augmentations=FLIP), training)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, spec, augmentations=FLIP), training)
     image = _batch()[0]["image"]
     mean = torch.tensor([1.0, 2.0]).reshape(1, 2, 1, 1)
     std = torch.tensor([2.0, 4.0]).reshape(1, 2, 1, 1)
@@ -412,8 +482,7 @@ def test_transforms_run_in_every_split_after_augmentation(
 
 
 def test_pixels_a_raster_lacks_become_zero_after_transforms(tmp_path: Path) -> None:
-    data = _training(_data(tmp_path, _spec(transforms=NORMALIZE)), False)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, _spec(transforms=NORMALIZE)), False)
     model_inputs, target, index, valid = _batch()
     model_inputs["image"][0, :, :2] = torch.nan
 
@@ -427,8 +496,7 @@ def test_pixels_a_raster_lacks_become_zero_after_transforms(tmp_path: Path) -> N
 
 def test_a_time_axis_survives_augmentation_and_transforms(tmp_path: Path) -> None:
     spec = _spec(transforms=NORMALIZE)
-    data = _training(_data(tmp_path, spec, augmentations=FLIP), True)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, spec, augmentations=FLIP), True)
     image = _batch(times=3)[0]["image"]
     mean = torch.tensor([1.0, 2.0]).reshape(1, 1, 2, 1, 1)
     std = torch.tensor([2.0, 4.0]).reshape(1, 1, 2, 1, 1)
@@ -446,8 +514,7 @@ def test_a_pixel_an_augmentation_invents_is_ignored(tmp_path: Path) -> None:
             "init_args": {"degrees": 0.0, "translate": [0.5, 0.5], "p": 1.0},
         }
     ]
-    data = _training(_data(tmp_path, augmentations=shift, ignore_index=9), True)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, augmentations=shift, ignore_index=9), True)
     target = torch.zeros(2, 8, 8, dtype=torch.int64)
 
     moved = data.on_after_batch_transfer(
@@ -457,32 +524,27 @@ def test_a_pixel_an_augmentation_invents_is_ignored(tmp_path: Path) -> None:
     assert set(moved.unique().tolist()) == {0, 9}
 
 
-def test_frames_and_reopened_workers_reproduce_reference_identity(tmp_path):
+@_spec_processing_not_settled
+def test_frames_and_reopened_workers_read_the_same_chips(tmp_path):
     import pickle
 
     spec = _spec(frames={"length": 2, "stride": 1, "tolerance": "1D"})
-    manifest = _manifest(tmp_path, times=4)
+    manifest = _prepared(tmp_path, spec, times=4)
     dataset = supervised.Dataset(manifest, spec)
-    assert set(dataset.parents) == {
-        f"s{i}/frame-{j}" for i in range(2) for j in range(3)
-    }
-    keys = dataset.reference.id.tolist()
+    # Four instants, two at a time, stepping by one: three frames per sample.
+    assert dataset.frames["parent"].tolist() == [0, 0, 0, 1, 1, 1]
     reopened = pickle.loads(pickle.dumps(dataset))
-    assert reopened._parents is None
-    assert reopened[17][2] == keys[17]
-    assert reopened.reference.id.tolist() == keys
+    assert reopened[17][2] == 17
+    torch.testing.assert_close(reopened[17][0]["image"], dataset[17][0]["image"])
     reordered = supervised.Dataset(manifest.iloc[::-1], spec)
-    assert set(reordered.reference.id) == set(keys)
-    # Same spatial grids, different temporal windows remain distinct parents.
-    assert (
-        dataset.parents["s0/frame-0"].gs.geobox
-        == dataset.parents["s0/frame-1"].gs.geobox
-    )
+    assert len(reordered) == len(dataset)
+    # Same spatial grids, different temporal windows remain distinct frames.
+    first, second = (dataset.frames.iloc[i].gs.to_stack() for i in (0, 1))
+    assert first.gs.geobox == second.gs.geobox
 
 
 def test_validity_survives_nan_conversion_without_changing_targets(tmp_path):
-    data = _training(_data(tmp_path), False)
-    data.setup("fit")
+    data = _training(_batches(tmp_path), False)
     inputs, target, ids, valid = _batch(times=2)
     inputs["image"][0, 1, 0, 3, 4] = torch.nan
     converted, labels, keys, mask = data.on_after_batch_transfer(
@@ -491,46 +553,38 @@ def test_validity_survives_nan_conversion_without_changing_targets(tmp_path):
     assert converted["image"][0, 1, 0, 3, 4] == 0
     assert not mask[0, 3, 4]
     assert mask[1].all()
-    assert keys == ids
+    assert torch.equal(keys, ids)
     torch.testing.assert_close(labels, target)
 
 
-def test_duplicate_manifest_identity_is_rejected_before_reading(tmp_path):
-    manifest = _manifest(tmp_path)
-    manifest["id"] = "duplicate"
-    with pytest.raises(ValueError, match="unique"):
-        supervised.Dataset(manifest, _spec())
-
-
+@_spec_processing_not_settled
 @pytest.mark.parametrize(
     "frames", [None, {"length": 2, "stride": 1, "tolerance": "1D"}]
 )
-def test_prepared_reference_retains_provenance_without_advertising_raw_assets(
-    tmp_path, frames
-):
-    manifest = _manifest(tmp_path, times=4 if frames else 0)
-    manifest["class_id"] = manifest["geosave:stack"].map({"s0": 7, "s1": 9})
+def test_a_chip_carries_its_anchors_properties_and_reads_its_frame(tmp_path, frames):
+    manifest = _prepared(tmp_path, _spec(frames=frames), times=4 if frames else 0)
+    manifest["class_id"] = manifest["id"].str.split("/").str[0].map({"s0": 7, "s1": 9})
     dataset = supervised.Dataset(manifest, _spec(frames=frames))
-    parent_id = "s1/frame-1" if frames else "s1"
-    row = dataset.reference.loc[f"{parent_id}/chip-5"]
+    # The second sample's chip 5; with frames, of its second frame.
+    position = (4 if frames else 1) * 16 + 5
+    row = dataset.windows.iloc[position]
     assert row.class_id == 9
-    assert row.stack == "s1"
-    assert "assets" not in row
-    assert set(row.times) == {"image", "label"}
-    tile = cuts.select_pixels(dataset.parents[row.parent], row.to_dict())
-    assert to_tensor(tile.gs.rasters["label"]).shape == (1, 8, 8)
+    sources = orjson.loads(row.sources)
+    assert set(sources) == {"image", "label"}
+    tile = row.gs.to_stack()
+    assert tile.gs.rasters["label"].gs.to_tensor().shape == (1, 8, 8)
     expected = (
         2 * _pixels(1, 4)[1:3, 3:11, 3:11] if frames else 2 * _pixels(1)[3:11, 3:11]
     )
     np.testing.assert_array_equal(tile.gs.rasters["image"].red, expected)
     if frames:
-        assert row.times["image"] == ["2025-06-02T00:00:00", "2025-06-03T00:00:00"]
+        days = [item["properties"]["datetime"][:10] for item in sources["image"]]
+        assert days == ["2025-06-02", "2025-06-03"]
 
 
 def test_evaluation_validity_intersects_named_inputs_and_time_axes(tmp_path):
     spec = _spec(inputs={"image": Ref("optical"), "dem": Ref("optical")})
-    data = _training(_data(tmp_path, spec), False)
-    data.setup("fit")
+    data = _training(_batches(tmp_path, spec), False)
     inputs, target, ids, valid = _batch(times=2)
     inputs["dem"] = torch.ones((2, 1, 8, 8))
     inputs["image"][0, 1, 1, 3, 4] = torch.nan
@@ -539,3 +593,38 @@ def test_evaluation_validity_intersects_named_inputs_and_time_axes(tmp_path):
     assert not mask[0, 3, 4] and not mask[1, 4, 5]
     assert mask[0, 4, 5] and mask[1, 3, 4]
     torch.testing.assert_close(kept, target)
+
+
+@_spec_processing_not_settled
+def test_an_empty_manifest_is_refused(tmp_path: Path) -> None:
+    manifest = _prepared(tmp_path)
+
+    with pytest.raises(ValueError, match="no rows"):
+        supervised.Dataset(manifest.iloc[0:0], _spec())
+
+
+@_spec_processing_not_settled
+def test_a_chip_opens_only_its_own_sample(tmp_path: Path, monkeypatch) -> None:
+    from geosave_engine.geodata.io.raster import cogs
+
+    dataset = supervised.Dataset(_prepared(tmp_path), _spec())
+    opened = set()
+    read = cogs.read
+    monkeypatch.setattr(
+        cogs,
+        "read",
+        lambda files, **options: (
+            opened.update(
+                part
+                for file in files
+                for part in Path(file.href).parts
+                if part in ("s0", "s1")
+            )
+            or read(files, **options)
+        ),
+    )
+
+    dataset[0]
+    dataset[1]
+
+    assert opened == {"s0"}

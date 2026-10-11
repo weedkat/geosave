@@ -22,7 +22,7 @@ import requests
 from dotenv import load_dotenv
 
 from geosave_engine.geodata.core.anchor import GeoAnchor
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.geodata.stac.query import StacQuery
 from geosave_engine.geodata.stac.source import StacSource
 from geosave_engine.model.spec import ModelSpec, RasterRequirement
@@ -82,14 +82,14 @@ def anchor(raw):
 def source():
     # These unit tests replace loading; constructing a source performs no I/O.
     class EmptyCatalog:
-        def search(self, query: object) -> list[pystac.Item]:
+        def search_items(self, query: object) -> list[pystac.Item]:
             return []
 
         def collection(self, collection: str) -> pystac.Collection:
             raise KeyError(collection)
 
     return StacSource(client=EmptyCatalog(), collection="example").set_config(
-        bands=("unused",), chunks={"x": 2, "y": 2}, item_properties=("platform",)
+        bands=("unused",), chunks={"x": 2, "y": 2}, with_properties=("platform",)
     )
 
 
@@ -101,7 +101,7 @@ class LocalCatalog:
     items: list[pystac.Item]
     requests: list[StacQuery] = field(default_factory=list)
 
-    def search(self, query):
+    def search_items(self, query):
         self.requests.append(query)
         return self.items if query.collections == [self.metadata.id] else []
 
@@ -185,7 +185,6 @@ def local_stac(tmp_path):
                 bands=("unused",) if name == "optical" else ("height",),
                 groupby="time",
                 chunks={"x": 2, "y": 2},
-                item_properties=("platform",),
             )
             .set_query(
                 datetime="2025-01-15", max_items=1, filter="eo:cloud_cover <= 10"
@@ -348,3 +347,17 @@ def catalog_http(monkeypatch):
 
     monkeypatch.setattr(requests.Session, "send", send)
     return visited, responses
+
+
+@pytest.fixture
+def bucket():
+    """Yield a unique `memory://` prefix and empty it afterwards."""
+    import uuid
+
+    import fsspec
+
+    filesystem = fsspec.filesystem("memory")
+    prefix = f"memory://geosave-tests/{uuid.uuid4()}"
+    yield prefix
+    if filesystem.exists(prefix):
+        filesystem.rm(prefix, recursive=True)

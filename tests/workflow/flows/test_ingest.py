@@ -5,7 +5,7 @@ import numpy as np
 from prefect import Flow
 import pytest
 
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.geodata import io
 from geosave_engine.model.spec import ModelSpec, RasterRequirement, StacRecipe
 from geosave_engine.workflow.configs import CoordinateAnchorConfig, RasterAnchorConfig
@@ -33,6 +33,14 @@ def model_spec(tmp_path, url):
     ).save(tmp_path / "model_spec.yaml")
 
 
+_acquisition_not_settled = pytest.mark.xfail(
+    raises=NotImplementedError,
+    strict=True,
+    reason="ModelSpec.load_rasters is a stub until acquisition is redesigned",
+)
+
+
+@_acquisition_not_settled
 def test_ingest_writes_one_sample_folder_from_a_raster_anchor(tmp_path, stac_server):
     url, requests, anchor = stac_server
     label = raster(
@@ -52,7 +60,7 @@ def test_ingest_writes_one_sample_folder_from_a_raster_anchor(tmp_path, stac_ser
     assert result == str(output)
     assert requests == [["optical"]]
     assert sorted(path.name for path in output.iterdir()) == ["optical.zarr"]
-    with io.read_stack(output, chunks="auto") as stack:
+    with io.open_stack(output, chunks="auto") as stack:
         assert stack.gs.groups == ("optical",)
         assert stack.gs.geobox == anchor.geobox
 
@@ -101,6 +109,7 @@ def test_ingest_loads_every_model_raster_recipe(tmp_path, monkeypatch) -> None:
     assert captured == {"red": "optical", "dem": "dem"}
 
 
+@_acquisition_not_settled
 def test_ingest_refuses_rasters_without_a_stac_block(tmp_path):
     spec = ModelSpec(
         schema_version=2,
@@ -164,6 +173,7 @@ def test_ingest_run_opens_a_json_anchor(tmp_path, prefect_server, monkeypatch) -
     assert shapes == [(4, 4)]
 
 
+@_acquisition_not_settled
 def test_ingest_refuses_an_existing_output(tmp_path, stac_server):
     url, requests, anchor = stac_server
     label = raster(

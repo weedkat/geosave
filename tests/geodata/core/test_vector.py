@@ -13,9 +13,9 @@ from shapely.geometry import Point, Polygon, box
 from geosave_engine.geodata import (
     GeoAnchor,
     GeoVector,
-    read_raster,
+    open_raster,
 )
-from geosave_engine.geodata.core.array import array
+from geosave_engine.geodata.core.constructors import array
 from geosave_engine.geodata.core.vector import SpatialPredicate
 from geosave_engine.geodata.transform.vector import rasterize, vectorize
 from geosave_engine.geodata.io import geotiff, zarr
@@ -80,7 +80,7 @@ def test_geometry_properties_become_columns() -> None:
 def test_a_read_geotiff_names_the_file_it_came_from(tmp_path: Path) -> None:
     path = _written(tmp_path, build_raster(), "scene.tif")
 
-    assert read_raster(path).encoding["source"] == str(path)
+    assert open_raster(path).encoding["source"] == str(path)
 
 
 def test_query_reads_time_columns_that_carry_no_timezone() -> None:
@@ -447,7 +447,6 @@ REMOVED = (
     "from_items",
     "upsert",
     "to_raster",
-    "to_stack",
     "raster_ids",
     "stack_ids",
     "empty",

@@ -10,7 +10,9 @@ import pytest
 
 from geosave_engine.geodata import stac
 from geosave_engine.geodata.errors import CollectionNotFoundError
-from geosave_engine.geodata.stac import StacClient, StacQuery, StacTableClient, table
+from geosave_engine.geodata.stac import StacClient, StacQuery
+from geosave_engine.geodata.io.vector import stac_geoparquet as table
+from geosave_engine.geodata.stac.client import _StacTableClient as StacTableClient
 
 
 @pytest.fixture
@@ -19,12 +21,12 @@ def catalog(scene, tmp_path: Path):
     forest = stac.create_collection(
         "forest", description="Forest samples", license="CC-BY-4.0"
     )
-    paths = scene.gs.to_cog(tmp_path / "forest", split_bands=True)
-    first, second = stac.create_items(paths, collection=forest)
+    paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}/{{band}}.tif")
+    first, second = table.to_items(stac.create_items(paths, collection=forest))
     first.properties["eo:cloud_cover"] = 5.0
     second.properties["eo:cloud_cover"] = 40.0
-    path = table.write(
-        [first, second], tmp_path / "catalog" / "items.parquet", collections=[forest]
+    path = table.from_items([first, second]).gs.to_geoparquet(
+        tmp_path / "catalog" / "items.parquet", collections=[forest]
     )
     return path, (first, second)
 
@@ -34,18 +36,23 @@ def test_a_table_answers_a_stac_query(catalog) -> None:
     client = StacTableClient(folder)
     forest = StacQuery(collections=["forest"])
 
-    assert [item.id for item in client.search(forest)] == [first.id, second.id]
-    assert client.search(StacQuery(collections=["absent"])) == []
+    assert [item.id for item in client.search_items(forest)] == [first.id, second.id]
+    assert client.search_items(StacQuery(collections=["absent"])) == []
     assert [
-        item.id for item in client.search(forest.set_filter("eo:cloud_cover <= 10"))
+        item.id
+        for item in client.search_items(forest.set_filter("eo:cloud_cover <= 10"))
     ] == [first.id]
-    assert [item.id for item in client.search(forest.sort_by("-eo:cloud_cover"))] == [
+    assert [
+        item.id for item in client.search_items(forest.sort_by("-eo:cloud_cover"))
+    ] == [
         second.id,
         first.id,
     ]
     assert [
         item.id
-        for item in client.search(StacQuery(collections=["forest"], ids=[second.id]))
+        for item in client.search_items(
+            StacQuery(collections=["forest"], ids=[second.id])
+        )
     ] == [second.id]
 
 
@@ -60,15 +67,15 @@ def test_a_table_is_searched_by_place_and_time(catalog) -> None:
         datetime=(datetime(2025, 5, 30), datetime(2025, 6, 5)),
     )
 
-    assert len(client.search(inside)) == 2
-    assert client.search(outside) == []
-    assert [item.id for item in client.search(early)] == [first.id]
+    assert len(client.search_items(inside)) == 2
+    assert client.search_items(outside) == []
+    assert [item.id for item in client.search_items(early)] == [first.id]
 
 
 def test_found_items_point_at_files_that_open(catalog) -> None:
     folder, (first, _) = catalog
 
-    (found, _) = StacTableClient(folder).search(StacQuery(collections=["forest"]))
+    (found, _) = StacTableClient(folder).search_items(StacQuery(collections=["forest"]))
 
     assert found.assets["red"].href == first.assets["red"].href
     assert found.assets["nir"].href == first.assets["nir"].href
@@ -87,11 +94,12 @@ def test_a_table_states_its_collections(catalog) -> None:
 
 def test_a_table_without_stored_collections_derives_them(scene, tmp_path) -> None:
     forest = stac.create_collection("forest", description="Forest samples")
-    items = stac.create_items(scene.gs.to_cog(tmp_path / "forest"), collection=forest)
-    path = table.write(items, tmp_path / "items.parquet")
+    paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}.tif")
+    rows = stac.create_items(paths, collection=forest)
+    path = rows.gs.to_geoparquet(tmp_path / "items.parquet")
     client = StacTableClient(path)
 
-    assert table.read_collections(path) == {}
+    assert list(table.get_collections(path)) == ["forest"]
     assert client.collections() == {"forest"}
     assert client.collection("forest").id == "forest"
 
@@ -125,7 +133,7 @@ def test_search_uses_the_rustac_session_configuration(catalog) -> None:
     client = StacClient.open(str(folder), duckdb=duckdb)
 
     with pytest.raises(rustac.RustacError, match="disabled by configuration"):
-        client.search(StacQuery(collections=["forest"]))
+        client.search_items(StacQuery(collections=["forest"]))
 
 
 def test_table_client_reads_stored_collections_through_rustac(
@@ -137,7 +145,7 @@ def test_table_client_reads_stored_collections_through_rustac(
         raise AssertionError("table client opened a second filesystem")
 
     # Search and Collection metadata must use the same configured DuckDB session.
-    monkeypatch.setattr(table.storage, "filesystem_path", refuse)
+    monkeypatch.setattr(table, "get_collections", refuse)
 
     assert StacTableClient(folder).collection("forest").license == "CC-BY-4.0"
 
@@ -195,7 +203,7 @@ server.serve_forever()
         location = "s3://catalog/items.parquet"
         client = StacClient.open(location, duckdb=duckdb)
 
-        (found, _) = client.search(StacQuery(collections=["forest"]))
+        (found, _) = client.search_items(StacQuery(collections=["forest"]))
 
         assert found.id == first.id
         assert client.collection("forest").license == "CC-BY-4.0"
@@ -204,3 +212,19 @@ server.serve_forever()
         server.terminate()
         server.wait(timeout=5)
         server.stdout.close()
+
+
+def test_search_returns_an_item_table(scene, tmp_path) -> None:
+    forest = stac.create_collection("forest", description="Forest samples")
+    paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}.tif")
+    rows = stac.create_items(paths, collection=forest)
+    path = rows.gs.to_geoparquet(tmp_path / "catalog.parquet", collections=[forest])
+    client = StacClient.open(path)
+
+    found = client.search(StacQuery(collections=["forest"]))
+    none = client.search(StacQuery(collections=["absent"]))
+
+    assert found["id"].tolist() == rows["id"].tolist()
+    assert type(found.gs).__name__ == "GeoCatalog"
+    assert none.empty
+    assert type(none.gs).__name__ == "GeoCatalog"

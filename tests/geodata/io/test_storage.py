@@ -2,35 +2,62 @@ from pathlib import Path
 
 import fsspec
 import pytest
-from fsspec.spec import AbstractFileSystem
+from upath import UPath
 
 from geosave_engine.geodata import io
-from geosave_engine.geodata.io.storage import filesystem_path, write
+from geosave_engine.geodata.io.storage import is_local, local_path, location, write
 
 from tests.geodata.conftest import build_raster
 
 
-def test_filesystem_path_forwards_storage_options(monkeypatch) -> None:
-    memory = fsspec.filesystem("memory")
-    received: dict[str, object] = {}
+def test_a_location_carries_its_storage_options() -> None:
+    url = location("memory://catalogs/catalog.parquet", {"skip_instance_cache": True})
 
-    def resolve(location: str, **options: object) -> tuple[AbstractFileSystem, str]:
-        received["location"] = location
-        received["options"] = options
-        return memory, "/catalogs/catalog.parquet"
+    assert url.protocol == "memory"
+    assert url.storage_options == {"skip_instance_cache": True}
 
-    monkeypatch.setattr(fsspec.core, "url_to_fs", resolve)
 
-    result = filesystem_path(
-        "hf://buckets/fatmur/test/catalog.parquet",
-        {"token": "test-token"},
+def test_a_location_merges_options_into_a_upath_it_is_given() -> None:
+    given = UPath("memory://catalogs/catalog.parquet", skip_instance_cache=True)
+
+    url = location(given, {"auto_mkdir": False})
+
+    assert url.storage_options == {"skip_instance_cache": True, "auto_mkdir": False}
+
+
+@pytest.mark.parametrize(
+    ("path", "local"),
+    [
+        ("scene.tif", True),
+        ("/data/scene.tif", True),
+        ("file:///data/scene.tif", True),
+        (UPath("/data/scene.tif"), True),
+        ("memory://bucket/scene.tif", False),
+        ("s3://bucket/scene.tif", False),
+    ],
+)
+def test_is_local_reads_the_protocol(path, local: bool) -> None:
+    assert is_local(path) is local
+
+
+def test_a_local_path_drops_the_file_scheme() -> None:
+    assert local_path("file:///data/scene.tif") == Path("/data/scene.tif")
+
+
+@pytest.mark.parametrize("path", ["scene.tif", "file:///data/scene.tif"])
+def test_a_local_location_is_a_pathlib_path(path) -> None:
+    assert isinstance(location(path), Path)
+
+
+def test_a_upath_destination_writes_like_a_url(bucket: str) -> None:
+    written = write(
+        UPath(f"{bucket}/scene.tif"),
+        lambda target: target.write_bytes(b"pixels"),
+        suffixes=(".tif",),
     )
 
-    assert result == (memory, "/catalogs/catalog.parquet")
-    assert received == {
-        "location": "hf://buckets/fatmur/test/catalog.parquet",
-        "options": {"token": "test-token"},
-    }
+    assert written == UPath(f"{bucket}/scene.tif")
+    assert written.read_bytes() == b"pixels"
 
 
 @pytest.mark.parametrize(
@@ -51,6 +78,7 @@ def test_a_file_url_writes_to_the_local_path_it_names(
     written = write(build_raster(times=1), f"file://{tmp_path}/{name}")
 
     assert written == tmp_path / name
+    assert isinstance(written, UPath)
     assert (tmp_path / name).exists()
     assert list(elsewhere.iterdir()) == []
 
@@ -122,7 +150,7 @@ def test_a_remote_write_uploads_what_was_written(bucket: str) -> None:
         suffixes=(".tif",),
     )
 
-    assert written == f"{bucket}/scene.tif"
+    assert written == UPath(f"{bucket}/scene.tif")
     assert fsspec.open(f"{bucket}/scene.tif").open().read() == b"pixels"
 
 
@@ -151,3 +179,14 @@ def test_an_existing_remote_object_refuses_without_overwrite(bucket: str) -> Non
     )
 
     assert fsspec.open(url).open().read() == b"second"
+
+
+def test_a_remote_write_returns_a_upath_carrying_its_options(bucket: str) -> None:
+    written = write(
+        f"{bucket}/scene.tif",
+        lambda target: target.write_bytes(b"pixels"),
+        suffixes=(".tif",),
+        storage_options={"skip_instance_cache": True},
+    )
+
+    assert written.storage_options == {"skip_instance_cache": True}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from os import PathLike
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import planetary_computer
 import pyarrow as pa
@@ -17,11 +17,14 @@ from urllib3.util import Retry
 
 from geosave_engine.geodata.errors import CollectionNotFoundError
 from geosave_engine.geodata.io import geoparquet
+from geosave_engine.geodata.io.vector import stac_geoparquet
 from geosave_engine.geodata.io.storage import absolute_location
 
-from . import table
 from .query import StacQuery
 from .source import StacSource
+
+if TYPE_CHECKING:
+    from geosave_engine.geodata import GeoDataFrame
 
 CDSE_URL = "https://stac.dataspace.copernicus.eu/v1/"
 PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/"
@@ -53,7 +56,7 @@ class StacClient:
     @classmethod
     def open(
         cls, endpoint: StacProvider | str, *, duckdb: rustac.DuckdbClient | None = None
-    ) -> StacClient | StacTableClient:
+    ) -> StacClient | _StacTableClient:
         """Open a built-in provider, a STAC API URL, or a STAC GeoParquet table.
 
         Args:
@@ -75,7 +78,7 @@ class StacClient:
         # A table is searched by rustac; a STAC API is asked over HTTP.
         suffix = PurePosixPath(endpoint).suffix.lower()
         if suffix in geoparquet.FILE_SUFFIXES:
-            return StacTableClient(endpoint, duckdb=duckdb)
+            return _StacTableClient(endpoint, duckdb=duckdb)
         if duckdb is not None:
             raise ValueError("duckdb is only supported for a STAC GeoParquet table")
         if endpoint == "planetary_computer":
@@ -119,8 +122,24 @@ class StacClient:
         """
         return cls(Client.open(ELEMENT84_URL, stac_io=_default_io()))
 
-    def search(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
-        """Run one search to completion.
+    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
+        """Run one search to completion as an item table.
+
+        Args:
+            query: Query object, or raw search parameters.
+
+        Returns:
+            One row per matching Item, read through `gs` as a catalog. Empty
+            where nothing matches.
+
+        Examples:
+            >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
+            ['forest_20250601T000000']
+        """
+        return stac_geoparquet.from_items(self.search_items(query))
+
+    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
+        """Run one search to completion as pystac Items, for loaders.
 
         Args:
             query: Query object, or raw pystac-client search parameters.
@@ -183,19 +202,19 @@ class StacClient:
         return StacSource(self, collection=collection)
 
 
-class StacTableClient:
+class _StacTableClient:
     """Search one STAC GeoParquet table with rustac and build sources on it.
 
     Item properties are columns of a table, so a sort or filter names them
     without the `properties.` prefix a STAC API takes.
 
     Args:
-        path: Parquet file as `stac.table.write` stores it, as a path or URL.
+        path: Parquet file as `GeoCatalog.to_geoparquet` stores it, as a path or URL.
         duckdb: Configured rustac session, needed for a bucket behind
             credentials or a custom endpoint. None creates a session.
 
     Examples:
-        >>> client = StacTableClient("samples/catalog.parquet")
+        >>> client = _StacTableClient("samples/catalog.parquet")
         >>> client.collections()
         {'forest'}
         >>> source = client.source("forest")
@@ -216,8 +235,24 @@ class StacTableClient:
         self._location = absolute_location(path)
         self._duckdb = duckdb if duckdb is not None else rustac.DuckdbClient()
 
-    def search(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
-        """Run one search over the table.
+    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
+        """Run one search to completion as an item table.
+
+        Args:
+            query: Query object, or raw search parameters.
+
+        Returns:
+            One row per matching Item, read through `gs` as a catalog. Empty
+            where nothing matches.
+
+        Examples:
+            >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
+            ['forest_20250601T000000']
+        """
+        return stac_geoparquet.from_items(self.search_items(query))
+
+    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
+        """Run one search over the table as pystac Items, for loaders.
 
         Args:
             query: Query object, or raw `rustac` search parameters.
@@ -227,7 +262,7 @@ class StacTableClient:
 
         Examples:
             >>> query = StacQuery(collections=["forest"])
-            >>> len(client.search(query.set_filter("eo:cloud_cover <= 10")))
+            >>> len(client.search_items(query.set_filter("eo:cloud_cover <= 10")))
             3
         """
         given = query.to_search_params() if isinstance(query, StacQuery) else query
@@ -317,7 +352,7 @@ class StacTableClient:
             [self._location],
         )
         for row in pa.table(metadata).to_pylist():
-            described.update(table.parse_collections(row["value"]))
+            described.update(stac_geoparquet.parse_collections(row["value"]))
         return described
 
 

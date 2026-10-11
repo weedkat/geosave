@@ -6,7 +6,7 @@ from odc.geo.geobox import GeoBox
 from shapely.geometry import Point
 
 from geosave_engine.geodata import GeoVector
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.geodata import io
 from geosave_engine.workflow.tasks.labels import find_labels, read_labels
 

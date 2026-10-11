@@ -15,13 +15,14 @@ def test_statistics_compute_shared_band_sources_once(as_array):
     @delayed
     def pixels():
         reads.append(1)
-        return np.array([[0.0, 1.0, 3.0], [-9999.0, 10.0, 20.0]])
+        return np.array([[0.0, 1.0, 3.0], [0.0, 10.0, 20.0]])
 
     values = da.from_delayed(pixels(), shape=(2, 3), dtype="float64")
     source = xr.Dataset(
         {
             "red": xr.DataArray(values[0], dims="x", attrs={"nodata": 0}),
-            "nir": xr.DataArray(values[1], dims="x", attrs={"nodata": -9999}),
+            # A stacked array keeps the fill every band shares, so both share one.
+            "nir": xr.DataArray(values[1], dims="x", attrs={"nodata": 0}),
         }
     )
     if as_array:

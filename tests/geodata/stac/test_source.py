@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from geosave_engine.geodata.attrs import AttrsHeader
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
@@ -18,7 +17,7 @@ from geosave_engine.geodata.stac import StacQuery, StacSource, StacSourceConfig
 
 
 class FakeClient:
-    def search(self, query: object) -> list[object]:
+    def search_items(self, query: object) -> list[object]:
         return [object()]
 
     def collection(self, collection: str) -> object:
@@ -129,13 +128,13 @@ def test_load_returns_dask_backed_arrays_by_default(
                 )
             },
             geobox,
-            coords={"time": [dt(2025, 6, 1)]},
+            time=[dt(2025, 6, 1)],
         )
         return loaded.chunk(options["chunks"])
 
     monkeypatch.setattr(source_module.odc.stac, "load", fake_load)
     monkeypatch.setattr(
-        source_module, "create_header", lambda *args, **kwargs: AttrsHeader()
+        source_module, "load_attrs", lambda items, collection, loaded, **kwargs: loaded
     )
     anchor = GeoAnchor.from_coordinates(
         -6.5914,
@@ -172,7 +171,7 @@ def test_load_names_a_geographic_grid_y_x(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(source_module.odc.stac, "load", fake_load)
     monkeypatch.setattr(
-        source_module, "create_header", lambda *args, **kwargs: AttrsHeader()
+        source_module, "load_attrs", lambda items, collection, loaded, **kwargs: loaded
     )
     anchor = GeoAnchor.from_coordinates(
         -6.5914,
@@ -247,3 +246,15 @@ def test_aliases_resolve_each_multiband_asset_index(local_source):
     assert loaded.nir.attrs["add_offset"] == -0.1
     assert loaded.gs.geobox == anchor.geobox
     assert loaded.gs.to_nan().gs.unpack().nir.values[0, 1, 1] == pytest.approx(1.1)
+
+
+def test_a_source_searches_the_items_it_loads_and_keeps_no_copy(local_source) -> None:
+    source, anchor = local_source
+
+    rows = source.search(anchor)
+    loaded = source.load(anchor)
+
+    assert type(rows.gs).__name__ == "GeoCatalog"
+    assert source.collection.id == rows["collection"].iloc[0]
+    assert "stac_items" not in loaded.attrs
+    assert "stac_groupby" not in loaded.attrs

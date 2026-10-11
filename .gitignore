@@ -232,3 +232,6 @@ lightning_logs/
 /workspace
 .VSCodeCounter
 /reference
+
+# Written by running examples/02_prepare.ipynb
+examples/data/

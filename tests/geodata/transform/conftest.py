@@ -6,10 +6,14 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
-import geosave_engine.geodata.attrs as attrs
-
-
 UTM = "EPSG:32633"
+
+
+def grid_of(data: xr.DataArray | xr.Dataset | xr.DataTree) -> GeoBox:
+    """Read the regular grid a raster sits on, failing where it sits on none."""
+    grid = data.gs.geobox
+    assert isinstance(grid, GeoBox)
+    return grid
 
 
 def geobox(
@@ -74,9 +78,7 @@ def build(
     if packed:
         raster["red"].attrs["scale_factor"] = 1e-4
     if labelled:
-        raster["cls"].attrs.update(
-            attrs.Legend(class_map={0: "bg", 1: "crop"}).to_attrs()
-        )
+        raster["cls"] = raster["cls"].gs.write_legend({0: "bg", 1: "crop"})
 
     stamped = raster.gs.write_crs()
     return stamped.chunk(chunks) if chunks else stamped

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from os import PathLike
-from pathlib import Path
+from upath import UPath
 from typing import TYPE_CHECKING, Literal, cast, get_args
 
 import geopandas as gpd
@@ -35,14 +35,15 @@ type SpatialPredicate = Literal[
 _PREDICATES = get_args(SpatialPredicate.__value__)
 
 
-@pd.api.extensions.register_dataframe_accessor("gs")
 class GeoVector:
     """GeoSave operations on a GeoDataFrame, read through `gs`.
 
     A vector is geometry with information attached: an active geometry column,
-    a CRS, and any other columns. Nothing here requires or adds a column. A
-    time filter applies in `query` only where the frame happens to carry
-    `datetime`, `start_datetime` or `end_datetime`.
+    a CRS, and any other columns. Nothing here adds a column. A time filter
+    applies in `query` only where the frame happens to carry `datetime`,
+    `start_datetime` or `end_datetime`. An item table, a frame of STAC Items,
+    is read through `cuts`: `cuts.stacks(rows, on=...)` lists the windows a
+    row's `gs.to_stack()` reads.
 
     Args:
         data: GeoDataFrame with an active geometry column.
@@ -52,12 +53,12 @@ class GeoVector:
             geometry column.
 
     Examples:
-        >>> plots = read_vector("plots.geojson")
+        >>> plots = open_vector("plots.geojson")
         >>> plots.gs.crs.to_epsg()
         4326
         >>> mask = plots.gs.rasterize(scene, column="class")
         >>> plots.gs.to_geoparquet("plots.parquet")
-        PosixPath('plots.parquet')
+        PosixUPath('plots.parquet')
     """
 
     def __init__(self, data: gpd.GeoDataFrame) -> None:
@@ -122,7 +123,7 @@ class GeoVector:
         *,
         overwrite: bool = False,
         **options: Unpack[GeoJSONWriteOptions],
-    ) -> Path | str:
+    ) -> UPath:
         """Write this vector as one GeoJSON file.
 
         GeoJSON states coordinates in WGS84, so a projected vector is
@@ -135,7 +136,8 @@ class GeoVector:
             **options: GeoJSON write options.
 
         Returns:
-            Local writes return a path; URL writes return the supplied URL.
+            Local writes return a PosixUPath; URL writes return a UPath carrying
+            its storage options.
 
         Raises:
             FileExistsError: The path exists and `overwrite` is false.
@@ -143,7 +145,7 @@ class GeoVector:
 
         Examples:
             >>> plots.gs.to_geojson("plots.geojson")
-            PosixPath('plots.geojson')
+            PosixUPath('plots.geojson')
         """
         from geosave_engine.geodata.io import geojson
 
@@ -156,7 +158,7 @@ class GeoVector:
         layer: str | None = None,
         overwrite: bool = False,
         **options: Unpack[GeoPackageWriteOptions],
-    ) -> Path | str:
+    ) -> UPath:
         """Write this vector as one layer in a GeoPackage.
 
         Args:
@@ -166,7 +168,8 @@ class GeoVector:
             **options: GeoPackage write options.
 
         Returns:
-            Local writes return a path; URL writes return the supplied URL.
+            Local writes return a PosixUPath; URL writes return a UPath carrying
+            its storage options.
 
         Raises:
             FileExistsError: The path exists and `overwrite` is false.
@@ -174,7 +177,7 @@ class GeoVector:
 
         Examples:
             >>> plots.gs.to_geopackage("survey.gpkg", layer="plots")
-            PosixPath('survey.gpkg')
+            PosixUPath('survey.gpkg')
         """
         from geosave_engine.geodata.io import geopackage
 
@@ -188,7 +191,7 @@ class GeoVector:
         *,
         overwrite: bool = False,
         **options: Unpack[GeoParquetWriteOptions],
-    ) -> Path | str:
+    ) -> UPath:
         """Write this vector as one GeoParquet file.
 
         Args:
@@ -197,7 +200,8 @@ class GeoVector:
             **options: GeoParquet write options.
 
         Returns:
-            Local writes return a path; URL writes return the supplied URL.
+            Local writes return a PosixUPath; URL writes return a UPath carrying
+            its storage options.
 
         Raises:
             FileExistsError: The path exists and `overwrite` is false.
@@ -205,7 +209,7 @@ class GeoVector:
 
         Examples:
             >>> plots.gs.to_geoparquet("plots.parquet")
-            PosixPath('plots.parquet')
+            PosixUPath('plots.parquet')
             >>> plots.gs.to_geoparquet(
             ...     "hf://buckets/fatmur/test/plots.parquet",
             ...     storage_options={"token": token},
@@ -390,3 +394,13 @@ class GeoVector:
             crs=geometry_crs or crs or "EPSG:4326",
         )
         return cast("GeoDataFrame", frame)
+
+
+@pd.api.extensions.register_dataframe_accessor("gs")
+def _gs(data: pd.DataFrame) -> GeoVector:
+    """Read a frame through `GeoCatalog` when its rows are STAC Items."""
+    from .catalog import GeoCatalog, is_item_table
+
+    if isinstance(data, gpd.GeoDataFrame) and is_item_table(data):
+        return GeoCatalog(data)
+    return GeoVector(data)

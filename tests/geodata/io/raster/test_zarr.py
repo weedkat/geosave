@@ -7,9 +7,9 @@ import orjson
 import pytest
 import xarray as xr
 from dask.delayed import Delayed
+from upath import UPath
 
-from geosave_engine.geodata.attrs import Nodata, rebase
-from geosave_engine.geodata import read_raster
+from geosave_engine.geodata import open_raster
 from geosave_engine.geodata.io import zarr
 
 from tests.geodata.conftest import build_raster
@@ -74,7 +74,7 @@ def test_order_metadata_is_owned_by_storage_without_changing_source_attrs(
     with zarr.read(destination) as restored:
         assert list(restored.data_vars) == names
         assert restored.attrs["title"] == "scene"
-        assert restored.gs.attrs.root.foreign["zarr_variable_order"] == names
+        assert restored.attrs["zarr_variable_order"] == names
 
 
 def test_a_zarr_variable_written_elsewhere_trails_the_written_order(
@@ -156,7 +156,7 @@ def test_zarr_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:
 def test_a_zarr_array_holds_the_fill_value_a_gdal_reader_masks_on(
     tmp_path: Path,
 ) -> None:
-    written = rebase(build_raster(), Nodata(fill_value=255), target=["red", "nir"])
+    written = build_raster().gs.write_nodata(255)
 
     destination = zarr.write(written, tmp_path / "scene.zarr")
 
@@ -185,11 +185,25 @@ def test_a_raster_round_trips_through_a_remote_store(
     # zarr maps `memory://` to its own store and refuses unused storage_options.
     saved = written.gs.to_zarr(destination)
 
-    assert saved == destination
+    assert saved == UPath(destination)
     assert list(tmp_path.iterdir()) == []
     local = written.gs.to_zarr(tmp_path / "local.zarr")
-    with read_raster(saved) as restored, read_raster(local) as expected:
+    with open_raster(saved) as restored, open_raster(local) as expected:
         xr.testing.assert_identical(restored, expected)
+
+
+@pytest.mark.parametrize("remote", [True, False], ids=["memory", "file-url"])
+def test_a_raster_round_trips_through_a_upath(
+    bucket: str, tmp_path: Path, remote: bool
+) -> None:
+    written = build_raster(times=2)
+    root = UPath(bucket) if remote else UPath(tmp_path.as_uri())
+
+    saved = zarr.write(written, root / "scene.zarr")
+
+    with zarr.read(root / "scene.zarr") as restored, zarr.read(saved) as again:
+        xr.testing.assert_identical(restored, again)
+        np.testing.assert_array_equal(restored["red"], written["red"])
 
 
 def test_a_remote_store_refuses_to_be_replaced_silently(bucket: str) -> None:
@@ -199,7 +213,7 @@ def test_a_remote_store_refuses_to_be_replaced_silently(bucket: str) -> None:
 
     with pytest.raises(FileExistsError):
         written.gs.to_zarr(destination)
-    assert written.gs.to_zarr(destination, overwrite=True) == destination
+    assert written.gs.to_zarr(destination, overwrite=True) == UPath(destination)
 
 
 def test_a_remote_store_needs_the_zarr_suffix(bucket: str) -> None:

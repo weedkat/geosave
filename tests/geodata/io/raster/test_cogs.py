@@ -1,4 +1,4 @@
-"""A raster arranged as COG files named after its path."""
+"""A raster arranged as COG files by a path template."""
 
 from __future__ import annotations
 
@@ -9,182 +9,283 @@ import pandas as pd
 import pytest
 import rasterio
 
-from geosave_engine.geodata import read_raster
-from geosave_engine.geodata.attrs import CFVariable, rebase
+from geosave_engine.geodata import open_raster
 from geosave_engine.geodata.io import cogs
 
 from tests.geodata.conftest import build_raster
 
-DAYS = ("20250601T000000", "20250602T000000")
+DAYS = ("20250601", "20250602")
 
 
 @pytest.mark.parametrize(
-    ("times", "split_bands", "expected"),
+    ("times", "template", "expected"),
     [
-        (0, False, ["scene.v2.tif"]),
-        (0, True, ["scene.v2/red.tif", "scene.v2/nir.tif"]),
-        (2, False, [f"scene.v2/scene.v2_{day}.tif" for day in DAYS]),
+        (0, "scene.tif", ["scene.tif"]),
+        (0, "s2_{band}.tif", ["s2_red.tif", "s2_nir.tif"]),
+        (0, "scene/{band}.tif", ["scene/red.tif", "scene/nir.tif"]),
+        (2, "scene_{time:%Y%m%d}.tif", [f"scene_{day}.tif" for day in DAYS]),
         (
             2,
-            True,
-            [
-                f"scene.v2/scene.v2_{day}/{band}.tif"
-                for day in DAYS
-                for band in ("red", "nir")
-            ],
+            "{time:%Y%m%d}/{band}.tif",
+            [f"{day}/{band}.tif" for day in DAYS for band in ("red", "nir")],
         ),
     ],
-    ids=["timeless-joined", "timeless-split", "dated-joined", "dated-split"],
+    ids=["one-file", "flat-bands", "folder-bands", "dates", "dates-and-bands"],
 )
-def test_write_names_every_file_after_its_path(
-    tmp_path: Path, times: int, split_bands: bool, expected: list[str]
+def test_the_template_fields_decide_the_files(
+    tmp_path: Path, times: int, template: str, expected: list[str]
 ) -> None:
     written = build_raster(times=times)
-    unrelated = tmp_path / "scene.v2" / "unrelated.tif"
-    unrelated.parent.mkdir()
-    unrelated.write_bytes(b"not produced by this export")
 
-    paths = cogs.write(written, tmp_path / "scene.v2", split_bands=split_bands)
+    files = cogs.write(written, f"{tmp_path}/{template}")
 
-    assert paths == tuple(tmp_path / name for name in expected)
-    assert all(path.is_file() for path in paths)
-    restored = read_raster(paths)
+    assert [Path(f.href) for f in files] == [tmp_path / name for name in expected]
+    restored = open_raster(files)
     assert restored.gs.geobox == written.gs.geobox
     for name, variable in written.data_vars.items():
-        np.testing.assert_array_equal(restored[name].squeeze(), variable)
+        np.testing.assert_array_equal(restored[name].squeeze(), variable.squeeze())
 
 
-def test_one_variable_is_never_split(tmp_path: Path) -> None:
-    written = build_raster(times=2)[["red"]]
-
-    paths = cogs.write(written, tmp_path / "scene", split_bands=True)
-
-    assert paths == tuple(tmp_path / f"scene/scene_{day}.tif" for day in DAYS)
+def test_place_is_a_callers_field_not_a_built_in(tmp_path: Path) -> None:
+    with pytest.raises(KeyError, match="lat"):
+        cogs.write(build_raster(), f"{tmp_path}/{{lat:.3f}}.tif")
 
 
-def test_a_scalar_instant_is_named_by_the_path(tmp_path: Path) -> None:
-    written = build_raster(times=1).isel(time=0)
+def test_a_callable_field_names_files_from_the_raster(tmp_path: Path) -> None:
+    written = build_raster(times=1)
+    lat = written.gs.anchor.lonlat[1]
 
-    (path,) = cogs.write(written, tmp_path / "scene")
-
-    assert path == tmp_path / "scene.tif"
-    np.testing.assert_array_equal(read_raster(path).time, written.time)
-
-
-def test_a_name_ending_in_tif_stays_a_name(tmp_path: Path) -> None:
-    assert cogs.write(build_raster(), tmp_path / "image.tif") == (
-        tmp_path / "image.tif.tif",
+    (file,) = cogs.write(
+        written,
+        f"{tmp_path}/{{lat:.3f}}.tif",
+        fields={"lat": lambda raster: raster.gs.anchor.lonlat[1]},
     )
 
-
-def test_split_band_names_with_dots_remain_distinct(tmp_path: Path) -> None:
-    written = build_raster().rename_vars({"red": "band.v1", "nir": "band.v2"})
-
-    paths = cogs.write(written, tmp_path / "scene", split_bands=True)
-
-    assert paths == (tmp_path / "scene/band.v1.tif", tmp_path / "scene/band.v2.tif")
+    assert Path(file.href) == tmp_path / f"{lat:.3f}.tif"
 
 
-def test_sub_second_instants_keep_their_fraction_in_the_name(tmp_path: Path) -> None:
-    instant = np.datetime64("2025-06-01T10:30:31.123456789", "ns")
+def test_a_caller_field_is_filled_as_given(tmp_path: Path) -> None:
+    (file,) = cogs.write(
+        build_raster(), f"{tmp_path}/{{prefix}}.tif", fields={"prefix": "s2"}
+    )
+
+    assert Path(file.href) == tmp_path / "s2.tif"
+
+
+def test_a_callable_field_is_given_each_dates_raster(tmp_path: Path) -> None:
+    written = build_raster(times=2)
+    seen = []
+
+    def day(raster):
+        seen.append(raster)
+        return pd.Timestamp(raster.time.values).strftime("%d")
+
+    files = cogs.write(written, f"{tmp_path}/day{{day}}.tif", fields={"day": day})
+
+    assert [Path(f.href) for f in files] == [tmp_path / "day01.tif", tmp_path / "day02.tif"]
+    assert all("time" not in raster.dims for raster in seen)
+
+
+def test_several_dates_without_time_refuse(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError, match=r"2 dates would share .*scene\.tif; add \{time\}"
+    ):
+        cogs.write(build_raster(times=2), f"{tmp_path}/scene.tif")
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_partial_date_that_collides_refuses(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"make \{time:%Y\} more precise"):
+        cogs.write(build_raster(times=2), f"{tmp_path}/{{time:%Y}}.tif")
+
+
+def test_time_on_an_undated_raster_refuses(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"no dates, so \{time\} cannot be filled"):
+        cogs.write(build_raster(), f"{tmp_path}/{{time:%Y}}.tif")
+
+
+@pytest.mark.parametrize("field", ["time", "band", "collection"])
+def test_a_caller_field_repeating_a_built_in_refuses(tmp_path: Path, field) -> None:
+    with pytest.raises(TypeError, match=f"{field}= repeats the field"):
+        cogs.write(build_raster(), f"{tmp_path}/x.tif", fields={field: "a"})
+
+
+def test_a_path_that_is_not_a_tiff_refuses(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="end the path in .tif"):
+        cogs.write(build_raster(), f"{tmp_path}/scene")
+
+
+def test_sub_second_instants_render_through_strftime(tmp_path: Path) -> None:
+    instant = np.datetime64("2025-06-01T10:30:31.123456", "ns")
     written = build_raster(times=1).assign_coords(time=[instant])
 
-    (path,) = cogs.write(written, tmp_path / "scene")
+    (file,) = cogs.write(written, f"{tmp_path}/{{time:%Y%m%dT%H%M%S_%f}}.tif")
 
-    assert path.name == "scene_20250601T103031_123456789.tif"
-    assert read_raster([path]).time.values[0] == instant
+    assert Path(file.href).name == "20250601T103031_123456.tif"
+    assert open_raster(file.href).time.values[0] == instant
 
 
 def test_joined_bands_keep_the_variable_order(tmp_path: Path) -> None:
     written = build_raster(times=2)
 
-    paths = cogs.write(written, tmp_path / "scene")
+    paths = cogs.write(written, f"{tmp_path}/{{time:%Y%m%d}}.tif")
 
-    assert list(read_raster(paths).data_vars) == list(written.data_vars)
+    assert list(open_raster(paths).data_vars) == list(written.data_vars)
 
 
 def test_map_scale_reaches_every_file(tmp_path: Path) -> None:
-    written = rebase(
-        build_raster(times=2), CFVariable(units="reflectance"), target=["red", "nir"]
+    source = build_raster(times=2)
+    written = source.assign(
+        {name: source[name].assign_attrs(units="reflectance") for name in ("red", "nir")}
     )
 
-    paths = cogs.write(written, tmp_path / "scene", map_scale=10_000)
+    files = cogs.write(written, f"{tmp_path}/{{time:%Y%m%d}}.tif", map_scale=10_000)
 
-    for path in paths:
-        with rasterio.open(path) as src:
+    for file in files:
+        with rasterio.open(file.href) as src:
             assert float(src.tags()["TIFFTAG_XRESOLUTION"]) == pytest.approx(10.0)
-    assert read_raster(paths).red.attrs["units"] == "reflectance"
+    assert open_raster(files).red.attrs["units"] == "reflectance"
 
 
 def test_an_existing_file_refuses_without_overwrite(tmp_path: Path) -> None:
     written = build_raster(times=1)
-    cogs.write(written, tmp_path / "scene")
+    cogs.write(written, f"{tmp_path}/scene.tif")
 
     with pytest.raises(FileExistsError):
-        cogs.write(written, tmp_path / "scene")
-    assert cogs.write(written, tmp_path / "scene", overwrite=True)
+        cogs.write(written, f"{tmp_path}/scene.tif")
+    assert cogs.write(written, f"{tmp_path}/scene.tif", overwrite=True)
 
 
 def test_a_raster_spanning_more_than_time_refuses(tmp_path: Path) -> None:
     spanning = build_raster(times=2).expand_dims({"model": ["a", "b"]})
 
     with pytest.raises(ValueError, match="a COG holds one instant of one grid"):
-        cogs.write(spanning, tmp_path / "scene")
+        cogs.write(spanning, f"{tmp_path}/{{time:%Y%m%d}}.tif")
 
 
-@pytest.mark.parametrize("root", ["scene.v2", "scene.v2/"])
-def test_remote_names_keep_their_scheme_and_dots(bucket: str, root: str) -> None:
-    written = build_raster(times=2)
+def test_remote_paths_keep_their_scheme(bucket: str) -> None:
+    files = cogs.write(build_raster(times=2), f"{bucket}/{{time:%Y%m%d}}/{{band}}.tif")
 
-    paths = cogs.write(written, f"{bucket}/{root}", split_bands=True)
-
-    assert paths == tuple(
-        f"{bucket}/scene.v2/scene.v2_{day}/{band}.tif"
-        for day in DAYS
-        for band in ("red", "nir")
-    )
-
-
-def test_local_names_are_still_paths(tmp_path: Path) -> None:
-    paths = cogs.write(build_raster(times=1), tmp_path / "scene")
-
-    assert paths == (tmp_path / "scene" / "scene_20250601T000000.tif",)
-
-
-def test_layout_names_each_file_its_scene_and_its_pixels() -> None:
-    source = build_raster(times=2)
-
-    files = cogs.layout(source, "samples/forest", split_bands=True)
-
-    assert [file.path for file in files] == [
-        "samples/forest/forest_20250601T000000/red.tif",
-        "samples/forest/forest_20250601T000000/nir.tif",
-        "samples/forest/forest_20250602T000000/red.tif",
-        "samples/forest/forest_20250602T000000/nir.tif",
+    assert [f.href for f in files] == [
+        f"{bucket}/{day}/{band}.tif" for day in DAYS for band in ("red", "nir")
     ]
-    assert [file.scene for file in files[::2]] == [
-        "forest_20250601T000000",
-        "forest_20250602T000000",
-    ]
+
+
+def test_layout_gives_each_file_its_date_and_bands() -> None:
+    files = cogs.layout(build_raster(times=2), "out/{time:%Y%m%d}.tif")
+
+    assert [file.path for file in files] == [f"out/{day}.tif" for day in DAYS]
     assert files[0].time == pd.Timestamp("2025-06-01")
-    assert files[0].raster.gs.variables == ("red",)
+    assert files[0].raster.gs.variables == ("red", "nir")
     assert "time" not in files[0].raster.dims
-
-
-def test_layout_of_a_raster_without_a_time_dimension_is_one_scene() -> None:
-    scalar = build_raster(times=1).isel(time=0)
-
-    (file,) = cogs.layout(scalar, "samples/label")
-
-    assert (file.scene, file.path, file.time) == ("label", "samples/label.tif", None)
-    assert file.raster.gs.variables == ("red", "nir")
 
 
 def test_write_writes_exactly_the_layout(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    root = tmp_path / "forest"
+    template = f"{tmp_path}/{{time:%Y%m%d}}/{{band}}.tif"
 
-    written = cogs.write(source, root, split_bands=True)
+    written = cogs.write(source, template)
 
-    planned = cogs.layout(source, root, split_bands=True)
-    assert [str(path) for path in written] == [file.path for file in planned]
+    assert [f.href for f in written] == [
+        file.path for file in cogs.layout(source, template)
+    ]
+
+
+def test_to_cog_returns_one_record_per_file(tmp_path: Path) -> None:
+    from geosave_engine.geodata.io import CogFile
+
+    scene = build_raster(times=2)
+
+    files = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}_{{band}}.tif")
+
+    assert all(isinstance(file, CogFile) for file in files)
+    assert [f.bands for f in files] == [("red",), ("nir",), ("red",), ("nir",)]
+    assert len({f.href for f in files}) == 4
+    assert files[0].datetime == pd.Timestamp(scene.time.values[0])
+    assert files[0].collection is None
+
+
+def test_an_unsplit_file_lists_every_band_in_order(tmp_path: Path) -> None:
+    (file,) = build_raster().gs.to_cog(f"{tmp_path}/scene.tif")
+
+    assert file.bands == ("red", "nir")
+    assert file.datetime is None
+    assert Path(file.href).is_absolute()
+
+
+def test_a_stack_names_each_file_by_its_collection(tmp_path: Path) -> None:
+    from geosave_engine.geodata import stack
+
+    image = build_raster(times=1)
+    label = image.isel(time=0, drop=True)[["red"]].rename(red="label")
+    sample = stack({"optical": image, "label": label})
+
+    files = sample.gs.to_cog(
+        {
+            "optical": f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif",
+            "label": f"{tmp_path}/{{collection}}.tif",
+        }
+    )
+
+    assert [f.collection for f in files] == ["optical", "label"]
+    assert Path(files[0].href).name.startswith("optical_")
+    assert Path(files[1].href).name == "label.tif"
+
+
+def test_records_read_back_as_the_raster_written(tmp_path: Path) -> None:
+    scene = build_raster(times=2)
+    files = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}_{{band}}.tif")
+
+    restored = cogs.read(files)
+
+    assert list(restored.data_vars) == ["red", "nir"]
+    assert restored.sizes["time"] == 2
+    np.testing.assert_array_equal(restored.red.values, scene.red.values)
+
+
+def test_a_stack_reads_back_from_its_records(tmp_path: Path) -> None:
+    from geosave_engine.geodata import open_stack, stack
+
+    image = build_raster(times=1)
+    label = image.isel(time=0, drop=True)[["red"]].rename(red="label")
+    files = stack({"optical": image, "label": label}).gs.to_cog(
+        {
+            "optical": f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif",
+            "label": f"{tmp_path}/{{collection}}.tif",
+        }
+    )
+
+    restored = open_stack(files)
+
+    assert restored.gs.groups == ("optical", "label")
+    assert "time" not in restored["label"].dims
+
+
+def test_records_read_onto_a_grid_stay_lazy(tmp_path: Path) -> None:
+    import dask
+
+    scene = build_raster(times=2)
+    files = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+    grid = scene.gs.geobox
+
+    read = cogs.read(files, geobox=grid)
+
+    assert dask.is_dask_collection(read.red)
+    assert read.gs.geobox == grid
+
+
+def test_a_grid_inside_the_files_own_is_sliced_not_warped(tmp_path: Path) -> None:
+    import warnings
+
+    from geosave_engine.geodata.warnings import AssumedFillWarning
+
+    scene = build_raster(times=2)
+    files = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+    window = scene.gs.geobox[1:2, 0:2]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", AssumedFillWarning)
+        read = cogs.read(files, geobox=window)
+
+    assert read.gs.geobox == window
+    np.testing.assert_array_equal(read.red.values, scene.red.values[:, 1:2, 0:2])

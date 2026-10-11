@@ -38,13 +38,13 @@ chips:
   overlap: 32
   mode: reflect
   window: hann
-# Pixel bindings. Row-based context uses the same declaration in training and inference.
+# Pixel bindings. Context reads the same rasters in training and inference.
 inputs:
   image: !ref image
 # Enable the encoder's context recipe when the data supplies its metadata:
 # context:
 #   call: geosave_engine.model.encoder.prithvi.model_context
-#   kwargs: {row: !ref row, raster: image}
+#   kwargs: {raster: !ref image}
 # For Clay, use geosave_engine.model.encoder.clay.model_context.
 # Run on the device after augmentation, in training, validation, and prediction.
 # Reflectance statistics per band, in the order of `rasters.sentinel_2_l2a`.

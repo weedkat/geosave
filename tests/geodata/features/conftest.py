@@ -28,7 +28,7 @@ def sentinel(chunks: dict[str, int] | None = None) -> xr.Dataset:
         {band: (dims, values + 0.01 * offset) for offset, band in enumerate(BANDS)}
         | {"SCL": (dims, np.full(values.shape, 4, dtype="uint8"))},
         grid,
-        coords={"time": np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]")},
+        time=np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"),
     )
     built = built.assign_coords(sun_azimuth=("time", [45.0, 135.0]), site="plot-1")
     built.sun_azimuth.attrs["units"] = "degree"

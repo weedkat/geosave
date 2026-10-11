@@ -1,23 +1,11 @@
 from __future__ import annotations
 
-import inspect
-
 import pytest
 import yaml
 import xarray as xr
+from upath import UPath
 
 from geosave_engine.model.spec import CallSpec, ModelSpec, Ref
-
-
-def test_preprocessing_preserves_missing_variable_error_and_raster_context():
-    spec = ModelSpec.model_validate(
-        {"schema_version": 2, "rasters": {"image": {"variables": ["red"]}}}
-    )
-
-    with pytest.raises(KeyError, match="red") as caught:
-        spec.preprocess({"image": xr.Dataset()})
-
-    assert caught.value.__notes__ == ["While validating raster 'image'"]
 
 
 @pytest.mark.parametrize(
@@ -27,14 +15,6 @@ def test_preprocessing_preserves_missing_variable_error_and_raster_context():
 def test_prediction_fields_are_rejected(field):
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         ModelSpec.model_validate({"schema_version": 2, "rasters": {}, field: {}})
-
-
-def test_resolve_path_is_static_and_uses_model_filename(tmp_path):
-    descriptor = inspect.getattr_static(ModelSpec, "resolve_path")
-
-    assert isinstance(descriptor, staticmethod)
-    assert ModelSpec.filename == "model_spec.yaml"
-    assert ModelSpec.resolve_path(tmp_path) == tmp_path / ModelSpec.filename
 
 
 def test_python_and_yaml_round_trip_preserves_references_and_literals(tmp_path):
@@ -58,14 +38,11 @@ def test_python_and_yaml_round_trip_preserves_references_and_literals(tmp_path):
         }
     )
     assert ModelSpec.model_validate(spec.model_dump()) == spec
-    (tmp_path / "weights.bin").write_bytes(b"weights")
 
-    path = spec.save(tmp_path)
+    path = spec.save(tmp_path / "model_spec.yaml")
 
     assert "!ref" in path.read_text()
     assert ModelSpec.load(path) == spec
-    assert ModelSpec.load(tmp_path) == spec
-    assert (tmp_path / "weights.bin").read_bytes() == b"weights"
 
 
 def test_parsing_never_imports_or_executes_calls(tmp_path):
@@ -182,7 +159,7 @@ inputs:
   raw: !ref optical
 context:
   call: deliberately_uninstalled.module.context
-  kwargs: {row: !ref row}
+  kwargs: {raster: !ref image}
 transforms:
   image:
     - {name: Normalize, init_args: {mean: [0.5], std: [0.25]}}
@@ -193,20 +170,13 @@ transforms:
 
     assert spec.inputs["image"] == Ref("image")
     assert spec.context == CallSpec(
-        call="deliberately_uninstalled.module.context", kwargs={"row": Ref("row")}
+        call="deliberately_uninstalled.module.context",
+        kwargs={"raster": Ref("image")},
     )
     assert spec.pixel_inputs == ("image", "raw")
     assert spec.input_rasters == ("image", "optical")
     assert spec.transforms["image"][0].init_args == {"mean": [0.5], "std": [0.25]}
-    assert ModelSpec.load(spec.save(tmp_path / "saved")) == spec
-
-
-def test_model_inputs_resolve_raster_references():
-    spec = _spec(inputs={"image": Ref("image"), "raw": Ref("optical")})
-    assert spec.model_inputs({"image": "pixels", "optical": "raw"}) == {
-        "image": "pixels",
-        "raw": "raw",
-    }
+    assert ModelSpec.load(spec.save(tmp_path / "saved.yaml")) == spec
 
 
 @pytest.mark.parametrize(
@@ -228,7 +198,7 @@ def test_transforms_must_name_a_pixel_input(name):
             inputs={
                 "image": Ref("image"),
             },
-            context=CallSpec(call="builtins.dict", kwargs={"centre": Ref("row")}),
+            context=CallSpec(call="builtins.dict", kwargs={"centre": Ref("image")}),
             transforms={name: [{"name": "Normalize"}]},
         )
 
@@ -239,8 +209,37 @@ def test_cuts_round_trip(tmp_path):
         chips={"size": [224, 256], "overlap": 32, "window": "hann"},
     )
 
-    restored = ModelSpec.load(spec.save(tmp_path))
+    restored = ModelSpec.load(spec.save(tmp_path / "model_spec.yaml"))
 
     assert restored == spec
     assert restored.chips is not None and restored.chips.shape == (224, 256)
     assert restored.frames is not None and restored.frames.mode == "strict"
+
+
+def test_a_spec_round_trips_through_a_remote_upath(bucket):
+    spec = _spec(inputs={"image": Ref("image")})
+    target = UPath(bucket) / "model_spec.yaml"
+
+    saved = spec.save(target)
+
+    assert saved == target
+    assert ModelSpec.load(target) == spec
+
+
+@pytest.mark.parametrize("method", ["preprocess", "model_context", "model_inputs"])
+def test_processing_methods_are_not_settled(method):
+    spec = _spec(inputs={"image": Ref("image")})
+
+    with pytest.raises(NotImplementedError, match=method):
+        getattr(spec, method)({"optical": xr.Dataset()})
+
+
+def test_a_key_reference_round_trips_through_yaml(tmp_path):
+    spec = _spec(
+        context=CallSpec(
+            call="builtins.dict",
+            kwargs={"azimuth": Ref('optical["view:sun_azimuth"]')},
+        )
+    )
+
+    assert ModelSpec.load(spec.save(tmp_path / "model_spec.yaml")) == spec

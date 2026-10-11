@@ -1,15 +1,18 @@
-"""Installed Transformers persistence adapter for native model releases."""
+"""Persist native model chains through the Transformers file contract."""
 
 from __future__ import annotations
 
+import os
 from typing import Any, TypedDict
 
+import torch
+from torch import nn
 from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedModel
-from transformers.initialization import no_init_weights
 
 from geosave_engine.__about__ import __version__
 from geosave_engine.model.chain import ModelChain
 from geosave_engine.model.registry import build_model
+from geosave_engine.model.spec import ModelSpec
 
 ARTIFACT_FORMAT_VERSION = 1
 
@@ -64,86 +67,114 @@ class GeoSaveConfig(PretrainedConfig):
 
 
 class GeoSaveModel(PreTrainedModel):
-    """Persist a native model chain through the Transformers file contract.
+    """Load, save, and push a native model chain as a Transformers model.
 
     Args:
         config: Ordered construction specifications.
         chain: Existing chain to wrap without rebuilding or copying weights.
             Its specifications must match config. Omit when loading an artifact.
+        spec: Processing contract `save_pretrained` writes beside the weights.
 
     Raises:
         ValueError: The supplied chain does not match the configuration.
 
+    Examples:
+        >>> release = GeoSaveModel.from_chain(task.model, spec=spec)
+        >>> commit = release.push_to_hub("org/model")
+        >>> model = AutoModel.from_pretrained("org/model", revision=commit.oid)
+        >>> model.chain.encoder
+        DINOv3(...)
     """
 
     config_class = GeoSaveConfig
     base_model_prefix = "chain"
 
     def __init__(
-        self, config: GeoSaveConfig, *, chain: ModelChain | None = None
+        self,
+        config: GeoSaveConfig,
+        *,
+        chain: ModelChain | None = None,
+        spec: ModelSpec | None = None,
     ) -> None:
         super().__init__(config)
         specs = {entry["stage"]: entry["spec"] for entry in config.stages}
         if chain is not None and list(chain.stage_specs.items()) != list(specs.items()):
             raise ValueError("Chain construction specifications do not match config")
         self.chain = chain if chain is not None else build_model(specs)
-        # Stage constructors own initialization; wrapping must preserve trained weights.
-        with no_init_weights():
-            self.post_init()
+        self.spec = spec
+        self.add_model_tags("geosave-engine")
+        self.post_init()
 
     @classmethod
-    def from_chain(cls, chain: ModelChain) -> GeoSaveModel:
+    def from_chain(
+        cls, chain: ModelChain, *, spec: ModelSpec | None = None
+    ) -> GeoSaveModel:
         """Wrap a trained chain, sharing its modules and weights.
 
         Args:
-            chain: Model built from serializable stage specifications.
+            chain: Model built from registered stage specifications.
+            spec: Processing contract to release with the weights.
 
         Returns:
             Transformers model sharing the chain and its training mode.
 
         Raises:
-            ValueError: The chain has no construction specifications.
+            ValueError: The chain has no construction specifications, or a
+                stage was built from a class path.
         """
         specs = chain.stage_specs
-        for stage, spec in specs.items():
-            if not spec.get("name") or "class_path" in spec:
+        for stage, stage_spec in specs.items():
+            if not stage_spec.get("name") or "class_path" in stage_spec:
                 raise ValueError(
                     f"Stage {stage!r} must use a registered name for publication"
                 )
         config = GeoSaveConfig(
-            stages=[StageConfig(stage=name, spec=spec) for name, spec in specs.items()]
+            stages=[
+                StageConfig(stage=name, spec=value) for name, value in specs.items()
+            ]
         )
-        model = cls(config, chain=chain)
+        model = cls(config, chain=chain, spec=spec)
         model.training = chain.training
         return model
 
+    def save_pretrained(self, save_directory: str | os.PathLike, **kwargs: Any) -> None:
+        """Write the Transformers artifact and, when present, the spec beside it.
+
+        Args:
+            save_directory: Directory to write.
+            **kwargs: Options forwarded to `PreTrainedModel.save_pretrained`.
+        """
+        super().save_pretrained(save_directory, **kwargs)
+        if self.spec is not None:
+            self.spec.save(os.path.join(save_directory, ModelSpec.filename))
+
+    @torch.no_grad()
+    def _init_weights(self, module: nn.Module) -> None:
+        """Fill derived buffers; parameters come from stage constructors or weights.
+
+        Transformers loads into modules built on the meta device, which leaves
+        non-persistent buffers (such as timm's rotary periods) unfilled.
+        """
+        fill = getattr(module, "init_non_persistent_buffers", None)
+        if callable(fill):
+            fill()
+
     @staticmethod
     def _finalize_model_loading(
-        model: PreTrainedModel,
-        load_config: Any,
-        loading_info: Any,
+        model: PreTrainedModel, load_config: Any, loading_info: Any
     ) -> Any:
-        """Reject artifacts that do not exactly match their configured chain."""
-        problems = []
-        if loading_info.missing_keys:
-            problems.append(f"Missing keys: {sorted(loading_info.missing_keys)}")
-        if loading_info.unexpected_keys:
-            problems.append(f"Unexpected keys: {sorted(loading_info.unexpected_keys)}")
-        if loading_info.mismatched_keys:
-            problems.append(f"Mismatched keys: {sorted(loading_info.mismatched_keys)}")
-        if problems:
-            raise RuntimeError(
-                "GeoSaveModel requires an exact checkpoint match. "
-                + "; ".join(problems)
-            )
+        """Reject checkpoints whose keys differ from the configured chain."""
         loading_info = PreTrainedModel._finalize_model_loading(
             model, load_config, loading_info
         )
-        problems = []
-        if loading_info.error_msgs:
-            problems.append(f"Loading errors: {loading_info.error_msgs}")
-        if loading_info.conversion_errors:
-            problems.append(f"Conversion errors: {loading_info.conversion_errors}")
+        problems = [
+            f"{label} keys: {sorted(keys)}"
+            for label, keys in (
+                ("Missing", loading_info.missing_keys),
+                ("Unexpected", loading_info.unexpected_keys),
+            )
+            if keys
+        ]
         if problems:
             raise RuntimeError(
                 "GeoSaveModel requires an exact checkpoint match. "

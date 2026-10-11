@@ -60,9 +60,7 @@ def test_stage_allows_explicit_rebinding() -> None:
     )
 
     assert spec.external_inputs == ("scale", "value")
-    assert spec.validate_inputs({"scale", "value"}) == frozenset(
-        {"scale", "value"}
-    )
+    assert spec.validate_inputs({"scale", "value"}) == frozenset({"scale", "value"})
 
 
 def test_empty_stage_has_no_inputs() -> None:

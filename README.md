@@ -21,7 +21,7 @@ Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
   ordered band DataArrays and return DataArrays.
 - **Training module** — `ml.segmentation.supervised.Module` provides model construction,
   training, evaluation, and prediction. `supervised.DataModule` feeds it from
-  STAC sample manifests, cut and transformed as the model spec declares.
+  prepared catalogs, cut and transformed as the model spec declares.
 - **Pretrained model registry** — encoders (DINOv3, Prithvi, Prithvi-TL,
   Clay), decoders (DPT, UNet), heads, selected by registry key, chained
   together automatically, no manual import wiring or hand-glued forward pass.

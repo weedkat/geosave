@@ -8,7 +8,7 @@ from graphlib import CycleError, TopologicalSorter
 
 from torch import nn
 
-from .step import Step
+from .step import Step, terminal_step
 
 
 @dataclass(frozen=True)
@@ -61,8 +61,12 @@ def ordered_steps(modules: Mapping[str, nn.Module]) -> list[BoundStep]:
     Returns:
         One method per stage, in dependency order.
 
+    A chain of one stage that declares no step runs that stage's `forward`
+    as an end-to-end model, its annotated parameters naming the inputs.
+
     Raises:
-        TypeError: A stage has no declared step or equally early alternatives.
+        TypeError: A stage has no declared step and is not a lone end-to-end
+            model, or a stage has equally early alternatives.
         CycleError: Step inputs and outputs form a cycle.
         ValueError: Selected steps publish the same output name.
     """
@@ -74,7 +78,14 @@ def ordered_steps(modules: Mapping[str, nn.Module]) -> list[BoundStep]:
         methods = [getattr(value, "_chain_step", None) for value in attributes.values()]
         declared = [value for value in methods if isinstance(value, Step)]
         if not declared:
-            raise TypeError(f"{type(module).__name__}: no @chain_step method found")
+            # A lone end-to-end model is called on its forward.
+            forward = type(module).forward
+            if len(modules) != 1 or forward is nn.Module.forward:
+                raise TypeError(
+                    f"{type(module).__name__}: no @chain_step method found; only "
+                    f"a lone end-to-end model may omit it and run its forward"
+                )
+            declared = [terminal_step(forward)]
         candidates.extend(BoundStep(stage, module, method) for method in declared)
 
     graph = TopologicalSorter(dependencies(candidates))

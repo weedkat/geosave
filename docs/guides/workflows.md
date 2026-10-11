@@ -40,10 +40,10 @@ geosave workflow ingest \
 | `--write-options JSON` | No | `{}` | Encoding options passed to the native writer. |
 | `--help` | No | — | Show command help. |
 
-The sample opens with `read_stack("data/scenes/s1")`, one group per model
+The sample opens with `open_stack("data/scenes/s1")`, one group per model
 raster. To list the sample in a catalog, build one Item per group with
-`stac.create_stack_items(paths, name="s1")`, where `paths` maps each group to its
-saved files, and store them with `stac.table.write`.
+`stac.create_items(paths, id="s1")`, where `paths` maps each group to its
+saved files, and store the item table with `rows.gs.to_geoparquet(...)`.
 
 The anchor may copy an existing raster's exact grid and time:
 
@@ -114,9 +114,7 @@ rasters:
     attrs:
       data_vars:
         "*":
-          models:
-            packing:
-              required: [scale_factor]
+          required: [scale_factor]
     stac:
       collection: sentinel-2-l2a
       endpoints:

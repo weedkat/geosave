@@ -14,9 +14,7 @@ def test_stac_recipe_preserves_priority_and_native_settings():
             "query": {
                 "datetime": ["2025-01-01", "2025-01-03"],
                 "max_items": 5,
-                "sortby": [
-                    {"field": "properties.datetime", "direction": "desc"}
-                ],
+                "sortby": [{"field": "properties.datetime", "direction": "desc"}],
             },
             "load": {"bands": ["B04", "B08"], "chunks": {"x": 32, "y": 16}},
         }
@@ -120,9 +118,7 @@ def test_named_variables_must_match_explicit_stac_bands():
     }
 
     with pytest.raises(ValidationError, match="bands.*variables"):
-        RasterRequirement.model_validate(
-            {"variables": ("B04", "B08"), "stac": recipe}
-        )
+        RasterRequirement.model_validate({"variables": ("B04", "B08"), "stac": recipe})
 
     requirement = RasterRequirement.model_validate(
         {"variables": ("B08", "B04"), "stac": recipe}

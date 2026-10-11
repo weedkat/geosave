@@ -2,14 +2,15 @@
 
 `configure_gdal` sets the process environment remote reads use. `read` opens
 one GDAL-supported raster file as a Dataset of its bands: a band is one
-variable, named by the `GDALVariable.variable_name` it carries. The attrs GDAL
-header factory reads tags and native band properties alike, leaving rioxarray
-the pixels and the grid.
+variable, named by the `GDALBand.variable_name` it carries. Tags and native
+band properties become CF attrs here, leaving rioxarray the pixels and the
+grid.
 """
 
 from __future__ import annotations
 
 import os
+import warnings
 from enum import Enum, auto
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
@@ -20,19 +21,17 @@ import rioxarray  # noqa: F401  — registers the .rio accessor
 import xarray as xr
 from fsspec.core import split_protocol
 
-from geosave_engine.geodata.attrs import (
-    GeoTIFFTags,
-    rebase,
-)
-from geosave_engine.geodata.attrs.headers.gdal import create_header
+import geosave_engine.geodata.attrs as attrs
+from geosave_engine import __path__ as _package_paths
+from geosave_engine.geodata.warnings import UnreadMaskWarning
+from rasterio.enums import ColorInterp, MaskFlags
 
 from geosave_engine.geodata.conventions import TIME_COORDINATE
 from geosave_engine.geodata.utils.datetime import parse_stem_dates
-from ..storage import absolute_location
+from ..storage import Location, absolute_location
+from .tags import GeoTIFFTags
 
 if TYPE_CHECKING:
-    from os import PathLike
-
     from geosave_engine.geodata import Dataset
 
 
@@ -48,7 +47,7 @@ class RasterioOpenOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     *,
     chunks: Any = None,
     mask_and_scale: bool = False,
@@ -56,7 +55,7 @@ def read(
 ) -> Dataset:
     """Read any GDAL-readable raster as one variable per band.
 
-    A band naming itself in `GDALVariable.variable_name` becomes that variable,
+    A band naming itself in `GDALBand.variable_name` becomes that variable,
     spending the tag; the rest keep rasterio's `band_1`, `band_2`. Its metadata
     stays on the variable, the description as `long_name` unless it is the name.
 
@@ -86,7 +85,7 @@ def read(
         datetime.datetime(2019, 5, 7, 0, 0)
     """
     with rasterio.open(hf_to_s3(source)) as src:
-        header = create_header(src)
+        root, bands = _attrs(src)
         cube = rioxarray.open_rasterio(
             src,
             band_as_variable=True,
@@ -107,27 +106,40 @@ def read(
 
     opened = cube
     try:
-        # rioxarray names the bands by position; the header names them as they name themselves.
-        cube = cube.rename_vars(
-            dict(zip(cube.data_vars, header.data_vars, strict=True))
-        )
-        cube = rebase(cube, header)
+        # rioxarray names the bands by position; the bands name themselves.
+        cube = cube.rename_vars(dict(zip(cube.data_vars, bands, strict=True)))
+        cube.attrs = root
+        for name, band_attrs in bands.items():
+            cube[name].attrs = band_attrs
         if mask_and_scale:
             # Decoded pixels are physical, so the file's packing lives in encoding alone.
-            cube = rebase(cube, target=cube.gs.variables, packing=None, nodata=None)
-
-        tags = header.root.get(GeoTIFFTags)
-        if tags is not None and tags.GEOSAVE_DATETIME is not None:
-            cube = cube.assign_coords(
-                {TIME_COORDINATE: np.datetime64(tags.GEOSAVE_DATETIME)}
+            cube = cube.assign(
+                {
+                    name: attrs.stamp(
+                        attrs.stamp(band, attrs.Packing, None), attrs.Nodata, None
+                    )
+                    for name, band in cube.data_vars.items()
+                }
             )
-        elif tags is not None and tags.TIFFTAG_DATETIME is not None:
-            cube = cube.assign_coords({TIME_COORDINATE: tags.TIFFTAG_DATETIME})
+
+        tags = GeoTIFFTags.model_validate(root)
+        instant = None
+        if tags.GEOSAVE_DATETIME is not None:
+            instant = np.datetime64(tags.GEOSAVE_DATETIME)
+        elif tags.TIFFTAG_DATETIME is not None:
+            instant = np.datetime64(tags.TIFFTAG_DATETIME)
         else:
             # A file dating itself only in its name still places itself in time.
             timespan = parse_stem_dates(PurePath(str(source)).stem)
             if timespan is not None:
-                cube = cube.assign_coords({TIME_COORDINATE: timespan[0]})
+                instant = np.datetime64(timespan[0])
+        # A dated raster always spans `time`, so one date and many read alike.
+        if instant is not None:
+            # Xarray's lazy file arrays cannot gain an axis without being read;
+            # dask's can, so an unchunked file is chunked first.
+            if not cube.chunks:
+                cube = cube.chunk()
+            cube = cube.expand_dims({TIME_COORDINATE: [instant]})
     except BaseException:
         opened.close()
         raise
@@ -140,7 +152,7 @@ def read(
     return cast("Dataset", cube)
 
 
-def hf_to_s3(location: str | PathLike[str]) -> str:
+def hf_to_s3(location: Location) -> str:
     """Spell a Hugging Face bucket URL as the S3 URL GDAL opens.
 
     GDAL reads local paths and `s3://`, `gs://`, `az://` and `https://` URLs
@@ -297,3 +309,78 @@ def configure_gdal(
     for key, value in values.items():
         if value is not _UNSET:
             os.environ[key] = value
+
+
+def _attrs(
+    src: rasterio.DatasetReader,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Read the file's tags and each band's native properties as CF attrs.
+
+    Args:
+        src: Open raster.
+
+    Returns:
+        (attrs of the whole file, variable name mapped to its band's attrs,
+        in band order). A band is named by its `variable_name` tag, else by
+        rasterio's positional `band_<n>`.
+
+    Raises:
+        ValueError: Two bands name one variable.
+
+    Warns:
+        UnreadMaskWarning: A band records absence in a mask that is not read.
+    """
+    with_mask_band = [
+        index
+        for index, flags in zip(src.indexes, src.mask_flag_enums, strict=True)
+        if MaskFlags.per_dataset in flags
+    ]
+    if with_mask_band:
+        warnings.warn(
+            f"bands {with_mask_band} mark their absent pixels in a mask band, "
+            f"which this reader does not read, so every pixel reads as present; "
+            f"give them a fill value, or read the mask with rasterio",
+            UnreadMaskWarning,
+            skip_file_prefixes=tuple(_package_paths),
+        )
+
+    bands: dict[str, dict[str, Any]] = {}
+    for index in src.indexes:
+        position = index - 1
+        band: dict[str, Any] = {
+            key: value
+            for key, value in src.tags(index).items()
+            if not key.startswith("STATISTICS_")
+        }
+        scale, offset = src.scales[position], src.offsets[position]
+        interpretation = src.colorinterp[position]
+        native: dict[str, Any] = {
+            "long_name": src.descriptions[position],
+            "units": src.units[position],
+            "scale_factor": None if scale == 1.0 else scale,
+            "add_offset": None if offset == 0.0 else offset,
+            "_FillValue": src.nodatavals[position],
+            "colorinterp": None
+            if interpretation is ColorInterp.undefined
+            else interpretation.name,
+        }
+        band.update({key: value for key, value in native.items() if value is not None})
+
+        legend = attrs.Legend.model_validate(band) if "flag_values" in band else None
+        if interpretation is ColorInterp.palette and legend and legend.flag_values:
+            colours = src.colormap(index)
+            band["color_map"] = {
+                value: colours[value][:3]
+                for value in legend.flag_values
+                if value in colours
+            }
+
+        identity = attrs.GDALBand.model_validate(band)
+        name = identity.variable_name or f"band_{index}"
+        if name in bands:
+            raise ValueError(
+                f"band {index} names variable {name!r}, which an earlier band "
+                f"already names; one file names each variable once"
+            )
+        bands[name] = band
+    return dict(src.tags()), bands

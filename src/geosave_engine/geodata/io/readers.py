@@ -5,22 +5,20 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from os import PathLike
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, cast
 
-import xarray as xr
+from upath import UPath
 
-from geosave_engine.geodata.attrs import merge, rebase
-from geosave_engine.geodata.conventions import TIME_COORDINATE
 
-from .raster import gdal, netcdf, safe, zarr
+from . import storage
+from .storage import Location
+from .raster import cogs, gdal, netcdf, safe, zarr
+from .raster.cogs import CogFile
 from .vector import geojson, geopackage, geoparquet
-from .storage import absolute_location
 
 if TYPE_CHECKING:
     from geosave_engine.geodata import Dataset, DataTree, GeoDataFrame
-
-type RasterSource = str | PathLike[str] | Sequence[str | PathLike[str]]
 
 _NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
 
@@ -36,57 +34,40 @@ _VECTOR_SUFFIXES = (".geojson", ".json", ".gpkg", ".parquet", ".geoparquet")
 _PRODUCT_SUFFIXES = (".safe",)
 
 
-def read_raster(source: RasterSource, **options: Any) -> Dataset:
-    """Read a raster file or store through the reader its suffix names.
+def open_raster(source: Location | Sequence[CogFile], **options: Any) -> Dataset:
+    """Open one raster file or store, or the records one `to_cog` wrote.
 
-    Several sources, or a folder of `.tif` files, read as one raster: variables
-    merge in source order and dated files join along `time`, always a dimension
-    then. `options` are forwarded untouched; each format module types its own.
+    `options` are forwarded untouched; each format module types its own.
 
     Args:
-        source: Local path or URI ending in a recognised raster suffix, a
-            folder of COGs, or several of these holding one raster.
-        **options: Forwarded to the reader each suffix selects.
+        source: Local path or URI ending in a recognised raster suffix, or
+            the `CogFile` records a `to_cog` returned.
+        **options: Forwarded to the reader the suffix selects.
 
     Returns:
         Dataset holding one variable per band or stored variable.
 
     Raises:
-        ValueError: The suffix names a vector format or no supported format, no
-            source is given, a folder holds no `.tif`, the sources sit on
-            different grids, or two of them hold one variable at one instant.
+        TypeError: A sequence holds anything but `CogFile` records.
+        ValueError: The suffix names a vector format or no supported format,
+            or no record is given.
 
     Examples:
-        >>> read_raster("scene.zarr").gs.variables
+        >>> open_raster("scene.zarr").gs.variables
         ('red', 'nir')
-        >>> read_raster("scene.tif").gs.variables
-        ('B04', 'B08')
+        >>> open_raster(scene.gs.to_cog("out/s_{time:%Y%m%d}.tif")).gs.variables
+        ('red', 'nir')
     """
-    if not isinstance(source, (str, PathLike)):
-        sources = list(source)
-        if not sources:
-            raise ValueError("read_raster needs at least one source")
-        with ExitStack() as opened:
-            rasters: list[xr.Dataset] = []
-            for path in sources:
-                raster = read_raster(path, **options)
-                opened.callback(raster.close)
-                rasters.append(raster)
-            cube = _combine_rasters(rasters)
-            cube.set_close(opened.pop_all().close)
-            return cast("Dataset", cube)
+    if not isinstance(source, (str, PathLike, UPath)):
+        files = list(source)
+        if not all(isinstance(file, CogFile) for file in files):
+            raise TypeError(
+                "open_raster reads one path, or the CogFile records to_cog "
+                "returned; open other files one at a time"
+            )
+        return cogs.read(files, **options)
 
     suffix = PurePath(str(source)).suffix.lower()
-
-    # A folder of COGs is named by its directory, whatever that is called.
-    stores = (".zarr", *_PRODUCT_SUFFIXES)
-    if suffix not in stores and Path(str(source)).is_dir():
-        paths = sorted(Path(str(source)).rglob("*.tif"))
-        if not paths:
-            raise ValueError(f"{source} holds no .tif file to read")
-        cube = read_raster(paths, **options)
-        cube.encoding["source"] = absolute_location(source)
-        return cube
 
     if suffix == ".zarr":
         return zarr.read(source, **options)
@@ -103,7 +84,7 @@ def read_raster(source: RasterSource, **options: Any) -> Dataset:
     if suffix in _VECTOR_SUFFIXES:
         raise ValueError(
             f"{source} holds vector features rather than pixels; read it with "
-            f"read_vector"
+            f"open_vector"
         )
 
     raise ValueError(
@@ -113,41 +94,52 @@ def read_raster(source: RasterSource, **options: Any) -> Dataset:
     )
 
 
-def read_stack(
-    source: str | PathLike[str] | Mapping[str, RasterSource], **options: Any
+def open_stack(
+    source: Location | Mapping[str, Location] | Sequence[CogFile],
+    **options: Any,
 ) -> DataTree:
-    """Read a directory of rasters, or named rasters, as a raster stack.
-
-    A directory holds one raster per group, each a file, a store, or a folder
-    of COGs, named by its stem. Named sources read one group each through
-    `read_raster`.
+    """Open the layers of a saved stack as one stack.
 
     Args:
-        source: Local directory of groups, or group names mapped to what
-            `read_raster` reads, as a stack writer returns them.
-        **options: Forwarded to `read_raster` for each group.
+        source: The `CogFile` records a stack's `to_cog` returned; layer names
+            mapped to the file or store each is; a local folder holding one
+            file or store per layer, each named by its stem; or a vendor
+            product such as a `.SAFE` folder.
+        **options: Forwarded to the reader of each layer.
 
     Returns:
-        DataTree holding one group per stacked raster: a mapping's in its own
-        order, a directory's in name order.
+        DataTree holding one group per layer: records' and a mapping's in
+        their own order, a folder's in name order.
 
     Raises:
-        ValueError: The source is one raster file or store, or the directory
-            holds no raster or two entries naming one group.
+        ValueError: A record names no layer, the folder holds no layer or two
+            entries naming one layer, or the source is one raster.
 
     Examples:
-        >>> read_stack(sample.gs.to_zarr("prepared/s1")).gs.groups
+        >>> open_stack(sample.gs.to_cog("out/{collection}.tif")).gs.groups
+        ('optical', 'label')
+        >>> open_stack(sample.gs.to_zarr("prepared/s1")).gs.groups
         ('sentinel_2_l2a', 'label')
-        >>> read_stack("prepared/s1").gs.groups
-        ('label', 'sentinel_2_l2a')
     """
-    if isinstance(source, Mapping):
-        from geosave_engine.geodata.core.stack import stack
+    from geosave_engine.geodata.core.stack import stack
 
+    if not isinstance(source, (str, PathLike, UPath, Mapping)):
+        layers: dict[str, list[CogFile]] = {}
+        for file in source:
+            if file.collection is None:
+                raise ValueError(
+                    "these files name no collection; open_raster reads a lone raster"
+                )
+            layers.setdefault(file.collection, []).append(file)
+        return stack(
+            {name: cogs.read(files, **options) for name, files in layers.items()}
+        )
+
+    if isinstance(source, Mapping):
         with ExitStack() as opened:
             rasters = {}
-            for name, paths in source.items():
-                rasters[name] = read_raster(paths, **options)
+            for name, path in source.items():
+                rasters[name] = open_raster(path, **options)
                 opened.callback(rasters[name].close)
             tree = stack(rasters)
             tree.set_close(opened.pop_all().close)
@@ -155,48 +147,44 @@ def read_stack(
 
     suffix = PurePath(str(source)).suffix.lower()
 
-    # A directory of one raster per group is what `stack.gs.to_cog` writes.
-    stores = (".zarr", *_PRODUCT_SUFFIXES)
-    if suffix not in stores and Path(str(source)).is_dir():
-        # A group is a folder of COGs, or one raster file or store.
-        group_suffixes = _ARRAY_SUFFIXES + _DATASET_SUFFIXES
-        entries = []
-        for entry in sorted(Path(str(source)).iterdir()):
-            if entry.name.startswith("."):
-                continue
-            if entry.is_dir() or entry.suffix.lower() in group_suffixes:
-                entries.append(entry)
+    # A folder of one file or store per layer, as a stack's `to_zarr` writes.
+    folder = storage.location(source, options.get("storage_options"))
+    if suffix not in (".zarr", *_PRODUCT_SUFFIXES) and folder.is_dir():
+        entries = [
+            entry
+            for entry in sorted(folder.iterdir())
+            if not entry.name.startswith(".")
+            and entry.suffix.lower() in (*_ARRAY_SUFFIXES, *_DATASET_SUFFIXES)
+        ]
         if not entries:
-            raise ValueError(f"{source} holds no raster to read as a group")
-
-        # A group is named by its stem, so `dem.tif` beside `dem.zarr` is ambiguous.
-        groups: dict[str, Path] = {}
+            raise ValueError(f"{source} holds no layer file or store to read")
+        # A layer is named by its stem, so `dem.tif` beside `dem.zarr` is ambiguous.
+        layers_by_stem: dict[str, UPath] = {}
         repeats = set()
         for entry in entries:
-            if entry.stem in groups:
+            if entry.stem in layers_by_stem:
                 repeats.add(entry.stem)
-            groups[entry.stem] = entry
+            layers_by_stem[entry.stem] = entry
         if repeats:
             raise ValueError(
-                f"{source} holds several entries naming the groups {sorted(repeats)}; "
-                f"a group is one file, store, or folder"
+                f"{source} holds several entries naming the layers {sorted(repeats)}"
             )
-        return read_stack(groups, **options)
+        return open_stack(layers_by_stem, **options)
 
     if suffix in _PRODUCT_SUFFIXES:
         return safe.read_stack(source, **options)
     raise ValueError(
-        f"{source} ends in {suffix!r}, which holds one raster; read it with "
-        f"read_raster, or read the folder holding one raster per group"
+        f"{source} ends in {suffix!r}, which holds one raster; open it with "
+        f"open_raster, or open the folder holding one raster per group"
     )
 
 
-def read_vector(source: str | PathLike[str], **options: Any) -> GeoDataFrame:
-    """Read a vector file through the reader its suffix names.
+def open_vector(source: Location, **options: Any) -> GeoDataFrame:
+    """Open a vector file through the reader its suffix names.
 
     GeoParquet accepts local paths or fsspec URLs; GeoJSON and GeoPackage are
-    local only. An item table is read with `stac.table.read`, which also makes
-    its asset hrefs openable.
+    local only. A GeoParquet file holding STAC Items, an item table, is read
+    with its stored relative hrefs made openable.
 
     Args:
         source: Local path, or fsspec URL for GeoParquet, ending in a
@@ -210,7 +198,7 @@ def read_vector(source: str | PathLike[str], **options: Any) -> GeoDataFrame:
         ValueError: The suffix names a raster format or no supported format.
 
     Examples:
-        >>> read_vector("plantations.geojson").gs.crs.to_epsg()
+        >>> open_vector("plantations.geojson").gs.crs.to_epsg()
         4326
     """
     suffix = PurePath(str(source)).suffix.lower()
@@ -222,54 +210,23 @@ def read_vector(source: str | PathLike[str], **options: Any) -> GeoDataFrame:
         return cast("GeoDataFrame", geopackage.read(source, **options))
 
     if suffix in (".parquet", ".geoparquet"):
-        return cast("GeoDataFrame", geoparquet.read(source, **options))
+        frame = cast("GeoDataFrame", geoparquet.read(source, **options))
+        from geosave_engine.geodata.core.catalog import is_item_table
+
+        if not is_item_table(frame):
+            return frame
+        # Deferred: only an item table needs the STAC dependencies.
+        from .vector import stac_geoparquet
+
+        return stac_geoparquet.resolve(frame, source)
 
     if suffix in _DATASET_SUFFIXES or suffix in _ARRAY_SUFFIXES:
         raise ValueError(
-            f"{source} holds pixels rather than vector features; read it with "
-            f"read_raster"
+            f"{source} holds pixels rather than vector features; open it with "
+            f"open_raster"
         )
 
     raise ValueError(
         f"{source} ends in {suffix!r}, which names no supported vector format; "
         f"read a vector ending in {_VECTOR_SUFFIXES}"
     )
-
-
-def _combine_rasters(sources: Sequence[xr.Dataset]) -> Dataset:
-    """Combine opened Datasets on one grid, refusing repeated variable/time planes.
-
-    Scalar acquisition coordinates become time dimensions. Metadata follows
-    attrs model merge rules. Source lifetime remains the caller's responsibility.
-    """
-    if not sources:
-        raise ValueError("read_raster needs at least one source")
-    rasters = []
-    for raster in sources:
-        if TIME_COORDINATE in raster.coords and TIME_COORDINATE not in raster.dims:
-            raster = raster.expand_dims(TIME_COORDINATE)
-        rasters.append(raster)
-    grid = rasters[0].gs.geobox
-    if any(raster.gs.geobox != grid for raster in rasters[1:]):
-        raise ValueError(
-            "the sources sit on different grids; read each raster on its "
-            "own, or reproject them onto one grid first"
-        )
-    # xarray lets one source win a repeated plane without reading pixels.
-    planes = set()
-    for raster in rasters:
-        for name in raster.data_vars:
-            for instant in raster.indexes.get(TIME_COORDINATE, [None]):
-                plane = (name, instant)
-                if plane in planes:
-                    raise ValueError(
-                        "two sources hold one variable at one instant; read the "
-                        "files of one raster, each instant once"
-                    )
-                planes.add(plane)
-    # Attrs drop here and are rebased below, where each model rules on its own.
-    cube = xr.combine_by_coords(
-        rasters, compat="no_conflicts", join="exact", combine_attrs="drop"
-    )
-    cube = rebase(cube, merge(rasters))
-    return cast("Dataset", cube)

@@ -2,33 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
-import geopandas as gpd
-from tiler import Tiler
 
 from geosave_engine.geodata import cuts
+from geosave_engine.geodata.cuts.chips import ChipMode
 from geosave_engine.geodata.cuts.frames import FrameMode
+from geosave_engine.geodata.cuts.merge import Taper
 
 from .base import SpecModel, Text
 
+if TYPE_CHECKING:
+    import geopandas as gpd
+    from tiler import Tiler
 
-type TilingMode = Literal["reflect", "edge", "constant", "wrap"]
-type StitchWindow = Literal[
-    "boxcar",
-    "hamming",
-    "triang",
-    "bartlett",
-    "hann",
-    "barthann",
-    "bohman",
-    "parzen",
-    "blackman",
-    "nuttall",
-    "blackmanharris",
-    "overlap-tile",
-]
+    from geosave_engine.geodata import GeoDataFrame
 
 
 class FramesSpec(SpecModel):
@@ -42,8 +31,8 @@ class FramesSpec(SpecModel):
         mode: What a frame covering an instant some layer missed does.
 
     Examples:
-        >>> FramesSpec(length=4, stride=2, tolerance="10D").cut(windows)["id"].tolist()
-        ['s0/frame-0', 's0/frame-1']
+        >>> FramesSpec(length=4, stride=2, tolerance="10D").cut(windows)["parent"].tolist()
+        [0, 0]
     """
 
     length: PositiveInt
@@ -51,17 +40,14 @@ class FramesSpec(SpecModel):
     tolerance: Text
     mode: FrameMode = "strict"
 
-    def cut(self, windows: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Cut windows into frames, each group keeping the dates it observed on.
+    def cut(self, windows: gpd.GeoDataFrame) -> GeoDataFrame:
+        """Cut windows into frames, each collection keeping its own dates.
 
         Args:
             windows: Windows as `cuts.stacks` or `cuts.chips` lists them.
 
         Returns:
-            One window per frame, in time order.
-
-        Raises:
-            ValueError: A window holds no sequence these frames fit.
+            One row per frame, as `cuts.frames` lists them.
         """
         return cuts.frames(
             windows,
@@ -86,14 +72,14 @@ class ChipsSpec(SpecModel):
         ValueError: Overlap cannot provide coverage for the selected window.
 
     Examples:
-        >>> ChipsSpec(size=224, overlap=32).cut(windows).iloc[0]["id"]
-        's0/chip-0'
+        >>> ChipsSpec(size=224, overlap=32).cut(windows).iloc[0][["parent", "chip"]].tolist()
+        [0, 0]
     """
 
     size: PositiveInt | Annotated[list[PositiveInt], Field(min_length=2, max_length=2)]
     overlap: NonNegativeInt = 0
-    mode: TilingMode = "reflect"
-    window: StitchWindow | None = None
+    mode: ChipMode = "reflect"
+    window: Taper | None = None
 
     @model_validator(mode="after")
     def _validate_window(self) -> Self:
@@ -123,26 +109,24 @@ class ChipsSpec(SpecModel):
         height, width = self.size
         return height, width
 
-    def cut(self, windows: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    def cut(self, windows: gpd.GeoDataFrame) -> GeoDataFrame:
         """Cut windows into chips of this size.
 
         Args:
             windows: Windows as `cuts.stacks` or `cuts.frames` lists them.
 
         Returns:
-            One window per chip, each numbered within the window it was cut
-            from.
+            One row per chip, as `cuts.chips` lists them.
         """
         return cuts.chips(windows, self.shape, overlap=self.overlap, mode=self.mode)
 
     def layout(self, shape: tuple[int, int]) -> tuple[Tiler, list[tuple[int, int]]]:
-        """Lay these chips over a window of a given shape.
+        """Lay these chips over a window, as cutting them did.
 
         Args:
-            shape: Height and width of the window chips are cut from.
+            shape: Height and width of the window.
 
         Returns:
-            The Tiler laying the chips and the halo around the window, the
-            same every time, so a merge rebuilds what a cut used.
+            The Tiler laying the chips, and the halo before and after each axis.
         """
         return cuts.layout(shape, self.shape, overlap=self.overlap, mode=self.mode)

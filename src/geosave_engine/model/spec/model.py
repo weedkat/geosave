@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 from pydantic import ConfigDict, Field, JsonValue, model_validator
 import xarray as xr
 import yaml
+from upath import UPath
 from yaml.nodes import ScalarNode
 
 from .base import Name, SpecModel, Text
@@ -17,9 +17,11 @@ from .cuts import FramesSpec, ChipsSpec
 from .rasters import RasterRequirement
 from .stage import StageSpec
 from geosave_engine.geodata.core import GeoAnchor
+from geosave_engine.geodata.io import storage
+from geosave_engine.geodata.io.storage import Location
 
 if TYPE_CHECKING:
-    import pandas as pd
+    import geopandas as gpd
 
 
 class _Loader(yaml.SafeLoader):
@@ -72,12 +74,13 @@ class ModelSpec(SpecModel):
     Args:
         schema_version: Document format version.
         rasters: Rasters the model reads, by name.
-        preprocessing: Named raster calls run on each frame.
+        preprocessing: Named raster calls run on each sample.
         frames: How a sample's time axis is cut. None cuts nothing.
         chips: How a raster is cut in space and merged back.
         inputs: What the model chain takes, by input name. A reference is a
             raster's pixels.
-        context: Optional row-based model context recipe, shared by training and inference.
+        context: Optional model context recipe reading the same rasters as
+            `inputs`, shared by training and inference.
         transforms: Tensor transforms per pixel input, run after augmentation.
 
     Raises:
@@ -116,9 +119,10 @@ class ModelSpec(SpecModel):
                 "Model inputs reference neither a preprocessing result nor a "
                 f"raster: {sorted(unknown)}"
             )
-        if self.context is not None and (unknown := self.context.inputs - {"row"}):
+        if self.context is not None and (unknown := self.context.inputs - known):
             raise ValueError(
-                f"Context may reference only the sample row: {sorted(unknown)}"
+                "Context references neither a preprocessing result nor a "
+                f"raster: {sorted(unknown)}"
             )
         if unknown := self.transforms.keys() - set(self.pixel_inputs):
             raise ValueError(
@@ -139,139 +143,108 @@ class ModelSpec(SpecModel):
     def load_rasters(self, anchor: GeoAnchor, /) -> dict[str, xr.Dataset]:
         """Load every declared raster from STAC onto an anchor.
 
-        Args:
-            anchor: Grid and time the rasters are loaded on.
-
-        Returns:
-            Raster name mapped to its selected lazy raster.
+        Not settled yet: read rasters from a catalog through `cuts.stacks`
+        and `row.gs.to_stack()` instead.
 
         Raises:
-            ValueError: A raster declares no `stac` block, or a loaded raster
-                does not meet its requirement.
+            NotImplementedError: Always.
         """
-        recipes = {
-            name: requirement.stac
-            for name, requirement in self.rasters.items()
-            if requirement.stac is not None
-        }
-        if missing := [name for name in self.rasters if name not in recipes]:
-            raise ValueError(f"Rasters declare no `stac` block: {missing}")
-
-        rasters = {}
-        for name, recipe in recipes.items():
-            try:
-                rasters[name] = self.rasters[name].select_raster(
-                    recipe.load_raster(anchor)
-                )
-            except Exception as error:
-                error.add_note(f"While loading raster {name!r}")
-                raise
-        return rasters
+        raise NotImplementedError(
+            "ModelSpec.load_rasters is not settled; read rasters from a catalog "
+            "with cuts.stacks and row.gs.to_stack()"
+        )
 
     def preprocess(self, rasters: Mapping[str, Any], /) -> dict[str, Any]:
         """Select the declared rasters and run preprocessing on them.
 
-        Args:
-            rasters: Rasters by the names this spec declares.
-
-        Returns:
-            Each selected raster and each preprocessing result, by name.
+        Not settled yet: redesigned together with frames, chips, inputs and
+        context.
 
         Raises:
-            TypeError: A raster is not an xarray Dataset.
-            KeyError: A supplied raster lacks a declared variable or coordinate.
-            ValueError: A raster does not meet its requirement, or
-                preprocessing reads one that was not supplied.
-
-        Examples:
-            >>> sorted(spec.preprocess({"sentinel_2_l2a": scene}))
-            ['image', 'sentinel_2_l2a', 'valid_pixels']
+            NotImplementedError: Always.
         """
-        selected = {}
-        for name, requirement in self.rasters.items():
-            if name not in rasters:
-                continue
-            try:
-                selected[name] = requirement.select_raster(rasters[name])
-            except Exception as error:
-                error.add_note(f"While validating raster {name!r}")
-                raise
-        return {**selected, **self.preprocessing.run({**rasters, **selected})}
+        raise NotImplementedError("ModelSpec.preprocess is not settled")
 
-    def model_context(self, row: pd.Series | None) -> dict[str, Any]:
-        """Encode a sample row with the declared context recipe.
+    def prepare(
+        self,
+        raw: gpd.GeoDataFrame,
+        output: Location,
+        *,
+        on: str,
+        keep: Sequence[str] = (),
+    ) -> UPath:
+        """Preprocess every window of a raw catalog and save what the model reads.
 
-        Args:
-            row: Native catalog row with metadata for the actual input window.
-
-        Returns:
-            Model-specific context values, or an empty dictionary.
+        Not settled yet: until the notebook examples fix the flow, save model
+        inputs with `to_cog` and catalogue them with `stac.create_items`.
 
         Raises:
-            ValueError: A declared context recipe receives no row.
-            TypeError: The recipe returns something other than a dictionary.
+            NotImplementedError: Always.
         """
-        if self.context is None:
-            return {}
-        if row is None:
-            raise ValueError("model context requires a sample row")
-        values = self.context.invoke(self.context.select_inputs({"row": row}))
-        if not isinstance(values, dict):
-            raise TypeError("model context must return a dictionary")
-        return values
+        raise NotImplementedError(
+            "ModelSpec.prepare is not settled; save the model inputs with "
+            "to_cog and catalogue them with stac.create_items"
+        )
+
+    def model_context(self, rasters: Mapping[str, Any]) -> dict[str, Any]:
+        """Encode the sample's rasters with the declared context recipe.
+
+        Not settled yet: redesigned together with frames, chips, inputs and
+        context.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError("ModelSpec.model_context is not settled")
 
     def model_inputs(
         self,
         rasters: Mapping[str, Any],
-        row: pd.Series | None = None,
         *,
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Combine selected raster inputs with live or explicitly cached context.
+        """Combine the declared raster inputs with their context.
 
-        Args:
-            rasters: Prepared rasters named by the input references.
-            row: Sample metadata passed to the context recipe.
-            context: Cached encoding for this row and recipe. None computes it.
-
-        Returns:
-            Named raster objects and context values for the model chain.
+        Not settled yet: redesigned together with frames, chips, inputs and
+        context.
 
         Raises:
-            ValueError: Context attempts to overwrite a raster input.
+            NotImplementedError: Always.
         """
-        pixels = {name: value.resolve(rasters) for name, value in self.inputs.items()}
-        encoded = self.model_context(row) if context is None else context
-        if overlap := pixels.keys() & encoded.keys():
-            raise ValueError(
-                f"context cannot overwrite raster inputs: {sorted(overlap)}"
-            )
-        return {**pixels, **encoded}
+        raise NotImplementedError("ModelSpec.model_inputs is not settled")
 
-    @staticmethod
-    def resolve_path(path: str | Path) -> Path:
-        """Resolve a local YAML filename or model artifact directory."""
-        if "://" in str(path):
-            raise ValueError("ModelSpec save/load requires a local path")
-        target = Path(path)
-        if target.is_dir():
-            return target / ModelSpec.filename
-        if target.suffix.lower() in (".yaml", ".yml"):
-            return target
-        if target.suffix or target.is_file():
-            raise ValueError("ModelSpec files must use a .yaml or .yml YAML suffix")
-        return target / ModelSpec.filename
+    def save(self, path: Location) -> UPath:
+        """Write this spec as YAML, with references as `!ref` tags.
 
-    def save(self, path: str | Path) -> Path:
-        """Save this document to a local YAML file or artifact directory."""
-        target = self.resolve_path(path)
-        payload = yaml.dump(self.model_dump(), Dumper=_Dumper, sort_keys=False)
+        Args:
+            path: YAML file to write, as a path, URL, or UPath.
+
+        Returns:
+            The written file.
+
+        Examples:
+            >>> spec.save("configs/model_spec.yaml")
+            PosixUPath('configs/model_spec.yaml')
+        """
+        target = storage.location(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        payload = yaml.dump(self.model_dump(), Dumper=_Dumper, sort_keys=False)
         target.write_text(payload, encoding="utf-8")
         return target
 
     @classmethod
-    def load(cls, path: str | Path) -> Self:
-        """Read a local model document without importing declared calls."""
-        payload = cls.resolve_path(path).read_text(encoding="utf-8")
+    def load(cls, path: Location) -> Self:
+        """Read a model_spec.yaml without importing the calls it declares.
+
+        Args:
+            path: YAML file, as a path, URL, or UPath.
+
+        Returns:
+            The spec the file declares.
+
+        Examples:
+            >>> ModelSpec.load("configs/model_spec.yaml").inputs
+            {'image': Ref('image')}
+        """
+        payload = storage.location(path).read_text(encoding="utf-8")
         return cls.model_validate(yaml.load(payload, Loader=_Loader))

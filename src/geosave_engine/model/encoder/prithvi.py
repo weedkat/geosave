@@ -4,7 +4,7 @@ from typing import cast
 
 import torch
 import torch.nn as nn
-import pandas as pd
+import xarray as xr
 from terratorch.models.backbones.prithvi_mae import PrithviViT
 from terratorch.registry import BACKBONE_REGISTRY
 
@@ -15,43 +15,43 @@ from geosave_engine.model.encoder.time import time_labels
 from geosave_engine.model.encoder.context import geographic_center
 
 
-def temporal_coords(row: pd.Series, *, raster: str = "image") -> torch.Tensor:
+def temporal_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     """Encode ordered frame timestamps as year and zero-indexed day of year.
 
     Args:
-        row: Sample reference row with acquisition metadata.
-        raster: Prepared raster supplying the temporal frames.
+        raster: Raster supplying the temporal frames.
 
     Returns:
         Float32 tensor shaped (T, 2).
     """
     return torch.tensor(
-        [
-            (when.year, when.timetuple().tm_yday - 1)
-            for when in time_labels(row, raster=raster)
-        ],
+        [(when.year, when.timetuple().tm_yday - 1) for when in time_labels(raster)],
         dtype=torch.float32,
     )
 
 
-def location_coords(row: pd.Series) -> torch.Tensor:
-    """Return the sample grid centre as a float32 latitude/longitude tensor."""
-    return torch.tensor(geographic_center(row), dtype=torch.float32)
+def location_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
+    """Return the raster's grid centre as a float32 latitude/longitude tensor."""
+    return torch.tensor(geographic_center(raster), dtype=torch.float32)
 
 
-def model_context(row: pd.Series, *, raster: str = "image") -> dict[str, torch.Tensor]:
-    """Encode sample metadata for Prithvi's temporal/location inputs.
+def model_context(raster: xr.Dataset | xr.DataArray) -> dict[str, torch.Tensor]:
+    """Encode the raster's time and place for Prithvi's temporal/location inputs.
 
     Args:
-        row: Reference row describing the actual input window.
-        raster: Prepared raster supplying the temporal frames.
+        raster: Raster the encoder receives, as the window read it.
 
     Returns:
         Temporal coordinates (T, 2) and geographic coordinates (2,).
+
+    Examples:
+        >>> context = model_context(chip["image"].dataset)
+        >>> context["temporal_coords"].shape
+        torch.Size([4, 2])
     """
     return {
-        "temporal_coords": temporal_coords(row, raster=raster),
-        "location_coords": location_coords(row),
+        "temporal_coords": temporal_coords(raster),
+        "location_coords": location_coords(raster),
     }
 
 
@@ -73,7 +73,7 @@ class _Prithvi(nn.Module):
         self,
         model_name: str = "prithvi_eo_v2_300",
         pretrained: bool = False,
-        in_channels: int = 6,
+        bands: list[str] | None = None,
         input_size: int | tuple[int, int] = 224,
         num_frames: int = 1,
         drop_path_rate: float = 0.0,
@@ -88,10 +88,11 @@ class _Prithvi(nn.Module):
         Args:
             model_name: terratorch backbone registry name. Must be a key of `MODEL_SPECS`.
             pretrained: load pretrained weights from HuggingFace hub (or `ckpt_path`).
-            in_channels: input channel count. `6` matches the checkpoint's pretrained
-                HLS S30 bands (BLUE, GREEN, RED, NIR_NARROW, SWIR_1, SWIR_2) and
-                transfers their weights; any other count gets a randomly initialized
-                patch-embed conv of that width.
+            bands: input bands in channel order, named as TerraTorch's `HLSBands`.
+                Bands in the checkpoint's BLUE, GREEN, RED, NIR_NARROW, SWIR_1,
+                SWIR_2 keep their pretrained patch-embed weights; any other name
+                gets randomly initialized ones. `None` reads those six in that
+                order.
             input_size: size the positional embedding buffer is built for, in pixels;
                 tuple for non-square. Sizes `model_name`'s patch size does not divide
                 are border-cropped. Call-time tensors may differ — the embedding is
@@ -122,9 +123,6 @@ class _Prithvi(nn.Module):
             if out_indices is not None
             else list(model_specs[model_name]["out_indices"])
         )
-        # TerraTorch uses its pretrained band order when bands is None.
-        bands = None if in_channels == 6 else list(range(in_channels))
-
         model = BACKBONE_REGISTRY.build(
             model_name,
             pretrained=pretrained,
@@ -202,7 +200,7 @@ class Prithvi(_Prithvi):
 class PrithviTL(_Prithvi):
     """Prithvi encoder conditioned on acquisition time and geographic location.
 
-    `model_context` reads them from one sample reference row.
+    `model_context` reads them from the raster it encodes.
     `forward_pyramid` accepts the tensors after DataLoader collation.
     """
 
@@ -217,7 +215,7 @@ class PrithviTL(_Prithvi):
         self,
         model_name: str = "prithvi_eo_v2_300_tl",
         pretrained: bool = False,
-        in_channels: int = 6,
+        bands: list[str] | None = None,
         input_size: int | tuple[int, int] = 224,
         num_frames: int = 1,
         drop_path_rate: float = 0.0,
@@ -232,7 +230,7 @@ class PrithviTL(_Prithvi):
         super().__init__(
             model_name=model_name,
             pretrained=pretrained,
-            in_channels=in_channels,
+            bands=bands,
             input_size=input_size,
             num_frames=num_frames,
             drop_path_rate=drop_path_rate,

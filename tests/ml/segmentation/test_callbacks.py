@@ -22,6 +22,13 @@ from geosave_engine.ml.segmentation.calibrate import ThresholdCalibrator
 from geosave_engine.model.chain import chain_step
 
 
+_spec_processing_not_settled = pytest.mark.xfail(
+    raises=NotImplementedError,
+    strict=True,
+    reason="ModelSpec processing is a stub until frames, chips, inputs and context are redesigned",
+)
+
+
 class SegmentationModel(nn.Module):
     def __init__(self, num_classes: int) -> None:
         super().__init__()
@@ -50,30 +57,28 @@ class ValidationObserver(Callback):
         self.labels.append(outputs["label"].clone())
 
 
-class Samples(Dataset[tuple[dict[str, torch.Tensor], torch.Tensor, str, torch.Tensor]]):
-    """One 4x4 raster read as its single tile, as `supervised.Dataset` offers it."""
+class Samples(Dataset[tuple[dict[str, torch.Tensor], torch.Tensor, int, torch.Tensor]]):
+    """One 4x4 raster read as its single chip, as `supervised.Dataset` offers it."""
 
-    def __init__(self) -> None:
+    def __init__(self, root: Path) -> None:
         grid = GeoBox.from_bbox((0, 0, 40, 40), "EPSG:32748", resolution=10)
         scene = raster({"red": (("y", "x"), np.ones((4, 4), "float32"))}, grid)
-        samples = _samples({"a": scene}, (4, 4))
-        self.reference = samples.reference
+        label = raster({"label": (("y", "x"), np.zeros((4, 4), "float32"))}, grid)
+        samples = _samples({"a": stack({"image": scene, "label": label})}, (4, 4), root)
+        self.frames, self.windows = samples.frames, samples.windows
         self.spec = SimpleNamespace(chips=ChipsSpec(size=4))
         self.target = "label"
-        label = raster({"label": (("y", "x"), np.zeros((4, 4), "float32"))}, grid)
-        self.parents = {"a": stack({"image": scene, "label": label})}
-        self.scene = scene
 
     def __len__(self) -> int:
-        return len(self.reference)
+        return len(self.windows)
 
     def __getitem__(
         self, index: int
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, str, torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, int, torch.Tensor]:
         return (
             {"image": torch.ones(2, 4, 4)},
             torch.zeros(4, 4, dtype=torch.long),
-            self.reference.id.iloc[index],
+            index,
             torch.ones(4, 4, dtype=torch.bool),
         )
 
@@ -110,7 +115,7 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
         enable_model_summary=False,
         default_root_dir=tmp_path,
     )
-    loader = DataLoader(Samples())
+    loader = DataLoader(Samples(tmp_path / "data"))
     trainer.fit(task, train_dataloaders=loader, val_dataloaders=loader)
 
     assert trainer.global_step == 1

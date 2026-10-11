@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
 import geosave_engine.geodata.attrs as attrs
-from geosave_engine.geodata.core.raster import raster as build_raster
+from geosave_engine.geodata.core.constructors import raster as build_raster
 from geosave_engine.geodata.core.stack import stack as build_stack
-from geosave_engine.geodata.transform.warp import align, reproject
+from geosave_engine.geodata.transform.warp import Resampling, align, reproject
+
+from .conftest import grid_of
 
 UTM = "EPSG:32633"
 WGS84 = "EPSG:4326"
@@ -40,11 +43,7 @@ def landcover() -> xr.Dataset:
     """Build a raster whose values are class codes."""
     box = utm_box()
     coded = build_raster({"landcover": (("y", "x"), np.ones(box.shape, "uint8"))}, box)
-    return attrs.rebase(
-        coded,
-        attrs.Legend(class_map={1: "water", 2: "urban"}),
-        target="landcover",
-    )
+    return coded.gs.write_legend({1: "water", 2: "urban"}, target="landcover")
 
 
 def test_a_geobox_target_lands_exactly_on_it() -> None:
@@ -79,7 +78,7 @@ def test_a_warped_raster_reports_the_crs_it_landed_on() -> None:
 
     warped = reproject(source, WGS84)
 
-    assert warped.gs.crs.epsg == 4326
+    assert warped.gs.crs == "EPSG:4326"
     # odc's own Dataset path leaves the source CRS in spatial_ref's attrs.
     assert source.odc.reproject(WGS84).odc.crs.epsg == 32633
 
@@ -100,11 +99,11 @@ def test_a_warped_raster_stacks_with_the_grid_it_targeted() -> None:
 
 
 def test_warping_keeps_the_raster_and_variable_attrs() -> None:
-    source = attrs.rebase(scene(), attrs.ACDD(title="Sentinel-2 Level-2A"))
+    source = scene().assign_attrs(title="Sentinel-2 Level-2A")
 
     warped = reproject(source, WGS84)
 
-    assert warped.gs.attrs.root.get(attrs.ACDD).title == "Sentinel-2 Level-2A"
+    assert warped.attrs["title"] == "Sentinel-2 Level-2A"
     assert warped.red.attrs["_FillValue"] == 0
 
 
@@ -123,7 +122,7 @@ def test_warping_a_stack_leaves_every_group_on_one_grid() -> None:
     grids = {name: group.gs.geobox for name, group in warped.gs.rasters.items()}
     assert warped.gs.groups == ("optical", "cover")
     assert len(set(grids.values())) == 1
-    assert warped.gs.crs.epsg == 4326
+    assert warped.gs.crs == "EPSG:4326"
 
 
 def test_warping_a_stack_onto_a_geobox_lands_every_group_on_it() -> None:
@@ -136,19 +135,19 @@ def test_warping_a_stack_onto_a_geobox_lands_every_group_on_it() -> None:
 
 
 @pytest.mark.parametrize("resampling", ["bilinear", "cubic", "average"])
-def test_a_blending_kernel_refuses_class_codes(resampling: str) -> None:
+def test_a_blending_kernel_refuses_class_codes(resampling: Resampling) -> None:
     with pytest.raises(ValueError, match="class codes"):
         reproject(landcover(), WGS84, resampling=resampling)
 
 
 def test_a_palette_band_refuses_a_blending_kernel_without_a_legend() -> None:
-    painted = attrs.rebase(
-        build_raster(
-            {"cover": (("y", "x"), np.ones(utm_box().shape, "uint8"))},
-            utm_box(),
-        ),
-        attrs.GDALVariable(colorinterp="palette"),
-        target="cover",
+    raster = build_raster(
+        {"cover": (("y", "x"), np.ones(utm_box().shape, "uint8"))}, utm_box()
+    )
+    painted = raster.assign(
+        cover=attrs.stamp(
+            raster.cover, attrs.GDALBand, attrs.GDALBand(colorinterp="palette")
+        )
     )
 
     with pytest.raises(ValueError, match="class codes"):
@@ -156,7 +155,9 @@ def test_a_palette_band_refuses_a_blending_kernel_without_a_legend() -> None:
 
 
 @pytest.mark.parametrize("resampling", ["nearest", "mode"])
-def test_a_value_preserving_kernel_accepts_class_codes(resampling: str) -> None:
+def test_a_value_preserving_kernel_accepts_class_codes(
+    resampling: Resampling,
+) -> None:
     from geosave_engine.geodata.warnings import AssumedFillWarning
 
     # The class map carries no fill value, so uncovered pixels take uint8's.
@@ -331,8 +332,8 @@ def test_reproject_keeps_a_nan_fill_value() -> None:
     warped = reproject(source, _wider())
     band = reproject(source.red, _wider())
 
-    assert np.isnan(attrs.Nodata.from_attrs(warped.red.attrs).fill_value)
-    assert np.isnan(attrs.Nodata.from_attrs(band.attrs).fill_value)
+    assert np.isnan(warped.red.gs.nodata)
+    assert np.isnan(band.gs.nodata)
     assert np.isnan(warped.red.values).any()
 
 
@@ -355,7 +356,7 @@ def test_reproject_gives_an_integer_with_no_fill_value_one_and_warns(
     with pytest.warns(AssumedFillWarning, match=str(fill)):
         band = reproject(source.red, _wider())
 
-    assert attrs.Nodata.from_attrs(warped.red.attrs).fill_value == fill
+    assert warped.red.gs.nodata == fill
     assert sorted(np.unique(warped.red.values).tolist()) == sorted([5, fill])
     assert sorted(np.unique(band.values).tolist()) == sorted([5, fill])
     assert warped.red.dtype == np.dtype(dtype)
@@ -379,13 +380,13 @@ def test_reproject_records_nan_for_a_float_with_no_fill_value_and_warns() -> Non
     with pytest.warns(AssumedFillWarning, match="nan"):
         warped = reproject(source, _wider())
 
-    assert np.isnan(attrs.Nodata.from_attrs(warped.red.attrs).fill_value)
+    assert np.isnan(warped.red.gs.nodata)
     assert np.isnan(warped.red.values).any()
     assert warped.red.dtype == np.dtype("float32")
 
 
 def test_reproject_onto_a_geographic_grid_keeps_y_x_and_laziness() -> None:
-    source = scene().chunk({"y": 2, "x": 2})
+    source = scene().isel(y=slice(0, 8), x=slice(0, 8)).chunk({"y": 2, "x": 2})
 
     warped = reproject(source, WGS84)
 
@@ -393,3 +394,51 @@ def test_reproject_onto_a_geographic_grid_keeps_y_x_and_laziness() -> None:
     assert warped.gs.crs.epsg == 4326
     assert warped.red.chunks is not None
     assert warped.y.attrs["standard_name"] == "latitude"
+
+
+def test_unnamed_class_array_refuses_blending() -> None:
+    with pytest.raises(ValueError, match="class codes"):
+        reproject(landcover().landcover.rename(None), WGS84, resampling="bilinear")
+
+
+def test_stack_reproject_resolves_numeric_resolution_once() -> None:
+    source = build_stack({"image": scene().chunk()})
+    warped = reproject(source, WGS84, resolution=0.001)
+    assert grid_of(warped.gs.rasters["image"]).resolution.x == 0.001
+    assert warped.gs.rasters["image"].red.chunks is not None
+
+
+def test_common_grid_covers_every_stack_group() -> None:
+    from geosave_engine.geodata.transform.warp import common_grid
+
+    source = scene()
+    eastern = build_raster(
+        {"red": (("y", "x"), np.full((256, 256), 2, dtype="uint16"))},
+        source.gs.geobox.translate_pix(256, 0),
+        nodata=0,
+    )
+    tree = build_stack({"west": source, "east": eastern})
+    grid = common_grid([tree])
+    assert grid.shape.yx == (256, 512)
+    assert grid.transform == source.gs.geobox.transform
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("rotation", [0, 30])
+def test_common_grid_selects_smallest_pixel_area(reverse, rotation) -> None:
+    from affine import Affine
+
+    from geosave_engine.geodata.transform.warp import common_grid
+
+    origin = Affine.translation(300000, 5000000) * Affine.rotation(rotation)
+    narrow = GeoBox((4, 4), origin * Affine.scale(10, -40), UTM)
+    fine = GeoBox((4, 4), origin * Affine.scale(20, -10), UTM)
+    rasters = [
+        build_raster({"red": (("y", "x"), np.ones((4, 4), "uint16"))}, grid, nodata=0)
+        for grid in (narrow, fine)
+    ]
+    if reverse:
+        rasters.reverse()
+
+    # 200 square metres per pixel beats 400, despite the wider x resolution.
+    assert common_grid(rasters, extent="match") == fine

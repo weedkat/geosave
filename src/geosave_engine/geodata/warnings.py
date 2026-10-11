@@ -40,3 +40,11 @@ class UncoveredInstantsWarning(GeoSaveWarning):
 
 class DroppedFramesWarning(GeoSaveWarning):
     """Frames lacking a scene for some group were not emitted."""
+
+
+class DuplicateInstantsWarning(GeoSaveWarning):
+    """Two items of one collection cover a window at one instant; one is kept."""
+
+
+class PartialCoverWarning(GeoSaveWarning):
+    """Items intersect a window without covering it, so they do not join it."""

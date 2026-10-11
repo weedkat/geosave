@@ -26,8 +26,8 @@ name their own variables in their band descriptions.
 The resolution groups sit on different grids, so a whole product is a stack
 rather than a cube: `read_stack` gives one group per resolution, and `read`
 takes the one resolution asked for. Implementing either also means translating
-`MTD_MSIL2A.xml` through a header factory, the way `attrs/headers/gdal` and
-`attrs/headers/geobox` translate their own sources.
+`MTD_MSIL2A.xml` into CF attrs, the way `io/raster/gdal` translates a GDAL
+band's slots and tags.
 
 Other vendors arrange products the same way over different encodings: Landsat
 Collection 2 is GeoTIFF leaves beside an `MTL.xml`, and Element84's Sentinel-2
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 _UNBUILT = (
     "reading a SAFE product is not built yet; open its JP2 leaves with "
     "`io.gdal.read` and combine them yourself, or convert the product to "
-    "COGs and read them with `read_raster`"
+    "COGs and read them with `open_raster`"
 )
 
 

@@ -47,8 +47,8 @@ objects = outputs["objects"]
 ```
 
 The detector in this example already decodes its outputs into tile-local boxes.
-GeoSave's raw `DetectionHead` still requires its own decoding design. Terminal
-tuples and dictionaries stay whole; they are not unpacked into chain features.
+Terminal tuples and dictionaries stay whole; they are not unpacked into chain
+features.
 
 `Published[T]` marks constructor attributes available to later stages.
 Explicit `init_args` win. Missing arguments may use one matching published
@@ -63,6 +63,29 @@ attribute; ambiguous sources and incompatible annotations raise errors.
 | `registry.py` | Factory registration, construction, and saved arguments |
 | `release/` | Native release saving, loading, and Hub publication |
 
+## Split and end-to-end models
+
+A split model is stages that declare steps: an encoder, a decoder, and a head.
+An end-to-end model is one module registered under the `model` stage with no
+`chain_step`; a chain holding it alone runs its `forward`, whose annotated
+parameters name the inputs.
+
+```yaml
+model_chain:                      # split
+  encoder: {name: dinov3}
+  decoder: {name: dpt}
+  head: {name: regression, init_args: {variables: [biomass]}}
+
+model_chain:                      # end-to-end
+  model: {name: ibm_granite_biomass}
+```
+
+Either way the training method receives one `ModelChain`, calls it with the
+spec's named inputs, and gets one tensor back. The module that produces the
+result names what it predicts: `classes` for segmentation and classification
+heads, `variables` for regression heads and end-to-end regressors. A release
+wraps the same chain with `GeoSaveModel.from_chain`.
+
 ## Geospatial context
 
 ```yaml
@@ -71,32 +94,28 @@ inputs:
   image: !ref image
 context:
   call: geosave_engine.model.encoder.prithvi.model_context
-  kwargs: {row: !ref row, raster: image}
+  kwargs: {raster: !ref image}
 ```
 
 ```python
-from geosave_engine.geodata import cuts
 from geosave_engine.ml.inputs import model_inputs
 
-row = reference.loc[sample_id]
-tile = cuts.select_pixels(parents[row.parent], row)
-inputs = model_inputs(spec, tile.gs.rasters, row)
+rasters = windows.iloc[position].gs.to_stack().gs.rasters
+inputs = model_inputs(spec, rasters)
 ```
 
-`inputs` binds prepared raster pixels; `context` encodes the native catalog row.
-Training and inference use the same declared function. Encoder-specific
-`model_context(row, *, raster="image")` functions return dictionaries of tensors.
-The row's `times` states each prepared raster's ordered timestamps; its `crs`,
-`transform`, `height` and `width` describe the exact input grid. Neither metadata extraction
-nor context encoding reads raster pixels. A row may also carry annotation columns.
+`inputs` binds prepared raster pixels; `context` references rasters the same
+way and encodes their time labels and grid. Training and inference use the
+same declared function. Encoder-specific `model_context(raster)` functions
+return dictionaries of tensors, read from the raster's `time` coordinate and
+georeferenced grid; neither reads pixels.
 
 | Encoder | Per-sample context |
 | --- | --- |
 | `PrithviTL` | `temporal_coords[T, 2]`: year and zero-based day of year; `location_coords[2]`: latitude, longitude |
 | `Clay` | `time[2]`: ISO week and hour; `latlon[2]`: latitude, longitude |
 
-Missing metadata raises an error. For Clay, select one frame before preparing the
-reference. Wavelengths and GSD retain explicit encoder constructor defaults; a
+Missing metadata raises an error. For Clay, cut frames of one instant. Wavelengths and GSD retain explicit encoder constructor defaults; a
 CRS resolution is not assumed to be a distance in metres. Pixel normalization
 remains separate from context encoding.
 
@@ -114,8 +133,11 @@ context. There is no automatic cache lookup or hidden encoder selection.
 ## Saving and loading native releases
 
 ```python
+import geosave_engine.model.release  # registers GeoSaveModel with AutoModel
+from transformers import AutoModel
 from geosave_engine.model.registry import build_model
-from geosave_engine.model.release import load_model, load_spec, save_model
+from geosave_engine.model.release import GeoSaveModel
+from geosave_engine.model.spec import ModelSpec
 
 stages = {
     "encoder": {
@@ -124,19 +146,21 @@ stages = {
     },
 }
 model = build_model(stages)
-save_model(model, "artifacts/model", spec="configs/model_spec.yaml")
-restored = load_model("artifacts/model")
-spec = load_spec("artifacts/model")
-inputs = model_inputs(spec, prepared_rasters, row)
+spec = ModelSpec.load("configs/model_spec.yaml")
+GeoSaveModel.from_chain(model, spec=spec).save_pretrained("artifacts/model")
+restored = AutoModel.from_pretrained("artifacts/model").chain
+spec = ModelSpec.load("artifacts/model/model_spec.yaml")
 ```
 
-`build_model` constructs reproducible chains from stage specifications.
-`save_model` writes `config.json`, `model.safetensors`, `model_spec.yaml`, and a
-generated model card. The repository contains no executable Python. Generated
-configuration records stage order, registered selectors, constructor defaults,
-resolved `Published` arguments, and the exact GeoSave version needed to rebuild
-the graph. Saved `pretrained` flags are false because exported weights supply the
-model state.
+`GeoSaveModel` is a Transformers `PreTrainedModel` around the chain, so
+`save_pretrained`, `push_to_hub`, and `AutoModel.from_pretrained` work as
+for any Transformers model. It writes `config.json`, `model.safetensors`, and,
+when given, `model_spec.yaml`. The repository contains no executable Python.
+Generated configuration records stage order, registered selectors, constructor
+defaults, resolved `Published` arguments, and the exact GeoSave version needed
+to rebuild the graph. Saved `pretrained` flags are false because exported
+weights supply the model state. Loading rejects checkpoints whose keys or
+shapes differ from the configured chain.
 
 Published stages must use registered `name` selectors implemented by the
 installed GeoSave version. Workspace `class_path` stages remain valid for
@@ -149,91 +173,74 @@ after loading, not stored in the artifact.
 
 ```python
 from geosave_engine.ml.segmentation import supervised
-from geosave_engine.model.release import publish_model
 
 # Restore the selected checkpoint, not whichever epoch remains in memory.
-task = supervised.Module.load_from_checkpoint("checkpoints/best.ckpt")
-commit = publish_model(
-    task.model,
-    "your-account/your-model",
-    spec="configs/model_spec.yaml",
-)
+task = supervised.Module.load_from_checkpoint(checkpoint)
+release = GeoSaveModel.from_chain(task.model, spec=spec)
+commit = release.push_to_hub("your-account/your-model")
 ```
 
-Install the exact `geosave-engine[hub]` version named in the generated model
-card. Pin `commit` when loading both parts of a production deployment:
+`push_to_hub` uploads the weights, configuration, spec, and a model card in
+one commit. Install the exact GeoSave version the configuration names, and pin
+the commit when loading a production deployment:
 
 ```python
-from geosave_engine.model.release import load_model, load_spec
-
-spec = load_spec("your-account/your-model", revision=commit)
-model = load_model("your-account/your-model", revision=commit).eval()
+model = AutoModel.from_pretrained("your-account/your-model", revision=commit.oid).eval()
+spec = ModelSpec.load(f"hf://your-account/your-model@{commit.oid}/model_spec.yaml")
 output = model(**model_inputs)
 ```
 
-Lightning checkpoints remain training artifacts for resuming or reproducing a
-run. A release contains only the native inference graph and its independently
-loadable geospatial contract; it omits optimizer, scheduler, callbacks,
-metrics, Trainer, and DataModule state.
+The spec loads through `hf://` without downloading weights. Lightning
+checkpoints stay training artifacts: a generated workspace's
+`scripts/publish.py` uploads them with the workspace code under `workspace/`.
 
-### Backbone-only release
+### Reusing a backbone
 
-An MAE task can keep its reconstruction decoder as a separate training-only
-attribute and put the deployable GFM encoder in a configured one-stage chain:
+The loaded chain is plain PyTorch, so a downstream model takes a stage as a
+built module:
 
 ```python
-# mae_task.model is build_model({"encoder": {"name": "gfm", ...}})
-commit = publish_model(
-    mae_task.model,
-    "your-account/gfm",
-    spec="configs/model_spec.yaml",
+encoder = AutoModel.from_pretrained("your-account/gfm", revision=commit.oid).chain.encoder
+model = build_model(
+    {
+        "encoder": encoder,
+        "decoder": {"name": "unet"},
+        "head": {"name": "segmentation", "init_args": {"classes": classes}},
+    }
 )
-encoder = load_model("your-account/gfm", revision=commit).encoder
 ```
 
-Publish the configured chain, not `mae_task.model.encoder` directly: the parent
-chain owns the constructor recipe required to rebuild the native module.
+A chain built from a module carries no construction recipe for that stage, so
+it cannot be published until the stage is given as a specification.
 
 ## Predicting geospatial tiles with Lightning
 
 ```python
 from lightning import Trainer
 from torch.utils.data import DataLoader, Dataset
-from geosave_engine.geodata import cuts
 from geosave_engine.ml.inputs import model_inputs
-from geosave_engine.ml.segmentation.callbacks import ChipWriter
 
-# frames lists the windows to predict; parents holds each one's prepared stack.
-reference = spec.chips.cut(frames).set_index("id", drop=False)
+# frames lists the windows to predict; each chip row reads its own pixels.
+windows = spec.chips.cut(frames)
 
 class PredictionDataset(Dataset):
     def __len__(self):
-        return len(reference)
+        return len(windows)
 
     def __getitem__(self, position):
-        row = reference.iloc[position]
-        tile = cuts.select_pixels(parents[row.parent], row)
-        return model_inputs(spec, tile.gs.rasters, row), row.id
+        rasters = windows.iloc[position].gs.to_stack().gs.rasters
+        return model_inputs(spec, rasters), position
 
-# Chips are saved as they are predicted, then merged in a step of their own.
-trainer = Trainer(callbacks=[ChipWriter("runs/predict/chips")])
-trainer.predict(task, dataloaders=DataLoader(PredictionDataset(), batch_size=8),
-                return_predictions=False)
-merged = cuts.merge(frames, reference, ChipWriter.read("runs/predict/chips"),
-                    taper=spec.chips.window)
-scene_logits = merged["scene-a"]["logits"]
+predictions = trainer.predict(task, dataloaders=DataLoader(PredictionDataset(), batch_size=8))
 ```
 
-This example assumes finite predictions and a complete prediction run. Apply
-pixel transforms appropriate to the released model before its forward call.
-`cuts.merge` rebuilds the layout the cut used and returns each raster on its
-parent's grid, so chips may be predicted in any order and on several devices.
+How predictions are saved is not settled; `ChipWriter` raises
+`NotImplementedError`. Chip outputs saved as COGs on their chips' grids, in an
+item table with a `chip` column, merge back with
+`cuts.merge(frames, windows, predictions, taper=spec.chips.window)`.
 
-The PyTorch Dataset belongs to the consuming method. GeoSave's shared
-`ml.datasets.TileDataset` has been removed. `stac.table.load(stac.table.to_items(rows))`
-opens the saved assets of selected rows. `cuts.select_pixels(parent, row)` applies an explicit
-window to prepared native xarray data. Reads remain lazy until tensor
-conversion. No custom tile object or automatic property-triggered loading exists.
+The PyTorch Dataset belongs to the consuming method. Reads remain lazy until
+tensor conversion.
 
 Prediction batches are `(model_inputs, ids)` and results are `(logits, ids)`.
 Supervised training/evaluation batches are `(model_inputs, target, ids, valid)`.

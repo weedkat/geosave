@@ -9,7 +9,9 @@ from geosave_engine.model.registry import list_models
 
 
 def test_the_variables_fix_the_channel_count() -> None:
-    head = RegressionHead(variables=["biomass", "height"], feature_channels=4, units="t/ha")
+    head = RegressionHead(
+        variables=["biomass", "height"], feature_channels=4, units="t/ha"
+    )
 
     values = head.forward_logits(torch.rand(2, 4, 8, 8))
 

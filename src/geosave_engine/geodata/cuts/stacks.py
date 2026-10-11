@@ -1,103 +1,168 @@
-"""One whole window per saved sample, read off an item table."""
+"""One window per anchor item, joined by the items that cover it."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+import warnings
+from typing import TYPE_CHECKING, Any, cast
 
 import geopandas as gpd
-import pandas as pd
+import orjson
 import pystac
+import shapely
 from affine import Affine
 from odc.geo.geobox import GeoBox
-from pystac.extensions.datacube import DatacubeExtension
 from pystac.extensions.projection import ProjectionExtension
 
-from geosave_engine.geodata.conventions import TIME_COORDINATE
-from geosave_engine.geodata.stac import table
-from geosave_engine.geodata.stac.extensions import GeosaveExtension
-from geosave_engine.geodata.stac.extensions.geosave import STACK_PROP
+from geosave_engine import __path__ as _package_paths
+from geosave_engine.geodata.io.vector import stac_geoparquet
+from geosave_engine.geodata.stac._item import instant
+from geosave_engine.geodata.warnings import (
+    DuplicateInstantsWarning,
+    PartialCoverWarning,
+)
 
 if TYPE_CHECKING:
     from geosave_engine.geodata import GeoDataFrame
 
+# Footprints are WGS84 polygons rebuilt from each grid; a shrink this small
+# absorbs float noise without letting a real gap pass.
+_TOLERANCE = 1e-7
 
-def stacks(items: gpd.GeoDataFrame) -> GeoDataFrame:
-    """List each saved sample as one window covering all of it.
+# Item fields a window row does not copy from its anchor.
+_STAC_FIELDS = {
+    "type",
+    "stac_version",
+    "stac_extensions",
+    "id",
+    "collection",
+    "assets",
+    "links",
+    "bbox",
+    "geometry",
+    "datetime",
+    "start_datetime",
+    "end_datetime",
+}
+_TIME_FIELDS = ("datetime", "start_datetime", "end_datetime")
+
+
+def stacks(items: gpd.GeoDataFrame, *, on: str) -> GeoDataFrame:
+    """List one window per item of collection `on`, on that item's grid.
+
+    Every item of another collection whose footprint covers the anchor's
+    joins it, so a window holds what was observed over all of it.
 
     Args:
-        items: Item table whose rows share `geosave:stack` per sample, as
-            `create_stack_items` builds them, one collection per group.
+        items: Item table, local or searched, of any collections and dates,
+            its hrefs absolute as `open_vector` and `search` return them.
+        on: Collection whose items are the windows, as labels are.
 
     Returns:
-        One row per sample, in the order samples first appear:
+        One row per anchor item, in table order:
 
-            id, stack     the sample's name
-            parent        None; a cut names the window it came from here
-            times         {group: [time labels]}, None for a timeless group
-            start_datetime, end_datetime   what those labels span, or None
-            crs, transform                 the window's grid
-            row_off, col_off, height, width   its pixels on the sample's grid
-            geometry      its footprint in WGS84
+            anchor          the anchor Item's id
+            parent          None; a cut names the row it came from here
+            sources         JSON {collection: [Item dict, ...]}, trimmed to
+                            what reading needs
+            proj:code, proj:transform, proj:shape   the anchor's grid
+            start_datetime, end_datetime            span of the dated members
+            geometry        the anchor's footprint, WGS84
+            ...             the anchor Item's own properties
 
     Raises:
-        ValueError: The table has no `geosave:stack` column, a row states no
-            grid, or the groups of one sample sit on different grids.
+        ValueError: `on` names no collection in the table, an item names no
+            collection, or an anchor's assets state no grid.
+
+    Warns:
+        DuplicateInstantsWarning: Two items of one collection cover an anchor
+            at one instant; the first in table order is kept.
+        PartialCoverWarning: Items intersect an anchor without covering it.
 
     Examples:
-        >>> stacks(items)[["id", "height", "width"]].values.tolist()
-        [['s0', 512, 512], ['s1', 512, 512]]
+        >>> windows = stacks(gs.open_vector("data/catalog.parquet"), on="label")
+        >>> windows.iloc[0].gs.to_stack().gs.groups
+        ('label', 's2', 's1', 'dem')
     """
-    if STACK_PROP not in items:
+    # A window groups its sources by collection, so every item must name one.
+    unnamed = items.loc[items["collection"].isna(), "id"].tolist()
+    if unnamed:
         raise ValueError(
-            f"the item table has no {STACK_PROP!r} column, so its rows name no "
-            f"samples; build it with stac.create_stack_items"
+            f"{len(unnamed)} items name no collection, so no window can group "
+            f"them: {unnamed[:5]}; set their collection or drop them"
         )
-
-    samples: dict[str, list[pystac.Item]] = {}
-    for item in table.to_items(items):
-        samples.setdefault(cast("str", GeosaveExtension.ext(item).stack), []).append(
-            item
+    present = sorted(items["collection"].unique())
+    if on not in present:
+        raise ValueError(
+            f"no item belongs to the collection {on!r}; the table holds {present}"
         )
-
-    rows = []
-    for name, members in samples.items():
-        grids: dict[str, GeoBox] = {}
-        labels: dict[str, list[pd.Timestamp]] = {}
-        for item in members:
-            group = cast("str", item.collection_id)
-            for asset in item.assets.values():
-                grids[group] = _grid(asset)
-                labels.setdefault(group, []).extend(_times(item, asset))
-
-        grid = next(iter(grids.values()))
-        apart = sorted(group for group, other in grids.items() if other != grid)
-        if apart:
-            raise ValueError(
-                f"sample {name!r} holds {apart} on a different grid from "
-                f"{next(iter(grids))!r}, so one window would not name the same "
-                f"pixels in each; write the sample as one stack"
-            )
-
-        times = {
-            group: [stamp.isoformat() for stamp in sorted(set(stamps))] or None
-            for group, stamps in labels.items()
+    anchors = items[items["collection"] == on].reset_index(drop=True)
+    others = items[items["collection"] != on].reset_index(drop=True)
+    shrunk = gpd.GeoDataFrame(
+        {"anchor_row": range(len(anchors))},
+        geometry=shapely.buffer(anchors.geometry.values, -_TOLERANCE),
+        crs=items.crs,
+    )
+    covering = gpd.sjoin(others, shrunk, predicate="covers", how="inner")
+    touching = gpd.sjoin(others, shrunk, predicate="intersects", how="inner")
+    pairs = set(zip(covering.index, covering["anchor_row"], strict=True))
+    partial = sorted(
+        {
+            index
+            for index, row in zip(touching.index, touching["anchor_row"], strict=True)
+            if (index, row) not in pairs
         }
-        dated = [stamp for stamps in labels.values() for stamp in stamps]
+    )
+    if partial:
+        warnings.warn(
+            f"{len(partial)} items intersect a window without covering it, so "
+            f"they do not join it: {others.loc[partial[:5], 'id'].tolist()}",
+            PartialCoverWarning,
+            skip_file_prefixes=tuple(_package_paths),
+        )
+
+    anchor_items = stac_geoparquet.to_items(anchors)
+    other_items = [] if others.empty else stac_geoparquet.to_items(others)
+    rows = []
+    for position, anchor in enumerate(anchor_items):
+        members: dict[str, list[dict[str, Any]]] = {on: [_stripped(anchor)]}
+        joined = sorted(covering.index[covering["anchor_row"] == position])
+        for each in (other_items[index] for index in joined):
+            kept = members.setdefault(cast("str", each.collection_id), [])
+            fields = _stripped(each)
+            when = instant(fields)
+            if when is not None and any(instant(other) == when for other in kept):
+                warnings.warn(
+                    f"{each.collection_id!r} has two items at {when} over "
+                    f"{anchor.id!r}; kept {kept[0]['id']!r}, dropped {each.id!r}",
+                    DuplicateInstantsWarning,
+                    skip_file_prefixes=tuple(_package_paths),
+                )
+                continue
+            kept.append(fields)
+        grid = _grid(anchor)
+        dated = [
+            stamp
+            for listed in members.values()
+            for fields in listed
+            if (stamp := instant(fields)) is not None
+        ]
+        properties = anchors.iloc[position]
         rows.append(
             {
-                "id": name,
+                "anchor": anchor.id,
                 "parent": None,
-                "stack": name,
-                "times": times,
+                "sources": orjson.dumps(members).decode(),
+                "proj:code": str(grid.crs),
+                "proj:transform": list(grid.transform)[:6],
+                "proj:shape": [grid.shape[0], grid.shape[1]],
                 "start_datetime": min(dated) if dated else None,
                 "end_datetime": max(dated) if dated else None,
-                "crs": str(grid.crs),
-                "transform": list(grid.transform)[:6],
-                "row_off": 0,
-                "col_off": 0,
-                "height": grid.shape[0],
-                "width": grid.shape[1],
-                "geometry": grid.extent.to_crs("EPSG:4326").geom,
+                "geometry": properties.geometry,
+                **{
+                    str(key): value
+                    for key, value in properties.items()
+                    if key not in _STAC_FIELDS and not str(key).startswith("proj:")
+                },
             }
         )
     return cast(
@@ -105,22 +170,33 @@ def stacks(items: gpd.GeoDataFrame) -> GeoDataFrame:
     )
 
 
-def _grid(asset: pystac.Asset) -> GeoBox:
-    """Return the grid an asset's Projection fields state."""
-    stated = ProjectionExtension.ext(asset)
-    if stated.shape is None or stated.transform is None:
-        raise ValueError(f"{asset.href} states no grid to cut windows on")
-    crs = stated.code if stated.code is not None else stated.wkt2
-    return GeoBox(tuple(stated.shape), Affine(*stated.transform[:6]), crs)
+def _stripped(item: pystac.Item) -> dict[str, Any]:
+    """Keep what reading an Item needs, its hrefs absolute."""
+    fields = item.to_dict(include_self_link=False)
+    for key, asset in item.assets.items():
+        fields["assets"][key]["href"] = asset.get_absolute_href()
+    return {
+        "type": fields["type"],
+        "stac_version": fields["stac_version"],
+        "id": fields["id"],
+        "collection": fields.get("collection"),
+        "geometry": fields["geometry"],
+        "bbox": fields.get("bbox"),
+        "properties": {
+            key: value
+            for key, value in fields["properties"].items()
+            if key in _TIME_FIELDS and value is not None
+        },
+        "assets": fields["assets"],
+    }
 
 
-def _times(item: pystac.Item, asset: pystac.Asset) -> list[pd.Timestamp]:
-    """Return the time labels an asset's Datacube fields state, naive UTC."""
-    if not DatacubeExtension.has_extension(item):
-        return []
-    if "cube:dimensions" not in asset.extra_fields:
-        return []
-    time = DatacubeExtension.ext(asset).dimensions.get(TIME_COORDINATE)
-    if time is None:
-        return []
-    return list(pd.to_datetime(time.values, utc=True).tz_localize(None))
+def _grid(item: pystac.Item) -> GeoBox:
+    """Return the grid the anchor's first gridded asset states."""
+    for asset in item.assets.values():
+        stated = ProjectionExtension.ext(asset)
+        if stated.shape is not None and stated.transform is not None:
+            crs = stated.code if stated.code is not None else stated.wkt2
+            height, width = stated.shape
+            return GeoBox((height, width), Affine(*stated.transform[:6]), crs)
+    raise ValueError(f"{item.id} states no grid to cut windows on")

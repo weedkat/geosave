@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
@@ -15,20 +15,69 @@ from geosave_engine.geodata.conventions import TIME_COORDINATE, require_yx
 
 if TYPE_CHECKING:
     import geopandas as gpd
-    from collections.abc import Mapping, Sequence
+    import torch
+    from collections.abc import Callable, Mapping
 
     from odc.geo import CRS, BoundingBox, Resolution
     from odc.geo.gcp import GCPGeoBox
     from odc.geo.geobox import GeoBox
     from odc.geo.geom import Geometry
 
-    from geosave_engine.geodata.attrs import AttrsHeader, AttrsModel, AttrsNamespace
     from odc.geo import SomeResolution
 
     from geosave_engine.geodata.transform.warp import Resampling, Target
     from geosave_engine.geodata.utils.datetime import DateRange
 
     from .anchor import GeoAnchor
+
+
+def as_tensor(
+    to_numpy: Callable[..., np.ndarray], dtype: str | torch.dtype | None
+) -> torch.Tensor:
+    """Read an accessor's model-input array as a writable, contiguous tensor.
+
+    Args:
+        to_numpy: The accessor's own `to_numpy`, which fixes the axis order.
+        dtype: Torch dtype or its string name. None keeps the pixel dtype. A
+            dtype NumPy cannot hold, such as bfloat16, reads as float32 first.
+
+    Returns:
+        Tensor laid out as `to_numpy` lays out its array.
+
+    Raises:
+        ValueError: A dtype name is unknown.
+        TypeError: `dtype` is neither a torch dtype nor a name, or the pixel
+            dtype has no tensor equivalent.
+    """
+    # Imported here so that importing geodata never pays for torch.
+    import torch
+
+    if isinstance(dtype, str):
+        target = getattr(torch, dtype, None)
+        if not isinstance(target, torch.dtype):
+            raise ValueError(f"Unknown torch dtype {dtype!r}")
+    elif dtype is None or isinstance(dtype, torch.dtype):
+        target = dtype
+    else:
+        raise TypeError(f"{dtype!r} is not a torch dtype or the name of one")
+
+    # Read-only pixel buffers are copied, so tensor operations can safely write.
+    if target is None:
+        values = np.require(to_numpy(), requirements=["C", "W"])
+        try:
+            return torch.as_tensor(values)
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"Cannot convert numpy dtype {values.dtype} to a torch tensor"
+            ) from error
+
+    try:
+        reading = torch.empty(0, dtype=target).numpy().dtype
+    except TypeError:
+        reading = np.dtype("float32")
+    return torch.as_tensor(
+        np.require(to_numpy(dtype=reading), requirements=["C", "W"]), dtype=target
+    )
 
 
 class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
@@ -145,79 +194,6 @@ class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         return None if geobox is None else geobox.resolution
 
     @property
-    def attrs(self) -> AttrsHeader:
-        """Read the typed attrs this object carries.
-
-        Returns:
-            Detached header, reread on every access because xarray attrs are
-            mutable in place.
-        """
-        return attrs.create_header(self._data)
-
-    @overload
-    def rebase(
-        self,
-        *models: AttrsModel | AttrsHeader | AttrsNamespace,
-        target: str | Sequence[str] | None = None,
-        inplace: Literal[False] = False,
-        **model_kwargs: Mapping[str, Any] | None,
-    ) -> DataT: ...
-
-    @overload
-    def rebase(
-        self,
-        *models: AttrsModel | AttrsHeader | AttrsNamespace,
-        target: str | Sequence[str] | None = None,
-        inplace: Literal[True],
-        **model_kwargs: Mapping[str, Any] | None,
-    ) -> None: ...
-
-    def rebase(
-        self,
-        *models: AttrsModel | AttrsHeader | AttrsNamespace,
-        target: str | Sequence[str] | None = None,
-        inplace: bool = False,
-        **model_kwargs: Mapping[str, Any] | None,
-    ) -> DataT | None:
-        """Return a copy of this object carrying the supplied attrs, as `attrs.rebase`.
-
-        A DataTree writes only its root; groups are rebased through
-        `stack["<group>"].gs.rebase`.
-
-        Args:
-            *models: Model instances to apply to `target`, one `AttrsNamespace`
-                to patch onto it, or one `AttrsHeader` to restore.
-            target: Variable or coordinate name the models describe, or
-                several of them. None writes to the object's own attrs.
-            inplace: Write into this object rather than returning a new one.
-            **model_kwargs: Model name mapped to its field values, or to None
-                to drop that model.
-
-        Returns:
-            New object carrying the attrs without copying pixel data, or None
-            when `inplace` is set.
-
-        Raises:
-            KeyError: A keyword names no GeoSave attrs model.
-            ValueError: `target` names neither a variable nor a coordinate, or
-                an attrs value belongs to another scope than its target.
-            ValidationError: A supplied value does not satisfy its field.
-
-        Examples:
-            >>> ds.gs.rebase(ACDD(title="Sentinel-2 Level-2A"))
-            >>> ds.gs.rebase(cf_variable={"units": "1"}, target="B04")
-            >>> joined.gs.rebase(attrs.merge(rasters))
-        """
-        if inplace:
-            attrs.rebase(
-                self._data, *models, target=target, inplace=True, **model_kwargs
-            )
-            return None
-        return attrs.rebase(
-            self._data, *models, target=target, inplace=False, **model_kwargs
-        )
-
-    @property
     def timespan(self) -> DateRange | None:
         """Read inclusive temporal coverage.
 
@@ -234,9 +210,8 @@ class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         if TIME_COORDINATE not in coords:
             return None
         labels = coords[TIME_COORDINATE].values
-        # A merge that dropped a disagreeing cadence leaves the model behind.
-        spec = attrs.TimeSpec.from_attrs(coords[TIME_COORDINATE].attrs)
-        if spec is not None and spec.time_freq is not None:
+        spec = attrs.parse(coords[TIME_COORDINATE], attrs.TimeSpec)
+        if spec is not None:
             return spec.timespan(labels)
 
         covered = [
@@ -298,9 +273,9 @@ class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
             >>> ds.gs.unpack().B04.max().item()
             0.09
         """
-        from geosave_engine.geodata.transform import packing
+        from geosave_engine.geodata.transform import nodata
 
-        return packing.unpack(self._data)
+        return nodata.unpack(self._data)
 
     def mask_and_scale(self) -> DataT:
         """Decode stored nodata, scale, and offset into physical values.
@@ -317,9 +292,9 @@ class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
             >>> reflectance.red.dtype
             dtype('float32')
         """
-        from geosave_engine.geodata.transform import nodata, packing
+        from geosave_engine.geodata.transform import nodata
 
-        return packing.unpack(nodata.to_nan(self._data))
+        return nodata.unpack(nodata.to_nan(self._data))
 
     def mask(
         self, valid: xr.DataArray | np.ndarray, *, fill: float | int | None = None
@@ -427,6 +402,6 @@ class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
             >>> ds.gs.crop(field_boundaries)
             >>> ds.gs.crop(box(10, 10, 30, 30, "EPSG:32633"))
         """
-        from geosave_engine.geodata.transform import vector as vectors
+        from geosave_engine.geodata.transform.crop import crop
 
-        return vectors.crop(self._data, region, mask=mask)
+        return crop(self._data, region, mask=mask)

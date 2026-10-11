@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 import geopandas as gpd
-import numpy as np
+import orjson
 import pytest
-from odc.geo.geobox import GeoBox
+from shapely.geometry import box
 
+from geosave_engine.geodata import cuts
 from geosave_engine.model.spec import FramesSpec, ChipsSpec
 
 
-def _grid() -> GeoBox:
-    return GeoBox.from_bbox((0, 0, 80, 80), "EPSG:32748", resolution=10)
+def _windows() -> gpd.GeoDataFrame:
+    """One 50 by 70 window, as `cuts.stacks` lists it: s2 on four dates, a static label."""
+    dates = ["2024-03-01", "2024-03-11", "2024-03-21", "2024-03-31"]
+    sources = {
+        "label": [{"id": "label", "properties": {}}],
+        "s2": [
+            {"id": f"s2_{day}", "properties": {"datetime": f"{day}T00:00:00Z"}}
+            for day in dates
+        ],
+    }
+    return gpd.GeoDataFrame(
+        {
+            "anchor": ["label"],
+            "parent": [None],
+            "sources": [orjson.dumps(sources).decode()],
+            "proj:code": ["EPSG:32633"],
+            "proj:transform": [[10.0, 0.0, 300000.0, 0.0, -10.0, 5000500.0]],
+            "proj:shape": [[50, 70]],
+        },
+        geometry=[box(12.0, 45.0, 12.01, 45.01)],
+        crs="EPSG:4326",
+    )
 
 
 def test_a_square_size_names_both_sides():
@@ -28,63 +49,6 @@ def test_a_window_needs_overlapping_tiles():
         ChipsSpec(size=4, window="hann")
 
 
-def _windows() -> gpd.GeoDataFrame:
-    """One whole window over an 8 by 8 sample with a dated and a timeless group."""
-    grid = _grid()
-    return gpd.GeoDataFrame(
-        [
-            {
-                "id": "s0",
-                "parent": None,
-                "stack": "s0",
-                "times": {
-                    "s2": [
-                        f"2024-01-{day}T00:00:00" for day in ("01", "11", "21", "31")
-                    ],
-                    "dem": None,
-                },
-                "start_datetime": None,
-                "end_datetime": None,
-                "crs": "EPSG:32748",
-                "transform": list(grid.transform)[:6],
-                "row_off": 0,
-                "col_off": 0,
-                "height": 8,
-                "width": 8,
-                "geometry": grid.extent.to_crs("EPSG:4326").geom,
-            }
-        ],
-        geometry="geometry",
-        crs="EPSG:4326",
-    )
-
-
-def test_layout_is_native_and_only_needs_pixel_dimensions():
-    from tiler import Tiler
-
-    layout, halo = ChipsSpec(size=4, overlap=2, mode="constant").layout((8, 8))
-    assert isinstance(layout, Tiler)
-    assert tuple(layout.tile_shape) == (4, 4)
-    assert (layout.overlap, layout.mode) == (2, "constant")
-    assert halo == [(1, 1), (1, 1)]
-    assert layout.get_tile(np.zeros(tuple(layout.data_shape)), 0).shape == (4, 4)
-
-
-def test_frames_are_cut_as_declared():
-    cut = FramesSpec(length=2, tolerance="1D").cut(_windows())
-
-    assert cut["id"].tolist() == ["s0/frame-0", "s0/frame-1"]
-    assert [len(times["s2"]) for times in cut["times"]] == [2, 2]
-    assert all(times["dem"] is None for times in cut["times"])
-
-
-def test_chips_are_cut_as_declared():
-    cut = ChipsSpec(size=4).cut(_windows())
-
-    assert cut["chip"].tolist() == [0, 1, 2, 3]
-    assert set(zip(cut["height"], cut["width"], strict=True)) == {(4, 4)}
-
-
 @pytest.mark.parametrize(
     "window", ["hann", "bartlett", "barthann", "bohman", "blackman", "overlap-tile"]
 )
@@ -98,3 +62,30 @@ def test_taper_rejects_single_pixel_overlap_that_leaves_seams(window):
 )
 def test_positive_edge_windows_allow_single_pixel_overlap(window):
     assert ChipsSpec(size=8, overlap=1, window=window).overlap == 1
+
+
+def test_a_chip_spec_cannot_wrap():
+    with pytest.raises(ValueError, match="wrap"):
+        ChipsSpec(size=8, overlap=2, mode="wrap")
+
+
+def test_frames_cut_as_the_spec_declares():
+    spec = FramesSpec(length=2, stride=1, tolerance="1D", mode="drop")
+
+    cut = spec.cut(_windows())
+
+    expected = cuts.frames(_windows(), 2, tolerance="1D", stride=1, mode="drop")
+    assert cut.equals(expected)
+    assert cut["parent"].tolist() == [0, 0, 0]
+
+
+def test_chips_cut_and_lay_out_as_the_spec_declares():
+    spec = ChipsSpec(size=[25, 35], overlap=4, mode="edge")
+
+    cut = spec.cut(_windows())
+    tiler, halo = spec.layout((50, 70))
+
+    expected = cuts.chips(_windows(), (25, 35), overlap=4, mode="edge")
+    assert cut.equals(expected)
+    assert len(tiler) == len(cut)
+    assert halo == cuts.layout((50, 70), (25, 35), overlap=4, mode="edge")[1]

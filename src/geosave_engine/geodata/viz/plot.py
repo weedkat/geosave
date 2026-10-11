@@ -24,7 +24,9 @@ from matplotlib.colors import ListedColormap
 from geosave_engine.geodata.utils.color import parse_color
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
+
+    import panel as pn
 
     from geosave_engine.geodata.utils.color import Palette
 
@@ -338,13 +340,58 @@ def classes(
         clim=(-0.5, len(codes) - 0.5),
         colorbar=True,
     )
+    # The backends name colorbar ticks differently.
+    ticks_option = "cticks" if hv.Store.current_backend == "bokeh" else "cbar_ticks"
     # A bare list of colours breaks matplotlib's GridSpace.
     styled = drawn.opts(
         hv.opts.Image(
             aspect="equal",
             cmap=ListedColormap(hexes),
             color_levels=len(codes),
-            cbar_ticks=ticks,
+            **{ticks_option: ticks},
         )
     )
     return _captioned(styled, array, cols=cols, title=title, xlabel=xlabel)
+
+
+def explore[T: xr.Dataset | xr.DataArray](
+    data: T, draw: Callable[[T], hv.Element | hv.NdLayout], *, alpha: float
+) -> pn.pane.HoloViews:
+    """Draw one date of a raster over OpenStreetMap, rendered with bokeh.
+
+    Static plots stay on matplotlib; the map is built while bokeh is the
+    current backend, so every option lands on the backend that draws tiles.
+
+    Args:
+        data: Georeferenced raster or band holding at most one date.
+        draw: Draws the raster once it is on the Web Mercator grid.
+        alpha: Opacity of the raster over the tiles.
+
+    Returns:
+        Pane drawing the raster over the tiles with bokeh.
+
+    Raises:
+        ValueError: `data` holds more than one date.
+    """
+    import holoviews.plotting.bokeh  # noqa: F401  — registers the bokeh renderer
+    import panel as pn
+
+    if TIME_COORDINATE in data.dims:
+        if data.sizes[TIME_COORDINATE] > 1:
+            raise ValueError(
+                f"a map shows one date, and this raster holds "
+                f"{data.sizes[TIME_COORDINATE]}; select one with .isel(time=0)"
+            )
+        data = data.isel({TIME_COORDINATE: 0})
+    # Web map tiles are drawn in Web Mercator; this copy is for display only.
+    web = data.gs.reproject("EPSG:3857")
+
+    previous = hv.Store.current_backend
+    hv.Store.set_current_backend("bokeh")
+    try:
+        # One date draws one panel, never a layout of several.
+        drawn = cast("hv.Element", draw(web))
+        overlay = hv.element.tiles.OSM() * drawn.opts(alpha=alpha)
+    finally:
+        hv.Store.set_current_backend(previous)
+    return pn.pane.HoloViews(overlay, backend="bokeh")

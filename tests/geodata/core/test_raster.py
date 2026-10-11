@@ -8,200 +8,64 @@ import pandas as pd
 import pytest
 import xarray as xr
 from odc.geo import CRS
-from odc.geo.geobox import GeoBox
 
 from geosave_engine.geodata import GeoArray, GeoRaster, GeoStack
-from geosave_engine.geodata.attrs import (
-    ACDD,
-    GDALVariable,
-    Nodata,
-    Packing,
-    StackedAttrs,
-    rebase,
-)
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.geodata.io import gdal
 
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import build_raster, geobox
 
 UTM = "EPSG:32633"
 
 
-def test_raster_dimensions_do_not_depend_on_coordinate_order() -> None:
-    pixels = np.zeros((2, 3, 4, 5))
-    built = raster(
-        {"red": (("time", "depth", "y", "x"), pixels)},
-        coords={"depth": [1, 2, 3], "time": [0, 1]},
-    )
-
-    assert built.red.dims == ("time", "depth", "y", "x")
-    assert built.red.data is pixels
-
-
-def test_raster_explicit_dimensions_allow_unlabelled_and_static_axes() -> None:
-    built = raster(
-        {
-            "red": (("time", "y", "x"), np.zeros((2, 4, 5))),
-            "dem": (("y", "x"), np.ones((4, 5))),
-        }
-    )
-
-    assert built.red.dims == ("time", "y", "x")
-    assert built.dem.dims == ("y", "x")
-    assert "time" not in built.coords
-
-
-def test_raster_requires_dimensions_for_bare_arrays() -> None:
-    with pytest.raises(TypeError, match="dimensions"):
-        raster({"red": np.zeros((4, 5))})
-
-
-def test_raster_accepts_native_dataarrays_without_computing() -> None:
-    import dask.array as da
-
-    band = xr.DataArray(da.ones((4, 5), chunks=(2, 5)), dims=("y", "x"))
-    built = raster({"red": band})
-
-    assert built.red.data is band.data
-
-
 @pytest.mark.parametrize(
-    ("times", "split_bands", "count"),
+    ("times", "template", "count"),
     [
-        (0, False, 1),
-        (0, True, 2),
-        (1, False, 1),
-        (1, True, 2),
-        (2, False, 2),
-        (2, True, 4),
+        (0, "scene.tif", 1),
+        (0, "{band}.tif", 2),
+        (1, "scene.tif", 1),
+        (2, "{time:%Y%m%d}.tif", 2),
+        (2, "{time:%Y%m%d}_{band}.tif", 4),
     ],
 )
 def test_cog_export_returns_readable_files(
-    tmp_path: Path, times: int, split_bands: bool, count: int
+    tmp_path: Path, times: int, template: str, count: int
 ) -> None:
     written = build_raster(times=times)
 
-    paths = written.gs.to_cog(tmp_path / "scene.v2", split_bands=split_bands)
+    paths = [file.href for file in written.gs.to_cog(f"{tmp_path}/{template}")]
 
-    assert isinstance(paths, tuple)
     assert len(paths) == count
     for path in paths:
         with gdal.read(path) as restored:
             expected = written.sel(time=restored.time) if times else written
             assert restored.gs.geobox == written.gs.geobox
-            assert len(restored.data_vars) == (1 if split_bands else 2)
             for name in restored.data_vars:
                 np.testing.assert_array_equal(restored[name], expected[name])
 
 
-@pytest.mark.parametrize("suffix", [".tif", ".tiff", ".TIF"])
-def test_cog_export_refuses_a_path_that_names_a_tiff(
-    tmp_path: Path, suffix: str
+def test_cog_export_takes_fields_and_creation_options_as_keywords(
+    tmp_path: Path,
 ) -> None:
-    destination = tmp_path / f"scene{suffix}"
+    import rasterio
 
-    with pytest.raises(ValueError, match="io.geotiff.write_cog"):
-        build_raster().gs.to_cog(destination)
-    assert not destination.exists()
+    (file,) = build_raster().gs.to_cog(
+        f"{tmp_path}/{{prefix}}.tif", prefix="s2", compress="deflate"
+    )
+    path = Path(file.href)
+
+    assert path == tmp_path / "s2.tif"
+    with rasterio.open(path) as src:
+        assert src.compression.name.lower() == "deflate"
+
+
+def test_cog_export_refuses_a_path_that_is_not_a_tiff(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="end the path in .tif"):
+        build_raster().gs.to_cog(tmp_path / "scene")
 
 
 def test_to_cog_takes_no_id() -> None:
     assert "id" not in inspect.signature(GeoRaster.to_cog).parameters
-
-
-def geobox(*, crs: str = UTM, shape: tuple[int, int] = (8, 8)) -> GeoBox:
-    """Build one grid for a raster-construction test.
-
-    Args:
-        crs: CRS the grid sits in.
-        shape: Grid height and width in pixels.
-
-    Returns:
-        Grid of `shape` at ten-unit pixels.
-    """
-    left, bottom = 300_000.0, 5_000_000.0
-    return GeoBox.from_bbox(
-        (left, bottom, left + shape[1] * 10, bottom + shape[0] * 10),
-        crs=crs,
-        shape=shape,
-        tight=True,
-    )
-
-
-def test_raster_places_arrays_and_conforms_them() -> None:
-    box = geobox()
-
-    built = raster({"red": (("y", "x"), np.zeros(box.shape, "uint16"))}, box)
-
-    assert built.gs.geobox == box
-    assert built.gs.variables == ("red",)
-    assert built.y.attrs["standard_name"] == "projection_y_coordinate"
-
-
-def test_raster_names_leading_dims_and_labels_them() -> None:
-    box = geobox()
-    times = pd.date_range("2024-01-01", periods=2, freq="MS")
-
-    built = raster(
-        {
-            "red": (
-                ("time", *("y", "x")),
-                np.zeros((2, *box.shape), "uint16"),
-            )
-        },
-        box,
-        coords={"time": times},
-    )
-
-    assert built.red.dims == ("time", "y", "x")
-    assert built.gs.timespan is not None
-
-
-def test_raster_leaves_an_unlabelled_leading_dim_alone() -> None:
-    box = geobox()
-
-    built = raster(
-        {
-            "probability": (
-                ("class", *("y", "x")),
-                np.zeros((3, *box.shape), "float32"),
-            )
-        },
-        box,
-    )
-
-    assert built.probability.dims == ("class", "y", "x")
-    assert "class" not in built.coords
-
-
-def test_raster_uses_y_x_for_a_geographic_grid() -> None:
-    built = raster(
-        {
-            "red": (
-                ("y", "x"),
-                np.zeros((4, 4), "uint16"),
-            )
-        },
-        geobox(crs="EPSG:4326", shape=(4, 4)),
-    )
-
-    assert built.red.dims == ("y", "x")
-
-
-def test_raster_without_a_geobox_stays_unplaced() -> None:
-    built = raster(
-        {
-            "band": (
-                ("y", "x"),
-                np.zeros((4, 4), "uint8"),
-            )
-        }
-    )
-
-    assert built.band.dims == ("y", "x")
-    assert not built.coords
-    assert built.gs.geobox is None
-    assert built.gs.crs_name is None
 
 
 def test_crs_name_stays_short_however_the_crs_was_built() -> None:
@@ -223,12 +87,13 @@ def test_crs_name_stays_short_however_the_crs_was_built() -> None:
     assert named.gs.crs_name == "unknown"
 
 
-def test_write_nodata_declares_it_under_both_names() -> None:
+def test_write_nodata_is_read_by_odc_too() -> None:
     box = geobox()
 
     built = raster({"red": (("y", "x"), np.zeros(box.shape, "uint16"))}, box, nodata=0)
 
-    assert built.gs.attrs.data_vars["red"].get(Nodata).fill_value == 0
+    assert built.red.attrs["_FillValue"] == 0
+    assert built.red.gs.nodata == 0
     assert built.red.odc.nodata == 0
 
 
@@ -251,103 +116,43 @@ def test_raster_keeps_pixels_untouched() -> None:
     assert built.red.dtype == np.dtype("float32")
 
 
-def test_to_array_drops_per_band_gdal_identity() -> None:
+def test_to_array_keeps_what_every_band_states_alike() -> None:
     box = geobox()
     built = raster(
         {
             "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
             "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
-            "B02": (("y", "x"), np.zeros(box.shape, "uint16")),
         },
         box,
+    ).gs.write_packing(1e-4)
+    built = built.assign(
+        B04=built.B04.assign_attrs(long_name="red"), B03=built.B03.assign_attrs(long_name="green")
     )
-    for name, colour in (("B04", "red"), ("B03", "green"), ("B02", "blue")):
-        built = rebase(
-            built,
-            GDALVariable(variable_name=name, colorinterp=colour),
-            Packing(scale_factor=1e-4),
-            target=name,
-        )
 
     stacked = built.gs.to_array()
 
-    assert stacked.band.values.tolist() == ["B04", "B03", "B02"]
-    assert stacked.attrs["scale_factor"] == pytest.approx(1e-4)
-    assert "variable_name" not in stacked.attrs
-    assert "colorinterp" not in stacked.attrs
-    band_attrs = stacked.gs.attrs.coords["band"].get(StackedAttrs)
-    assert band_attrs is not None
-    assert band_attrs.variable_attrs["B04"]["colorinterp"] == "red"
+    assert stacked.band.values.tolist() == ["B04", "B03"]
+    assert stacked.attrs == {"scale_factor": pytest.approx(1e-4)}
 
 
-def test_to_raster_restores_what_to_array_stacked() -> None:
+def test_to_raster_gives_every_band_the_arrays_attrs() -> None:
     box = geobox()
-    built = rebase(
-        raster(
-            {
-                "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
-                "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
-            },
-            box,
-        ),
-        ACDD(title="Sentinel-2 Level-2A"),
-    )
-    built = rebase(
-        built,
-        GDALVariable(variable_name="B04"),
-        Packing(scale_factor=1e-4),
-        target="B04",
-    )
-    built = rebase(
-        built,
-        GDALVariable(variable_name="B03"),
-        Packing(scale_factor=2e-4),
-        target="B03",
-    )
+    built = raster(
+        {
+            "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
+            "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
+        },
+        box,
+    ).gs.write_nodata(0)
+    built.attrs = {"title": "S2"}
 
     split = built.gs.to_array().gs.to_raster()
 
-    assert split.attrs == built.attrs
-    for name in ("B04", "B03"):
-        assert split[name].attrs == built[name].attrs
+    assert split.attrs == {}
+    assert split.B04.attrs == split.B03.attrs == {"_FillValue": 0}
 
 
-def test_to_raster_restores_only_the_bands_still_carried() -> None:
-    box = geobox()
-    built = raster(
-        {
-            "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
-            "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
-        },
-        box,
-    )
-    built = rebase(built, GDALVariable(variable_name="B04"), target="B04")
-    built = rebase(built, GDALVariable(variable_name="B03"), target="B03")
-
-    split = built.gs.to_array().sel(band=["B04"]).gs.to_raster()
-
-    assert split.gs.variables == ("B04",)
-    assert split["B04"].attrs["variable_name"] == "B04"
-
-
-def test_band_round_trip_keeps_dataset_and_band_attrs_apart() -> None:
-    built = raster(
-        {"red": (("y", "x"), np.ones(geobox().shape, "float32"))},
-        geobox(),
-    )
-    built.attrs = {"units": "root-unit", "title": "original"}
-    built.red.attrs = {"units": "band-unit"}
-
-    stacked = built.gs.to_array()
-    assert stacked.attrs == {"units": "band-unit"}
-    stacked.attrs["title"] = "edited"
-    restored = stacked.gs.to_raster()
-
-    assert restored.attrs == {"units": "root-unit", "title": "original"}
-    assert restored.red.attrs == {"units": "band-unit", "title": "edited"}
-
-
-def test_band_stacking_merges_equivalent_nodata_spellings():
+def test_one_nodata_spelled_two_ways_stacks_as_one() -> None:
     source = raster(
         {
             "red": (("y", "x"), np.ones(geobox().shape, "int16")),
@@ -355,22 +160,31 @@ def test_band_stacking_merges_equivalent_nodata_spellings():
         },
         geobox(),
     )
-    source.attrs = {"title": "scene", "nodata": -9999}
     source.red.attrs = {"nodata": 0, "long_name": "red"}
     source.nir.attrs = {"_FillValue": 0, "long_name": "nir"}
 
-    stacked = source.gs.to_array()
+    assert source.gs.to_array().attrs == {"_FillValue": 0}
 
-    assert stacked.attrs == {"nodata": 0, "_FillValue": 0}
-    assert stacked.band.attrs["dataset_attrs"] == source.attrs
-    assert stacked.band.attrs["variable_attrs"] == {
-        "red": {"long_name": "red"},
-        "nir": {"long_name": "nir"},
-    }
-    restored = stacked.sel(band=["nir"]).gs.to_raster()
-    assert restored.attrs == source.attrs
-    assert list(restored.data_vars) == ["nir"]
-    assert restored.nir.attrs == {"long_name": "nir", "nodata": 0, "_FillValue": 0}
+
+def test_bands_with_different_nodata_stack_without_one() -> None:
+    source = raster(
+        {
+            "red": (("y", "x"), np.ones(geobox().shape, "int16")),
+            "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
+        },
+        geobox(),
+    )
+    source.red.attrs = {"_FillValue": 0, "units": "1"}
+    source.nir.attrs = {"_FillValue": -1, "units": "1"}
+
+    assert source.gs.to_array().attrs == {"units": "1"}
+
+
+def test_nan_nodata_stacks() -> None:
+    source = raster({"red": (("y", "x"), np.ones(geobox().shape, "float32"))}, geobox())
+    source.red.attrs = {"nodata": np.float32("nan")}
+
+    assert np.isnan(source.gs.to_array().gs.nodata)
 
 
 def test_statistics_reads_a_lazy_source_once() -> None:
@@ -399,11 +213,7 @@ def test_statistics_reads_a_lazy_source_once() -> None:
 
 def test_to_raster_names_an_unstacked_band_after_itself() -> None:
     box = geobox()
-    built = rebase(
-        raster({"B04": (("y", "x"), np.zeros(box.shape, "uint16"))}, box),
-        Packing(scale_factor=1e-4),
-        target="B04",
-    )
+    built = raster({"B04": (("y", "x"), np.zeros(box.shape, "uint16"))}, box).gs.write_packing(1e-4)
 
     split = built["B04"].gs.to_raster()
 
@@ -419,55 +229,6 @@ def test_to_raster_refuses_bands_it_cannot_name() -> None:
 
     with pytest.raises(ValueError, match="labels none of them"):
         stacked.drop_vars("band").gs.to_raster()
-
-
-def test_raster_refuses_no_arrays() -> None:
-    with pytest.raises(ValueError, match="at least one named array"):
-        raster({})
-
-
-def test_raster_refuses_arrays_on_different_shapes() -> None:
-    with pytest.raises(ValueError, match="conflicting sizes"):
-        raster(
-            {
-                "a": (
-                    ("y", "x"),
-                    np.zeros((8, 8)),
-                ),
-                "b": (
-                    ("y", "x"),
-                    np.zeros((4, 4)),
-                ),
-            }
-        )
-
-
-def test_raster_refuses_a_rank_that_does_not_match_dims() -> None:
-    box = geobox()
-
-    with pytest.raises(ValueError, match="Could not convert tuple"):
-        raster({"a": (("y", "x"), np.zeros((3, *box.shape)))}, box)
-
-
-def test_raster_refuses_trailing_axes_off_the_grid() -> None:
-    with pytest.raises(ValueError, match="geobox"):
-        raster({"a": (("y", "x"), np.zeros((4, 4)))}, geobox())
-
-
-def test_raster_refuses_a_coord_of_the_wrong_length() -> None:
-    box = geobox()
-
-    with pytest.raises(ValueError, match="conflicting sizes"):
-        raster(
-            {
-                "a": (
-                    ("class", *("y", "x")),
-                    np.zeros((3, *box.shape)),
-                )
-            },
-            box,
-            coords={"class": [1, 2]},
-        )
 
 
 def test_statistics_summarise_only_the_present_pixels() -> None:
@@ -521,14 +282,13 @@ def test_raster_statistics_tabulate_each_variable_as_its_band_does() -> None:
     pd.testing.assert_frame_equal(table.loc[["nir"]], built.nir.gs.statistics())
 
 
-def test_multiband_array_statistics_preserve_band_order_and_nodata() -> None:
+def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
     source = xr.Dataset(
         {
             "nir": (("y", "x"), [[0.0, 10.0, 20.0]]),
-            "red": (("y", "x"), [[-9999.0, 1.0, 3.0]]),
+            "red": (("y", "x"), [[0.0, 1.0, 3.0]]),
         }
-    ).gs.rebase(Nodata(fill_value=0), target="nir")
-    source = source.gs.rebase(Nodata(fill_value=-9999), target="red")
+    ).gs.write_nodata(0)
 
     table = source.gs.to_array().gs.statistics()
 
@@ -591,27 +351,6 @@ def test_statistics_refuse_a_band_holding_no_present_pixel() -> None:
         band.gs.statistics()
 
 
-def test_band_round_trip_keeps_dataset_root_nodata_as_a_foreign_attr():
-    source = raster(
-        {"red": (("y", "x"), np.ones(geobox().shape, "uint16"))},
-        geobox(),
-    )
-    source.attrs = {"nodata": -9999}
-    source.red.attrs = {"nodata": 0}
-    restored = source.gs.to_array().gs.to_raster()
-    assert restored.gs.attrs.root.get(Nodata) is None
-    assert restored.attrs == {"nodata": -9999}
-    assert restored.red.gs.attrs.root.get(Nodata).fill_value == 0
-
-
-def test_band_stacking_stores_root_values_in_their_json_spelling():
-    from pathlib import Path
-
-    source = raster({"red": (("y", "x"), np.ones(geobox().shape))}, geobox())
-    source.attrs = {"source_path": Path("local.tif")}
-    assert source.gs.to_array().gs.to_raster().attrs == {"source_path": "local.tif"}
-
-
 def test_an_edit_on_the_stacked_array_reaches_every_band():
     source = raster(
         {
@@ -619,59 +358,9 @@ def test_an_edit_on_the_stacked_array_reaches_every_band():
             "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
         },
         geobox(),
-    )
-    source.red.attrs = {"nodata": 0, "units": "1"}
-    source.nir.attrs = {"nodata": 0, "units": "1"}
-    stacked = rebase(source.gs.to_array(), Nodata(fill_value=-1))
-    restored = stacked.gs.to_raster()
-    assert restored.red.gs.attrs.root.get(Nodata).fill_value == -1
-    assert restored.nir.gs.attrs.root.get(Nodata).fill_value == -1
-
-
-def test_bands_with_different_nodata_round_trip():
-    source = raster(
-        {
-            "red": (("y", "x"), np.ones(geobox().shape, "int16")),
-            "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
-        },
-        geobox(),
-    )
-    source.red.attrs = {"nodata": 0, "units": "1"}
-    source.nir.attrs = {"nodata": -1, "units": "1"}
-    source.attrs = {"title": "S2"}
-    stacked = source.gs.to_array()
-    assert stacked.attrs == {"units": "1"}
-    restored = stacked.gs.to_raster()
-    assert restored.red.attrs == {"nodata": 0, "_FillValue": 0, "units": "1"}
-    assert restored.nir.attrs == {"nodata": -1, "_FillValue": -1, "units": "1"}
-    assert restored.attrs == {"title": "S2"}
-
-
-def test_an_array_without_stacked_attrs_gives_its_attrs_to_every_band():
-    array = xr.DataArray(
-        np.zeros((2, 2, 2), "int16"),
-        dims=("band", "y", "x"),
-        coords={"band": ["red", "nir"]},
-        attrs={"nodata": 0},
-    )
-    restored = array.gs.to_raster()
-    assert restored.attrs == {}
-    assert restored.red.attrs == {"nodata": 0, "_FillValue": 0}
-    assert restored.nir.attrs == {"nodata": 0, "_FillValue": 0}
-
-
-def test_stacking_preserves_nan_nodata_at_each_scope():
-    source = raster(
-        {"red": (("y", "x"), np.ones(geobox().shape, "float32"))},
-        geobox(),
-    )
-    source.attrs = {"nodata": np.nan}
-    source.red.attrs = {"nodata": np.float32("nan")}
-    stacked = source.gs.to_array()
-    assert np.isnan(stacked.gs.attrs.root.get(Nodata).fill_value)
-    restored = stacked.gs.to_raster()
-    assert np.isnan(restored.attrs["nodata"])
-    assert np.isnan(restored.red.gs.attrs.root.get(Nodata).fill_value)
+    ).gs.write_nodata(0)
+    restored = source.gs.to_array().gs.write_nodata(-1).gs.to_raster()
+    assert restored.gs.nodata == {"red": -1, "nir": -1}
 
 
 def test_write_crs_replaces_grid_coordinate_attrs_and_keeps_the_root() -> None:
@@ -693,56 +382,6 @@ def test_write_crs_keeps_a_one_pixel_grid() -> None:
     )
 
     assert built.gs.write_crs().odc.geobox == built.odc.geobox
-
-
-def test_array_builds_the_band_raster_would() -> None:
-    from geosave_engine.geodata.core.array import array
-
-    pixels = np.ones((2, *geobox().shape), "int16")
-    labels = pd.date_range("2024-01-01", periods=2)
-
-    band = array(
-        pixels,
-        geobox(),
-        dims=("time", *("y", "x")),
-        coords={"time": labels},
-        nodata=0,
-    )
-    variable = raster(
-        {
-            "a": (
-                ("time", *("y", "x")),
-                pixels,
-            )
-        },
-        geobox(),
-        coords={"time": labels},
-        nodata=0,
-    )["a"]
-
-    assert band.name is None
-    xr.testing.assert_identical(band, variable.rename(None))
-
-
-@pytest.mark.parametrize(
-    ("pixels", "dims", "coords", "message"),
-    [
-        (np.ones((8, 8)), ("time", "y", "x"), {"time": [0]}, "Could not convert tuple"),
-        (np.ones((2, 8, 8)), ("time", "y", "x"), {"time": [0]}, "conflicting sizes"),
-        (np.ones((4, 4)), ("y", "x"), {}, "geobox"),
-        (np.ones((8, 8)), ("y", "x"), {"x": range(8)}, "already supplies"),
-    ],
-)
-def test_array_refuses_what_raster_refuses(pixels, dims, coords, message) -> None:
-    from geosave_engine.geodata.core.array import array
-
-    with pytest.raises(ValueError, match=message):
-        array(
-            pixels,
-            geobox(),
-            dims=dims,
-            coords=coords,
-        )
 
 
 @pytest.mark.parametrize(
@@ -776,49 +415,82 @@ def test_writers_that_name_nothing_take_no_id(writer) -> None:
     assert "id" not in inspect.signature(writer).parameters
 
 
-@pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857"])
-def test_constructor_spatial_names_preserve_cf_grid_through_netcdf(
-    tmp_path: Path, crs: str
-) -> None:
-    import dask.array as da
-    from affine import Affine
-
-    grid = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), crs)
-    pixels = da.ones((2, 3), chunks=(1, 3))
-    built = raster({"red": (("y", "x"), pixels)}, grid)
-
-    assert built.red.data is pixels
-    assert built.red.dims == ("y", "x")
-    assert built.gs.write_crs().red.dims == ("y", "x")
-    assert built.y.attrs["axis"] == "Y"
-    assert built.x.attrs["axis"] == "X"
-    if crs == "EPSG:4326":
-        assert built.y.attrs["standard_name"] == "latitude"
-        assert built.x.attrs["standard_name"] == "longitude"
-        assert built.y.attrs["units"] == "degrees_north"
-        assert built.x.attrs["units"] == "degrees_east"
-    else:
-        assert built.y.attrs["standard_name"] == "projection_y_coordinate"
-        assert built.x.attrs["standard_name"] == "projection_x_coordinate"
-
-    path = tmp_path / "grid.nc"
-    built.to_netcdf(path)
-    with xr.open_dataset(path, decode_coords="all") as restored:
-        assert restored.red.dims == ("y", "x")
-        assert restored.odc.geobox == grid
-        assert restored.rio.crs.to_epsg() == int(crs.split(":")[1])
-        assert (restored.rio.y_dim, restored.rio.x_dim) == ("y", "x")
-        xr.testing.assert_equal(restored.red, built.red.compute())
-
-
 def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
+    from geosave_engine.geodata.io.vector import stac_geoparquet
     from geosave_engine.geodata.stac import create_items
 
     band = build_raster(times=2)["red"].isel(time=0)
-    path = band.gs.to_cog(tmp_path / "red.tif")
+    (file,) = band.gs.to_cog(tmp_path / "red.tif")
 
-    (item,) = create_items(path)
+    (item,) = stac_geoparquet.to_items(create_items([file]))
 
     assert item.id == "red"
     assert list(item.assets) == ["red"]
-    assert item.assets["red"].href == str(path)
+    assert item.assets["red"].href == file.href
+
+
+def _classes() -> xr.Dataset:
+    box = geobox()
+    codes = np.zeros(box.shape, "uint8")
+    return raster({"label": (("y", "x"), codes), "other": (("y", "x"), codes)}, box)
+
+
+NAMES = {0: "water", 1: "trees"}
+COLORS = {0: "#419bdf", 1: "#397d49"}
+
+
+def test_write_legend_names_and_colours_each_class() -> None:
+    labelled = _classes().gs.write_legend(NAMES, COLORS, target="label")
+
+    legend = labelled.label.gs.legend
+    assert legend.classes == NAMES
+    assert legend.color_map == COLORS
+    assert labelled.other.gs.legend is None
+
+
+def test_write_legend_without_colours_names_the_classes() -> None:
+    labelled = _classes().gs.write_legend(NAMES, target="label")
+
+    assert labelled.label.gs.legend.classes == NAMES
+
+
+def test_write_legend_defaults_to_every_variable() -> None:
+    labelled = _classes().gs.write_legend(NAMES)
+
+    assert all(
+        labelled[name].gs.legend.classes == NAMES
+        for name in ("label", "other")
+    )
+
+
+def test_write_legend_refuses_a_variable_it_does_not_hold() -> None:
+    with pytest.raises(KeyError):
+        _classes().gs.write_legend(NAMES, target="missing")
+
+
+def test_a_band_writes_its_own_legend() -> None:
+    band = _classes()["label"].gs.write_legend(NAMES, COLORS)
+
+    assert band.gs.legend.classes == NAMES
+
+
+def test_a_written_legend_survives_a_geotiff_round_trip(tmp_path: Path) -> None:
+    from geosave_engine.geodata.io import geotiff
+
+    labelled = _classes()[["label"]].gs.write_legend(NAMES, COLORS)
+
+    restored = gdal.read(geotiff.write_cog(labelled, tmp_path / "label.tif"))
+
+    assert restored.label.gs.legend.classes == NAMES
+
+
+def test_a_dated_band_writes_through_the_raster_template(tmp_path: Path) -> None:
+    band = build_raster(times=2)["red"]
+
+    paths = band.gs.to_cog(f"{tmp_path}/red_{{time:%Y%m%d}}.tif")
+
+    assert [Path(f.href) for f in paths] == [
+        tmp_path / "red_20250601.tif",
+        tmp_path / "red_20250602.tif",
+    ]
+

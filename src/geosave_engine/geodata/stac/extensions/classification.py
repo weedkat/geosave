@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-from typing import cast
+from typing import Any, cast
 
 import pystac
 import xarray as xr
 from pystac.extensions.classification import Classification, ClassificationExtension
 from pystac.extensions.raster import RasterBand, RasterExtension
 
-from geosave_engine.geodata.attrs import AttrsModel, Legend
+import geosave_engine.geodata.attrs as attrs
 from geosave_engine.geodata.utils.color import parse_color
 
 # What the schema lets a class be named.
@@ -25,7 +25,7 @@ def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
 
     Args:
         asset: Asset already added to its Item, carrying its Raster bands.
-        raster: Raster as `read_raster` opens it. A variable with no legend,
+        raster: Raster as `open_raster` opens it. A variable with no legend,
             or one that lists bit masks, writes nothing.
 
     Raises:
@@ -37,52 +37,54 @@ def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
         >>> ClassificationExtension.ext(band).classes[1].name
         'forest'
     """
-    header = raster.gs.attrs
     bands = RasterExtension.ext(asset).bands or []
     for name, band in zip(raster.gs.variables, bands, strict=True):
-        legend = header.data_vars[name].get(Legend)
+        legend = raster[name].gs.legend
         # CF masks do not state the bit offset, length and names a STAC bitfield needs.
-        if legend is None or legend.class_map is None or legend.flag_masks is not None:
+        if legend is None or legend.classes is None or legend.flag_masks is not None:
             continue
         ClassificationExtension.ext(band).apply(classes=_classes(legend))
         # A band has no owner to declare the schema on.
         ClassificationExtension.add_to(cast("pystac.Item", asset.owner))
 
 
-def read(band: RasterBand) -> list[AttrsModel]:
-    """Read the legend one Raster band's classes state.
+def read(band: RasterBand) -> dict[str, Any]:
+    """Read the CF flag attrs one Raster band's classes state.
 
     Args:
         band: One band of an asset's Raster listing.
 
     Returns:
-        One `Legend` naming each class and its colour hint. Empty where the
-        band lists no classes.
+        The legend as `flag_values`, `flag_meanings` and, where classes carry
+        colour hints, `color_map`. Empty where the band lists no classes.
 
     Examples:
-        >>> (legend,) = read(RasterExtension.ext(asset).bands[0])
-        >>> legend.class_map
-        {0: 'background', 1: 'forest'}
+        >>> read(RasterExtension.ext(asset).bands[0])["flag_meanings"]
+        'background forest'
     """
     classes = ClassificationExtension.ext(band).classes
     if not classes:
-        return []
-    class_map = {entry.value: entry.name for entry in classes}
+        return {}
     colors = {
         entry.value: f"#{entry.color_hint}"
         for entry in classes
         if entry.color_hint is not None
     }
-    if colors:
-        return [Legend(class_map=class_map, color_map=colors)]
-    return [Legend(class_map=class_map)]
+    # `classes` is spelled into CF codes and names by Legend's own validator.
+    legend = attrs.Legend.model_validate(
+        {
+            "classes": {entry.value: entry.name for entry in classes},
+            "color_map": colors or None,
+        }
+    )
+    return legend.to_attrs()
 
 
-def _classes(legend: Legend) -> list[Classification]:
+def _classes(legend: attrs.Legend) -> list[Classification]:
     """Spell a legend's classes as Classification classes."""
     colors = legend.color_map or {}
     classes = []
-    for value, name in (legend.class_map or {}).items():
+    for value, name in (legend.classes or {}).items():
         if not _CLASS_NAME.fullmatch(name):
             raise ValueError(
                 f"class name {name!r} for value {value} carries a character STAC "

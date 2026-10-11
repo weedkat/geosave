@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
-from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, TypedDict, Unpack, Literal, cast, overload
 
 import xarray as xr
 import zarr
+from upath import UPath
 from dask.delayed import delayed
 from xarray.core.types import T_Chunks
 
-from geosave_engine.geodata.attrs import Nodata
 from geosave_engine.geodata.conventions import to_yx
-from ..storage import absolute_location, is_local, local_path
+from ..storage import Location, absolute_location, location, openable
 
 
 if TYPE_CHECKING:
-    from os import PathLike
-
     from dask.delayed import Delayed
 
     from geosave_engine.geodata import Dataset
@@ -67,7 +64,7 @@ class ZarrWriteOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     *,
     chunks: ZarrChunkSpec = None,
     mask_and_scale: bool = False,
@@ -76,7 +73,7 @@ def read(
     """Open a Zarr store as a raster Dataset.
 
     Args:
-        source: Local Zarr path or URI.
+        source: Local Zarr path, fsspec URL, or UPath.
         chunks: Chunk configuration for the opened arrays.
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
@@ -96,20 +93,24 @@ def read(
         dtype('uint16')
     """
     options: dict[str, Any] = dict(open_options)
+    store = location(source, options.pop("storage_options", None))
+    # zarr refuses storage_options for a local path, so only a URL passes them.
+    remote_options = dict(store.storage_options) or None
     options.setdefault("consolidated", False)
     # A grid mapping variable is a coordinate; the CF default leaves it a data variable.
     options.setdefault("decode_coords", "all")
     opened = xr.open_dataset(
-        source,
+        openable(store),
         engine="zarr",
         chunks=chunks,
         mask_and_scale=mask_and_scale,
+        storage_options=remote_options,
         **options,
     )
     try:
         cube = to_yx(_in_written_order(opened))
         group = zarr.open_group(
-            source, mode="r", storage_options=options.get("storage_options")
+            openable(store), mode="r", storage_options=remote_options
         )
         cube.encoding["zarr"] = {
             "zarr_format": group.metadata.zarr_format,
@@ -166,18 +167,18 @@ def _in_written_order(ds: xr.Dataset) -> xr.Dataset:
 @overload
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: Literal[True] = True,
     overwrite: bool = False,
     **write_options: Unpack[ZarrWriteOptions],
-) -> Path | str: ...
+) -> UPath: ...
 
 
 @overload
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: Literal[False],
     overwrite: bool = False,
@@ -187,12 +188,12 @@ def write(
 
 def write(
     raster: xr.Dataset,
-    destination: str | PathLike[str],
+    destination: Location,
     *,
     compute: bool = True,
     overwrite: bool = False,
     **write_options: Unpack[ZarrWriteOptions],
-) -> Path | str | Delayed:
+) -> UPath | Delayed:
     """Write a raster to a Zarr store.
 
     A Zarr group records no member order, so a Dataset's variable order
@@ -200,7 +201,7 @@ def write(
 
     Args:
         raster: Raster Dataset.
-        destination: Output path or fsspec URL ending in `.zarr`.
+        destination: Output path, fsspec URL, or UPath ending in `.zarr`.
         compute: False returns a delayed write instead of writing now.
         overwrite: Replace an existing destination when true.
         **write_options: Supported xarray Zarr write options.
@@ -215,7 +216,7 @@ def write(
 
     Examples:
         >>> write(raster, "scene.zarr")
-        PosixPath('scene.zarr')
+        PosixUPath('scene.zarr')
     """
     if not isinstance(raster, xr.Dataset):
         raise TypeError(
@@ -223,19 +224,18 @@ def write(
             f"write a stack with its own gs.to_zarr"
         )
 
-    name = PurePosixPath(str(destination)).name
-    if PurePosixPath(name).suffix != _STORE_SUFFIX:
-        raise ValueError(f"destination {name!r} must end in {_STORE_SUFFIX!r}")
-    # A URL passes to xarray as written; `Path` would fold its `scheme://`.
-    if is_local(destination):
-        path: Path | str = local_path(destination)
-    else:
-        path = str(destination)
+    options: dict[str, Any] = dict(write_options)
+    store = location(destination, options.pop("storage_options", None))
+    if store.suffix != _STORE_SUFFIX:
+        raise ValueError(f"destination {store.name!r} must end in {_STORE_SUFFIX!r}")
+    path = openable(store)
+    # zarr refuses storage_options for a local path, so only a URL passes them.
+    if store.storage_options:
+        options["storage_options"] = dict(store.storage_options)
 
     # A Zarr group records no member order, so the raster's own travels in attrs.
     raster = _recording_order(raster)
 
-    options: dict[str, Any] = dict(write_options)
     # A Zarr array holds its own fill value, which is what a GDAL reader masks on.
     options["encoding"] = {
         **fill_encoding(raster),
@@ -252,11 +252,11 @@ def write(
             compute=False,
             **options,
         )
-        return delayed(lambda _: path)(written)
+        return delayed(lambda _: store)(written)
     raster.to_zarr(
         path, mode=mode, zarr_format=_STORE_ZARR_FORMAT, compute=True, **options
     )
-    return path
+    return store
 
 
 def fill_encoding(raster: xr.Dataset) -> dict[str, dict[str, Any]]:
@@ -283,11 +283,11 @@ def fill_encoding(raster: xr.Dataset) -> dict[str, dict[str, Any]]:
     """
     declared: dict[str, dict[str, Any]] = {}
     for name, variable in raster.data_vars.items():
-        nodata = Nodata.from_attrs(variable.attrs)
-        if nodata is not None and nodata.fill_value is not None:
+        fill = variable.gs.nodata
+        if fill is not None:
             # xarray consumes coordinates before backend options, but grid_mapping after.
             encoding = variable.encoding
-            declared[str(name)] = {"fill_value": nodata.fill_value}
+            declared[str(name)] = {"fill_value": fill}
             if "grid_mapping" in encoding:
                 declared[str(name)]["grid_mapping"] = encoding["grid_mapping"]
     return declared

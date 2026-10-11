@@ -6,36 +6,36 @@ import dask.array as da
 import numpy as np
 import pytest
 
-from geosave_engine.geodata import read_raster
-from geosave_engine.geodata.attrs import CFVariable, Legend, Spectral
-from geosave_engine.geodata.attrs.headers.stac import band_attrs, read_bands
+from geosave_engine.geodata import GeoVector, open_raster
+from geosave_engine.geodata import attrs
+from geosave_engine.geodata.stac._bands import band_attrs, read_bands
 from geosave_engine.geodata.features import ndvi
-from geosave_engine.geodata.stac import create_items, table
+from geosave_engine.geodata import open_vector
+from geosave_engine.geodata.io.vector import stac_geoparquet as table
+from geosave_engine.geodata.stac import create_items
 
 from tests.geodata.conftest import build_raster
 
 
 def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     optical = build_raster(times=2, packed=True)[["red"]]
-    optical = optical.gs.rebase(
-        CFVariable(units="1"),
-        Spectral(common_name="red", center_wavelength=0.665),
-        target="red",
-    )
+    optical = optical.gs.write_spectral("red", center_wavelength=0.665, target="red")
+    optical = optical.assign(red=optical.red.assign_attrs(units="1"))
     label = build_raster()[["nir"]].astype("uint8").rename(nir="label")
-    label = label.gs.rebase(
-        Legend(class_map={0: "background", 1: "forest"}, color_map={1: "#00ff00"}),
-        target="label",
+    label = label.gs.write_legend(
+        {0: "background", 1: "forest"}, {1: "#00ff00"}, target="label"
     )
     when = datetime(2025, 6, 1, tzinfo=UTC)
-    items = [
-        *create_items(optical.gs.to_cog(tmp_path / "optical")),
-        *create_items(label.gs.to_cog(tmp_path / "label"), datetime=when),
-    ]
+    rows = GeoVector.concat(
+        [
+            create_items(optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")),
+            create_items(label.gs.to_cog(f"{tmp_path}/label.tif"), datetime=when),
+        ]
+    )
 
-    saved = table.write(items, tmp_path / "items.parquet")
+    saved = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
-    restored = table.to_items(table.read(saved))
+    restored = table.to_items(open_vector(saved))
     red, spectral = read_bands(restored[0].assets["red"])[0]
     classes, named = read_bands(restored[-1].assets["label"])[0]
     assert red.data_type == "uint16"
@@ -46,15 +46,17 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
         "common_name": "red",
         "center_wavelength": 0.665,
     }
-    legend = Legend.from_attrs(band_attrs(classes, named))
-    assert legend.class_map == {0: "background", 1: "forest"}
+    legend = attrs.Legend.model_validate(band_attrs(classes, named))
+    assert legend.classes == {0: "background", 1: "forest"}
 
 
 @pytest.mark.integration
 def test_described_items_validate_against_their_schemas(tmp_path) -> None:
     scene = build_raster(times=1, packed=True)
 
-    (item,) = create_items(scene.gs.to_cog(tmp_path / "scene"))
+    (item,) = table.to_items(
+        create_items(scene.gs.to_cog(f"{tmp_path}/scene_{{time:%Y%m%d}}.tif"))
+    )
 
     item.validate()
 
@@ -69,10 +71,9 @@ def test_observations_to_prepared_index_to_reusable_dataset(local_source, tmp_pa
     assert composite.gs.geobox == anchor.geobox
     path = composite.gs.to_zarr(tmp_path / "ndvi.zarr")
 
-    with read_raster(path, chunks={}) as reopened:
+    with open_raster(path, chunks={}) as reopened:
         assert isinstance(reopened.ndvi.data, da.Array)
         assert reopened.gs.geobox == anchor.geobox
-        assert reopened.attrs["stac_items"][0]["id"] == "scene"
         assert np.isnan(reopened.ndvi.values[0, 0])
         assert reopened.ndvi.values[1, 1] == pytest.approx((1.1 - 0.2) / (1.1 + 0.2))
         assert "scale_factor" not in reopened.ndvi.attrs

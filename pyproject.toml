@@ -75,6 +75,10 @@ dependencies = [
     "s3fs>=2026.3.0",
     "gcsfs>=2026.3.0",
     "rustac[arrow]>=0.9.17",
+    "jupyter-bokeh>=4.0",
+    "universal-pathlib>=0.3.10",
+    "typing-extensions>=4.13.0",
+    "segmentation-models-pytorch>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -136,8 +140,10 @@ exclude_lines = [
 [dependency-groups]
 dev = [
   "basedpyright>=1.40.1",
+  "ipykernel>=7.4.0",
   "ipywidgets>=8.1.8",
   "mypy>=1.0.0",
+  "nbclient>=0.11.0",
   "pre-commit>=3.8.0",
   "pytest>=8.3.5",
   "ruff>=0.15.10",

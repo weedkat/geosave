@@ -6,7 +6,7 @@ import dask.array as da
 from odc.geo.geobox import GeoBox
 import xarray as xr
 
-from geosave_engine.geodata.core.raster import raster
+from geosave_engine.geodata.core.constructors import raster
 from geosave_engine.model.spec import ModelSpec
 
 

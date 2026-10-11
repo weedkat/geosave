@@ -13,7 +13,9 @@ def _pyramid() -> list[torch.Tensor]:
 
 
 def test_one_logit_vector_comes_back_per_sample() -> None:
-    head = ClassificationHead(classes=["crop", "forest", "urban"], pyramid_channels=[8, 16])
+    head = ClassificationHead(
+        classes=["crop", "forest", "urban"], pyramid_channels=[8, 16]
+    )
 
     assert head.num_classes == 3
     assert head.forward_logits(_pyramid()).shape == (2, 3)
@@ -38,6 +40,8 @@ def test_a_repeated_class_is_refused() -> None:
 def test_the_head_ends_a_chain_under_its_registered_name() -> None:
     assert "CLASSIFICATION" in list_models("head")["head"]
 
-    chain = ModelChain(head=ClassificationHead(classes=["a", "b"], pyramid_channels=[8, 16]))
+    chain = ModelChain(
+        head=ClassificationHead(classes=["a", "b"], pyramid_channels=[8, 16])
+    )
 
     assert chain(pyramid=_pyramid()).shape == (2, 2)

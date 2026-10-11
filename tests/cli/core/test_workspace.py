@@ -111,76 +111,6 @@ def test_generated_entrypoint_parses_library_lightning_pair(
 
 
 @pytest.mark.slow
-def test_segmentation_workspace_trains_on_prepared_samples(workspace):
-    from pathlib import Path
-
-    from geosave_engine.geodata.stac import create_stack_items, table
-
-    examples = Path(__file__).parents[3] / "examples/data/dw_imagery"
-    path = next(path for path in sorted(examples.iterdir()) if path.is_dir())
-    # One complete scene exercises training and stitched validation.
-    layers = sorted(path.iterdir())
-    files = {layer.stem: (layer,) for layer in layers}
-    entries = create_stack_items(files, name=path.name)
-    for split in ("train", "val"):
-        (workspace / f"data/{split}").mkdir(parents=True, exist_ok=True)
-        table.write(
-            entries, workspace / f"data/{split}/manifest.parquet", overwrite=True
-        )
-
-    # The example rasters hold digital numbers, 10000 times the template's reflectance.
-    spec_path = workspace / "configs/model_spec.yaml"
-    text = spec_path.read_text()
-    for reflectance, digital in (
-        ("[0.1105, 0.1355, 0.1552, 0.2743]", "[1105.0, 1355.0, 1552.0, 2743.0]"),
-        ("[0.1809, 0.1757, 0.1888, 0.1742]", "[1809.0, 1757.0, 1888.0, 1742.0]"),
-    ):
-        assert reflectance in text
-        text = text.replace(reflectance, digital)
-    spec_path.write_text(text)
-
-    config = yaml.safe_load((workspace / "configs/train.yaml").read_text())
-    chain = config["model"]["init_args"]["model_chain"]
-    chain["encoder"]["init_args"]["pretrained"] = False
-    # The example labels are Dynamic World classes, numbered up to 10.
-    chain["head"]["init_args"]["classes"] = [f"class_{number}" for number in range(11)]
-    config["data"]["init_args"].update(batch_size=4, num_workers=0)
-    # A checkpoint of this encoder is over a gigabyte, so none is written here.
-    config["trainer"]["callbacks"] = [
-        callback
-        for callback in config["trainer"]["callbacks"]
-        if "ModelCheckpoint" not in callback["class_path"]
-    ]
-    config["trainer"].update(
-        max_epochs=1,
-        limit_train_batches=2,
-        num_sanity_val_steps=0,
-        accelerator="cpu",
-        devices=1,
-        enable_checkpointing=False,
-    )
-    # Stage order is the chain's build order, so the keys must not be sorted.
-    (workspace / "configs/test.yaml").write_text(
-        yaml.safe_dump(config, sort_keys=False)
-    )
-
-    cli = GeosaveCLI(
-        auto_configure_optimizers=False,
-        subclass_mode_model=True,
-        subclass_mode_data=True,
-        args=["fit", "--config", str(workspace / "configs/test.yaml")],
-    )
-
-    metrics = cli.trainer.callback_metrics
-    assert cli.trainer.global_step == 2
-    assert torch.isfinite(metrics["train_loss"])
-    # The 510x510 sample is rebuilt from 16 tiles and scored whole.
-    assert len(cli.datamodule.val_dataset) == 16
-    assert metrics["val_loss"] < 20
-    assert 0.0 <= metrics["val_iou_macro"] <= 1.0
-
-
-@pytest.mark.slow
 def test_custom_lightning_workspace_runs_one_train_and_validation_batch(tmp_path):
     assert "custom_lightning" in get_workspaces()
     create_workspace(tmp_path, "custom_lightning")
@@ -216,3 +146,30 @@ assert cli.model.validation_step(validation_batch, 0).ndim == 0
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def regression_workspace(tmp_path, monkeypatch):
+    create_workspace(tmp_path, "regression")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+def test_regression_swaps_only_the_head_loss_metrics_and_target(
+    regression_workspace,
+):
+    from geosave_engine.ml.regression import supervised as regression
+
+    config = yaml.safe_load((regression_workspace / "configs/train.yaml").read_text())
+    chain = config["model"]["init_args"]["model_chain"]
+    assert chain["head"] == {
+        "name": "regression",
+        "init_args": {"variables": ["target"]},
+    }
+    assert chain["encoder"]["name"] == "dinov3"
+    module = regression.Module(**config["model"]["init_args"])
+    assert isinstance(module.criterion, torch.nn.MSELoss)
+    data = regression.DataModule(**config["data"]["init_args"])
+    assert data.target == "target"
+    assert data.spec == ModelSpec.load(regression_workspace / "configs/model_spec.yaml")

@@ -5,40 +5,43 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+from upath import UPath
 
 
-import geosave_engine.geodata.attrs as attrs
-from geosave_engine.geodata.stac import create_stack_items
-from geosave_engine.geodata import read_raster, read_stack
+from geosave_engine.geodata.stac import create_items
+from geosave_engine.geodata import open_raster, open_stack
 from geosave_engine.geodata.core.stack import map_groups, stack as build_stack
 from geosave_engine.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import titled as _titled
 
 
-@pytest.mark.parametrize("times", [0, 2])
-@pytest.mark.parametrize("split_bands", [False, True])
+@pytest.mark.parametrize(
+    ("times", "template", "files"),
+    [
+        (0, "{collection}.tif", 1),
+        (0, "{collection}/{band}.tif", 2),
+        (2, "{collection}_{time:%Y%m%d}.tif", 2),
+        (2, "{collection}/{time:%Y%m%d}/{band}.tif", 4),
+    ],
+)
 def test_cog_export_retains_groups_with_repeated_band_names(
-    tmp_path: Path, times: int, split_bands: bool
+    tmp_path: Path, times: int, template: str, files: int
 ) -> None:
     image = build_raster(times=times)
     label = (image // 1000).astype("uint8")
     written = build_stack({"image.v2": image, "label.v1": label})
-    root = tmp_path / "scene"
-    root.mkdir()
-    unrelated = root / "unrelated.tif"
-    unrelated.touch()
 
-    saved = written.gs.to_cog(root, split_bands=split_bands)
+    saved = written.gs.to_cog(f"{tmp_path}/{template}")
 
-    assert isinstance(saved, dict)
-    assert list(saved) == ["image.v2", "label.v1"]
-    for group, paths in saved.items():
-        assert len(paths) == (times or 1) * (2 if split_bands else 1)
-        assert unrelated not in paths
+    assert list(dict.fromkeys(f.collection for f in saved)) == ["image.v2", "label.v1"]
+    for group in ("image.v2", "label.v1"):
+        paths = [Path(f.href) for f in saved if f.collection == group]
+        assert len(paths) == files
         source = written.gs.rasters[group]
         for path in paths:
-            assert group in str(path.relative_to(root))
+            assert group in str(path.relative_to(tmp_path))
             with gdal.read(path) as restored:
                 expected = source.sel(time=restored.time) if times else source
                 assert restored.gs.geobox == source.gs.geobox
@@ -47,27 +50,50 @@ def test_cog_export_retains_groups_with_repeated_band_names(
                     np.testing.assert_array_equal(restored[name], expected[name])
 
 
-def test_timeless_cog_groups_with_file_suffixes_do_not_collide(tmp_path: Path) -> None:
+def test_groups_sharing_a_path_refuse_before_writing(tmp_path: Path) -> None:
     image = build_raster()
-    label = (image // 1000).astype("uint8")
-    written = build_stack({"image": image, "image.tif": label, "image.TIFF": image})
+    written = build_stack({"image": image, "label": image})
 
-    saved = written.gs.to_cog(tmp_path)
+    with pytest.raises(
+        ValueError, match=r"2 layers would share .*scene\.tif; add \{collection\}"
+    ):
+        written.gs.to_cog(f"{tmp_path}/scene.tif")
+    assert not list(tmp_path.iterdir())
 
-    assert saved == {
-        "image": (tmp_path / "image.tif",),
-        "image.tif": (tmp_path / "image.tif.tif",),
-        "image.TIFF": (tmp_path / "image.TIFF.tif",),
-    }
-    with gdal.read(saved["image.tif"][0]) as restored:
-        np.testing.assert_array_equal(restored.red, label.red)
+
+def test_groups_take_a_template_each(tmp_path: Path) -> None:
+    written = build_stack({"optical": build_raster(times=2), "dem": build_raster()})
+
+    saved = written.gs.to_cog(
+        {
+            "optical": f"{tmp_path}/optical_{{time:%Y%m%d}}.tif",
+            "dem": f"{tmp_path}/dem.tif",
+        }
+    )
+
+    assert [(f.collection, Path(f.href)) for f in saved] == [
+        ("optical", tmp_path / "optical_20250601.tif"),
+        ("optical", tmp_path / "optical_20250602.tif"),
+        ("dem", tmp_path / "dem.tif"),
+    ]
+
+
+def test_time_on_an_undated_group_points_to_one_template_per_group(
+    tmp_path: Path,
+) -> None:
+    written = build_stack({"optical": build_raster(times=2), "dem": build_raster()})
+
+    with pytest.raises(ValueError, match="'dem' has no dates.*a template per group"):
+        written.gs.to_cog(f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif")
 
 
 def test_a_stack_reads_back_from_what_its_cog_export_returns(tmp_path: Path) -> None:
     image = build_raster(times=2)
     written = build_stack({"image": image, "label": (image // 1000).astype("uint8")})
 
-    restored = read_stack(written.gs.to_cog(tmp_path / "scene"))
+    restored = open_stack(
+        written.gs.to_cog(f"{tmp_path}/{{collection}}/{{time:%Y%m%d}}.tif")
+    )
 
     assert restored.gs.groups == ("image", "label")
     np.testing.assert_array_equal(
@@ -176,7 +202,7 @@ def test_stack_round_trip_preserves_groups_and_grid(
 ) -> None:
     paths = stack.gs.to_zarr(tmp_path / "stack")
 
-    restored = read_stack(paths)
+    restored = open_stack(paths)
 
     assert list(paths) == list(stack.gs.groups)
     assert paths["optical"] == tmp_path / "stack/optical.zarr"
@@ -189,7 +215,7 @@ def test_every_group_opens_on_its_own(tmp_path: Path, stack: xr.DataTree) -> Non
     paths = stack.gs.to_netcdf(tmp_path / "solo")
 
     store = paths["optical"]
-    solo = read_raster(store)
+    solo = open_raster(store)
 
     assert store == tmp_path / "solo/optical.nc"
     assert solo.gs.geobox == stack.gs.geobox
@@ -216,15 +242,25 @@ def test_a_deferred_stack_write_resolves_to_its_stores(
 
     assert list(paths) == list(stack.gs.groups)
     np.testing.assert_array_equal(
-        read_stack(paths)["optical"].red, stack["optical"].red
+        open_stack(paths)["optical"].red, stack["optical"].red
     )
+
+
+def test_a_stack_round_trips_through_a_upath_folder(
+    bucket: str, stack: xr.DataTree
+) -> None:
+    folder = UPath(bucket) / "s0"
+
+    stack.gs.to_zarr(folder)
+
+    assert set(open_stack(folder).gs.groups) == set(stack.gs.groups)
 
 
 def test_a_single_store_is_not_a_stack(tmp_path, stack: xr.DataTree) -> None:
     store = stack.gs.to_zarr(tmp_path / "stack")["optical"]
 
-    with pytest.raises(ValueError, match="read_raster"):
-        read_stack(store)
+    with pytest.raises(ValueError, match="open_raster"):
+        open_stack(store)
 
 
 def test_a_stack_spans_from_its_earliest_group_to_its_latest() -> None:
@@ -263,20 +299,20 @@ def test_a_stack_anchors_on_its_shared_grid_and_joint_span() -> None:
 def test_map_groups_changes_every_group_and_keeps_the_root_attrs() -> None:
     raster = build_raster()
     built = build_stack({"optical": raster[["red"]], "dem": raster[["nir"]]})
-    titled = built.gs.rebase(attrs.ACDD(title="scene"))
+    titled = _titled(built)
 
     halved = map_groups(titled, lambda group: group.isel(x=slice(0, 1)))
 
     assert halved.gs.groups == ("optical", "dem")
     assert halved.gs.geobox.shape.x == 1
-    assert halved.gs.attrs.root.get(attrs.ACDD).title == "scene"
+    assert halved.attrs["title"] == "scene"
 
 
 def test_map_groups_rebuilds_a_stack_that_shares_no_grid() -> None:
     raster = build_raster()
     coarse = raster[["nir"]].isel(x=slice(0, 1))
     built = build_stack({"optical": raster[["red"]], "dem": coarse})
-    titled = built.gs.rebase(attrs.ACDD(title="scene"))
+    titled = _titled(built)
 
     renamed = map_groups(
         titled,
@@ -285,7 +321,7 @@ def test_map_groups_rebuilds_a_stack_that_shares_no_grid() -> None:
 
     assert renamed.gs.geobox is None
     assert renamed.gs.variables == ("optical/red_raw", "dem/nir_raw")
-    assert renamed.gs.attrs.root.get(attrs.ACDD).title == "scene"
+    assert renamed.attrs["title"] == "scene"
 
 
 def test_a_stack_reads_the_pixel_operations_through_gs(stack: xr.DataTree) -> None:
@@ -321,38 +357,21 @@ def test_a_saved_stack_indexes_one_item_per_group_scene(tmp_path: Path) -> None:
     optical = build_raster(times=2)
     sample = build_stack({"optical": optical, "dem": build_raster()})
 
-    items = create_stack_items(sample.gs.to_cog(tmp_path / "s0"), name="s0")
+    saved = sample.gs.to_cog(
+        {
+            "optical": f"{tmp_path}/optical_{{time:%Y%m%dT%H%M%S}}.tif",
+            "dem": f"{tmp_path}/dem.tif",
+        }
+    )
+    rows = create_items(saved, id="s0")
 
-    assert [item.id for item in items] == [
+    assert rows["id"].tolist() == [
         "s0/optical_20250601T000000",
         "s0/optical_20250602T000000",
         "s0/dem",
     ]
-    assert [item.collection_id for item in items] == ["optical", "optical", "dem"]
-    assert {item.properties["geosave:stack"] for item in items} == {"s0"}
-    assert items[2].assets["image"].href == str(tmp_path / "s0/dem.tif")
-
-
-@pytest.mark.parametrize("suffix", [".zarr", ".nc"])
-def test_a_stack_store_restores_each_group_through_the_table(tmp_path, suffix) -> None:
-    from geosave_engine.geodata.stac import table
-
-    optical = build_raster(times=2)
-    sample = build_stack({"optical": optical, "label": build_raster(times=2)})
-    write = sample.gs.to_zarr if suffix == ".zarr" else sample.gs.to_netcdf
-
-    items = create_stack_items(write(tmp_path / "s0"), name="s0")
-
-    rows = table.from_items(items)
-    restored = build_stack(
-        {
-            group: table.load(table.to_items(rows[rows["collection"] == group]))
-            for group in sample.gs.groups
-        }
-    )
-    assert restored.gs.groups == sample.gs.groups
-    np.testing.assert_array_equal(restored["optical"].red, optical.red)
-    restored.close()
+    assert rows["collection"].tolist() == ["optical", "optical", "dem"]
+    assert rows.iloc[2]["assets"]["image"]["href"] == str(tmp_path / "dem.tif")
 
 
 def test_shared_geographic_stack_spans_y_x() -> None:

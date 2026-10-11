@@ -5,12 +5,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
+
+from upath import UPath
 from typing import Any, Literal, TypedDict, Unpack, cast
 
 import geopandas as gpd
+import typing_extensions
 
 from .. import storage
-from ..storage import StorageOptions
+from ..storage import Location, StorageOptions
 
 FILE_SUFFIXES = (".parquet", ".geoparquet")
 
@@ -26,13 +29,13 @@ class GeoParquetOpenOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     **open_options: Unpack[GeoParquetOpenOptions],
 ) -> gpd.GeoDataFrame:
     """Open one local or fsspec-backed GeoParquet file.
 
     Args:
-        source: Local path or fsspec URL to GeoParquet.
+        source: Local path, fsspec URL, or UPath to GeoParquet.
         **open_options: Supported GeoPandas and Parquet read options.
 
     Returns:
@@ -44,16 +47,17 @@ def read(
     """
     storage_options = open_options.pop("storage_options", None)
     parquet_options = dict(open_options.pop("parquet_options", {}))
-    filesystem, source_path = storage.filesystem_path(source, storage_options)
+    parquet = storage.location(source, storage_options)
     return gpd.read_parquet(
-        source_path,
-        filesystem=filesystem,
+        parquet.path,
+        filesystem=parquet.fs,
         **open_options,
         **parquet_options,
     )
 
 
-class GeoParquetWriteOptions(TypedDict, total=False):
+# Closed, so a subclass writer may add keywords these options never name.
+class GeoParquetWriteOptions(typing_extensions.TypedDict, total=False, closed=True):
     """Optional GeoPandas behavior supported when writing GeoParquet."""
 
     index: bool | None
@@ -71,7 +75,7 @@ def write(
     *,
     overwrite: bool = False,
     **write_options: Unpack[GeoParquetWriteOptions],
-) -> Path | str:
+) -> UPath:
     """Write one GeoDataFrame to local or fsspec-backed GeoParquet.
 
     Args:
@@ -81,7 +85,8 @@ def write(
         **write_options: Supported GeoPandas and Parquet write options.
 
     Returns:
-        Local writes return a path; URL writes return the supplied URL.
+        Local writes return a PosixUPath; URL writes return a UPath carrying
+        its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.

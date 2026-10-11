@@ -8,11 +8,11 @@ from typing import Any
 import xarray as xr
 from xarray.backends import BackendEntrypoint
 
-from .readers import read_raster, read_stack
+from .readers import open_raster, open_stack
 
 
 class GeoSaveBackendEntrypoint(BackendEntrypoint):
-    """Open rasters with `read_raster` and stacks with `read_stack`.
+    """Open rasters with `open_raster` and stacks with `open_stack`.
 
     The engine runs only when named. It claims no file on its own, so
     `xr.open_dataset("scene.tif")` keeps choosing among xarray's own engines.
@@ -35,7 +35,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         drop_variables: str | Iterable[str] | None = None,
         **options: Any,
     ) -> xr.Dataset:
-        """Open what `read_raster` reads.
+        """Open what `open_raster` reads.
 
         Args:
             filename_or_obj: One raster file or store, a folder of COGs, or
@@ -47,7 +47,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         Returns:
             Raster Dataset, lazily indexed; xarray applies `chunks` itself.
         """
-        raster = read_raster(filename_or_obj, **options)
+        raster = open_raster(filename_or_obj, **options)
         if drop_variables is None:
             return raster
         return raster.drop_vars(drop_variables)
@@ -59,15 +59,15 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         drop_variables: str | Iterable[str] | None = None,
         **options: Any,
     ) -> xr.DataTree:
-        """Open what `read_stack` reads.
+        """Open what `open_stack` reads.
 
         Args:
             filename_or_obj: Folder holding one raster per group, or group
-                names mapped to what `read_raster` reads.
+                names mapped to what `open_raster` reads.
             drop_variables: Unused; drop variables from the groups instead.
             **options: Read options passed to every group's reader.
 
         Returns:
             DataTree holding one group per raster.
         """
-        return read_stack(filename_or_obj, **options)
+        return open_stack(filename_or_obj, **options)

@@ -1,11 +1,11 @@
-"""GeoSave Engine's geodata surface, reached as `gs.read_raster`, `gs.raster`, `gs.stack`.
+"""GeoSave Engine's geodata surface, reached as `gs.open_raster`, `gs.raster`, `gs.stack`.
 
 Each name is fetched from `geodata` on first use, so importing the CLI never
 pays for the geospatial stack it does not touch.
 
 Examples:
     >>> import geosave_engine as gs
-    >>> gs.read_raster("scene.tif").gs.variables
+    >>> gs.open_raster("scene.tif").gs.variables
     ('B04', 'B08')
 """
 
@@ -22,12 +22,16 @@ if TYPE_CHECKING:
         GeoRaster,
         GeoStack,
         GeoVector,
+        array,
         configure_gdal,
+        cuts,
+        features,
         io,
         raster,
-        read_raster,
-        read_stack,
-        read_vector,
+        open_raster,
+        open_stack,
+        open_vector,
+        stac,
         stack,
         transform,
     )
@@ -42,12 +46,16 @@ __all__ = [
     "GeoRaster",
     "GeoStack",
     "GeoVector",
+    "array",
     "configure_gdal",
+    "cuts",
+    "features",
     "io",
     "raster",
-    "read_raster",
-    "read_stack",
-    "read_vector",
+    "open_raster",
+    "open_stack",
+    "open_vector",
+    "stac",
     "stack",
     "transform",
 ]

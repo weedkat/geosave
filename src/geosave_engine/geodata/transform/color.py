@@ -18,7 +18,7 @@ def colorize(band: xr.DataArray) -> xr.DataArray:
         band: Class codes carrying a `Legend`.
 
     Returns:
-        Georeferenced array shaped `(*axes, band, y, x)` valued in `[0, 1]`,
+        Lazy georeferenced array shaped `(*axes, band, y, x)` valued in `[0, 1]`,
         whose `band` coordinate is `("red", "green", "blue")`. A pixel no
         class names is absent on every channel.
 
@@ -30,43 +30,43 @@ def colorize(band: xr.DataArray) -> xr.DataArray:
         >>> colorize(ds["landcover"]).sizes["band"]
         3
     """
-    from geosave_engine.geodata.core.array import array
-
-    legend = attrs.Legend.from_attrs(band.attrs)
-    class_map = None if legend is None else legend.class_map
+    legend = attrs.parse(band, attrs.Legend)
+    class_map = None if legend is None else legend.classes
     if legend is None or class_map is None:
         raise ValueError(
             "band lists no classes, so its values name none to colour; write "
             "a Legend, or compose channels with GeoRaster.to_array"
         )
 
-    colour_of = legend.color_map or {}
+    colors = legend.color_map or {}
     codes = sorted(class_map)
-    missing_colour = [code for code in codes if code not in colour_of]
-    if missing_colour:
+    missing_colors = [code for code in codes if code not in colors]
+    if missing_colors:
         raise ValueError(
-            f"classes {missing_colour} carry no colour; give Legend.color_map an "
+            f"classes {missing_colors} carry no colour; give Legend.color_map an "
             f"entry for every class the band lists"
         )
 
-    palette = np.array(
-        [parse_color(colour_of[code]) for code in codes], dtype="float32"
-    )
+    palette = np.array([parse_color(colors[code]) for code in codes], dtype="float32")
     palette /= 255.0  # (class, 3)
 
-    pixels = band.values
-    names_class = np.isin(pixels, codes)
-    code_index = np.where(names_class, np.searchsorted(codes, pixels), 0)
-    channels = np.where(names_class[..., None], palette[code_index], np.nan)
+    def lookup(pixels: np.ndarray) -> np.ndarray:
+        valid = np.isin(pixels, codes)
+        indices = np.where(valid, np.searchsorted(codes, pixels), 0)
+        return np.where(valid[..., None], palette[indices], np.float32(np.nan))
 
-    axes = band.gs.axes
-    return array(
-        np.moveaxis(channels, -1, -3),  # (*axes, band, y, x)
-        band.odc.geobox,
-        dims=(*axes, BAND_DIMENSION, *SPATIAL_DIMENSIONS),
-        nodata=None,  # absence is NaN here, which no fill value stands for
-        coords={
-            **{name: labels for name, labels in axes.items() if labels is not None},
-            BAND_DIMENSION: ["red", "green", "blue"],
-        },
+    colored = xr.apply_ufunc(
+        lookup,
+        band,
+        output_core_dims=[[BAND_DIMENSION]],
+        dask="parallelized",
+        output_dtypes=[np.float32],
+        dask_gufunc_kwargs={"output_sizes": {BAND_DIMENSION: 3}},
+        keep_attrs=False,
+    )
+    return (
+        colored.assign_coords(band.coords)
+        .assign_coords({BAND_DIMENSION: ["red", "green", "blue"]})
+        .transpose(*band.gs.axes, BAND_DIMENSION, *SPATIAL_DIMENSIONS)
+        .rename(None)
     )

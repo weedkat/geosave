@@ -9,7 +9,7 @@ import pytest
 from pystac.extensions.classification import ClassificationExtension
 from pystac.extensions.raster import RasterExtension
 
-from geosave_engine.geodata.attrs import Legend
+from geosave_engine.geodata import attrs
 from geosave_engine.geodata.stac.extensions import classification, raster
 
 from tests.geodata.conftest import build_raster
@@ -21,15 +21,13 @@ def _asset(href: str = "scene.tif") -> pystac.Asset:
     return item.assets["image"]
 
 
-def _label(legend: Legend):
+def _label(classes, colors=None):
     label = build_raster()[["nir"]].astype("uint8").rename(nir="label")
-    return label.gs.rebase(legend, target="label")
+    return label.gs.write_legend(classes, colors, target="label")
 
 
 def test_a_legend_becomes_classes_on_its_band() -> None:
-    label = _label(
-        Legend(class_map={0: "background", 1: "forest"}, color_map={1: "#00ff00"})
-    )
+    label = _label({0: "background", 1: "forest"}, {1: "#00ff00"})
     asset = _asset()
     raster.write(asset, label)
 
@@ -55,7 +53,7 @@ def test_a_raster_without_a_legend_declares_nothing(scene) -> None:
 
 
 def test_a_class_name_stac_refuses_raises() -> None:
-    label = _label(Legend(class_map={1: "tree/shrub"}))
+    label = _label({1: "tree/shrub"})
     asset = _asset()
     raster.write(asset, label)
 
@@ -75,7 +73,7 @@ def test_bit_masks_write_no_classes() -> None:
 
 
 def test_classes_need_the_raster_bands_written_first() -> None:
-    label = _label(Legend(class_map={1: "forest"}))
+    label = _label({1: "forest"})
     asset = _asset()
     RasterExtension.add_to(asset.owner)
 
@@ -84,16 +82,15 @@ def test_classes_need_the_raster_bands_written_first() -> None:
 
 
 def test_classes_are_read_back_as_the_legend_that_wrote_them() -> None:
-    label = _label(
-        Legend(class_map={0: "background", 1: "forest"}, color_map={1: "#00ff00"})
-    )
+    label = _label({0: "background", 1: "forest"}, {1: "#00ff00"})
     asset = _asset()
     raster.write(asset, label)
     classification.write(asset, label)
 
-    (legend,) = classification.read(RasterExtension.ext(asset).bands[0])
+    stated = classification.read(RasterExtension.ext(asset).bands[0])
+    legend = attrs.Legend.model_validate(stated)
 
-    assert legend.class_map == {0: "background", 1: "forest"}
+    assert legend.classes == {0: "background", 1: "forest"}
     assert legend.color_map[1] == "#00FF00"
 
 
@@ -101,4 +98,4 @@ def test_a_band_without_classes_reads_nothing(scene) -> None:
     asset = _asset()
     raster.write(asset, scene)
 
-    assert classification.read(RasterExtension.ext(asset).bands[0]) == []
+    assert classification.read(RasterExtension.ext(asset).bands[0]) == {}
