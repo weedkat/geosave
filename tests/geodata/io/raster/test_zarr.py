@@ -10,8 +10,8 @@ from dask.delayed import Delayed
 from upath import UPath
 from zarr import open_group
 
-from geosave_engine.geodata import open_raster
-from geosave_engine.geodata.io import zarr
+from geosave.geodata import open_raster
+from geosave.geodata.io import zarr
 
 from tests.geodata.conftest import build_raster
 

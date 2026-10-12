@@ -5,12 +5,12 @@ from pystac_client.exceptions import APIError
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata.core import GeoAnchor
-from geosave_engine.geodata.errors import CollectionNotFoundError
-from geosave_engine.model.spec import ModelSpec, RasterRequirement, StacRecipe
+from geosave.geodata.core import GeoAnchor
+from geosave.geodata.errors import CollectionNotFoundError
+from geosave.model.spec import ModelSpec, RasterRequirement, StacRecipe
 
 
-stac_module = import_module("geosave_engine.model.spec.stac")
+stac_module = import_module("geosave.model.spec.stac")
 
 
 def coordinate_anchor():

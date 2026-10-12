@@ -1,8 +1,11 @@
-# Quickstart
+# From images to training chips
 
-This example uses synthetic data and needs no network access. It builds a small synthetic image and label, saves them
-as Cloud Optimized GeoTIFFs, lists them in a STAC item table, cuts model-sized
-chips, and reads one chip as tensors.
+Create a small image and label, save them, then read a spatial chip as tensors.
+This example uses synthetic data and works offline. Read
+[Your first raster](first-raster.md) first if xarray rasters and grids are new to you.
+
+The data moves through three forms: pixels in xarray, file metadata in a catalog,
+and selected pixels in PyTorch tensors.
 
 ## 1. Make a sample
 
@@ -14,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-import geosave_engine as gs
+import geosave as gs
 
 root = Path(tempfile.mkdtemp())
 anchor = gs.GeoAnchor.from_coordinates(
@@ -22,7 +25,8 @@ anchor = gs.GeoAnchor.from_coordinates(
     crs="EPSG:32633", timespan="2025-01-01",
 )
 rng = np.random.default_rng(0)
-pixels = lambda hi: rng.integers(0, hi, (256, 256), dtype="uint16")
+def pixels(hi):
+    return rng.integers(0, hi, (256, 256), dtype="uint16")
 
 optical = gs.raster(
     {"red": (("y", "x"), pixels(3000)), "nir": (("y", "x"), pixels(3000))},
@@ -30,7 +34,7 @@ optical = gs.raster(
     nodata=0,
 )
 label = gs.raster(
-    {"label": (("y", "x"), pixels(3).astype("uint8"))}, anchor.geobox
+    {"label": (("y", "x"), pixels(2).astype("uint8"))}, anchor.geobox
 )
 optical
 ```
@@ -67,8 +71,9 @@ label = label.expand_dims(time=[day])
 
 ## 3. Stack, save, and catalogue
 
-A stack groups rasters on one grid. Each group is a STAC collection, and
-`to_cog` writes one file per collection and date.
+These two rasters share a grid. `gs.stack` groups them without resampling;
+other groups can retain different grids. Here each group becomes a STAC
+collection, and `to_cog` writes one file per collection and date.
 
 ```python
 sample = gs.stack({"optical": optical, "label": label})
@@ -108,13 +113,15 @@ Output:
 3  [128, 128]     2025-01-01   2025-01-01
 ```
 
-A cut takes a table and returns one; no pixels are opened.
+The four rows describe 128 × 128 windows on the saved scene. A cut takes a
+table and returns one; it does not read the pixel arrays.
 
 ## 5. Read a chip as tensors
 
 ```python
 chip = windows.iloc[0].gs.to_stack()          # lazy DataTree
-tensors = chip.gs.to_tensor()
+decoded = chip.gs.mask_and_scale()
+tensors = decoded.gs.to_tensor()
 chip.close()
 {name: tuple(t.shape) for name, t in tensors.items()}
 ```
@@ -125,8 +132,34 @@ Output:
 {'label': (1, 1, 128, 128), 'optical': (1, 2, 128, 128)}
 ```
 
-Pixels load here, and only the chip's own window is read. The tensors are
-`[time, band, y, x]`.
+Decoding turns optical nodata (`0`) into NaN; any declared scale and offset
+would also be applied. Conversion to tensors reads the selected chip window.
+Here the axes are `[time, band, y, x]`.
+
+## Use the single-date sample
+
+For a model taking one image, remove the singleton time axis and make the
+label an integer class map:
+
+```python
+image = tensors["optical"][0]
+target = tensors["label"][0, 0].long()
+valid = image.isfinite().all(dim=0)
+target[~valid] = 255
+image.shape, target.shape
+```
+
+Output:
+
+```text
+(torch.Size([2, 128, 128]), torch.Size([128, 128]))
+```
+
+The two input channels are red and near-infrared. Labels are class `0` or `1`,
+with `255` marking pixels whose inputs are missing. These are the `image`,
+`target`, and `valid` values a segmentation Dataset returns. The
+[training guide](guides/training.md) shows that sample contract and the
+DataModule's remaining input preparation.
 
 ## Where next
 

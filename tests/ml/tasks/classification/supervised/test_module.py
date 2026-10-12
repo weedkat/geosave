@@ -6,8 +6,8 @@ from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from geosave_engine.ml.tasks.classification import supervised
-from geosave_engine.model.chain import chain_step
+from geosave.ml.tasks.classification import supervised
+from geosave.model.chain import chain_step
 
 
 class Classifier(nn.Module):

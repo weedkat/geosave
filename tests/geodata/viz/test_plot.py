@@ -4,10 +4,10 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.anchor import GeoAnchor
-from geosave_engine.geodata.core.constructors import raster as build_raster
-from geosave_engine.geodata.core.stack import stack as build_stack
-from geosave_engine.geodata.core.geolocator import Place
+from geosave.geodata.core.anchor import GeoAnchor
+from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.core.geolocator import Place
 
 pytest.importorskip("hvplot", reason="viz extra not installed")
 
@@ -180,6 +180,17 @@ class TestOutput:
         assert isinstance(
             optical.gs.plot("B04") + labels.gs.plot("landcover"), hv.Layout
         )
+
+    def test_dated_plots_compose(self, rgb: xr.Dataset, labels: xr.Dataset) -> None:
+        one = rgb.expand_dims(time=[np.datetime64("2024-03-05")])
+        two = rgb.expand_dims(
+            time=[np.datetime64("2024-03-05"), np.datetime64("2024-03-06")]
+        )
+
+        composed = one.gs.plot() + labels.gs.plot("landcover") + two.gs.plot()
+
+        assert len(composed) == 4
+        assert len(panel_axes(composed)) == 4
 
     def test_time_and_location_caption_each_panel(self, rgb: xr.Dataset) -> None:
         dated = rgb.expand_dims(

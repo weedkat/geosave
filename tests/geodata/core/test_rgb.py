@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import xarray as xr
-from geosave_engine.geodata import attrs
-from geosave_engine.geodata.core.raster import _rgb_indices
+from geosave.geodata import attrs
+from geosave.geodata.core.raster import _rgb_indices
 
 
 def build_bands(*colours: str | None) -> xr.Dataset:

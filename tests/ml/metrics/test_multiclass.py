@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from geosave_engine.ml.metrics import MulticlassMetrics
+from geosave.ml.metrics import MulticlassMetrics
 
 
 @pytest.fixture

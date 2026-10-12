@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pystac
 from pystac.extensions.eo import Band, EOExtension
 
-from geosave_engine.geodata.stac.extensions import eo
+from geosave.geodata.stac.extensions import eo
 
 from tests.geodata.conftest import build_raster
 

@@ -9,7 +9,7 @@ import pytest
 from affine import Affine
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import cuts, open_raster
+from geosave.geodata import cuts, open_raster
 
 BANDS = ["plus", "minus"]
 

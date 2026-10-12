@@ -6,8 +6,8 @@ Read a validated metadata value from an ordinary xarray band:
 import numpy as np
 import xarray as xr
 
-import geosave_engine as gs
-from geosave_engine.geodata import attrs
+import geosave as gs
+from geosave.geodata import attrs
 
 band = xr.DataArray(np.array([[0, 1], [2, 255]], dtype="uint8"), dims=("y", "x"))
 band = band.gs.write_nodata(255).gs.write_legend(

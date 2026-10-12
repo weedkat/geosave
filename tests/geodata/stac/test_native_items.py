@@ -10,9 +10,9 @@ import pytest
 from shapely.geometry import mapping
 from stac_geoparquet.arrow import stac_table_to_items
 
-from geosave_engine.geodata import io
-from geosave_engine.geodata import open_vector
-from geosave_engine.geodata.io.vector import stac_geoparquet as table
+from geosave.geodata import io
+from geosave.geodata import open_vector
+from geosave.geodata.io.vector import stac_geoparquet as table
 from tests.geodata.conftest import build_raster, read_items
 
 
@@ -92,7 +92,10 @@ def test_only_data_assets_load(tmp_path):
 
     loaded = read_items(table.from_items([entry]))
 
-    assert list(loaded.data_vars) == list(source.data_vars)
+    # The thumbnail is skipped; the data asset names its bands by its key.
+    assert list(loaded.data_vars) == [
+        f"reflectance.{index}" for index in range(1, len(source.data_vars) + 1)
+    ]
     loaded.close()
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-import geosave_engine as gs
+import geosave as gs
 
 root = Path(tempfile.mkdtemp())
 anchor = gs.GeoAnchor.from_coordinates(

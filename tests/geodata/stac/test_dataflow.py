@@ -6,13 +6,13 @@ import dask.array as da
 import numpy as np
 import pytest
 
-from geosave_engine.geodata import GeoVector, open_raster
-from geosave_engine.geodata import attrs
-from geosave_engine.geodata.stac._bands import band_attrs, read_bands
-from geosave_engine.geodata.features import ndvi
-from geosave_engine.geodata import open_vector
-from geosave_engine.geodata.io.vector import stac_geoparquet as table
-from geosave_engine.geodata.stac import create_items
+from geosave.geodata import GeoVector, open_raster
+from geosave.geodata import attrs
+from geosave.geodata.stac._bands import band_attrs, read_bands
+from geosave.geodata.features import ndvi
+from geosave.geodata import open_vector
+from geosave.geodata.io.vector import stac_geoparquet as table
+from geosave.geodata.stac import create_items
 
 from tests.geodata.conftest import build_raster
 

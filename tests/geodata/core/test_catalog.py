@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from geosave_engine.geodata import open_vector, stac, stack
-from geosave_engine.geodata.core.catalog import GeoCatalog
-from geosave_engine.geodata.io.vector import stac_geoparquet
+from geosave.geodata import open_vector, stac, stack
+from geosave.geodata.core.catalog import GeoCatalog
+from geosave.geodata.io.vector import stac_geoparquet
 from tests.geodata.conftest import stack_templates
 
 
@@ -21,7 +21,7 @@ def test_gs_is_a_catalog_on_an_item_table_and_a_vector_otherwise(rows) -> None:
     import geopandas as gpd
     from shapely.geometry import Point
 
-    from geosave_engine.geodata import GeoVector
+    from geosave.geodata import GeoVector
 
     plots = gpd.GeoDataFrame({"name": ["a"]}, geometry=[Point(0, 0)], crs="EPSG:4326")
 

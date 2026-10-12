@@ -128,18 +128,13 @@ uploads a trained model release and selected workspace files to Hugging Face. Re
 these scripts and their inputs before running them. Publication is a separate
 step from fitting; see [Release a model](release.md).
 
-`geosave make` copies an optional scaffold into an existing workspace:
-
-```bash
-geosave make scripts prepare_dense_data.py
-```
-
-The current dense-preparation scaffold calls the unfinished
-`prepare_dense_data` flow. It is an extension starting point, not a working
-preparation recipe. For supported local catalog preparation, use
-`ModelSpec.prepare`; see [Workflows](workflows.md).
+For catalog preparation, call `ModelSpec.prepare` from your own script; see
+[Model spec](model-spec.md). To run ingestion as a Prefect job, install the
+`flows` extra (`pip install "geosave[flows]"`); see [Optional ingestion flows](workflows.md).
+The `geosave` CLI provides workspace creation and `make` for copying available
+scaffolds. This checkout bundles no scaffold files.
 
 To improve what future workspaces receive, edit
-`src/geosave_engine/templates/`. Your generated workspace remains an editable
-consumer project. The [architecture guide](../architecture.md) explains that
+`src/geosave/templates/`. Your generated workspace remains an editable
+consumer project. The [architecture guide](../contributing/architecture.md) explains that
 source/consumer boundary.

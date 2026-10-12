@@ -5,7 +5,7 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.constructors import raster
+from geosave.geodata.core.constructors import raster
 
 UTM = "EPSG:32633"
 
@@ -200,7 +200,7 @@ def test_a_band_converts_without_gaining_a_band_axis() -> None:
 
 
 def test_a_stack_converts_each_group_on_its_own_dtype() -> None:
-    from geosave_engine.geodata.core.stack import stack
+    from geosave.geodata.core.stack import stack
 
     scene = stack(
         {"optical": optical(), "height": optical()[["B04"]].astype("float32")}

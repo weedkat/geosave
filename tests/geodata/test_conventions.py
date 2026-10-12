@@ -10,7 +10,7 @@ from affine import Affine
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
-from geosave_engine.geodata.conventions import require_yx, to_yx
+from geosave.geodata.conventions import require_yx, to_yx
 
 GRID = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")
 

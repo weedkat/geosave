@@ -8,10 +8,10 @@ import pytest
 import xarray as xr
 from upath import UPath
 
-from geosave_engine.geodata import io
-from geosave_engine.geodata.io.readers import open_raster, open_stack
-from geosave_engine.geodata.warnings import DroppedAttrsWarning
-from geosave_engine.geodata.io import geotiff, netcdf, zarr
+from geosave.geodata import io
+from geosave.geodata.io.readers import open_raster, open_stack
+from geosave.geodata.warnings import DroppedAttrsWarning
+from geosave.geodata.io import geotiff, netcdf, zarr
 
 from tests.geodata.conftest import build_raster
 
@@ -105,7 +105,7 @@ def test_open_raster_reads_a_remote_upath(bucket: str) -> None:
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_directory_reader_owns_opened_layers(tmp_path, monkeypatch, fail):
-    from geosave_engine.geodata.io import readers
+    from geosave.geodata.io import readers
 
     for name in ("a.zarr", "b.zarr"):
         (tmp_path / name).touch()
@@ -145,7 +145,7 @@ def test_a_plain_vector_reads_back_with_its_own_columns(tmp_path, suffix):
     import geopandas as gpd
     from shapely.geometry import Point
 
-    from geosave_engine.geodata import open_vector
+    from geosave.geodata import open_vector
 
     plots = gpd.GeoDataFrame(
         {"class": [1, 2]}, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326"
@@ -166,7 +166,7 @@ def test_vectors_open_through_open_vector_and_read_vector_is_gone(tmp_path) -> N
     import geopandas as gpd
     from shapely.geometry import Point
 
-    import geosave_engine as gs
+    import geosave as gs
 
     plots = gpd.GeoDataFrame({"name": ["a"]}, geometry=[Point(0, 0)], crs="EPSG:4326")
     path = plots.gs.to_geoparquet(tmp_path / "plots.parquet")
@@ -203,3 +203,17 @@ def test_a_tag_the_records_state_differently_drops_and_warns(tmp_path: Path) -> 
         restored = open_raster(files)
 
     assert "TIFFTAG_ARTIST" not in restored.attrs
+
+
+def test_a_signed_url_opens_by_the_suffix_of_its_path(monkeypatch) -> None:
+    from geosave.geodata.io import readers
+
+    opened = []
+    monkeypatch.setattr(
+        readers.gdal, "read", lambda source, **options: opened.append(source)
+    )
+    url = "https://host/scene/B02.tif?st=2026-10-11&sig=CXPh%3D"
+
+    open_raster(url)
+
+    assert opened == [url]

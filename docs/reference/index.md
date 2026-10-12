@@ -9,7 +9,7 @@ returns, and examples where available.
 | [Data](geodata.md) | Raster and vector accessors, I/O, transforms, features, metadata, STAC, and windows. |
 | [Models](model.md) | Chains, registry, stages, input specifications, and releases. |
 | [Training](ml.md) | Lightning tasks, data modules, metrics, and training tools. |
-| [Workflows](workflow.md) | Validated job inputs, Prefect flows, and reusable tasks. |
+| [Workflows](workflow.md) | `geosave_flows`: validated job inputs, Prefect flows, and reusable tasks. |
 
 Start with the [practical guides](../index.md#find-your-task) when you want a
 complete example. Read [Concepts](../concepts/index.md) for behavior shared

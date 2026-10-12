@@ -17,6 +17,7 @@ same biomes.
 from __future__ import annotations
 
 import argparse
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -24,9 +25,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-import geosave_engine as gs
-from geosave_engine.geodata.stac import StacClient
-from geosave_engine.geodata.io import COGWriteOptions
+import geosave as gs
+from geosave.geodata.stac import StacClient
+from geosave.geodata.io import COGWriteOptions
 
 BANDS = ["B02", "B03", "B04", "B08"]
 # Dynamic World's codes 1-10, renumbered from 0 as segmentation datasets do;
@@ -55,10 +56,14 @@ def candidates(raw: Path, tiles: int, seed: int) -> pd.DataFrame:
     table = pd.read_excel(raw / "v1_dw_tile_metadata_for_public_release.xlsx")
     paths = {path.stem: path for path in (raw / "train/Experts").rglob("*.tif")}
     # Some tiles were labelled twice; the expert row describes the expert file.
-    table = table[(table["labeler"] == "Experts") & table["dw_id"].isin(paths)]
-    table = table[(table["NB_Pixels"] >= 0.9 * 510 * 510) & (table["Clouds"] <= 1)]
+    by_experts = (table["labeler"] == "Experts") & table["dw_id"].isin(paths)
+    table = table[by_experts]
+    well_labelled = table["NB_Pixels"] >= 0.9 * 510 * 510
+    cloud_free = table["Clouds"] <= 1
+    table = table[well_labelled & cloud_free]
     # A few spare tiles per biome cover scenes Planetary Computer lacks.
-    per_biome = -(-tiles * 6 // 5 // table["biome"].nunique())
+    wanted = math.ceil(tiles * 6 / 5)
+    per_biome = math.ceil(wanted / table["biome"].nunique())
     shuffled = table.sample(frac=1, random_state=seed)
     picked = shuffled.groupby("biome").head(per_biome)
     return picked.assign(path=picked["dw_id"].map(paths))
@@ -91,7 +96,8 @@ def write_classes(out: Path) -> None:
 
 def load_image(source, label):
     image = source.load(label.gs.anchor)[BANDS].compute()
-    image = image.fillna(0).astype("uint16").gs.write_nodata(0)
+    image = image.fillna(0).astype("uint16")
+    image = image.gs.write_nodata(0)
     image = image.gs.write_packing(1e-4, target=BANDS)
     return image.gs.write_rgb(red="B04", green="B03", blue="B02")
 
@@ -123,7 +129,8 @@ def build(raw: Path, out: Path, tiles: int, seed: int, workers: int) -> None:
     # Biome order, then every sixth tile to val and test, keeps biomes in each split.
     done.sort(key=lambda item: (item[0].biome, item[0].dw_id))
     rng = np.random.default_rng(seed)
-    keep = sorted(rng.choice(len(done), size=min(tiles, len(done)), replace=False))
+    count = min(tiles, len(done))
+    keep = sorted(rng.choice(len(done), size=count, replace=False))
     write_classes(out)
     for number, index in enumerate(keep):
         row, label, image = done[index]

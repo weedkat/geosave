@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def test_packing_spells_cf_scale_and_offset() -> None:

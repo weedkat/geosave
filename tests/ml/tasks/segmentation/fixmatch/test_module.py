@@ -7,7 +7,7 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from geosave_engine.ml.tasks.segmentation import fixmatch
+from geosave.ml.tasks.segmentation import fixmatch
 
 STAGES = {
     "model": {

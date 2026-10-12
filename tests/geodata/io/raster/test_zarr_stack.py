@@ -3,8 +3,8 @@
 import numpy as np
 import dask.array as da
 
-from geosave_engine.geodata import raster, open_raster, open_stack, stack
-from geosave_engine.geodata.io import zarr
+from geosave.geodata import raster, open_raster, open_stack, stack
+from geosave.geodata.io import zarr
 
 from tests.geodata.conftest import build_raster
 

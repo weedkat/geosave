@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from geosave_engine.model.chain import Published, chain_step
+from geosave.model.chain import Published, chain_step
 
 
 class Encoder(nn.Module):

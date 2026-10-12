@@ -1,6 +1,6 @@
 import pytest
 
-from geosave_engine.geodata.utils.color import parse_color
+from geosave.geodata.utils.color import parse_color
 
 
 @pytest.mark.parametrize(

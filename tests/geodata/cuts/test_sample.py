@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from geosave_engine.geodata import cuts
+from geosave.geodata import cuts
 
 
 def test_a_window_reads_every_collection_on_its_grid(items, sample, grid) -> None:
@@ -52,7 +52,7 @@ def test_a_reflect_halo_fills_only_past_the_parent(items, sample) -> None:
 
 
 def test_a_saved_windows_table_reads_the_same_pixels(items, tmp_path) -> None:
-    from geosave_engine.geodata import open_vector
+    from geosave.geodata import open_vector
 
     cut = cuts.chips(cuts.stacks(items, on="label"), 32)
     path = cut.gs.to_geoparquet(tmp_path / "windows.parquet")
@@ -66,23 +66,28 @@ def test_a_saved_windows_table_reads_the_same_pixels(items, tmp_path) -> None:
 
 def test_cuts_registers_the_row_accessor_on_import():
     code = (
-        "import sys, pandas as pd, geosave_engine; "
+        "import sys, pandas as pd, geosave; "
         "assert 'gs' not in dir(pd.Series); "
-        "from geosave_engine.geodata import cuts; "
+        "from geosave.geodata import cuts; "
         "assert 'gs' in dir(pd.Series); "
         "assert 'torch' not in sys.modules"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
-def test_saved_multiband_sources_keep_band_names(items, sample, tmp_path):
+def test_a_multiband_source_numbers_its_bands_by_asset(items, sample, tmp_path):
     import orjson
     import pystac
 
-    from geosave_engine.geodata import open_vector, stac
+    from geosave.geodata import open_vector, stac
+
+    import geosave.geodata.attrs as attrs
 
     optical = sample["s2"].dataset
-    optical = optical.assign(nir=optical.red + 1)
+    optical = optical.assign(
+        red=attrs.stamp(optical.red, attrs.Spectral, attrs.Spectral(common_name="red")),
+        nir=optical.red + 1,
+    )
     owner = stac.create_collection("s2", description="Optical bands")
     files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")
     rows = stac.create_items(files, collection=owner)
@@ -95,13 +100,40 @@ def test_saved_multiband_sources_keep_band_names(items, sample, tmp_path):
 
     snapshots = orjson.loads(windows.iloc[0]["sources"])["s2"]
     records = stac.cog_files(pystac.Item.from_dict(snapshots[0]))
-    assert records[0].bands == ("red", "nir")
+    assert records[0].bands == ("image.1", "image.2")
 
     recovered = windows.iloc[0].gs.to_stack()["s2"].dataset
 
-    assert tuple(recovered.data_vars) == ("red", "nir")
-    assert dask.is_dask_collection(recovered.red)
+    assert tuple(recovered.data_vars) == ("image.1", "image.2")
+    assert dask.is_dask_collection(recovered["image.1"])
     assert recovered.gs.geobox == optical.gs.geobox
     np.testing.assert_array_equal(recovered.time.values, optical.time.values)
-    np.testing.assert_array_equal(recovered.red.values, optical.red.values)
-    np.testing.assert_array_equal(recovered.nir.values, optical.nir.values)
+    np.testing.assert_array_equal(recovered["image.1"].values, optical.red.values)
+    np.testing.assert_array_equal(recovered["image.2"].values, optical.nir.values)
+    # The catalog's EO facts are metadata on the variable the asset key names.
+    assert recovered["image.1"].gs.spectral.common_name == "red"
+
+
+def test_catalog_eo_facts_reach_a_file_that_states_none(items, sample, tmp_path):
+    from pystac.extensions.eo import Band, EOExtension
+
+    from geosave.geodata import stac
+    from geosave.geodata.io.vector import stac_geoparquet as table
+
+    optical = sample["s2"].dataset[["red"]]
+    assert optical.red.gs.spectral is None
+    files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}_{{band}}.tif")
+    rows = table.to_items(stac.create_items(files, collection="s2"))
+    # The host states facts its files do not carry, as Planetary Computer does.
+    for item in rows:
+        EOExtension.ext(item.assets["red"]).bands = [
+            Band.create(name="B04", common_name="red", center_wavelength=0.665)
+        ]
+    combined = pd.concat(
+        [items[items["collection"] == "label"], table.from_items(rows)],
+        ignore_index=True,
+    )
+
+    recovered = cuts.stacks(combined, on="label").iloc[0].gs.to_stack()["s2"].dataset
+
+    assert recovered.red.gs.spectral.common_name == "red"

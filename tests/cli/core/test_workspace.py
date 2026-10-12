@@ -8,11 +8,11 @@ import pytest
 import torch
 import yaml
 
-from geosave_engine.cli.core.workspace import create_workspace
-from geosave_engine.model.spec import ModelSpec
-from geosave_engine.ml.cli import GeosaveCLI
-from geosave_engine.ml.tasks.segmentation import supervised
-from geosave_engine.cli.core.templates import get_workspaces
+from geosave.cli.core.workspace import create_workspace
+from geosave.model.spec import ModelSpec
+from geosave.ml.cli import GeosaveCLI
+from geosave.ml.tasks.segmentation import supervised
+from geosave.cli.core.templates import get_workspaces
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def test_segmentation_configs_agree_on_model_inputs(workspace):
         "init_args": {"classes": ["background", "target"]},
     }
     assert config["data"]["class_path"] == (
-        "geosave_engine.ml.tasks.segmentation.supervised.DataModule"
+        "geosave.ml.tasks.segmentation.supervised.DataModule"
     )
     data = supervised.DataModule(**config["data"]["init_args"])
     assert data.spec == spec
@@ -111,7 +111,7 @@ def test_generated_entrypoint_parses_library_lightning_pair(
     assert chain["encoder"]["init_args"] == {"in_channels": 4, "input_size": 224}
     assert config["data"]["init_args"]["spec"] == "configs/model_spec.yaml"
     assert config["data"]["class_path"] == (
-        "geosave_engine.ml.tasks.segmentation.supervised.DataModule"
+        "geosave.ml.tasks.segmentation.supervised.DataModule"
     )
 
 
@@ -124,7 +124,7 @@ def test_custom_lightning_workspace_runs_one_train_and_validation_batch(tmp_path
     script = """
 from modules.data import CustomDataModule
 from modules.task import CustomTask
-from geosave_engine.ml.cli import GeosaveCLI
+from geosave.ml.cli import GeosaveCLI
 
 cli = GeosaveCLI(
     run=False,
@@ -164,7 +164,7 @@ def regression_workspace(tmp_path, monkeypatch):
 def test_regression_swaps_only_the_head_loss_metrics_and_target(
     regression_workspace,
 ):
-    from geosave_engine.ml.tasks.regression import supervised as regression
+    from geosave.ml.tasks.regression import supervised as regression
 
     config = yaml.safe_load((regression_workspace / "configs/train.yaml").read_text())
     chain = config["model"]["init_args"]["model_chain"]
@@ -176,6 +176,6 @@ def test_regression_swaps_only_the_head_loss_metrics_and_target(
     module = regression.Module(**config["model"]["init_args"])
     assert isinstance(module.criterion, torch.nn.MSELoss)
     data = config["data"]
-    assert data["class_path"] == "geosave_engine.ml.tasks.regression.supervised.DataModule"
+    assert data["class_path"] == "geosave.ml.tasks.regression.supervised.DataModule"
     assert data["init_args"]["spec"] == "configs/model_spec.yaml"
     assert set(data["init_args"]["train"]) == {"class_path", "init_args"}

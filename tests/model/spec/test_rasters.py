@@ -7,8 +7,8 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from pydantic import ValidationError
 
-from geosave_engine.geodata.core.constructors import raster
-from geosave_engine.model.spec import FieldRequirement, RasterRequirement
+from geosave.geodata.core.constructors import raster
+from geosave.model.spec import FieldRequirement, RasterRequirement
 
 
 def test_persisted_raster_requirements_need_no_acquisition_identity():

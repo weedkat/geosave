@@ -4,8 +4,8 @@ import fsspec
 import pytest
 from upath import UPath
 
-from geosave_engine.geodata import io
-from geosave_engine.geodata.io.storage import is_local, local_path, location, write
+from geosave.geodata import io
+from geosave.geodata.io.storage import is_local, local_path, location, write
 
 from tests.geodata.conftest import build_raster
 

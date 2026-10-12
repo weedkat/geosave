@@ -7,13 +7,13 @@ import torch
 from pydantic import ValidationError
 from torch import nn
 
-from geosave_engine.ml.builders import (
+from geosave.ml.builders import (
     build_criterion,
     build_optimizer,
     build_scheduler,
 )
-from geosave_engine.model.factory import BuildSpec
-from geosave_engine.ml.criterion import ProbOhemCrossEntropy2d
+from geosave.model.factory import BuildSpec
+from geosave.ml.criterion import ProbOhemCrossEntropy2d
 
 
 @pytest.mark.parametrize(

@@ -29,7 +29,7 @@ jobs:
           import os
           import re
 
-          path = pathlib.Path("src/geosave_engine/__about__.py")
+          path = pathlib.Path("src/geosave/__about__.py")
           text = path.read_text()
           base = re.search(r'__version__\s*=\s*"([^"]+)"', text).group(1)
           dev_version = f"{base}.dev{os.environ['GITHUB_RUN_NUMBER']}"
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/geosave-engine
+      url: https://test.pypi.org/p/geosave
     permissions:
       id-token: write
     steps:
@@ -93,7 +93,7 @@ jobs:
 
             Install the exact build: pin the versioned `.whl` below.
             Install "whatever's newest" with a URL that never changes:
-            `pip install https://github.com/${{ github.repository }}/releases/download/dev/geosave_engine-0+latest-py3-none-any.whl`
+            `pip install https://github.com/${{ github.repository }}/releases/download/dev/geosave-0+latest-py3-none-any.whl`
           files: dist/*.whl
 
   # --- push of a version tag (vX.Y.Z): real release -> PyPI + tagged GitHub release ---
@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/geosave-engine
+      url: https://pypi.org/p/geosave
     permissions:
       id-token: write
     steps:

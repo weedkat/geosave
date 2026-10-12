@@ -11,8 +11,8 @@ import pandas as pd
 import pytest
 from shapely.geometry import box
 
-from geosave_engine.geodata import cuts
-from geosave_engine.geodata.warnings import (
+from geosave.geodata import cuts
+from geosave.geodata.warnings import (
     DroppedFramesWarning,
     DroppedInstantsWarning,
     GeoSaveWarning,

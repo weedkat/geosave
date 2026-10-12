@@ -8,9 +8,9 @@ import pytest
 import torch
 from torch import nn
 
-from geosave_engine.model.chain import Published, chain_step
-from geosave_engine.model.factory import BuildSpec
-from geosave_engine.model.registry import (
+from geosave.model.chain import Published, chain_step
+from geosave.model.factory import BuildSpec
+from geosave.model.registry import (
     MODEL_REGISTRY,
     build_model,
     list_models,

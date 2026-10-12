@@ -2,7 +2,7 @@
 
 
 def test_template_discovery_ignores_caches(tmp_path, monkeypatch):
-    from geosave_engine.cli.core import templates
+    from geosave.cli.core import templates
 
     workspaces = tmp_path / "workspaces"
     scaffolds = tmp_path / "scaffolds"

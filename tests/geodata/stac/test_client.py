@@ -3,8 +3,8 @@ from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 import pytest
 
-from geosave_engine.geodata.stac import StacClient
-from geosave_engine.geodata.errors import CollectionNotFoundError
+from geosave.geodata.stac import StacClient
+from geosave.geodata.errors import CollectionNotFoundError
 
 
 def test_wrapping_a_client_preserves_its_transport():

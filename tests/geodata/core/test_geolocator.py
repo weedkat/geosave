@@ -1,4 +1,4 @@
-from geosave_engine.geodata.core import geolocator
+from geosave.geodata.core import geolocator
 
 
 def test_geolocator_uses_rounded_coordinates(monkeypatch) -> None:

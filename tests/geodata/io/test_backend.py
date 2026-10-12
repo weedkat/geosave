@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import open_raster, open_stack, stack
+from geosave.geodata import open_raster, open_stack, stack
 
 from tests.geodata.conftest import build_raster
 

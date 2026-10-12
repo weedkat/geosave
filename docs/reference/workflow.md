@@ -1,20 +1,19 @@
 # Workflow inputs, flows, and tasks
 
-Prefect flows run complete jobs from validated inputs.
-See [Ingest data](../guides/workflows.md). `prepare_dense_data` is a declared
-placeholder that raises NotImplementedError; use ModelSpec.prepare for preparation.
+Prefect flows run complete jobs from validated inputs. They ship as
+`geosave_flows`, installed with `pip install "geosave[flows]"`. See [Ingest data](../guides/workflows.md).
 
 ## Anchor configuration
 
-::: geosave_engine.workflow.configs
+::: geosave_flows.configs
 
 ## Flows
 
-::: geosave_engine.workflow.flows
+::: geosave_flows.ingest
 
 ## Write a sample
 
-::: geosave_engine.workflow.tasks.sample
+::: geosave_flows.tasks.sample
     options:
       members:
         - write_sample
@@ -22,7 +21,7 @@ placeholder that raises NotImplementedError; use ModelSpec.prepare for preparati
 
 ## Label files
 
-::: geosave_engine.workflow.tasks.labels
+::: geosave_flows.tasks.labels
     options:
       members:
         - find_labels

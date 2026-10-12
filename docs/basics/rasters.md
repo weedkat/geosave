@@ -5,7 +5,7 @@ Build a small image with two named bands:
 ```python
 import numpy as np
 
-import geosave_engine as gs
+import geosave as gs
 
 anchor = gs.GeoAnchor.from_coordinates(
     latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
@@ -122,6 +122,18 @@ Spectral indices decode the selected bands' nodata and scale/offset metadata
 before calculating. For your own arithmetic, decode explicitly with
 `scene.gs.mask_and_scale()` when the file stores packed values.
 See [describe raster values](attrs.md).
+
+## Plot a band
+
+```python
+scene.gs.plot("ndvi", cmap="YlGn", xlabel="")
+```
+
+![NDVI values on the synthetic raster grid](../assets/raster-ndvi.png)
+
+The color scale shows the band's values. `xlabel=""` leaves out a location
+caption and avoids its reverse-geocoding lookup. For an interactive map, use
+`scene.gs.explore("ndvi")`; map tiles need network access.
 
 ## Put new pixels on an existing grid
 

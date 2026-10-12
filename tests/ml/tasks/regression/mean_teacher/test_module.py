@@ -7,7 +7,7 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from geosave_engine.ml.tasks.regression import mean_teacher
+from geosave.ml.tasks.regression import mean_teacher
 from tests.ml.tasks.regression.supervised.test_module import STAGES
 
 

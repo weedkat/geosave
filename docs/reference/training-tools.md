@@ -5,7 +5,7 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
 
 ## Optimizer, scheduler, and loss builders
 
-::: geosave_engine.ml.builders.CriterionSpec
+::: geosave.ml.builders.CriterionSpec
     options:
       inherited_members:
         - name
@@ -13,7 +13,7 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
         - init_args
         - resolve
 
-::: geosave_engine.ml.builders.OptimizerSpec
+::: geosave.ml.builders.OptimizerSpec
     options:
       inherited_members:
         - name
@@ -21,7 +21,7 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
         - init_args
         - resolve
 
-::: geosave_engine.ml.builders.SchedulerSpec
+::: geosave.ml.builders.SchedulerSpec
     options:
       inherited_members:
         - name
@@ -29,30 +29,30 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
         - init_args
         - resolve
 
-::: geosave_engine.ml.builders.build_criterion
+::: geosave.ml.builders.build_criterion
 
-::: geosave_engine.ml.builders.build_optimizer
+::: geosave.ml.builders.build_optimizer
 
-::: geosave_engine.ml.builders.build_scheduler
+::: geosave.ml.builders.build_scheduler
 
 ## Losses
 
-::: geosave_engine.ml.criterion
+::: geosave.ml.criterion
 
 ## Augmentation and mixing
 
-::: geosave_engine.ml.transforms
+::: geosave.ml.transforms
 
 ## Prediction logging
 
-::: geosave_engine.ml.tasks.segmentation.callbacks
+::: geosave.ml.tasks.segmentation.callbacks
     options:
       members:
         - DensePredictionLogger
 
 ## Threshold calibration
 
-::: geosave_engine.ml.tasks.segmentation.calibrate
+::: geosave.ml.tasks.segmentation.calibrate
     options:
       members:
         - ThresholdCalibrator
@@ -60,4 +60,4 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
 
 ## Workspace entry point
 
-::: geosave_engine.ml.cli.GeosaveCLI
+::: geosave.ml.cli.GeosaveCLI

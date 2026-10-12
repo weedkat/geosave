@@ -8,11 +8,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geosave_engine.geodata import stac
-from geosave_engine.geodata.errors import CollectionNotFoundError
-from geosave_engine.geodata.stac import StacClient, StacQuery
-from geosave_engine.geodata.io.vector import stac_geoparquet as table
-from geosave_engine.geodata.stac.client import _StacTableClient as StacTableClient
+from geosave.geodata import stac
+from geosave.geodata.errors import CollectionNotFoundError
+from geosave.geodata.stac import StacClient, StacQuery
+from geosave.geodata.io.vector import stac_geoparquet as table
+from geosave.geodata.stac.client import _StacTableClient as StacTableClient
 
 
 @pytest.fixture

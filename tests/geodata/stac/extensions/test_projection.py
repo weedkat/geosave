@@ -11,8 +11,8 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from pystac.extensions.projection import ProjectionExtension
 
-from geosave_engine.geodata import raster
-from geosave_engine.geodata.stac.extensions import projection
+from geosave.geodata import raster
+from geosave.geodata.stac.extensions import projection
 
 
 def _asset(href: str = "scene.tif") -> pystac.Asset:

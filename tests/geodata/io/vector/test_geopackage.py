@@ -9,7 +9,7 @@ import pytest
 from upath import UPath
 from shapely.geometry import Point
 
-from geosave_engine.geodata import open_vector
+from geosave.geodata import open_vector
 
 
 def _plots() -> gpd.GeoDataFrame:
@@ -43,7 +43,7 @@ def test_a_geopackage_writes_to_a_remote_url(bucket: str) -> None:
 
 
 def test_an_option_given_twice_refuses(tmp_path: Path) -> None:
-    from geosave_engine.geodata.io import geopackage
+    from geosave.geodata.io import geopackage
 
     path = _plots().gs.to_geopackage(tmp_path / "survey.gpkg")
 

@@ -160,7 +160,7 @@ The context recipe reads the prepared raster's metadata.
 inputs:
   image: !ref image
 context:
-  call: geosave_engine.model.encoder.prithvi.model_context
+  call: geosave.model.stages.encoder.prithvi.model_context
   kwargs: {raster: !ref image}
 ```
 
@@ -169,7 +169,7 @@ context:
 | `PrithviTL` | `temporal_coords` shaped `(time, 2)`: year and zero-based day of year; `location_coords` shaped `(2,)`: latitude and longitude |
 | `Clay` | `time` shaped `(2,)`: ISO week and hour; `latlon` shaped `(2,)`: latitude and longitude |
 
-For Clay, use `geosave_engine.model.encoder.clay.model_context` and a raster
+For Clay, use `geosave.model.stages.encoder.clay.model_context` and a raster
 with one acquisition instant. The functions return float32 tensors and read
 time labels and the grid centre, without loading pixels. Missing time or grid
 metadata raises.

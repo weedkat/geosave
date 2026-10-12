@@ -6,7 +6,7 @@ Create a table of field boundaries:
 import geopandas as gpd
 from shapely.geometry import box
 
-import geosave_engine as gs
+import geosave as gs
 
 fields = gpd.GeoDataFrame(
     {"name": ["north"], "class": [1]},

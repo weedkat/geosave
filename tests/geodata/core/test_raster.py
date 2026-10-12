@@ -9,9 +9,9 @@ import pytest
 import xarray as xr
 from odc.geo import CRS
 
-from geosave_engine.geodata import GeoArray, GeoRaster, GeoStack
-from geosave_engine.geodata.core.constructors import raster
-from geosave_engine.geodata.io import gdal
+from geosave.geodata import GeoArray, GeoRaster, GeoStack
+from geosave.geodata.core.constructors import raster
+from geosave.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster, geobox
 
@@ -416,8 +416,8 @@ def test_writers_that_name_nothing_take_no_id(writer) -> None:
 
 
 def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
-    from geosave_engine.geodata.io.vector import stac_geoparquet
-    from geosave_engine.geodata.stac import create_items
+    from geosave.geodata.io.vector import stac_geoparquet
+    from geosave.geodata.stac import create_items
 
     band = build_raster(times=2)["red"].isel(time=0)
     (file,) = band.gs.to_cog(tmp_path / "red.tif")
@@ -475,7 +475,7 @@ def test_a_band_writes_its_own_legend() -> None:
 
 
 def test_a_written_legend_survives_a_geotiff_round_trip(tmp_path: Path) -> None:
-    from geosave_engine.geodata.io import geotiff
+    from geosave.geodata.io import geotiff
 
     labelled = _classes()[["label"]].gs.write_legend(NAMES, COLORS)
 
@@ -512,7 +512,7 @@ def test_to_raster_recovers_only_the_attrs_every_band_shared() -> None:
 
 
 def test_a_legend_without_colours_writes_to_netcdf(tmp_path: Path) -> None:
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     labelled = _classes()[["label"]].gs.write_legend(NAMES, None)
 

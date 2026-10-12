@@ -11,10 +11,10 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from geosave_engine.ml.tasks.segmentation.callbacks import DensePredictionLogger
-from geosave_engine.ml.tasks.segmentation import supervised
-from geosave_engine.ml.tasks.segmentation.calibrate import ThresholdCalibrator
-from geosave_engine.model.chain import chain_step
+from geosave.ml.tasks.segmentation.callbacks import DensePredictionLogger
+from geosave.ml.tasks.segmentation import supervised
+from geosave.ml.tasks.segmentation.calibrate import ThresholdCalibrator
+from geosave.model.chain import chain_step
 
 
 class SegmentationModel(nn.Module):

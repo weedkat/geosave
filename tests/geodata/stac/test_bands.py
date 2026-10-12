@@ -10,15 +10,15 @@ import xarray as xr
 from pystac.extensions.eo import Band
 from pystac.extensions.raster import RasterBand
 
-import geosave_engine.geodata  # noqa: F401  — registers the .gs accessor
-from geosave_engine.geodata.attrs import Packing, Spectral
-from geosave_engine.geodata.stac._bands import (
+import geosave.geodata  # noqa: F401  — registers the .gs accessor
+from geosave.geodata.attrs import Packing, Spectral
+from geosave.geodata.stac._bands import (
     band_attrs,
     load_attrs,
     read_asset_fields,
     read_bands,
 )
-from geosave_engine.geodata.warnings import DroppedAttrsWarning
+from geosave.geodata.warnings import DroppedAttrsWarning
 
 
 def _item(id: str, timestamp: dt, fields: dict[str, object]) -> pystac.Item:
@@ -57,8 +57,8 @@ def test_importing_attrs_does_not_import_stac() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; import geosave_engine.geodata.attrs; "
-            "assert 'geosave_engine.geodata.stac' not in sys.modules",
+            "import sys; import geosave.geodata.attrs; "
+            "assert 'geosave.geodata.stac' not in sys.modules",
         ],
         check=False,
         capture_output=True,

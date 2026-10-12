@@ -49,7 +49,7 @@ an instant with missing observations. `mode="drop"` omits such frames and warns.
 ## Cut chips and pad edges
 
 ```python
-import geosave_engine as gs
+import geosave as gs
 
 tiler, halo = gs.cuts.layout((128, 128), (64, 64), overlap=16)
 halo

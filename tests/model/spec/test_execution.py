@@ -1,6 +1,6 @@
 import pytest
 
-from geosave_engine.model.spec import ModelSpec, Ref, StageSpec
+from geosave.model.spec import ModelSpec, Ref, StageSpec
 
 _events: list[int] = []
 

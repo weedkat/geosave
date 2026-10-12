@@ -4,7 +4,7 @@ from datetime import datetime as dt
 
 import numpy as np
 
-from geosave_engine.geodata.attrs import TimeSpec
+from geosave.geodata.attrs import TimeSpec
 
 
 def test_bounds_are_half_open_forward_for_start_labels() -> None:

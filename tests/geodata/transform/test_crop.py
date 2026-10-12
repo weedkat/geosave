@@ -9,8 +9,8 @@ import pytest
 import xarray as xr
 from dask.callbacks import Callback
 
-from geosave_engine.geodata.core.stack import stack
-from geosave_engine.geodata.transform.crop import crop, window
+from geosave.geodata.core.stack import stack
+from geosave.geodata.transform.crop import crop, window
 from tests.geodata.conftest import build_raster, titled
 from tests.geodata.transform.conftest import grid_of
 
@@ -20,7 +20,7 @@ def test_crop_cuts_a_band_and_marks_outside_pixels_nodata() -> None:
     import shapely
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
     band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0)
@@ -59,7 +59,7 @@ def _triangle():
 def _band(times: int = 0):
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
     band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0).rename(
@@ -85,7 +85,7 @@ def test_crop_masks_every_instant_of_a_time_axis() -> None:
 
 
 def test_crop_cuts_every_group_of_a_stack_and_keeps_root_attrs() -> None:
-    from geosave_engine.geodata.core.stack import stack
+    from geosave.geodata.core.stack import stack
 
     band = _band()
     tree = stack(
@@ -116,7 +116,7 @@ def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() ->
     import shapely
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(

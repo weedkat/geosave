@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import torch
 
-from geosave_engine.ml.tasks.classification import supervised
+from geosave.ml.tasks.classification import supervised
 from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
 
 

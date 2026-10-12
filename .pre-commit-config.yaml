@@ -19,7 +19,7 @@ repos:
   #   hooks:
   #     - id: geosave-mypy
   #       name: geosave mypy (pre-push)
-  #       entry: uv run mypy src/geosave_engine tests
+  #       entry: uv run mypy src/geosave tests
   #       language: system
   #       pass_filenames: false
   #       stages: [pre-push]

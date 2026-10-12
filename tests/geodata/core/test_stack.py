@@ -8,10 +8,10 @@ import xarray as xr
 from upath import UPath
 
 
-from geosave_engine.geodata.stac import create_items
-from geosave_engine.geodata import open_raster, open_stack
-from geosave_engine.geodata.core.stack import map_groups, stack as build_stack
-from geosave_engine.geodata.io import gdal
+from geosave.geodata.stac import create_items
+from geosave.geodata import open_raster, open_stack
+from geosave.geodata.core.stack import map_groups, stack as build_stack
+from geosave.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster
 from tests.geodata.conftest import titled as _titled
@@ -404,7 +404,7 @@ def test_shared_geographic_stack_spans_y_x() -> None:
 
 def test_plot_takes_a_caption_without_asking_the_network(monkeypatch) -> None:
     pytest.importorskip("hvplot", reason="viz extra not installed")
-    from geosave_engine.geodata.core.anchor import GeoAnchor
+    from geosave.geodata.core.anchor import GeoAnchor
 
     def refuse(_):
         raise AssertionError("an explicit caption must not reverse geocode")
@@ -428,3 +428,20 @@ def test_plot_leaves_room_between_columns_for_each_colorbar() -> None:
     )
 
     assert drawn.opts.get("plot", backend="matplotlib").kwargs["hspace"] == 0.9
+
+
+def test_bands_stack_as_one_variable_groups() -> None:
+    from odc.geo.geobox import GeoBox
+
+    from geosave.geodata.core.constructors import raster as build
+    from geosave.geodata.core.stack import stack as build_stack
+
+    box = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32749", resolution=10)
+    label = build({"label": (("y", "x"), np.zeros((2, 2), "uint8"))}, box)["label"]
+    unnamed = label.copy().rename(None)
+
+    tree = build_stack({"label": label, "prediction": unnamed})
+
+    assert tree.gs.groups == ("label", "prediction")
+    assert list(tree["label"].dataset.data_vars) == ["label"]
+    assert list(tree["prediction"].dataset.data_vars) == ["prediction"]

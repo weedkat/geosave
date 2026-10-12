@@ -6,7 +6,7 @@ for [Dataset](raster-accessor.md), [DataArray](array-accessor.md), and [DataTree
 
 ## Arrays and rasters
 
-::: geosave_engine.geodata.core.constructors
+::: geosave.geodata.core.constructors
     options:
       members:
         - array
@@ -15,6 +15,6 @@ for [Dataset](raster-accessor.md), [DataArray](array-accessor.md), and [DataTree
 
 ## Stacks
 
-::: geosave_engine.geodata.core.stack.stack
+::: geosave.geodata.core.stack.stack
     options:
       members: false

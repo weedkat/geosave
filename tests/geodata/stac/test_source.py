@@ -11,9 +11,9 @@ from pydantic import ValidationError
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-import geosave_engine.geodata.stac.source as source_module
-from geosave_engine.geodata import GeoAnchor, raster
-from geosave_engine.geodata.stac import StacQuery, StacSource, StacSourceConfig
+import geosave.geodata.stac.source as source_module
+from geosave.geodata import GeoAnchor, raster
+from geosave.geodata.stac import StacQuery, StacSource, StacSourceConfig
 
 
 class FakeClient:

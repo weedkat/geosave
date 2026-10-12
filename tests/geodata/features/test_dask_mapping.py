@@ -11,7 +11,7 @@ from scipy.ndimage import uniform_filter
 def test_mapping_keeps_coordinates_and_matches_eager_neighborhoods(
     backend: str,
 ) -> None:
-    from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
+    from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     values = np.arange(64, dtype="float32").reshape(8, 8)
     scene = xr.Dataset(
@@ -36,7 +36,7 @@ def test_mapping_keeps_coordinates_and_matches_eager_neighborhoods(
 
 
 def test_mapping_never_overlaps_the_time_axis() -> None:
-    from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
+    from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     values = np.stack([np.ones((4, 4)), np.full((4, 4), 10)]).astype("float32")
     field = xr.DataArray(values, dims=("time", "y", "x")).chunk(
@@ -55,7 +55,7 @@ def test_mapping_never_overlaps_the_time_axis() -> None:
 
 
 def test_mapping_refuses_a_halo_that_needs_larger_chunks() -> None:
-    from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
+    from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     field = xr.DataArray(np.ones((8, 8)), dims=("y", "x")).chunk({"y": 2, "x": 2})
 
@@ -65,7 +65,7 @@ def test_mapping_refuses_a_halo_that_needs_larger_chunks() -> None:
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_mapping_orders_dataset_bands_by_dimension_name(lazy: bool) -> None:
-    from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
+    from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     values = np.arange(16, dtype="float32").reshape(4, 4)
     scene = xr.Dataset({"a": (("y", "x"), values), "b": (("y", "x"), values * 2)})
@@ -86,7 +86,7 @@ def test_mapping_orders_dataset_bands_by_dimension_name(lazy: bool) -> None:
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_mapping_refuses_negative_halos(lazy: bool) -> None:
-    from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
+    from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     field = xr.DataArray(np.ones((4, 4)), dims=("y", "x"))
     if lazy:

@@ -6,7 +6,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## Reader selection
 
-::: geosave_engine.geodata.io
+::: geosave.geodata.io
     options:
       members:
         - open_raster
@@ -15,7 +15,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## COG files
 
-::: geosave_engine.geodata.io.raster.cogs
+::: geosave.geodata.io.raster.cogs
     options:
       members:
         - CogFile
@@ -28,7 +28,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## GeoTIFF and GDAL
 
-::: geosave_engine.geodata.io.raster.gdal
+::: geosave.geodata.io.raster.gdal
     options:
       members:
         - read
@@ -36,7 +36,7 @@ See [Read and save data](../basics/io.md) for complete examples.
         - RasterioOpenOptions
         - hf_to_s3
 
-::: geosave_engine.geodata.io.raster.geotiff
+::: geosave.geodata.io.raster.geotiff
     options:
       members:
         - write_cog
@@ -46,11 +46,11 @@ See [Read and save data](../basics/io.md) for complete examples.
         - COGWriteOptions
         - GTiffWriteOptions
 
-::: geosave_engine.geodata.io.raster.tags.GeoTIFFTags
+::: geosave.geodata.io.raster.tags.GeoTIFFTags
 
 ## Zarr
 
-::: geosave_engine.geodata.io.raster.zarr
+::: geosave.geodata.io.raster.zarr
     options:
       members:
         - read
@@ -62,7 +62,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## NetCDF
 
-::: geosave_engine.geodata.io.raster.netcdf
+::: geosave.geodata.io.raster.netcdf
     options:
       members:
         - read
@@ -75,7 +75,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## Vendor products
 
-::: geosave_engine.geodata.io.raster.safe
+::: geosave.geodata.io.raster.safe
     options:
       members:
         - read
@@ -83,7 +83,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## GeoParquet
 
-::: geosave_engine.geodata.io.vector.geoparquet
+::: geosave.geodata.io.vector.geoparquet
     options:
       members:
         - read
@@ -93,7 +93,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## GeoJSON
 
-::: geosave_engine.geodata.io.vector.geojson
+::: geosave.geodata.io.vector.geojson
     options:
       members:
         - read
@@ -104,7 +104,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## GeoPackage
 
-::: geosave_engine.geodata.io.vector.geopackage
+::: geosave.geodata.io.vector.geopackage
     options:
       members:
         - read
@@ -114,7 +114,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## STAC GeoParquet
 
-::: geosave_engine.geodata.io.vector.stac_geoparquet
+::: geosave.geodata.io.vector.stac_geoparquet
     options:
       members:
         - from_items
@@ -126,7 +126,7 @@ See [Read and save data](../basics/io.md) for complete examples.
 
 ## Locations and storage
 
-::: geosave_engine.geodata.io.storage
+::: geosave.geodata.io.storage
     options:
       members:
         - Location

@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import open_vector, raster, stac, stack
+from geosave.geodata import open_vector, raster, stac, stack
 from tests.geodata.conftest import stack_templates
 
 GROUPS = ("s2", "s1", "dem", "label")

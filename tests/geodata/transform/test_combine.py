@@ -13,10 +13,10 @@ from affine import Affine
 from odc.geo import CRS
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.constructors import raster as build_raster
-from geosave_engine.geodata.core.stack import stack
-from geosave_engine.geodata.transform.combine import concat_time, merge_bands, mosaic
-from geosave_engine.geodata.warnings import DroppedAttrsWarning, GeoSaveWarning
+from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.stack import stack
+from geosave.geodata.transform.combine import concat_time, merge_bands, mosaic
+from geosave.geodata.warnings import DroppedAttrsWarning, GeoSaveWarning
 
 from .conftest import build, geobox, grid_of
 
@@ -540,7 +540,7 @@ def test_mosaic_lays_floats_whose_nodata_is_nan() -> None:
     import numpy as np
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import raster as build
+    from geosave.geodata.core.constructors import raster as build
 
     west = GeoBox.from_bbox((0, 0, 80, 80), crs="EPSG:32633", resolution=10)
     east = GeoBox.from_bbox((40, 0, 120, 80), crs="EPSG:32633", resolution=10)
@@ -566,3 +566,33 @@ def test_mosaic_refuses_different_scalar_observations() -> None:
     second = granule().assign_coords(time=np.datetime64("2024-01-02"))
     with pytest.raises(ValueError, match="coordinates"):
         mosaic([first, second])
+
+
+def test_merge_bands_ignores_the_grid_mappings_placeholder_value() -> None:
+    # Readers disagree on the CF placeholder: rioxarray stores 0, odc-geo the EPSG code.
+    box = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32749", resolution=10)
+    red = build_raster({"red": (("y", "x"), np.ones((2, 2), "uint16"))}, box)
+    nir = build_raster({"nir": (("y", "x"), np.ones((2, 2), "uint16"))}, box)
+    red = red.assign_coords(spatial_ref=red.spatial_ref.copy(data=0))
+    nir = nir.assign_coords(spatial_ref=nir.spatial_ref.copy(data=32749))
+
+    merged = merge_bands([red, nir])
+
+    assert list(merged.data_vars) == ["red", "nir"]
+    assert merged.gs.geobox == box
+
+
+def test_merge_bands_keeps_one_spelling_of_the_grid_coordinates() -> None:
+    # A band sliced from a file has bare x/y; one odc-geo warped has CF attrs.
+    box = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32749", resolution=10)
+    red = build_raster({"red": (("y", "x"), np.ones((2, 2), "uint16"))}, box)
+    nir = build_raster({"nir": (("y", "x"), np.ones((2, 2), "uint16"))}, box)
+    red = red.copy()
+    red.x.attrs, red.y.attrs = {}, {}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DroppedAttrsWarning)
+        merged = merge_bands([red, nir])
+
+    assert merged.x.attrs["axis"] == "X"
+    assert merged.y.attrs["standard_name"] == "projection_y_coordinate"

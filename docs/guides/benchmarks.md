@@ -4,7 +4,7 @@ Download the original Dynamic World expert labels:
 
 <!-- NETWORK: original publisher download -->
 ```python
-from geosave_engine.geodata.benchmarks import dynamic_world
+from geosave.geodata.benchmarks import dynamic_world
 
 labels = dynamic_world.download("data/dynamic_world", subset="experts")
 labels
@@ -42,7 +42,7 @@ on the downloaded files, so its output is not captured here:
 
 <!-- NETWORK: requires the completed download above -->
 ```python
-import geosave_engine as gs
+import geosave as gs
 
 files = sorted(labels.rglob("*.tif"))
 label = gs.open_raster(files[0])

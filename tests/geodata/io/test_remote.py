@@ -25,15 +25,15 @@ import numpy as np
 import pytest
 from shapely.geometry import box
 
-from geosave_engine.geodata import (
+from geosave.geodata import (
     configure_gdal,
     open_raster,
     open_stack,
     open_vector,
     stack,
 )
-from geosave_engine.geodata.io import storage
-from geosave_engine.geodata import stac
+from geosave.geodata.io import storage
+from geosave.geodata import stac
 
 from tests.geodata.conftest import build_raster, read_items
 

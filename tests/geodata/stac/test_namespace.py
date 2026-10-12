@@ -2,7 +2,7 @@
 
 
 def test_the_stac_namespace_exposes_item_helpers_and_clients() -> None:
-    import geosave_engine as gs
+    import geosave as gs
 
     assert sorted(gs.stac.__all__) == [
         "StacClient",

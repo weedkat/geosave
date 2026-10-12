@@ -7,10 +7,10 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-import geosave_engine.geodata.attrs as attrs
-from geosave_engine.geodata.core.constructors import raster as build_raster
-from geosave_engine.geodata.core.stack import stack as build_stack
-from geosave_engine.geodata.transform.warp import Resampling, align, reproject
+import geosave.geodata.attrs as attrs
+from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.transform.warp import Resampling, align, reproject
 
 from .conftest import grid_of
 
@@ -56,7 +56,7 @@ def test_a_geobox_target_lands_exactly_on_it() -> None:
 
 @pytest.mark.parametrize("mode", ["direct", "accessor", "stack"])
 def test_fill_warning_points_to_the_caller(mode: str) -> None:
-    from geosave_engine.geodata.warnings import AssumedFillWarning
+    from geosave.geodata.warnings import AssumedFillWarning
 
     source = landcover()
     with pytest.warns(AssumedFillWarning) as caught:
@@ -158,7 +158,7 @@ def test_a_palette_band_refuses_a_blending_kernel_without_a_legend() -> None:
 def test_a_value_preserving_kernel_accepts_class_codes(
     resampling: Resampling,
 ) -> None:
-    from geosave_engine.geodata.warnings import AssumedFillWarning
+    from geosave.geodata.warnings import AssumedFillWarning
 
     # The class map carries no fill value, so uncovered pixels take uint8's.
     with pytest.warns(AssumedFillWarning, match="255"):
@@ -347,7 +347,7 @@ def test_reproject_keeps_a_bands_name() -> None:
 def test_reproject_gives_an_integer_with_no_fill_value_one_and_warns(
     dtype: str, fill: int
 ) -> None:
-    from geosave_engine.geodata.warnings import AssumedFillWarning
+    from geosave.geodata.warnings import AssumedFillWarning
 
     source = _small(dtype, None)
 
@@ -373,7 +373,7 @@ def test_reproject_stays_quiet_for_a_variable_carrying_a_fill_value() -> None:
 
 
 def test_reproject_records_nan_for_a_float_with_no_fill_value_and_warns() -> None:
-    from geosave_engine.geodata.warnings import AssumedFillWarning
+    from geosave.geodata.warnings import AssumedFillWarning
 
     source = _small("float32", None)
 
@@ -409,7 +409,7 @@ def test_stack_reproject_resolves_numeric_resolution_once() -> None:
 
 
 def test_common_grid_covers_every_stack_group() -> None:
-    from geosave_engine.geodata.transform.warp import common_grid
+    from geosave.geodata.transform.warp import common_grid
 
     source = scene()
     eastern = build_raster(
@@ -428,7 +428,7 @@ def test_common_grid_covers_every_stack_group() -> None:
 def test_common_grid_selects_smallest_pixel_area(reverse, rotation) -> None:
     from affine import Affine
 
-    from geosave_engine.geodata.transform.warp import common_grid
+    from geosave.geodata.transform.warp import common_grid
 
     origin = Affine.translation(300000, 5000000) * Affine.rotation(rotation)
     narrow = GeoBox((4, 4), origin * Affine.scale(10, -40), UTM)

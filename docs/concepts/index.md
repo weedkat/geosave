@@ -13,4 +13,4 @@ related to your next operation; you do not need all of them before using GeoSave
 | [Training contracts](training.md) | What must a Dataset return, and how do loss, masks, augmentation, and metrics behave? |
 
 Use the [API reference](../reference/index.md) for argument details. Package
-ownership and contributor guidance live in [Architecture](../architecture.md).
+ownership and contributor guidance live in [Architecture](../contributing/architecture.md).

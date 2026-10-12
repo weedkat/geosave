@@ -11,8 +11,8 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.constructors import array, raster
-from geosave_engine.geodata.io import gdal
+from geosave.geodata.core.constructors import array, raster
+from geosave.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster, geobox
 
@@ -248,7 +248,7 @@ def test_raster_refuses_a_tree_as_reference() -> None:
 
 @pytest.mark.parametrize("format", ["geotiff", "netcdf"])
 def test_native_reference_round_trip(tmp_path: Path, format: str) -> None:
-    from geosave_engine.geodata.io import geotiff, netcdf
+    from geosave.geodata.io import geotiff, netcdf
 
     source = build_raster(times=2).isel(time=0)
     pixels = np.array([[0, 1], [2, 255]], dtype="uint8")
@@ -397,7 +397,7 @@ def test_raster_refuses_a_coord_of_the_wrong_length() -> None:
 
 
 def test_array_builds_the_band_raster_would() -> None:
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     pixels = np.ones((2, *geobox().shape), "int16")
     labels = pd.date_range("2024-01-01", periods=2)
@@ -435,7 +435,7 @@ def test_array_builds_the_band_raster_would() -> None:
     ],
 )
 def test_array_refuses_what_raster_refuses(pixels, dims, coords, message) -> None:
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     with pytest.raises(ValueError, match=message):
         array(

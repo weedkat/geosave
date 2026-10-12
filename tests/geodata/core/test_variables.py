@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata.core.variables import variable_names
+from geosave.geodata.core.variables import variable_names
 
 
 def scene() -> xr.Dataset:

@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-import geosave_engine.geodata  # noqa: F401  — registers the .gs accessor
-import geosave_engine.geodata.attrs as attrs
+import geosave.geodata  # noqa: F401  — registers the .gs accessor
+import geosave.geodata.attrs as attrs
 
 
 def band(**band_attrs: object) -> xr.DataArray:

@@ -14,11 +14,11 @@ from rasterio.crs import CRS
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 
-from geosave_engine.geodata import attrs
-from geosave_engine.geodata.io.raster.tags import GeoTIFFTags
-from geosave_engine.geodata.warnings import UnreadMaskWarning
-from geosave_engine.geodata.io import gdal
-from geosave_engine.geodata.io import geotiff
+from geosave.geodata import attrs
+from geosave.geodata.io.raster.tags import GeoTIFFTags
+from geosave.geodata.warnings import UnreadMaskWarning
+from geosave.geodata.io import gdal
+from geosave.geodata.io import geotiff
 
 from tests.geodata.conftest import build_raster
 
@@ -598,7 +598,7 @@ def test_a_palette_outranks_the_interpretation_a_band_was_read_with(
 
 
 def test_a_palette_read_from_a_cog_writes_to_netcdf(tmp_path: Path) -> None:
-    from geosave_engine.geodata.io import netcdf
+    from geosave.geodata.io import netcdf
 
     label = (
         build_raster()[["red"]]

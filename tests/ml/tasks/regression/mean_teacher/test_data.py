@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
-from geosave_engine.ml.tasks.regression import mean_teacher
+from geosave.ml.tasks.regression import mean_teacher
 from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]

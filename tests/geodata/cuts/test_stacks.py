@@ -8,8 +8,8 @@ import pandas as pd
 import pytest
 from shapely.affinity import translate
 
-from geosave_engine.geodata import cuts
-from geosave_engine.geodata.warnings import (
+from geosave.geodata import cuts
+from geosave.geodata.warnings import (
     DuplicateInstantsWarning,
     PartialCoverWarning,
 )

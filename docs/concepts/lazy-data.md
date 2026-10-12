@@ -5,7 +5,7 @@ Build a calculation without reading every pixel:
 ```python
 import dask.array as da
 
-import geosave_engine as gs
+import geosave as gs
 
 anchor = gs.GeoAnchor.from_coordinates(
     latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"

@@ -7,8 +7,8 @@ import orjson
 import pandas as pd
 import pytest
 
-from geosave_engine.geodata import cuts
-from geosave_engine.geodata.warnings import DroppedFramesWarning, DroppedInstantsWarning
+from geosave.geodata import cuts
+from geosave.geodata.warnings import DroppedFramesWarning, DroppedInstantsWarning
 
 
 def _days(frame, collection: str) -> list[str]:

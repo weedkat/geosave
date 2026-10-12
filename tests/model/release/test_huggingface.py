@@ -16,12 +16,12 @@ from safetensors.torch import load_file, save_file
 import torch
 from transformers import AutoModel
 
-from geosave_engine.__about__ import __version__
-from geosave_engine.model.chain import ModelChain, chain_step
-from geosave_engine.model.head.segmentation import SegmentationHead
-from geosave_engine.model.registry import build_model, register_model
-from geosave_engine.model.release import GeoSaveConfig, GeoSaveModel
-from geosave_engine.model.spec import ModelSpec
+from geosave.__about__ import __version__
+from geosave.model.chain import ModelChain, chain_step
+from geosave.model.stages.head.segmentation import SegmentationHead
+from geosave.model.registry import build_model, register_model
+from geosave.model.release import GeoSaveConfig, GeoSaveModel
+from geosave.model.spec import ModelSpec
 
 
 @register_model("head", "periodic")
@@ -156,7 +156,7 @@ def test_push_uploads_model_spec_and_card_in_one_commit(
         "model.safetensors",
         ModelSpec.filename,
     }
-    assert "geosave-engine" in uploaded["README.md"]
+    assert "geosave" in uploaded["README.md"]
 
 
 def test_reload_fills_non_persistent_buffers(tmp_path: Path) -> None:
@@ -224,7 +224,7 @@ def test_automodel_loads_in_fresh_process(tmp_path: Path, chain: ModelChain) -> 
             """
 import sys
 import torch
-import geosave_engine.model.release
+import geosave.model.release
 from transformers import AutoModel
 model = AutoModel.from_pretrained(sys.argv[1], local_files_only=True)
 actual = model(feature_map=torch.ones(1, 2, 4, 4))

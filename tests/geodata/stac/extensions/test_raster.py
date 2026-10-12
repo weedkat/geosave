@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 from pystac.extensions.raster import RasterBand, RasterExtension
 
-from geosave_engine.geodata import open_raster
-from geosave_engine.geodata.stac.extensions import raster
+from geosave.geodata import open_raster
+from geosave.geodata.stac.extensions import raster
 
 from tests.geodata.conftest import build_raster
 

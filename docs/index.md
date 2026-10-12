@@ -1,9 +1,9 @@
-# GeoSave Engine
+# GeoSave
 
 GeoSave connects geospatial data preparation to PyTorch Lightning training.
 Images stay in xarray, vectors stay in GeoDataFrames, and model graphs stay in
 PyTorch. You can use each part from ordinary Python without creating a workspace
-or running a Prefect workflow.
+or installing the optional Prefect integration.
 
 GeoSave adds geospatial accessors, metadata-aware raster operations, STAC
 catalogs and readable training windows. It also provides model composition,
@@ -47,7 +47,7 @@ computation, window selection, model inputs, or training behavior.
 
 Use the [API reference](reference/index.md) to look up a function's arguments,
 return value, errors, and supported shapes. Contributor details live in
-[Architecture](architecture.md).
+[Architecture](contributing/architecture.md).
 
 GeoSave is in Alpha. The docs describe the current implementation; examples of
 features that remain unimplemented are labeled explicitly.

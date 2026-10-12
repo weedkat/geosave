@@ -6,9 +6,9 @@ from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from geosave_engine.ml.tasks.pretraining import mim
-from geosave_engine.ml.tasks.pretraining.mim.module import patch_mask
-from geosave_engine.model.chain import chain_step
+from geosave.ml.tasks.pretraining import mim
+from geosave.ml.tasks.pretraining.mim.module import patch_mask
+from geosave.model.chain import chain_step
 
 
 class Reconstructor(nn.Module):

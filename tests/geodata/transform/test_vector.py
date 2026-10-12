@@ -13,7 +13,7 @@ def _sliced_geographic_scene():
     """Build a raster whose sliced coordinates drift from its geobox's own."""
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import raster
+    from geosave.geodata.core.constructors import raster
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(
@@ -29,7 +29,7 @@ def test_rasterize_lands_on_the_target_rasters_own_coordinates() -> None:
     import shapely
     import xarray as xr
 
-    from geosave_engine.geodata.transform.nodata import mask
+    from geosave.geodata.transform.nodata import mask
 
     scene = _sliced_geographic_scene()
     left, bottom, right, top = grid_of(scene).boundingbox.bbox
@@ -61,7 +61,7 @@ def test_a_presence_mask_refuses_a_truthy_fill() -> None:
 def _flags(values, dtype):
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata.core.constructors import array
+    from geosave.geodata.core.constructors import array
 
     pixels = np.asarray(values, dtype=dtype)
     side = pixels.shape[0] * 10
@@ -106,7 +106,7 @@ def test_geographic_polygonization_and_rasterization_round_trip():
     band = xr.DataArray(pixels, dims=dims, coords=xr_coords(grid, dims=dims))
     band.encoding["grid_mapping"] = "spatial_ref"
 
-    from geosave_engine.geodata.transform.vector import vectorize
+    from geosave.geodata.transform.vector import vectorize
 
     regions = vectorize(band)
     restored = regions.gs.rasterize(band, column="value", dtype="uint8")

@@ -1,6 +1,6 @@
 import torch
 
-from geosave_engine.ml.tasks.segmentation.calibrate import softmax_argmax
+from geosave.ml.tasks.segmentation.calibrate import softmax_argmax
 
 
 def test_top_class_and_its_confidence_leave_logits_unchanged():

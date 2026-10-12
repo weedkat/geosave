@@ -7,9 +7,9 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata.core.constructors import raster as build_raster
-from geosave_engine.geodata.core.stack import stack as build_stack
-from geosave_engine.geodata.transform.nodata import mask, to_nan, unpack
+from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.transform.nodata import mask, to_nan, unpack
 from tests.geodata.conftest import titled
 
 UTM = "EPSG:32633"

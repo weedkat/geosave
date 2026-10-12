@@ -6,9 +6,9 @@ Check each constructor before selecting a model.
 
 ## Encoders
 
-::: geosave_engine.model.encoder.DINOv3
+::: geosave.model.stages.encoder.DINOv3
 
-::: geosave_engine.model.encoder.Prithvi
+::: geosave.model.stages.encoder.Prithvi
     options:
       inherited_members:
         - __init__
@@ -17,7 +17,7 @@ Check each constructor before selecting a model.
         - pyramid_strides
         - input_size
 
-::: geosave_engine.model.encoder.PrithviTL
+::: geosave.model.stages.encoder.PrithviTL
     options:
       inherited_members:
         - forward
@@ -25,11 +25,11 @@ Check each constructor before selecting a model.
         - pyramid_strides
         - input_size
 
-::: geosave_engine.model.encoder.Clay
+::: geosave.model.stages.encoder.Clay
 
 ## Prithvi context
 
-::: geosave_engine.model.encoder.prithvi
+::: geosave.model.stages.encoder.prithvi
     options:
       members:
         - temporal_coords
@@ -38,7 +38,7 @@ Check each constructor before selecting a model.
 
 ## Clay context
 
-::: geosave_engine.model.encoder.clay
+::: geosave.model.stages.encoder.clay
     options:
       members:
         - time
@@ -47,15 +47,15 @@ Check each constructor before selecting a model.
 
 ## Decoders
 
-::: geosave_engine.model.decoder
+::: geosave.model.stages.decoder
 
 ## Heads
 
-::: geosave_engine.model.head.ClassificationHead
+::: geosave.model.stages.head.ClassificationHead
 
-::: geosave_engine.model.head.DenseHead
+::: geosave.model.stages.head.DenseHead
 
-::: geosave_engine.model.head.RegressionHead
+::: geosave.model.stages.head.RegressionHead
     options:
       inherited_members:
         - __init__
@@ -63,7 +63,7 @@ Check each constructor before selecting a model.
         - forward_logits
         - feature_channels
 
-::: geosave_engine.model.head.SegmentationHead
+::: geosave.model.stages.head.SegmentationHead
     options:
       inherited_members:
         - __init__
@@ -73,4 +73,4 @@ Check each constructor before selecting a model.
 
 ## Complete models
 
-::: geosave_engine.model.monolith
+::: geosave.model.stages.monolith

@@ -28,7 +28,7 @@ nav = [
         { "Train a segmentation model" = "guides/training.md" },
         { "Save and publish a model" = "guides/release.md" },
         { "Create a training workspace" = "guides/workspaces.md" },
-        { "Ingest data with a workflow" = "guides/workflows.md" },
+        { "Optional ingestion flows" = "guides/workflows.md" },
         { "Download benchmark files" = "guides/benchmarks.md" },
     ] },
     { "Concepts and behavior" = [
@@ -75,7 +75,10 @@ nav = [
         { "Workflows" = "reference/workflow.md" },
     ] },
     { "Contributing" = [
-        { "Architecture" = "architecture.md" },
+        { "Architecture" = "contributing/architecture.md" },
+        { "Open decisions" = "contributing/open-decisions.md" },
+        { "Maintenance ledger" = "contributing/maintenance-ledger.md" },
+        { "Design specs" = "contributing/specs/index.md" },
     ] },
 ]
 

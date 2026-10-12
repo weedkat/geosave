@@ -15,9 +15,9 @@ from pystac.extensions.eo import EOExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import RasterExtension
 
-from geosave_engine.geodata import io, raster, stac, stack
-from geosave_engine.geodata import open_vector
-from geosave_engine.geodata.io.vector import stac_geoparquet as table
+from geosave.geodata import io, raster, stac, stack
+from geosave.geodata import open_vector
+from geosave.geodata.io.vector import stac_geoparquet as table
 
 from tests.geodata.conftest import build_raster, cog_template, stack_templates
 
@@ -328,7 +328,7 @@ def test_a_collection_cannot_override_named_layers(scene, tmp_path) -> None:
 
 
 def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
-    from geosave_engine.geodata.stac.item import cog_files
+    from geosave.geodata.stac.item import cog_files
 
     files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
     item = table.to_items(stac.create_items(files))[0]
@@ -344,3 +344,75 @@ def test_paths_are_not_records(scene, tmp_path) -> None:
 
     with pytest.raises(TypeError, match="CogFile"):
         stac.create_items([file.href for file in files])
+
+
+def test_a_collection_can_be_named_by_its_id(scene, tmp_path):
+    (path,) = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+
+    one = stac.create_item({"image": path.href}, id="s0", collection="image")
+    many = stac.create_items([path], collection="image")
+
+    assert one["collection"].tolist() == ["image"]
+    assert many["collection"].tolist() == ["image"]
+
+
+def test_records_name_variables_by_asset_key(tmp_path) -> None:
+    # Planetary Computer's shape: per-band files beside a true-colour rendering
+    # whose eo:bands repeat their names, with no raster:bands count.
+    from datetime import UTC, datetime
+
+    import pystac
+    from pystac.extensions.eo import Band
+
+    from geosave.geodata.stac.item import cog_files
+
+    item = pystac.Item(
+        "scene",
+        {"type": "Point", "coordinates": [0.0, 0.0]},
+        [0.0, 0.0, 0.0, 0.0],
+        datetime(2019, 1, 30, tzinfo=UTC),
+        {},
+    )
+    EOExtension.add_to(item)
+    for key, names in (("B04", ["B04"]), ("visual", ["B04", "B03", "B02"])):
+        item.add_asset(key, pystac.Asset(f"{tmp_path}/{key}.tif", roles=["data"]))
+        EOExtension.ext(item.assets[key]).bands = [Band.create(name=n) for n in names]
+
+    records = cog_files(item)
+
+    assert [record.bands for record in records] == [
+        ("B04",),
+        ("visual.1", "visual.2", "visual.3"),
+    ]
+
+
+def test_band_attrs_carry_eo_facts_by_variable_name(tmp_path) -> None:
+    from datetime import UTC, datetime
+
+    import pystac
+    from pystac.extensions.eo import Band
+
+    import geosave.geodata.attrs as attrs
+    from geosave.geodata.stac.item import band_attrs
+
+    item = pystac.Item(
+        "scene",
+        {"type": "Point", "coordinates": [0.0, 0.0]},
+        [0.0, 0.0, 0.0, 0.0],
+        datetime(2019, 1, 30, tzinfo=UTC),
+        {},
+    )
+    EOExtension.add_to(item)
+    listed = {
+        "B04": [Band.create(name="B04", common_name="red", center_wavelength=0.665)],
+        "visual": [Band.create(name=n) for n in ("B04", "B03", "B02")],
+    }
+    for key, bands in listed.items():
+        item.add_asset(key, pystac.Asset(f"{tmp_path}/{key}.tif", roles=["data"]))
+        EOExtension.ext(item.assets[key]).bands = bands
+
+    found = band_attrs(item)
+
+    assert attrs.Spectral.from_attrs(found["B04"]).common_name == "red"
+    # visual's bands state only a name, which names no CF attr.
+    assert set(found) == {"B04"}

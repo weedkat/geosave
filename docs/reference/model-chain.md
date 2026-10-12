@@ -5,15 +5,15 @@ See [Build a model](../guides/models.md) for examples before writing custom stag
 
 ## Composition
 
-::: geosave_engine.model.chain
+::: geosave.model.chain
 
 ## Construction
 
-::: geosave_engine.model.registry
+::: geosave.model.registry
     options:
       members:
         - build_model
         - list_models
         - register_model
 
-::: geosave_engine.model.factory.BuildSpec
+::: geosave.model.factory.BuildSpec

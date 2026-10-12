@@ -9,8 +9,8 @@ import xarray as xr
 from affine import Affine
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import raster
-from geosave_engine.geodata.features import shadow_mask
+from geosave.geodata import raster
+from geosave.geodata.features import shadow_mask
 
 from tests.geodata.features.conftest import sentinel
 

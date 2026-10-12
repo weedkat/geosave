@@ -9,8 +9,8 @@ import pytest
 from pystac.extensions.classification import ClassificationExtension
 from pystac.extensions.raster import RasterExtension
 
-from geosave_engine.geodata import attrs
-from geosave_engine.geodata.stac.extensions import classification, raster
+from geosave.geodata import attrs
+from geosave.geodata.stac.extensions import classification, raster
 
 from tests.geodata.conftest import build_raster
 

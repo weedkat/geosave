@@ -3,7 +3,7 @@
 import numpy as np
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import raster
+from geosave.geodata import raster
 
 
 def test_a_projected_grid_describes_its_axes_completely() -> None:

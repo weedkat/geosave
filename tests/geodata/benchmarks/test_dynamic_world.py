@@ -6,7 +6,7 @@ from zipfile import BadZipFile, ZipFile
 
 import pytest
 
-from geosave_engine.geodata.benchmarks import dynamic_world
+from geosave.geodata.benchmarks import dynamic_world
 
 
 @pytest.fixture

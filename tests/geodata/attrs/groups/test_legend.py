@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def test_classes_are_spelled_as_cf_flags() -> None:
@@ -117,7 +117,7 @@ def _labelled():
     import numpy as np
     from odc.geo.geobox import GeoBox
 
-    from geosave_engine.geodata import raster
+    from geosave.geodata import raster
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), "EPSG:32633", resolution=10)
     codes = np.array([[0, 1, 0, 1]] * 4, "uint8")
@@ -127,7 +127,7 @@ def _labelled():
 
 
 def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     labelled = _labelled()
     (file,) = labelled.gs.to_cog(str(tmp_path / "label.tif"))
@@ -140,7 +140,7 @@ def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
 
 @pytest.mark.parametrize("suffix", ["zarr", "nc", "tif"])
 def test_a_legend_survives_each_raster_format(tmp_path, suffix) -> None:
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     labelled = _labelled()
     path = tmp_path / f"label.{suffix}"

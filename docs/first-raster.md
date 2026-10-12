@@ -8,7 +8,7 @@ using the [installation guide](install.md).
 
 ```python
 import numpy as np
-import geosave_engine as gs
+import geosave as gs
 
 anchor = gs.GeoAnchor.from_coordinates(
     latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"

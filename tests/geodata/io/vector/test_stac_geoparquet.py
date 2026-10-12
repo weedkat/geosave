@@ -10,9 +10,9 @@ import pyarrow.parquet as pq
 import pytest
 from pystac.extensions.raster import RasterExtension
 
-from geosave_engine.geodata import GeoVector, cuts, open_vector, stac, stack
-from geosave_engine.geodata.core.catalog import GeoCatalog
-from geosave_engine.geodata.io.vector import stac_geoparquet as table
+from geosave.geodata import GeoVector, cuts, open_vector, stac, stack
+from geosave.geodata.core.catalog import GeoCatalog
+from geosave.geodata.io.vector import stac_geoparquet as table
 from tests.geodata.conftest import cog_template, read_items, stack_templates
 
 
@@ -20,14 +20,20 @@ def _refuse(*args, **kwargs):
     raise AssertionError("the table computed pixels")
 
 
+def _per_band(template: str) -> str:
+    """Write one file per band, so each asset is one band named by its key."""
+    return template.replace(".tif", "_{band}.tif")
+
+
 def _cog_items(scene, root, name="forest", **options):
-    template = cog_template(root, name, dated="time" in scene.dims)
+    template = _per_band(cog_template(root, name, dated="time" in scene.dims))
     return table.to_items(stac.create_items(scene.gs.to_cog(template), **options))
 
 
 def _stack_items(scene, label, root, name="s0"):
     sample = stack({"optical": scene, "label": label})
-    saved = sample.gs.to_cog(stack_templates(sample, root / name))
+    templates = stack_templates(sample, root / name)
+    saved = sample.gs.to_cog({group: _per_band(t) for group, t in templates.items()})
     return table.to_items(stac.create_items(saved, id=name))
 
 
@@ -65,8 +71,8 @@ def test_rows_become_the_items_they_came_from(scene, tmp_path) -> None:
 
     assert [item.id for item in restored] == [item.id for item in items]
     assert restored[0].bbox == pytest.approx(items[0].bbox)
-    assert restored[0].assets["image"].href == items[0].assets["image"].href
-    assert RasterExtension.ext(restored[0].assets["image"]).bands[0].nodata == 0
+    assert restored[0].assets["red"].href == items[0].assets["red"].href
+    assert RasterExtension.ext(restored[0].assets["red"]).bands[0].nodata == 0
 
 
 def test_filtered_rows_keep_only_the_assets_they_have(scene, label, tmp_path) -> None:
@@ -102,7 +108,7 @@ def test_read_rows_carry_hrefs_that_open(scene, tmp_path) -> None:
 
     rows = open_vector(path)
 
-    assert rows["assets"][0]["image"]["href"] == items[0].assets["image"].href
+    assert rows["assets"][0]["red"]["href"] == items[0].assets["red"].href
 
 
 def test_a_table_follows_its_assets_when_moved(scene, tmp_path) -> None:
@@ -124,7 +130,8 @@ def test_each_group_of_a_stack_loads_alone(scene, label, tmp_path) -> None:
     optical = read_items(rows[rows["collection"] == "optical"])
     classes = read_items(rows[rows["collection"] == "label"])
 
-    assert optical.gs.variables == ("red", "nir")
+    # Reading promises band names, not their order; a model selects by name.
+    assert set(optical.gs.variables) == {"red", "nir"}
     assert classes.gs.variables == ("label",)
     optical.close()
     classes.close()
@@ -138,7 +145,7 @@ def test_only_data_assets_load(scene, tmp_path) -> None:
 
     restored = read_items(table.from_items([item]))
 
-    assert restored.gs.variables == ("red", "nir")
+    assert set(restored.gs.variables) == {"red", "nir"}
     restored.close()
 
 
@@ -378,9 +385,9 @@ def test_reading_a_plain_table_does_not_import_stac(tmp_path) -> None:
     plots = gpd.GeoDataFrame({"n": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
     path = plots.gs.to_geoparquet(tmp_path / "plots.parquet")
     code = (
-        "import sys; from geosave_engine.geodata import open_vector; "
+        "import sys; from geosave.geodata import open_vector; "
         f"open_vector({str(path)!r}); "
-        "assert not {'geosave_engine.geodata.stac', 'pystac', 'rustac', "
+        "assert not {'geosave.geodata.stac', 'pystac', 'rustac', "
         "'stac_geoparquet'} & set(sys.modules)"
     )
 
@@ -438,7 +445,7 @@ def test_importing_core_and_io_loads_no_stac() -> None:
     import sys
 
     code = (
-        "import sys; import geosave_engine.geodata.core, geosave_engine.geodata.io; "
+        "import sys; import geosave.geodata.core, geosave.geodata.io; "
         "assert not {'pystac', 'rustac', 'stac_geoparquet'} & set(sys.modules)"
     )
 

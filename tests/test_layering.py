@@ -77,42 +77,42 @@ def test_import_time_nodes_skip_what_importing_does_not_run():
 
 
 def test_geodata_imports_no_ml_and_no_torch_at_import_time():
-    root = Path(__file__).parents[1] / "src" / "geosave_engine" / "geodata"
+    root = Path(__file__).parents[1] / "src" / "geosave" / "geodata"
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text())
-        assert not _names(_imports(ast.walk(tree)), "geosave_engine.ml"), path
+        assert not _names(_imports(ast.walk(tree)), "geosave.ml"), path
         # `.gs.to_tensor()` imports torch when called; importing geodata must not.
         assert not _names(_imports(_import_time_nodes(tree)), "torch"), path
 
 
 def test_only_ml_tasks_import_ml_tasks():
-    root = Path(__file__).parents[1] / "src" / "geosave_engine" / "ml"
+    root = Path(__file__).parents[1] / "src" / "geosave" / "ml"
     for path in root.rglob("*.py"):
         relative = path.relative_to(root)
         if relative.parts[0] == "tasks":
             continue
         tree = ast.parse(path.read_text())
-        assert not _names(_imports(ast.walk(tree)), "geosave_engine.ml.tasks"), path
+        assert not _names(_imports(ast.walk(tree)), "geosave.ml.tasks"), path
 
 
 @pytest.mark.slow
 def test_geodata_loads_no_torch():
     assert not _loads(
-        "geosave_engine.geodata, geosave_engine.geodata.io, geosave_engine.geodata.benchmarks",
+        "geosave.geodata, geosave.geodata.io, geosave.geodata.benchmarks",
         "torch",
     )
 
 
 @pytest.mark.slow
 def test_model_core_loads_no_lightning():
-    imports = "geosave_engine.model.chain, geosave_engine.model.registry, geosave_engine.model.head"
+    imports = "geosave.model.chain, geosave.model.registry, geosave.model.stages.head"
     assert not _loads(imports, "lightning")
 
 
 @pytest.mark.slow
 def test_every_stage_package_registers_its_models():
     listed = _run(
-        "from geosave_engine.model.registry import list_models\nprint(list_models())"
+        "from geosave.model.registry import list_models\nprint(list_models())"
     )
     assert ast.literal_eval(listed) == {
         "decoder": ["DPT", "UNET"],
@@ -123,21 +123,26 @@ def test_every_stage_package_registers_its_models():
 
 
 @pytest.mark.slow
-def test_spec_and_workflow_load_no_torch():
-    assert not _loads(
-        "geosave_engine.model.spec, geosave_engine.workflow.flows", "torch"
-    )
+def test_spec_loads_no_torch():
+    assert not _loads("geosave.model.spec", "torch")
+
+
+@pytest.mark.slow
+def test_library_loads_no_flows_or_prefect():
+    imports = "geosave, geosave.model.spec, geosave.ml, geosave.cli.main"
+    assert not _loads(imports, "geosave_flows")
+    assert not _loads(imports, "prefect")
 
 
 @pytest.mark.slow
 def test_release_loads_no_lightning():
-    assert not _loads("geosave_engine.model.release", "lightning")
+    assert not _loads("geosave.model.release", "lightning")
 
 
 def test_supervised_segmentation_pairs_its_module_and_data():
     from lightning import LightningDataModule, LightningModule
 
-    from geosave_engine.ml.tasks.segmentation import supervised
+    from geosave.ml.tasks.segmentation import supervised
 
     assert issubclass(supervised.Module, LightningModule)
     assert issubclass(supervised.DataModule, LightningDataModule)

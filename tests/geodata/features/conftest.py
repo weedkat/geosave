@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import raster
+from geosave.geodata import raster
 
 BANDS = ("B01", "B02", "B04", "B05", "B07", "B08", "B8A", "B09", "B10", "B11", "B12")
 

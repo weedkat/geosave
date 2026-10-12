@@ -142,7 +142,7 @@ celerybeat.pid
 
 # Environments
 .env
-!src/geosave_engine/templates/common/.env
+!src/geosave/templates/common/.env
 .envrc
 .venv
 env/
@@ -215,7 +215,7 @@ __marimo__/
 
 # Local files
 config/
-!src/geosave_engine/workflow/config/
+!src/geosave/workflow/config/
 dataset/
 
 # Local logs

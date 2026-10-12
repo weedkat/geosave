@@ -35,7 +35,7 @@ through named values. An encoder extracts features; a head turns features into
 outputs.
 
 ```python
-from geosave_engine.model.chain import ModelChain, chain_step
+from geosave.model.chain import ModelChain, chain_step
 
 
 class Encoder(nn.Module):
@@ -96,7 +96,7 @@ configuration. Start with a built-in head to see this without downloading an
 encoder checkpoint.
 
 ```python
-from geosave_engine.model.registry import build_model
+from geosave.model.registry import build_model
 
 head = build_model({
     "head": {
@@ -137,7 +137,7 @@ weights and may require access to the checkpoint repository.
 width, to a later stage's constructor.
 
 ```python
-from geosave_engine.model.chain import Published
+from geosave.model.chain import Published
 
 
 class SizedEncoder(Encoder):
@@ -174,7 +174,7 @@ while `chain_step` routes values produced during a model call.
 After the stage works as a normal module, give it a configured name:
 
 ```python
-from geosave_engine.model.registry import register_model
+from geosave.model.registry import register_model
 
 
 @register_model("encoder", "tiny")

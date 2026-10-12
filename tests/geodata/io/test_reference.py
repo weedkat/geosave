@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from geosave_engine.geodata import open_vector
+from geosave.geodata import open_vector
 
 
 @pytest.mark.parametrize("georeferenced", [True, False])
@@ -38,7 +38,7 @@ def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
 @pytest.mark.parametrize("format", ["netcdf", "zarr"])
 def test_unindexed_pixel_raster_needs_no_geographic_id(tmp_path, format):
     import xarray as xr
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     source = xr.Dataset({"image": (("y", "x"), np.arange(4).reshape(2, 2))})
     suffix = ".nc" if format == "netcdf" else ".zarr"

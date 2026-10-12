@@ -24,7 +24,7 @@ nodata, scale, and offset into physical values and names the result `image`.
 `inputs.image` binds that result to the model argument `image`.
 
 ```python
-from geosave_engine.model.spec import ModelSpec
+from geosave.model.spec import ModelSpec
 
 spec = ModelSpec.load("model_spec.yaml")
 ```
@@ -42,7 +42,7 @@ call works with a Dataset opened from GeoTIFF, Zarr, or STAC.
 import numpy as np
 from odc.geo.geobox import GeoBox
 
-import geosave_engine as gs
+import geosave as gs
 
 grid = GeoBox.from_bbox(
     (500_000, 9_000_000, 500_040, 9_000_040),

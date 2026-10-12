@@ -6,7 +6,7 @@ import yaml
 import xarray as xr
 from upath import UPath
 
-from geosave_engine.model.spec import CallSpec, ModelSpec, Ref
+from geosave.model.spec import CallSpec, ModelSpec, Ref
 
 
 @pytest.mark.parametrize(

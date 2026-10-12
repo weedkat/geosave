@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def test_nodata_is_spelled_as_cf_fill_value_only() -> None:
@@ -49,7 +49,7 @@ def test_nodata_survives_a_zarr_round_trip(tmp_path) -> None:
 
 @pytest.mark.parametrize("fill", [-3.40282e38, 0.1])
 def test_a_float_fill_reads_at_the_bands_precision_and_masks(fill) -> None:
-    from geosave_engine.geodata.transform.nodata import to_nan
+    from geosave.geodata.transform.nodata import to_nan
 
     band = xr.DataArray(
         np.array([fill, 1], "float32"), dims="x", attrs={"_FillValue": fill}

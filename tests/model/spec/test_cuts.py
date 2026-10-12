@@ -5,8 +5,8 @@ import orjson
 import pytest
 from shapely.geometry import box
 
-from geosave_engine.geodata import cuts
-from geosave_engine.model.spec import FramesSpec, ChipsSpec
+from geosave.geodata import cuts
+from geosave.model.spec import FramesSpec, ChipsSpec
 
 
 def _windows() -> gpd.GeoDataFrame:

@@ -8,7 +8,7 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import features, raster
+from geosave.geodata import features, raster
 
 from tests.geodata.features.conftest import sentinel
 

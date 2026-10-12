@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from geosave_engine.ml.metrics import RegressionMetrics
+from geosave.ml.metrics import RegressionMetrics
 
 
 def test_regression_metrics_score_flat_values() -> None:

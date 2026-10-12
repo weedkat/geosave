@@ -9,8 +9,8 @@ from affine import Affine
 from dask.callbacks import Callback
 from odc.geo.geobox import GeoBox
 
-from geosave_engine.geodata import raster, stack
-from geosave_engine.geodata.transform.warp import align, common_grid, reproject
+from geosave.geodata import raster, stack
+from geosave.geodata.transform.warp import align, common_grid, reproject
 
 from .conftest import grid_of
 

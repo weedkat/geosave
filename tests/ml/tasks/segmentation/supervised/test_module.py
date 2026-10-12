@@ -10,9 +10,9 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 import yaml
 
-from geosave_engine.ml.cli import GeosaveCLI
-from geosave_engine.ml.tasks.segmentation import supervised
-from geosave_engine.model.chain import chain_step
+from geosave.ml.cli import GeosaveCLI
+from geosave.ml.tasks.segmentation import supervised
+from geosave.model.chain import chain_step
 
 
 class SegmentationModel(nn.Module):
@@ -325,10 +325,10 @@ def test_training_constructor_errors_remain_native(stages, field, path):
 def test_template_preserves_task_optimizer_configuration(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "geosave_engine.ml.cli.GeosaveCLI",
+        "geosave.ml.cli.GeosaveCLI",
         lambda **kwargs: calls.append(kwargs),
     )
-    template = Path(__file__).parents[5] / "src/geosave_engine/templates/common/main.py"
+    template = Path(__file__).parents[5] / "src/geosave/templates/common/main.py"
     runpy.run_path(str(template), run_name="__main__")
     assert calls[0]["auto_configure_optimizers"] is False
 

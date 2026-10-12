@@ -4,14 +4,14 @@
   "venv": ".venv",
   "typeCheckingMode": "standard",
   "include": [
-    "src/geosave_engine",
+    "src/geosave",
     "tests"
   ],
   "exclude": [
     "**/__pycache__",
     "workspace",
     "examples",
-    "src/geosave_engine/templates"
+    "src/geosave/templates"
   ],
   "reportMissingTypeStubs": false
 }

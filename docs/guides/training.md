@@ -35,8 +35,8 @@ from lightning import Trainer, seed_everything
 from torch import nn
 from torch.utils.data import Dataset
 
-from geosave_engine.ml.tasks.segmentation.supervised import DataModule, Module, Sample
-from geosave_engine.model.registry import register_model
+from geosave.ml.tasks.segmentation.supervised import DataModule, Module, Sample
+from geosave.model.registry import register_model
 
 
 class Chips(Dataset):

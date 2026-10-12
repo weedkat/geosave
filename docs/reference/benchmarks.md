@@ -5,4 +5,4 @@ See [Download benchmark files](../guides/benchmarks.md) for subsets and storage 
 
 ## Dynamic World
 
-::: geosave_engine.geodata.benchmarks.dynamic_world.download
+::: geosave.geodata.benchmarks.dynamic_world.download

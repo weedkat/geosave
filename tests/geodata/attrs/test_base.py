@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import attrs
-from geosave_engine.geodata.attrs.base import parse, stamp
+from geosave.geodata import attrs
+from geosave.geodata.attrs.base import parse, stamp
 
 
 def _band(dtype="uint8", **attributes) -> xr.DataArray:

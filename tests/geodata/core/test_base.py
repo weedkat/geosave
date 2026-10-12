@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-import geosave_engine.geodata as gs
+import geosave.geodata as gs
 
-from geosave_engine.geodata import GeoAnchor, GeoArray, GeoRaster, GeoStack, GeoVector
-from geosave_engine.geodata.core.geolocator import Place
+from geosave.geodata import GeoAnchor, GeoArray, GeoRaster, GeoStack, GeoVector
+from geosave.geodata.core.geolocator import Place
 
 from tests.geodata.conftest import build_raster
 
@@ -282,7 +282,7 @@ def test_times_reads_a_scalar_time_coordinate() -> None:
 
 
 def test_a_band_read_from_disk_decodes_to_float32(tmp_path) -> None:
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     (written,) = build_raster(packed=True).gs.to_cog(f"{tmp_path}/scene.tif")
 

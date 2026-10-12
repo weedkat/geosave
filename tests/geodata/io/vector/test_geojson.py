@@ -6,7 +6,7 @@ import pytest
 from upath import UPath
 from shapely.geometry import box, mapping
 
-from geosave_engine.geodata import GeoVector, io
+from geosave.geodata import GeoVector, io
 
 
 def test_plain_geojson_nested_assets_remain_mappings(tmp_path):

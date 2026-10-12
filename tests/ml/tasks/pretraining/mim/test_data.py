@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import torch
 
-from geosave_engine.ml.tasks.pretraining import mim
+from geosave.ml.tasks.pretraining import mim
 from tests.ml.tasks.segmentation.supervised.test_data import (
     FLIP,
     NORMALIZE,

@@ -2,14 +2,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-from geosave_engine.cli.core.workspace import create_workspace
-from geosave_engine.model.spec import ModelSpec, Ref
+from geosave.cli.core.workspace import create_workspace
+from geosave.model.spec import ModelSpec, Ref
 
 
 def test_shipped_model_spec_round_trips_as_inert_declarations(tmp_path):
     path = (
         Path(__file__).parents[3]
-        / "src/geosave_engine/templates/workspaces/segmentation/configs/model_spec.yaml"
+        / "src/geosave/templates/workspaces/segmentation/configs/model_spec.yaml"
     )
 
     spec = ModelSpec.load(path)

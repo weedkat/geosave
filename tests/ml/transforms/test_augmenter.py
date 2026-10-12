@@ -2,7 +2,7 @@ import kornia.augmentation as K
 import pytest
 import torch
 
-from geosave_engine.ml.transforms import ImageAugmenter
+from geosave.ml.transforms import ImageAugmenter
 
 
 def test_yaml_configuration_builds_native_joint_augmentation():

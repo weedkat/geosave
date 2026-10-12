@@ -1,7 +1,7 @@
 import pytest
 from torch import nn
 
-from geosave_engine.model.factory import BuildSpec
+from geosave.model.factory import BuildSpec
 
 
 def test_imported_factory_preserves_missing_attribute_error() -> None:

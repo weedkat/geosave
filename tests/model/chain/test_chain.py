@@ -8,7 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from geosave_engine.model.chain import ModelChain, chain_step
+from geosave.model.chain import ModelChain, chain_step
 
 
 class Encode(nn.Module):

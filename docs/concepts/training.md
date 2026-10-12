@@ -14,7 +14,7 @@ geographic regions, run raster preprocessing, or construct chips. Use
 [ModelSpec](../guides/model-spec.md) for raster requirements and preprocessing.
 
 Each method exports its Module, DataModule, and sample dictionary type under
-`geosave_engine.ml.tasks.<task>.<method>`. Pass torch Datasets for `train` and
+`geosave.ml.tasks.<task>.<method>`. Pass torch Datasets for `train` and
 `val`; supervised pairs also accept `test`. A test loader requires its Dataset.
 
 ## Choose the target for the task
@@ -127,7 +127,7 @@ pipeline. Supply `data_keys` when moving several tensors together:
 
 ```python
 import torch
-from geosave_engine.ml.transforms import ImageAugmenter
+from geosave.ml.transforms import ImageAugmenter
 
 augment = ImageAugmenter(
     [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}], size=16
@@ -194,7 +194,7 @@ arguments.
 
 ```python
 from lightning import Trainer
-from geosave_engine.ml.tasks.segmentation.calibrate import ThresholdCalibrator
+from geosave.ml.tasks.segmentation.calibrate import ThresholdCalibrator
 
 trainer = Trainer(
     max_epochs=20,

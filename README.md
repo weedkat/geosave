@@ -1,15 +1,19 @@
-# geosave-engine
+# geosave
 
-GeoSave Engine is a local-first product for building geospatial AI workflows end to end. It standardizes the full path from data acquisition, environment setup, model training, and prediction to serving-ready outputs, so teams do not need to reinvent a different workflow for every project.
+GeoSave is a Python library for geospatial data preparation and Lightning-based
+model development. Work with native xarray rasters and GeoDataFrames, preserve
+geospatial metadata, prepare training chips, and compose ordinary PyTorch models.
 
-It generates editable workspace starters that compose geospatial data APIs, model stages, and Lightning training. Users can prepare datasets and develop models through ordinary Python objects and configuration.
+Use the library directly, or create an editable workspace with run configurations
+and your own Dataset. Install `geosave[flows]` to use the optional Prefect ingestion jobs through
+`geosave_flows`.
 
 Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
 
 ## Features
 
-- **Geospatial core.** CF-conformant `xr.Dataset` rasters and same-grid
-  `xr.DataTree` stacks, plus `GeoDataFrame` vectors, use `.gs` accessors.
+- **Geospatial core.** CF-conformant `xr.Dataset` rasters and named
+  `xr.DataTree` groups that can retain their native grids, plus `GeoDataFrame` vectors, use `.gs` accessors.
   Persistence covers Zarr, NetCDF, GeoTIFF/COG, GeoJSON, GeoPackage and
   GeoParquet; raster work stays lazy until you compute.
 - **STAC catalogs.** Items are built from the files a writer saved and stored as
@@ -30,20 +34,23 @@ Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
 Requires Python 3.12+.
 
 ```bash
-pip install geosave-engine
+pip install geosave
 # or
-uv add geosave-engine
+uv add geosave
 ```
+
+Training, Hub releases, Prefect flows and cloud paths are extras;
+`pip install "geosave[all]"` installs everything the examples use.
 
 Want the rolling dev build (rebuilt on every push to `main`) instead of the
 latest stable tag:
 
 ```bash
 pip install --pre --index-url https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ geosave-engine
+  --extra-index-url https://pypi.org/simple/ geosave
 ```
 
-Working on GeoSave Engine itself (clone + `uv sync`), or installing an
+Working on GeoSave itself (clone + `uv sync`), or installing an
 exact dev build off a GitHub release — see the
 [documentation](https://weedkat.github.io/geosave-engine/).
 
@@ -57,9 +64,10 @@ cd my-project
 
 `geosave create` prompts for a workspace starter; pass `-w segmentation`,
 `-w regression`, `-w custom_lightning`, or `-w blank` to select it, and `-d` to set the description.
-See the [workspace guide](docs/guides/workspaces.md) and follow the
-[documentation](https://weedkat.github.io/geosave-engine/) for the full
-step-by-step — explore a pipeline, build a dataset, train.
+Start with [Your first raster](docs/first-raster.md), then
+[prepare training chips](docs/quickstart.md) and [train a model](docs/guides/training.md).
+The [workspace guide](docs/guides/workspaces.md) explains generated projects;
+the [API reference](docs/reference/index.md) lists public functions and classes.
 
 ## Generated Workspace
 
@@ -82,7 +90,7 @@ my-project/
 
 ```python
 import numpy as np
-import geosave_engine as gs
+import geosave as gs
 
 anchor = gs.GeoAnchor.from_coordinates(
     latitude=45, longitude=12, shape=64, resolution=10, crs="EPSG:32633"

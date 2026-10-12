@@ -3,7 +3,7 @@ import math
 from pydantic import ValidationError
 import pytest
 
-from geosave_engine.model.spec import RasterRequirement, StacRecipe
+from geosave.model.spec import RasterRequirement, StacRecipe
 
 
 def test_stac_recipe_preserves_priority_and_native_settings():

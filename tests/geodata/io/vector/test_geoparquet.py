@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import Point, box
 
-from geosave_engine.geodata import GeoVector, open_vector
+from geosave.geodata import GeoVector, open_vector
 
 
 def test_geoparquet_catalog_supports_bbox_and_column_filtering(

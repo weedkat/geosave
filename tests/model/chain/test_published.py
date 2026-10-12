@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 import torch.nn as nn
 
-from geosave_engine.model.chain import Published
-from geosave_engine.model.chain.published import (
+from geosave.model.chain import Published
+from geosave.model.chain.published import (
     accepts,
     published_attrs,
     published_kwargs,

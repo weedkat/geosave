@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from rasterio.enums import ColorInterp
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def test_a_band_states_its_variable_and_colour_interpretation() -> None:

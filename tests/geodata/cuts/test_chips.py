@@ -8,7 +8,7 @@ import orjson
 import pandas as pd
 import pytest
 
-from geosave_engine.geodata import cuts
+from geosave.geodata import cuts
 
 
 def test_chips_without_overlap_tile_the_window(items) -> None:

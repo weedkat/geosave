@@ -5,7 +5,9 @@ import tomllib
 import pytest
 from typer.testing import CliRunner
 
-from geosave_engine.cli.main import app
+from geosave.cli.commands import make
+from geosave.cli.core import templates
+from geosave.cli.main import app
 
 
 @pytest.mark.parametrize(
@@ -44,8 +46,15 @@ def test_create_rejects_unknown_workspace_before_writing(tmp_path, monkeypatch):
 
 
 def test_make_installs_scaffold_in_existing_workspace(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "geosave.toml").write_text("[workspace]\n")
-    result = CliRunner().invoke(app, ["make", "scripts", "prepare_dense_data.py"])
+    scaffolds = tmp_path / "scaffolds"
+    (scaffolds / "scripts").mkdir(parents=True)
+    (scaffolds / "scripts" / "prepare.py").write_text("print('prepare')\n")
+    monkeypatch.setattr(templates, "SCAFFOLDS_DIR", scaffolds)
+    monkeypatch.setattr(make, "SCAFFOLDS_DIR", scaffolds)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "geosave.toml").write_text("[workspace]\n")
+    result = CliRunner().invoke(app, ["make", "scripts", "prepare.py"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "scripts/prepare_dense_data.py").is_file()
+    assert (workspace / "scripts/prepare.py").is_file()

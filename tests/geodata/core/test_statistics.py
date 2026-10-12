@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-import geosave_engine.geodata  # noqa: F401
+import geosave.geodata  # noqa: F401
 
 
 @pytest.mark.parametrize("as_array", [False, True])

@@ -3,7 +3,7 @@
 Install the Hub integration to use the Transformers release adapter:
 
 ```bash
-pip install 'geosave-engine[hub]'
+pip install 'geosave[hub]'
 ```
 
 ## Save the model for reuse
@@ -11,9 +11,9 @@ pip install 'geosave-engine[hub]'
 ```python
 import torch
 
-from geosave_engine.model.registry import build_model
-from geosave_engine.model.release import GeoSaveModel
-from geosave_engine.model.spec import ModelSpec, Ref
+from geosave.model.registry import build_model
+from geosave.model.release import GeoSaveModel
+from geosave.model.spec import ModelSpec, Ref
 
 chain = build_model({
     "head": {
@@ -62,7 +62,7 @@ chain, without the optimizer, scheduler, DataModule, metrics, or callbacks.
 ## Load and call the model
 
 ```python
-import geosave_engine.model.release
+import geosave.model.release
 from transformers import AutoModel
 
 model = AutoModel.from_pretrained("release", local_files_only=True).eval()
@@ -77,7 +77,7 @@ logits.shape
 torch.Size([1, 3, 16, 16])
 ```
 
-Importing `geosave_engine.model.release` registers the GeoSave model type with
+Importing `geosave.model.release` registers the GeoSave model type with
 Transformers. Loading reconstructs the chain from its configuration and restores
 the weights. `model.chain` is the native `ModelChain`.
 

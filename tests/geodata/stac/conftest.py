@@ -8,9 +8,9 @@ import pystac
 from pystac.extensions.projection import ProjectionExtension
 import rasterio
 
-from geosave_engine.geodata import GeoAnchor
-from geosave_engine.geodata.stac import StacSource
-from geosave_engine.geodata.stac.source import SearchClient
+from geosave.geodata import GeoAnchor
+from geosave.geodata.stac import StacSource
+from geosave.geodata.stac.source import SearchClient
 
 
 @pytest.fixture

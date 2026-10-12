@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def test_spectral_spells_its_three_keys() -> None:

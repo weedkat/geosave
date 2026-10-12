@@ -12,8 +12,6 @@ from urllib.parse import parse_qs, urlparse
 import dask.array as da
 import numpy as np
 from odc.geo.geobox import GeoBox
-from prefect.settings import temporary_settings
-from prefect.testing.utilities import prefect_test_harness
 import pytest
 import pystac
 from pystac.extensions.projection import ProjectionExtension
@@ -21,11 +19,11 @@ import rasterio
 import requests
 from dotenv import load_dotenv
 
-from geosave_engine.geodata.core.anchor import GeoAnchor
-from geosave_engine.geodata.core.constructors import raster
-from geosave_engine.geodata.stac.query import StacQuery
-from geosave_engine.geodata.stac.source import StacSource
-from geosave_engine.model.spec import ModelSpec, RasterRequirement
+from geosave.geodata.core.anchor import GeoAnchor
+from geosave.geodata.core.constructors import raster
+from geosave.geodata.stac.query import StacQuery
+from geosave.geodata.stac.source import StacSource
+from geosave.model.spec import ModelSpec, RasterRequirement
 
 
 def pytest_configure(config):
@@ -38,15 +36,6 @@ def pytest_configure(config):
 def dw_tif_path() -> Path:
     """Path to the DynamicWorld anchor used as a real test fixture."""
     return Path(__file__).parent / "data/dw_-22.7491991582_15.9791703445-20190223.tif"
-
-
-@pytest.fixture(scope="module")
-def prefect_server():
-    with (
-        temporary_settings({"server.analytics_enabled": False}),
-        prefect_test_harness(),
-    ):
-        yield
 
 
 @pytest.fixture

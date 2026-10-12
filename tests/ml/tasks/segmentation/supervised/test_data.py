@@ -8,8 +8,8 @@ import pytest
 import torch
 from torch.utils.data import Dataset
 
-from geosave_engine.ml.tasks.segmentation import supervised
-from geosave_engine.model.spec import ModelSpec, Ref
+from geosave.ml.tasks.segmentation import supervised
+from geosave.model.spec import ModelSpec, Ref
 
 FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
 NORMALIZE = {
@@ -230,7 +230,7 @@ def test_evaluation_validity_intersects_named_inputs_and_time_axes(
 
 
 def test_lightning_cli_builds_each_split_dataset(tmp_path: Path) -> None:
-    from geosave_engine.ml.cli import GeosaveCLI
+    from geosave.ml.cli import GeosaveCLI
 
     chips = {"class_path": f"{__name__}.Chips"}
     cli = GeosaveCLI(

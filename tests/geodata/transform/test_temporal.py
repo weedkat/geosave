@@ -5,9 +5,9 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-import geosave_engine.geodata.attrs as attrs
-from geosave_engine.geodata.core.constructors import raster as build_raster
-from geosave_engine.geodata.transform.temporal import interpolate, reduce, resample
+import geosave.geodata.attrs as attrs
+from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.transform.temporal import interpolate, reduce, resample
 
 UTM = "EPSG:32633"
 

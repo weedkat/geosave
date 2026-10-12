@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from geosave_engine.ml.transforms import cutmix_boxes
+from geosave.ml.transforms import cutmix_boxes
 
 
 def test_each_box_is_one_rectangle_within_the_area_bounds() -> None:

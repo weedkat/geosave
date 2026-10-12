@@ -7,7 +7,7 @@ import dask.array as da
 import geopandas as gpd
 from shapely.geometry import box
 
-import geosave_engine as gs
+import geosave as gs
 
 anchor = gs.GeoAnchor.from_coordinates(
     latitude=45, longitude=12, shape=256, resolution=10, crs="EPSG:32633"

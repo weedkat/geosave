@@ -6,7 +6,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Grids
 
-::: geosave_engine.geodata.transform.warp
+::: geosave.geodata.transform.warp
     options:
       members:
         - reproject
@@ -19,7 +19,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Crop and pad
 
-::: geosave_engine.geodata.transform.crop
+::: geosave.geodata.transform.crop
     options:
       members:
         - crop
@@ -29,7 +29,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Combine rasters
 
-::: geosave_engine.geodata.transform.combine
+::: geosave.geodata.transform.combine
     options:
       members:
         - merge_bands
@@ -41,7 +41,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Time
 
-::: geosave_engine.geodata.transform.temporal
+::: geosave.geodata.transform.temporal
     options:
       members:
         - resample
@@ -53,7 +53,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Nodata and scaling
 
-::: geosave_engine.geodata.transform.nodata
+::: geosave.geodata.transform.nodata
     options:
       members:
         - mask
@@ -62,7 +62,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Rasterize and vectorize
 
-::: geosave_engine.geodata.transform.vector
+::: geosave.geodata.transform.vector
     options:
       members:
         - rasterize
@@ -70,7 +70,7 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
 
 ## Class colors
 
-::: geosave_engine.geodata.transform.color
+::: geosave.geodata.transform.color
     options:
       members:
         - colorize

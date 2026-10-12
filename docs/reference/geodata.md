@@ -1,6 +1,6 @@
 # Data API
 
-GeoSave works with xarray objects and GeoDataFrames. Importing `geosave_engine`
+GeoSave works with xarray objects and GeoDataFrames. Importing `geosave`
 registers the `.gs` accessors. These pages document GeoSave additions; use the
 xarray and GeoPandas reference for their native methods.
 

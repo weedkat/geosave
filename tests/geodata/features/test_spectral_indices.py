@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import features
+from geosave.geodata import features
 
 from tests.geodata.features.conftest import sentinel
 

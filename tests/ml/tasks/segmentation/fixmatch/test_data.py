@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
-from geosave_engine.ml.tasks.segmentation import fixmatch
+from geosave.ml.tasks.segmentation import fixmatch
 from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]

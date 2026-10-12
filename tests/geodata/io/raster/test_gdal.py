@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pytest
 
-from geosave_engine.geodata.io.raster.gdal import configure_gdal, hf_to_s3
+from geosave.geodata.io.raster.gdal import configure_gdal, hf_to_s3
 
 
 def test_gdal_configuration_sets_supplied_values(monkeypatch) -> None:
@@ -68,7 +68,7 @@ def test_gdal_configuration_can_skip_sidecar_probes(monkeypatch) -> None:
 def test_band_slots_and_tags_read_as_one_variables_attrs() -> None:
     from rasterio.io import MemoryFile
 
-    from geosave_engine.geodata.io.raster.gdal import _attrs
+    from geosave.geodata.io.raster.gdal import _attrs
 
     with MemoryFile() as memory:
         with memory.open(driver="GTiff", width=1, height=1, count=1, dtype="uint8") as dst:
@@ -83,3 +83,34 @@ def test_band_slots_and_tags_read_as_one_variables_attrs() -> None:
     assert bands["red"]["long_name"] == "Red reflectance"
     assert bands["red"]["units"] == "1"
     assert bands["red"]["variable_name"] == "red"
+
+
+def _tiff(path, *, tiled: bool) -> str:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    options = {"tiled": True, "blockxsize": 256, "blockysize": 256} if tiled else {}
+    with rasterio.open(
+        path, "w", driver="GTiff", width=1024, height=1024, count=1, dtype="uint16",
+        crs="EPSG:32749", transform=from_origin(500_000.0, 9_010_240.0, 10, 10),
+        **options,
+    ) as tiff:
+        tiff.write(np.zeros((1, 1024, 1024), "uint16"))
+    return str(path)
+
+
+def test_lazy_chunks_follow_the_files_own_tiles(tmp_path) -> None:
+    # A window then reads only the tiles it overlaps, not the whole band.
+    from geosave.geodata.io.raster.gdal import read
+
+    band = read(_tiff(tmp_path / "tiled.tif", tiled=True), chunks={}).band_1
+
+    assert band.data.chunksize == (256, 256)
+
+
+def test_a_striped_file_stays_one_chunk(tmp_path) -> None:
+    from geosave.geodata.io.raster.gdal import read
+
+    band = read(_tiff(tmp_path / "striped.tif", tiled=False), chunks={}).band_1
+
+    assert band.data.chunksize == (1024, 1024)

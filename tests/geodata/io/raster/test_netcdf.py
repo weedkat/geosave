@@ -6,7 +6,7 @@ from upath import UPath
 import xarray as xr
 from dask.delayed import Delayed
 
-from geosave_engine.geodata.io import netcdf
+from geosave.geodata.io import netcdf
 from tests.geodata.conftest import build_raster
 
 
@@ -60,7 +60,7 @@ def test_netcdf_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:
 
 def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> None:
 
-    from geosave_engine.geodata import open_raster
+    from geosave.geodata import open_raster
 
     written = build_raster(times=2)
 

@@ -10,15 +10,15 @@ import xarray as xr
 from dask.callbacks import Callback
 from shapely.geometry import Point, Polygon, box
 
-from geosave_engine.geodata import (
+from geosave.geodata import (
     GeoAnchor,
     GeoVector,
     open_raster,
 )
-from geosave_engine.geodata.core.constructors import array
-from geosave_engine.geodata.core.vector import SpatialPredicate
-from geosave_engine.geodata.transform.vector import rasterize, vectorize
-from geosave_engine.geodata.io import geotiff, zarr
+from geosave.geodata.core.constructors import array
+from geosave.geodata.core.vector import SpatialPredicate
+from geosave.geodata.transform.vector import rasterize, vectorize
+from geosave.geodata.io import geotiff, zarr
 
 from tests.geodata.conftest import build_raster
 

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave_engine.geodata import attrs
+from geosave.geodata import attrs
 
 
 def _band(**attributes) -> xr.DataArray:
