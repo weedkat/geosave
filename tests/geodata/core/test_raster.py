@@ -444,7 +444,7 @@ def test_write_legend_names_and_colours_each_class() -> None:
 
     legend = labelled.label.gs.legend
     assert legend.classes == NAMES
-    assert legend.color_map == COLORS
+    assert legend.color_map == {0: "#419BDF", 1: "#397D49"}
     assert labelled.other.gs.legend is None
 
 
@@ -494,3 +494,36 @@ def test_a_dated_band_writes_through_the_raster_template(tmp_path: Path) -> None
         tmp_path / "red_20250602.tif",
     ]
 
+
+def test_to_raster_recovers_only_the_attrs_every_band_shared() -> None:
+    scene = (
+        build_raster()
+        .gs.write_packing(1e-4)
+        .gs.write_nodata(0, target="red")
+        .gs.write_nodata(65535, target="nir")
+    )
+
+    restored = scene.gs.to_array().gs.to_raster()
+
+    assert restored.gs.packing == scene.gs.packing
+    assert restored.gs.nodata == {"red": None, "nir": None}
+    shared = scene.gs.write_nodata(0).gs.to_array().gs.to_raster()
+    assert shared.gs.nodata == {"red": 0, "nir": 0}
+
+
+def test_a_legend_without_colours_writes_to_netcdf(tmp_path: Path) -> None:
+    from geosave_engine.geodata import open_raster
+
+    labelled = _classes()[["label"]].gs.write_legend(NAMES, None)
+
+    restored = open_raster(labelled.gs.to_netcdf(tmp_path / "label.nc"))
+
+    assert restored.label.gs.legend == labelled.label.gs.legend
+
+
+def test_a_raster_crops_to_its_own_bounds() -> None:
+    scene = build_raster().gs.write_nodata(0)
+
+    cut = scene.gs.crop(scene.gs.bounds)
+
+    assert cut.gs.geobox == scene.gs.geobox

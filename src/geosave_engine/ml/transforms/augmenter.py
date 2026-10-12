@@ -108,7 +108,7 @@ class ImageAugmenter(torch.nn.Module):
         size: Default spatial size for transforms such as RandomCrop.
 
     Raises:
-        ValueError: A transform name is unknown.
+        AttributeError: A transform name is absent from Kornia.
     """
 
     def __init__(

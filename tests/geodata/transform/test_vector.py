@@ -45,6 +45,19 @@ def test_rasterize_lands_on_the_target_rasters_own_coordinates() -> None:
     assert (masked.red.values == 0).any() and (masked.red.values == 1).any()
 
 
+def test_a_presence_mask_refuses_a_truthy_fill() -> None:
+    import shapely
+
+    scene = _sliced_geographic_scene()
+    left, bottom, right, top = grid_of(scene).boundingbox.bbox
+    plot = gpd.GeoDataFrame(
+        geometry=[shapely.box(left, bottom, right, top)], crs="EPSG:4326"
+    )
+
+    with pytest.raises(ValueError, match="presence mask"):
+        plot.gs.rasterize(scene, fill=1)
+
+
 def _flags(values, dtype):
     from odc.geo.geobox import GeoBox
 

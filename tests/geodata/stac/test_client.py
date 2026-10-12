@@ -1,4 +1,5 @@
 from pystac_client import Client
+from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 import pytest
 
@@ -17,12 +18,36 @@ def test_wrapping_a_client_preserves_its_transport():
     assert transport.session.headers["X-Catalog"] == "private"
 
 
-def test_missing_collection_raises_a_lookup_error(monkeypatch):
+def _not_found(status: int | None):
+    error = APIError('{"code":"NotFound","description":"Not Found"}')
+    error.status_code = status
+
+    def raise_it(_name):
+        raise error
+
+    return raise_it
+
+
+def _missing_key(name):
+    raise KeyError(f"Collection {name} not found on catalog")
+
+
+@pytest.mark.parametrize("lookup", [_not_found(404), _missing_key])
+def test_missing_collection_raises_a_lookup_error(monkeypatch, lookup):
+    # A STAC API answers 404; a static catalog raises KeyError.
     native = Client(id="local", description="Local catalog")
-    monkeypatch.setattr(native, "get_collection", lambda _name: None)
+    monkeypatch.setattr(native, "get_collection", lookup)
 
     with pytest.raises(CollectionNotFoundError, match="missing"):
         StacClient(native).collection("missing")
+
+
+def test_another_api_error_is_not_a_missing_collection(monkeypatch):
+    native = Client(id="local", description="Local catalog")
+    monkeypatch.setattr(native, "get_collection", _not_found(503))
+
+    with pytest.raises(APIError):
+        StacClient(native).collection("busy")
 
 
 @pytest.mark.parametrize("provider", ["planetary_computer", "cdse", "element84"])

@@ -1,7 +1,7 @@
 """The `gs.stac` namespace."""
 
 
-def test_the_stac_namespace_exposes_builders_and_clients_only() -> None:
+def test_the_stac_namespace_exposes_item_helpers_and_clients() -> None:
     import geosave_engine as gs
 
     assert sorted(gs.stac.__all__) == [
@@ -10,10 +10,12 @@ def test_the_stac_namespace_exposes_builders_and_clients_only() -> None:
         "StacQuery",
         "StacSource",
         "StacSourceConfig",
+        "cog_files",
         "create_collection",
         "create_item",
         "create_items",
         "get_collections",
+        "instant",
     ]
     assert not hasattr(gs.stac, "table")
     assert not hasattr(gs.stac, "StacTableClient")

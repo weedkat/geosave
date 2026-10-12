@@ -181,8 +181,8 @@ def write(
                 f"{destination} is remote, and a NetCDF file is uploaded once "
                 f"written; pass compute=True"
             )
-        path = storage.location(destination)
-        if path.suffix not in _FILE_SUFFIXES:
+        path = storage.local_path(destination)
+        if path.suffix.lower() not in _FILE_SUFFIXES:
             raise ValueError(
                 f"destination {path.name!r} must end in one of {list(_FILE_SUFFIXES)}"
             )
@@ -192,7 +192,7 @@ def write(
         written = raster.to_netcdf(
             path, mode="w", engine=engine, compute=False, **options
         )
-        return delayed(lambda _: path)(written)
+        return delayed(lambda _: storage.location(path))(written)
 
     def save(target: Path) -> None:
         raster.to_netcdf(target, mode="w", engine=engine, compute=True, **options)

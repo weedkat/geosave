@@ -15,7 +15,7 @@ from pystac.extensions.projection import ProjectionExtension
 
 from geosave_engine import __path__ as _package_paths
 from geosave_engine.geodata.io.vector import stac_geoparquet
-from geosave_engine.geodata.stac._item import instant
+from geosave_engine.geodata.stac.item import instant
 from geosave_engine.geodata.warnings import (
     DuplicateInstantsWarning,
     PartialCoverWarning,
@@ -95,8 +95,13 @@ def stacks(items: gpd.GeoDataFrame, *, on: str) -> GeoDataFrame:
         raise ValueError(
             f"no item belongs to the collection {on!r}; the table holds {present}"
         )
-    anchors = items[items["collection"] == on].reset_index(drop=True)
-    others = items[items["collection"] != on].reset_index(drop=True)
+    # A boolean filter keeps the geometry; pandas-stubs type it as a DataFrame.
+    anchors = cast(
+        "gpd.GeoDataFrame", items[items["collection"] == on].reset_index(drop=True)
+    )
+    others = cast(
+        "gpd.GeoDataFrame", items[items["collection"] != on].reset_index(drop=True)
+    )
     shrunk = gpd.GeoDataFrame(
         {"anchor_row": range(len(anchors))},
         geometry=shapely.buffer(anchors.geometry.values, -_TOLERANCE),
@@ -178,6 +183,7 @@ def _stripped(item: pystac.Item) -> dict[str, Any]:
     return {
         "type": fields["type"],
         "stac_version": fields["stac_version"],
+        "stac_extensions": fields.get("stac_extensions", []),
         "id": fields["id"],
         "collection": fields.get("collection"),
         "geometry": fields["geometry"],

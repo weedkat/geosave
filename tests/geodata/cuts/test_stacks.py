@@ -34,6 +34,7 @@ def test_sources_keep_absolute_hrefs_and_only_what_loading_needs(items) -> None:
     assert set(s2) == {
         "type",
         "stac_version",
+        "stac_extensions",
         "id",
         "collection",
         "geometry",

@@ -16,7 +16,7 @@ def test_workflow_help_lists_only_runnable_commands() -> None:
     assert "workflow" in root.stdout
     assert group.exit_code == 0
     assert "ingest" in group.stdout
-    assert "prepare-dense-data" in group.stdout
+    assert "prepare-dense-data" not in group.stdout
 
 
 def test_ingest_help_lists_its_flow_options() -> None:
@@ -27,26 +27,6 @@ def test_ingest_help_lists_its_flow_options() -> None:
         assert option in result.stdout
     assert "--catalog" not in result.stdout
     assert "--sources" not in result.stdout
-
-
-def test_prepare_dense_data_help_lists_safe_concurrency_default() -> None:
-    result = runner.invoke(app, ["workflow", "prepare-dense-data", "--help"])
-
-    assert result.exit_code == 0
-    for option in (
-        "--labels",
-        "--output",
-        "--spec",
-        "--pattern",
-        "--max-concurrency",
-        "--format",
-        "--write-options",
-    ):
-        assert option in result.stdout
-    assert "--metadata" not in result.stdout
-    assert "--sources" not in result.stdout
-    assert "1" in result.stdout
-    assert "geotiff" in result.stdout
 
 
 def test_ingest_parses_anchor_and_prints_result(
@@ -88,49 +68,6 @@ def test_ingest_parses_anchor_and_prints_result(
     assert result.stdout == "data/scenes/s1\n"
 
 
-def test_prepare_dense_data_forwards_typed_options(monkeypatch) -> None:
-    captured = {}
-
-    def run_flow(**arguments):
-        captured.update(arguments)
-        return "data/prepared/manifest.parquet"
-
-    monkeypatch.setattr(flows, "prepare_dense_data", run_flow)
-    result = runner.invoke(
-        app,
-        [
-            "workflow",
-            "prepare-dense-data",
-            "--labels",
-            "data/labels",
-            "--output",
-            "data/prepared",
-            "--spec",
-            "model_spec.yaml",
-            "--pattern",
-            "train/*.tif",
-            "--max-concurrency",
-            "2",
-            "--format",
-            "zarr",
-            "--write-options",
-            '{"compress":"ZSTD","blocksize":256}',
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert captured == {
-        "labels": "data/labels",
-        "output": "data/prepared",
-        "spec": "model_spec.yaml",
-        "pattern": "train/*.tif",
-        "max_concurrency": 2,
-        "format": "zarr",
-        "write_options": {"compress": "ZSTD", "blocksize": 256},
-    }
-    assert result.stdout == "data/prepared/manifest.parquet\n"
-
-
 @pytest.mark.parametrize(
     ("option", "value"),
     [
@@ -158,66 +95,6 @@ def test_ingest_rejects_invalid_json_before_invoking_flow(
     arguments.extend([option, value])
 
     result = runner.invoke(app, arguments)
-
-    assert result.exit_code == 2
-
-
-def test_prepare_dense_data_rejects_zero_concurrency_before_flow(
-    monkeypatch,
-) -> None:
-    def unexpected_flow(**arguments):
-        pytest.fail(f"flow invoked with invalid input: {arguments}")
-
-    monkeypatch.setattr(flows, "prepare_dense_data", unexpected_flow)
-    result = runner.invoke(
-        app,
-        [
-            "workflow",
-            "prepare-dense-data",
-            "--labels",
-            "labels",
-            "--output",
-            "prepared",
-            "--spec",
-            "model_spec.yaml",
-            "--max-concurrency",
-            "0",
-        ],
-    )
-
-    assert result.exit_code == 2
-
-
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("--format", "netcdf"),
-        ("--write-options", "[]"),
-        ("--write-options", "{"),
-    ],
-)
-def test_prepare_dense_data_rejects_invalid_output_options_before_flow(
-    monkeypatch, option, value
-) -> None:
-    def unexpected_flow(**arguments):
-        pytest.fail(f"flow invoked with invalid input: {arguments}")
-
-    monkeypatch.setattr(flows, "prepare_dense_data", unexpected_flow)
-    result = runner.invoke(
-        app,
-        [
-            "workflow",
-            "prepare-dense-data",
-            "--labels",
-            "labels",
-            "--output",
-            "prepared",
-            "--spec",
-            "model_spec.yaml",
-            option,
-            value,
-        ],
-    )
 
     assert result.exit_code == 2
 

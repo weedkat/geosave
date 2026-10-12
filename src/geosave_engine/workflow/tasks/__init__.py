@@ -1,5 +1,3 @@
-"""Reusable workflow work units."""
+"""Workflow work units; import concrete helpers from their owning modules."""
 
-from .dense import prepare_dense_sample
-
-__all__ = ["prepare_dense_sample"]
+__all__: list[str] = []

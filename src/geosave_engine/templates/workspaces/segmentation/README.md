@@ -119,8 +119,8 @@ Cut windows from the item table with `geosave_engine.geodata.cuts`:
 `cuts.stacks(items, on="label")` lists one window per label, and
 `spec.frames.cut(...)` and `spec.chips.cut(...)` split it in time and space
 without reading pixels. A row reads its own pixels with `row.gs.to_stack()`;
-`geosave_engine.ml.inputs.model_inputs(spec, rasters)`
-turns them into tensors.
+`spec.model_inputs(rasters)` binds them to the model's inputs, and
+`.gs.to_tensor()` turns each into a tensor.
 
 Enable the encoder's `context` recipe in `model_spec.yaml` when the rasters
 carry time labels and a georeferenced grid. The template leaves context

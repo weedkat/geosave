@@ -168,6 +168,26 @@ def test_native_reference_keeps_output_variable_semantics() -> None:
     assert built.confidence.data is pixels.data
 
 
+def test_a_band_named_like_the_references_takes_its_attrs() -> None:
+    source = build_raster()
+    source["label"] = source.red.astype("uint8").gs.write_legend(
+        {0: "water", 1: "trees"}, color_map={0: "#419BDF", 1: "#397D49"}
+    )
+    source.label.attrs["long_name"] = "Land cover"
+    pixels = xr.DataArray(
+        np.ones(source.label.shape, "uint8"),
+        dims=source.label.dims,
+        attrs={"long_name": "Predicted land cover"},
+    )
+
+    built = raster({"label": pixels, "other": pixels.rename(None)}, source, nodata=9)
+
+    assert built.label.gs.legend == source.label.gs.legend
+    assert built.label.attrs["long_name"] == "Predicted land cover"
+    assert built.label.gs.nodata == 9
+    assert "flag_values" not in built.other.attrs
+
+
 def test_native_reference_reads_a_custom_crs_coordinate() -> None:
     source = build_raster().rename({"spatial_ref": "crs"})
     for band in source.data_vars.values():

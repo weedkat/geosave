@@ -72,6 +72,7 @@ def build_model(
         none where a stage arrived already built: its arguments are not known.
 
     Raises:
+        ValueError: No stage is given.
         TypeError: A stage given as a class is not an `nn.Module` subclass.
 
     Examples:

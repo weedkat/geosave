@@ -1,3 +1,5 @@
+"""Select a stage factory by registered name or class path."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping

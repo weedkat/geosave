@@ -163,8 +163,8 @@ def to_nan[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
     Examples:
         >>> to_nan(scene).red.dtype
         dtype('float32')
-        >>> to_nan(scene).red.attrs
-        {}
+        >>> to_nan(scene).red.attrs  # packing stays; the fill value is gone
+        {'scale_factor': 0.0001, 'add_offset': -0.1}
     """
     return _map_bands(data, _band_to_nan)
 

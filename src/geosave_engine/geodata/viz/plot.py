@@ -112,8 +112,8 @@ def plot(
         ValueError: `cmap` or `clim` accompanies a composite or `class_map`.
 
     Examples:
-        >>> plot(ds.gs.to_array(["ndvi"]), cmap="RdYlGn")
-        >>> plot(ds.gs.to_array(["B04", "B03", "B02"]), clim=(0.0, 0.3))
+        >>> plot(ds[["ndvi"]].gs.to_array(), cmap="RdYlGn")
+        >>> plot(ds[["B04", "B03", "B02"]].gs.to_array(), clim=(0.0, 0.3))
     """
     if BAND_DIMENSION in array.dims:
         if array.sizes[BAND_DIMENSION] == 3:
@@ -213,8 +213,8 @@ def rgb(
             red, green, blue.
         stretch: Bounds mapped onto `[0, 1]`, in the channels' own stored
             values. None takes the 2-98 percentile across the three
-            channels, leaving `uint8` and values already within `[0, 1]`
-            untouched.
+            channels, so dark reflectance fills the display; `uint8` is
+            drawn as stored.
         cols: Columns `time` lays panels into. Ignored without it.
         title: Panel title above the axes. None suppresses the title.
         xlabel: Caption appended below each panel's timestamp. None adds no
@@ -229,8 +229,8 @@ def rgb(
             every channel pixel is nan or the channels are flat.
 
     Examples:
-        >>> rgb(ds.gs.to_array(["B04", "B03", "B02"]), stretch=(0.0, 0.3))
-        >>> rgb(monthly.gs.to_array(["B04", "B03", "B02"]), cols=6)
+        >>> rgb(ds[["B04", "B03", "B02"]].gs.to_array(), stretch=(0.0, 0.3))
+        >>> rgb(monthly[["B04", "B03", "B02"]].gs.to_array(), cols=6)
     """
     y, x = SPATIAL_DIMENSIONS
     has_time = TIME_COORDINATE in array.dims
@@ -242,16 +242,13 @@ def rgb(
             finite = array.values[np.isfinite(array.values)]
             if not finite.size:
                 raise ValueError("every channel pixel is nan; nothing to draw")
-            if finite.min() >= 0.0 and finite.max() <= 1.0:
-                values = array.values.astype("float32")
-            else:
-                low, high = (float(v) for v in np.percentile(finite, (2, 98)))
-                if not high > low:
-                    raise ValueError(
-                        f"channels are flat near {low}; pass stretch=(low, high)"
-                    )
-                scaled = (array.values.astype("float32") - low) / (high - low)
-                values = np.clip(scaled, 0.0, 1.0)
+            low, high = (float(v) for v in np.percentile(finite, (2, 98)))
+            if not high > low:
+                raise ValueError(
+                    f"channels are flat near {low}; pass stretch=(low, high)"
+                )
+            scaled = (array.values.astype("float32") - low) / (high - low)
+            values = np.clip(scaled, 0.0, 1.0)
     else:
         low, high = stretch
         if not high > low:
@@ -348,6 +345,8 @@ def classes(
             aspect="equal",
             cmap=ListedColormap(hexes),
             color_levels=len(codes),
+            # The ticks name the classes; a "value" title would only crowd them.
+            clabel="",
             **{ticks_option: ticks},
         )
     )

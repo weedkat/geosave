@@ -8,7 +8,7 @@ from odc.geo.geobox import GeoBox
 
 from geosave_engine.geodata.conventions import TIME_COORDINATE
 
-from geosave_engine.geodata.utils.dask_mapping import map_spatial_overlap
+from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
 
 
 def shadow_mask(

@@ -1,51 +1,88 @@
-# Download benchmark files
+# Download benchmark labels
 
+Download the original Dynamic World expert labels:
+
+<!-- NETWORK: original publisher download -->
 ```python
 from geosave_engine.geodata.benchmarks import dynamic_world
 
 labels = dynamic_world.download("data/dynamic_world", subset="experts")
-# pathlib.Path('data/dynamic_world/experts')
+labels
 ```
 
-The downloader extracts original publisher files and accompanying metadata.
-It preserves folder layout and label values. It does not fetch source imagery,
-convert metadata to a catalog, or make a training split.
+Expected return after a successful download, rather than a captured download
+result:
 
-| Subset | Release | Archive size, approximately |
-| --- | --- | --- |
-| `experts` | Expert training labels | 47.8 MB |
-| `non_expert` | Commissioned training labels | 214.7 MB |
-| `validation` | Individual expert labels and composites | 29 MB |
-| `test` | Expert consensus, predicted labels, probabilities | 3.9 GB |
+```text
+PosixPath('data/dynamic_world/experts')
+```
 
-Training downloads also include the publisher README and main metadata
-spreadsheet. Validation keeps its archive contents and adds the README. Original
-Sentinel-2 imagery is absent from the training release; metadata identifies the
-source scenes. The training data is CC BY 4.0; use the publisher's citation and
-attribution. [PANGAEA training release](https://doi.pangaea.de/10.1594/PANGAEA.933475)
+`labels` is a local directory containing the publisher's extracted files and
+metadata. The downloader preserves their folder structure and label values.
+It does not acquire source imagery or prepare a training catalog.
 
-The test archive contains metadata CSV files. In its `label_*` rasters, `lulc`
-is human annotation and `label` is a model prediction; probability rasters are
-separate. Those bands must not be treated interchangeably as ground truth.
-The download verifies the published archive MD5 checksum.
-[Zenodo test release](https://zenodo.org/records/4766508)
+## Choose a subset
 
-## Reuse and interrupted downloads
+| Subset | Contents |
+| --- | --- |
+| `experts` | Expert training labels and metadata. |
+| `non_expert` | Commissioned training labels and metadata. |
+| `validation` | Individual expert labels, composites, and README. |
+| `test` | Expert consensus labels, predictions, probabilities, and CSV metadata. |
 
+The training and validation release contains label GeoTIFFs and identifies the
+source Sentinel-2 scenes in metadata; the original imagery is not included.
+It is published under CC BY 4.0. Use the publisher's citation and required
+attribution. [PANGAEA training release](https://doi.pangaea.de/10.1594/PANGAEA.933475).
+
+## Open the original rasters
+
+After the download completes, use the normal raster reader. This block depends
+on the downloaded files, so its output is not captured here:
+
+<!-- NETWORK: requires the completed download above -->
 ```python
-validation = dynamic_world.download("data/dynamic_world", subset="validation")
+import geosave_engine as gs
+
+files = sorted(labels.rglob("*.tif"))
+label = gs.open_raster(files[0])
+label
 ```
 
-Each subset has its own directory and a `.geosave-complete.json` record.
-Repeated calls reuse a matching completed extraction without network requests.
-Transfers and extraction happen in a temporary directory; failures propagate and
-do not publish a completed subset. Downloaded ZIP files are removed after
-extraction. Budget disk space for both the archive and extracted files during
-the download.
+Use the publisher's metadata to interpret band values and match labels to
+imagery. Training labels use `0` for unmarked pixels, so decide how to exclude
+those pixels when preparing training targets. Avoid assuming every release
+uses the same band names or class indexing.
+[PANGAEA label description](https://doi.pangaea.de/10.1594/PANGAEA.933475).
 
-An existing destination without a matching completion record raises
+For the test release, `label_*` rasters contain `lulc` for human annotation and
+`label` for the model's predicted class; probabilities are in separate rasters.
+Select the human annotation as ground truth. The approximately 3.9 GB test
+archive has a published MD5 checksum, which this downloader verifies.
+[Zenodo test release](https://zenodo.org/records/4766508).
+
+Once you have paired imagery and labels, [catalogs and windows](catalogs-and-cuts.md)
+show how to describe saved rasters as Items and select model inputs. Downloading
+alone does not create that catalog or a training/validation split.
+
+## Reuse completed downloads
+
+<!-- NETWORK: fetches only if the subset is not complete -->
+```python
+labels = dynamic_world.download("data/dynamic_world", subset="experts")
+```
+
+Each subset has a `.geosave-complete.json` record. A matching completed
+extraction is reused without network requests. The record confirms the
+extraction completed; it does not repair files later changed or deleted.
+
+Transfers and extraction use a temporary directory. A failed attempt does not
+publish a completed subset, and temporary ZIP files are removed afterward.
+Allow disk space for both the archive and extracted files during the download.
+
+An existing subset directory without a matching completion record raises
 `FileExistsError`. Move or remove that incomplete directory explicitly before
-retrying. Malformed completion JSON raises `ValueError` without changing files.
-A completion record tracks successful extraction; it does not repair
-files edited or deleted afterward. The downloader is for local storage and does
-not coordinate concurrent writers to the same subset directory.
+retrying. Malformed completion JSON raises `ValueError`. Downloads are local
+and do not coordinate concurrent calls to the same destination.
+
+See the [benchmark reference](../reference/benchmarks.md) for the download API.

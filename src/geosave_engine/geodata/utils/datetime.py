@@ -7,7 +7,6 @@ from datetime import datetime as dt
 from datetime import timedelta, timezone
 from typing import Literal
 
-import pandas as pd
 from pandas.tseries.frequencies import to_offset
 
 DateRange = tuple[dt, dt]
@@ -228,25 +227,6 @@ def freq_offset(freq: Freq) -> str:
         raise ValueError(
             f"Unknown freq {freq!r} — needs a pandas offset alias, e.g. 'D', '5D', 'ME'"
         ) from e
-
-
-def format_instant(value: pd.Timestamp) -> str:
-    """Compact filename token for one instant, as ESA stamps its granules.
-
-    Args:
-        value: Instant at up to nanosecond precision.
-
-    Returns:
-        Token shaped `YYYYMMDDTHHMMSS`, followed by `_` and nine fraction
-        digits where the instant carries sub-second precision.
-
-    Examples:
-        >>> format_instant(pd.Timestamp("2025-06-01T10:30:31"))
-        '20250601T103031'
-    """
-    token = value.strftime("%Y%m%dT%H%M%S")
-    fraction = value.microsecond * 1000 + value.nanosecond
-    return f"{token}_{fraction:09d}" if fraction else token
 
 
 def parse_stem_dates(stem: str) -> DateRange | None:

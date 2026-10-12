@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dask.array as da
 import pytest
 import yaml
 import xarray as xr
@@ -226,20 +227,98 @@ def test_a_spec_round_trips_through_a_remote_upath(bucket):
     assert ModelSpec.load(target) == spec
 
 
-@pytest.mark.parametrize("method", ["preprocess", "model_context", "model_inputs"])
-def test_processing_methods_are_not_settled(method):
-    spec = _spec(inputs={"image": Ref("image")})
+def scaled(*, data: xr.Dataset) -> xr.Dataset:
+    return data * 2
 
-    with pytest.raises(NotImplementedError, match=method):
-        getattr(spec, method)({"optical": xr.Dataset()})
+
+def centre(*, raster: xr.Dataset) -> dict[str, float]:
+    return {"centre": float(raster["red"].mean())}
+
+
+def _processing(**fields: object) -> ModelSpec:
+    return ModelSpec.model_validate(
+        {
+            "schema_version": 2,
+            "rasters": {"optical": {"variables": ["red"]}},
+            "preprocessing": {
+                "image": {
+                    "call": f"{__name__}.scaled",
+                    "kwargs": {"data": Ref("optical")},
+                }
+            },
+            "inputs": {"image": Ref("image")},
+            "context": {
+                "call": f"{__name__}.centre",
+                "kwargs": {"raster": Ref("image")},
+            },
+            **fields,
+        }
+    )
+
+
+def _optical() -> xr.Dataset:
+    return xr.Dataset(
+        {
+            "red": (("y", "x"), da.ones((2, 2), chunks=1)),
+            "nir": (("y", "x"), da.zeros((2, 2))),
+        }
+    )
+
+
+def test_preprocess_returns_selected_rasters_and_results_lazily():
+    results = _processing().preprocess({"optical": _optical(), "label": xr.Dataset()})
+
+    assert sorted(results) == ["image", "optical"]
+    assert list(results["optical"].data_vars) == ["red"]
+    assert isinstance(results["image"]["red"].data, da.Array)
+    assert float(results["image"]["red"].max()) == 2
+
+
+def test_preprocess_refuses_a_missing_declared_raster():
+    with pytest.raises(KeyError, match="optical"):
+        _processing().preprocess({"label": xr.Dataset()})
+
+
+def test_model_inputs_resolve_prepared_rasters_and_add_their_context():
+    image = _optical()[["red"]]
+
+    inputs = _processing().model_inputs({"image": image, "label": xr.Dataset()})
+
+    assert inputs["image"] is image
+    assert inputs["centre"] == 1.0
+
+
+def test_model_inputs_take_cached_context_without_encoding():
+    inputs = _processing().model_inputs({"image": _optical()}, context={"centre": 5.0})
+
+    assert inputs["centre"] == 5.0
+
+
+def test_context_cannot_replace_a_pixel_input():
+    with pytest.raises(ValueError, match="image"):
+        _processing().model_inputs({"image": _optical()}, context={"image": 0})
+
+
+def test_a_spec_without_context_encodes_nothing():
+    assert _processing(context=None).model_context({"image": _optical()}) == {}
+
+
+def test_context_must_return_a_dict():
+    spec = _processing(
+        context={"call": "builtins.list", "kwargs": {}},
+    )
+
+    with pytest.raises(TypeError, match="dict"):
+        spec.model_context({"image": _optical()})
 
 
 def test_a_key_reference_round_trips_through_yaml(tmp_path):
     spec = _spec(
+        inputs={"image": Ref("optical")},
         context=CallSpec(
             call="builtins.dict",
             kwargs={"azimuth": Ref('optical["view:sun_azimuth"]')},
-        )
+        ),
     )
 
     assert ModelSpec.load(spec.save(tmp_path / "model_spec.yaml")) == spec

@@ -1,7 +1,10 @@
 """GeoSave Engine's geodata surface, reached as `gs.open_raster`, `gs.raster`, `gs.stack`.
 
-Each name is fetched from `geodata` on first use, so importing the CLI never
-pays for the geospatial stack it does not touch.
+Importing the package imports `geodata`, which registers the `gs` accessor on
+xarray objects, GeoDataFrames and cuts rows, so `.gs` works right after
+`import geosave_engine as gs`. torch and the viz stack stay unloaded until a
+member that needs them is called; `cuts`, `features` and `stac` load on
+first use.
 
 Examples:
     >>> import geosave_engine as gs
@@ -11,30 +14,26 @@ Examples:
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from geosave_engine.geodata import (
-        DataArray,
-        DataTree,
-        Dataset,
-        GeoDataFrame,
-        GeoAnchor,
-        GeoArray,
-        GeoRaster,
-        GeoStack,
-        GeoVector,
-        array,
-        configure_gdal,
-        cuts,
-        features,
-        io,
-        raster,
-        open_raster,
-        open_stack,
-        open_vector,
-        stac,
-        stack,
-        transform,
-    )
+from geosave_engine.geodata import (
+    DataArray,
+    DataTree,
+    Dataset,
+    GeoDataFrame,
+    GeoAnchor,
+    GeoArray,
+    GeoRaster,
+    GeoStack,
+    GeoVector,
+    array,
+    configure_gdal,
+    io,
+    raster,
+    open_raster,
+    open_stack,
+    open_vector,
+    stack,
+    transform,
+)
 
 __all__ = [
     "DataArray",
@@ -60,22 +59,26 @@ __all__ = [
     "transform",
 ]
 
+# These bring their own heavy dependencies, so they load on first use.
+_LAZY = ("cuts", "features", "stac")
+
+if TYPE_CHECKING:
+    from geosave_engine.geodata import cuts, features, stac
+
 
 def __getattr__(name: str) -> object:
-    """Fetch one public geodata name, importing `geodata` the first time.
-
-    Args:
-        name: Attribute being read off this package.
-
-    Returns:
-        The name as `geodata` exports it.
+    """Fetch `cuts`, `features` or `stac` from `geodata` on first use.
 
     Raises:
         AttributeError: `name` is not part of the public surface.
     """
-    if name not in __all__:
+    if name not in _LAZY:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     from geosave_engine import geodata
 
     return getattr(geodata, name)
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY})

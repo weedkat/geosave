@@ -7,7 +7,7 @@ from odc.geo.geobox import GeoBox
 from geosave_engine.geodata.core.anchor import GeoAnchor
 from geosave_engine.geodata.core.constructors import raster as build_raster
 from geosave_engine.geodata.core.stack import stack as build_stack
-from geosave_engine.geodata.utils.geolocator import Place
+from geosave_engine.geodata.core.geolocator import Place
 
 pytest.importorskip("hvplot", reason="viz extra not installed")
 
@@ -104,6 +104,10 @@ class TestClassMap:
             (2, "snow"),
         ]
 
+    def test_titles_no_colorbar_its_ticks_already_name(self, labels: xr.Dataset) -> None:
+        drawn = labels.gs.plot("landcover")
+        assert drawn.opts.get("plot", backend="matplotlib").kwargs["clabel"] == ""
+
     def test_accepts_an_rgb_tuple_palette(self, labels: xr.Dataset) -> None:
         recoloured = labels.gs.write_legend(
             {0: "water", 1: "trees", 8: "snow"},
@@ -150,6 +154,16 @@ class TestConstraints:
 
     def test_per_band_colour_interpretation_selects_rgb(self, rgb: xr.Dataset) -> None:
         assert isinstance(rgb.gs.plot(), hv.RGB)
+
+    def test_dark_reflectance_is_stretched_to_fill_the_display(
+        self, rgb: xr.Dataset
+    ) -> None:
+        # Reflectance sits well inside [0, 1]; drawn as-is it would be near black.
+        reflectance = (rgb.astype("float32") / 16 * 0.3).gs.write_rgb("B04", "B03", "B02")
+
+        drawn = reflectance.gs.plot()
+
+        assert float(drawn.data["R"].max()) == 1.0
 
 
 class TestOutput:

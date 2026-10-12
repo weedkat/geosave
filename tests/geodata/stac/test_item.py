@@ -328,12 +328,12 @@ def test_a_collection_cannot_override_named_layers(scene, tmp_path) -> None:
 
 
 def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
-    from geosave_engine.geodata.stac._item import cog_files
+    from geosave_engine.geodata.stac.item import cog_files
 
     files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
     item = table.to_items(stac.create_items(files))[0]
 
-    back = cog_files(item.to_dict())
+    back = cog_files(item)
 
     assert sorted(f.bands for f in back) == [("nir",), ("red",)]
     assert {f.datetime for f in back} == {files[0].datetime}

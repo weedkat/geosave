@@ -11,7 +11,8 @@ from pathlib import Path
 from upath import UPath
 
 from .. import storage
-from ..storage import StorageOptions
+from ..storage import Location, StorageOptions
+from .geojson import driver_read_options
 
 if TYPE_CHECKING:
     from os import PathLike
@@ -30,7 +31,7 @@ class GeoPackageOpenOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     *,
     layer: str | None = None,
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
@@ -39,7 +40,8 @@ def read(
     """Open one GeoPackage layer as a GeoDataFrame.
 
     Args:
-        source: Local GeoPackage path or URI.
+        source: Local path, `file://` URL, or a URL GDAL reads itself, as
+            `s3://` or `https://`, with credentials from `configure_gdal`.
         layer: Layer name. None selects the layer only when exactly one exists.
         engine: Concrete GeoPandas file-reading engine.
         **open_options: Supported GeoPandas and file-driver read options.
@@ -52,9 +54,10 @@ def read(
         ValueError: `layer` is ambiguous, or a driver option selects an engine
             or disables geometry.
     """
+    path = storage.openable(storage.location(source))
     selected_layer = layer
     if selected_layer is None:
-        layer_names = [str(name) for name in gpd.list_layers(source)["name"]]
+        layer_names = [str(name) for name in gpd.list_layers(path)["name"]]
         if len(layer_names) != 1:
             raise ValueError(
                 f"GeoPackage {Path(str(source)).name!r} contains layers "
@@ -62,14 +65,9 @@ def read(
             )
         selected_layer = layer_names[0]
 
-    driver_options = dict(open_options.pop("driver_options", {}))
-    if "engine" in driver_options:
-        raise ValueError("driver_options must not contain engine; use engine=")
-    if "ignore_geometry" in driver_options:
-        raise ValueError("driver_options must not contain ignore_geometry")
-    options: dict[str, Any] = {**open_options, **driver_options}
+    options = driver_read_options(open_options)
     return gpd.read_file(
-        source,
+        path,
         layer=selected_layer,
         engine=engine,
         ignore_geometry=False,

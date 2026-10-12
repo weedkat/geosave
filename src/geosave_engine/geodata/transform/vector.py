@@ -43,6 +43,11 @@ def vectorize(
     Raises:
         ValueError: The array, mask, name, connectivity, or dtype is
             unsuitable for polygonization.
+
+    Examples:
+        >>> regions = vectorize(prediction["cover"], value_name="cover")
+        >>> regions["cover"].tolist()
+        [1, 2]
     """
     from rasterio.features import shapes
     from shapely.geometry import shape
@@ -146,7 +151,7 @@ def rasterize(
         vector: Features to burn.
         like: Anchor or geolocated xarray object supplying the target grid.
         column: Property to burn. None returns a boolean presence mask.
-        fill: Value outside geometries.
+        fill: Value outside geometries. A presence mask takes only 0 or False.
         dtype: Output dtype for property values.
         all_touched: Burn every touched pixel instead of pixel centres.
 
@@ -156,7 +161,14 @@ def rasterize(
     Raises:
         KeyError: The selected property is absent.
         ValueError: A geometry is null, empty, or invalid, or values or fill
-            cannot be represented by the dtype.
+            cannot be represented by the dtype, or a presence mask is given
+            a truthy fill.
+
+    Examples:
+        >>> rasterize(fields, scene).dtype
+        dtype('bool')
+        >>> rasterize(fields, scene, column="crop", dtype="uint8").name
+        'crop'
     """
     from rasterio.features import rasterize as burn
 
@@ -179,10 +191,16 @@ def rasterize(
     # A presence mask burns ones; a property burns its own values, checked to fit.
     output_dtype: np.dtype
     if column is None:
+        # A presence mask is True inside, so a truthy fill would mark every pixel.
+        if fill:
+            raise ValueError(
+                f"a presence mask is True inside the geometries, so fill={fill!r} "
+                f"would mark every pixel; pass column to burn values, or drop fill"
+            )
         output_dtype = np.dtype("uint8")
         values = np.ones(len(frame), dtype=output_dtype)
         output_name = "mask"
-        output_fill: int | float | bool = bool(fill)
+        output_fill: int | float | bool = False
     else:
         if column not in frame:
             raise KeyError(f"the vector has no {column!r} column")

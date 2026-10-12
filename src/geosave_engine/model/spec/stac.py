@@ -15,10 +15,12 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pystac_client.exceptions import APIError
 import xarray as xr
 
 from geosave_engine.geodata.core import GeoAnchor
-from geosave_engine.geodata.stac.client import StacProvider
+from geosave_engine.geodata.errors import CollectionNotFoundError
+from geosave_engine.geodata.stac.client import StacClient, StacProvider
 from geosave_engine.geodata.stac.query import StacQuery
 from geosave_engine.geodata.stac.source import StacSourceConfig
 
@@ -108,15 +110,38 @@ class StacRecipe(SpecModel):
         return self
 
     def load_raster(self, anchor: GeoAnchor, /) -> xr.Dataset:
-        """Load a lazy raster on an anchor from the first available endpoint.
+        """Load a lazy raster on an anchor from the first endpoint serving it.
 
-        Not settled yet: read rasters from a catalog through `cuts.stacks`
-        and `row.gs.to_stack()` instead.
+        An endpoint that cannot be reached, or does not publish the
+        collection, passes to the next; a failure while loading does not.
+
+        Args:
+            anchor: Grid and datetime window to load.
+
+        Returns:
+            The collection on the anchor's grid, as `StacSource.load` reads it.
 
         Raises:
-            NotImplementedError: Always.
+            ConnectionError: No endpoint serves the collection; the message
+                names each endpoint's failure.
+            AnchorFetchError: The search matched no items.
+
+        Examples:
+            >>> recipe.load_raster(anchor).gs.variables
+            ('B04', 'B08')
         """
-        raise NotImplementedError(
-            "StacRecipe.load_raster is not settled; read rasters from a catalog "
-            "with cuts.stacks and row.gs.to_stack()"
+        failures = []
+        for endpoint in self.endpoints:
+            try:
+                source = StacClient.open(str(endpoint)).source(self.collection)
+            except (APIError, CollectionNotFoundError) as error:
+                failures.append(f"{endpoint}: {error}")
+                continue
+            # `set_query` takes CQL2 text and `-field` sorts; the recipe holds
+            # their JSON forms, which StacQuery takes as they are.
+            source.config = self.load
+            source.query = self.query.to_query(self.collection)
+            return source.load(anchor)
+        raise ConnectionError(
+            f"no endpoint serves {self.collection!r}: " + "; ".join(failures)
         )

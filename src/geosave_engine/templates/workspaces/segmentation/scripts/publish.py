@@ -5,7 +5,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
-from geosave_engine.ml.segmentation import supervised
+from geosave_engine.ml.tasks.segmentation import supervised
 from geosave_engine.model.release import GeoSaveModel
 from geosave_engine.model.spec import ModelSpec
 

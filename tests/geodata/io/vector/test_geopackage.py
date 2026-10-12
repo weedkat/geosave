@@ -40,3 +40,18 @@ def test_a_geopackage_writes_to_a_remote_url(bucket: str) -> None:
 
     assert written == UPath(f"{bucket}/survey.gpkg")
     assert written.stat().st_size > 0
+
+
+def test_an_option_given_twice_refuses(tmp_path: Path) -> None:
+    from geosave_engine.geodata.io import geopackage
+
+    path = _plots().gs.to_geopackage(tmp_path / "survey.gpkg")
+
+    with pytest.raises(TypeError, match="rows"):
+        geopackage.read(path, rows=1, driver_options={"rows": 2})
+
+
+def test_a_file_url_reads_as_its_local_path(tmp_path: Path) -> None:
+    path = _plots().gs.to_geopackage(tmp_path / "survey.gpkg")
+
+    assert len(open_vector(UPath(path.as_uri()))) == 2

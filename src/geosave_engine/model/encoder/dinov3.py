@@ -54,7 +54,12 @@ class DINOv3(nn.Module):
         Args:
             model_name: timm model name. Must be a key of `MODEL_SPECS`.
             pretrained: load pretrained weights from timm hub.
-            in_channels: input image channel count.
+            in_channels: input image channel count. It sizes and initialises
+                only the patch embedding; no pixel is changed. The checkpoint
+                is RGB, so with `pretrained` the first three channels keep their
+                kernel slices only when they are red, green and blue, in that
+                order. timm repeats those three slices over further channels
+                and scales every slice by `3 / in_channels`.
             input_size: input spatial size; tuple for non-square.
             drop_path_rate: stochastic depth rate.
             proj_drop_rate: dropout on attention output projection.

@@ -8,33 +8,22 @@ Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
 
 ## Features
 
-- **Geospatial core redesign** — CF-conformant `xr.Dataset` rasters and flat,
-  same-grid `xr.DataTree` stacks use `.gs` accessors and typed persistence
-  adapters for Zarr, netCDF, GeoTIFF/COG, GeoJSON, GeoPackage, and GeoParquet.
-  Native transforms, temporal frames, tiling, and tensor conversion support
-  lazy raster processing.
-- **Model workflows** — [YAML model specifications and Prefect workflows](docs/guides/workflows.md)
-  keep raster acquisition and preprocessing portable while providing
-  serializable configs, reusable tasks, and independently runnable
-  data-preparation flows.
-- **DataArray features** — spectral indices and masks consume explicitly
-  ordered band DataArrays and return DataArrays.
-- **Training module** — `ml.segmentation.supervised.Module` provides model construction,
-  training, evaluation, and prediction. `supervised.DataModule` feeds it from
-  prepared catalogs, cut and transformed as the model spec declares.
-- **Pretrained model registry** — encoders (DINOv3, Prithvi, Prithvi-TL,
-  Clay), decoders (DPT, UNet), heads, selected by registry key, chained
-  together automatically, no manual import wiring or hand-glued forward pass.
-- **Sensor-aware band metadata** — wavelength/GSD/mean/std per sensor
-  (Sentinel-2, Landsat, MODIS, more), feeding model config directly (Clay's
-  wavelength conditioning, normalization stats) — a geodata concern, not
-  hardcoded into any model.
-- **MLflow run tracking** — set `MLFLOW_TRACKING_URI` and training logs to
-  MLflow alongside the local logger, no config change. Rebuilding a trained
-  model from its checkpoint and registering it is still pending.
-- **Editable scaffolding, not a framework lock-in** — `geosave create`
-  hands you real, editable files. No required base class your code has to
-  obey to keep working.
+- **Geospatial core.** CF-conformant `xr.Dataset` rasters and same-grid
+  `xr.DataTree` stacks, plus `GeoDataFrame` vectors, use `.gs` accessors.
+  Persistence covers Zarr, NetCDF, GeoTIFF/COG, GeoJSON, GeoPackage and
+  GeoParquet; raster work stays lazy until you compute.
+- **STAC catalogs.** Items are built from the files a writer saved and stored as
+  stac-geoparquet item tables, searchable with rustac.
+- **Cuts.** Frames and chips are tables of windows; each row reads itself as a
+  lazy stack.
+- **Model chains and releases.** Registered encoders (DINOv3, Prithvi,
+  Prithvi-TL, Clay), decoders (DPT, UNet) and heads compose into one
+  `ModelChain`, released as a Transformers model with its `model_spec.yaml`.
+- **Lightning training.** Task and method pairs of `LightningModule` and
+  `LightningDataModule` in `ml/`, run through `LightningCLI`.
+- **MLflow.** Set `MLFLOW_TRACKING_URI` and training also logs to MLflow.
+- **Editable workspaces.** `geosave create` hands you real files; no base class
+  is required.
 
 ## Installations
 
@@ -67,7 +56,7 @@ cd my-project
 ```
 
 `geosave create` prompts for a workspace starter; pass `-w segmentation`,
-`-w custom_lightning`, or `-w blank` to select it, and `-d` to set the description.
+`-w regression`, `-w custom_lightning`, or `-w blank` to select it, and `-d` to set the description.
 See the [workspace guide](docs/guides/workspaces.md) and follow the
 [documentation](https://weedkat.github.io/geosave-engine/) for the full
 step-by-step — explore a pipeline, build a dataset, train.
@@ -89,6 +78,44 @@ my-project/
 └── main.py        # LightningCLI entry point — do not need to touch this
 ```
 
-## Development Workflow
+## A first look in Python
 
-TO BE ADDED LATER
+```python
+import numpy as np
+import geosave_engine as gs
+
+anchor = gs.GeoAnchor.from_coordinates(
+    latitude=45, longitude=12, shape=64, resolution=10, crs="EPSG:32633"
+)
+pixels = np.random.default_rng(0).integers(1, 3000, (64, 64), dtype="uint16")
+scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
+scene
+```
+
+Output:
+
+```text
+<xarray.Dataset> Size: 9kB
+Dimensions:      (y: 64, x: 64)
+Coordinates:
+  * y            (y) float64 512B 4.988e+06 4.988e+06 ... 4.987e+06 4.987e+06
+  * x            (x) float64 512B 2.632e+05 2.632e+05 ... 2.639e+05 2.639e+05
+    spatial_ref  int32 4B 32633
+Data variables:
+    red          (y, x) uint16 8kB 1528 2551 2763 1911 2521 ... 65 818 2788 735
+```
+
+The [quickstart](docs/quickstart.md) continues from pixels to model-ready
+tensors, offline.
+
+## Development
+
+```bash
+uv sync
+uv run pytest                    # fast tests
+uv run pytest -m integration     # network tests
+uv run pytest -m slow
+uv run ruff check .
+uv run pre-commit run --all-files
+uv run zensical build            # documentation, written to site/
+```

@@ -55,14 +55,14 @@ def dependencies(steps: list[BoundStep]) -> dict[BoundStep, set[BoundStep]]:
 def ordered_steps(modules: Mapping[str, nn.Module]) -> list[BoundStep]:
     """Choose each stage's earliest available method and sort the resulting chain.
 
+    A chain of one stage that declares no step runs that stage's `forward`
+    as an end-to-end model, its annotated parameters naming the inputs.
+
     Args:
         modules: Registered stage names and instances, in construction order.
 
     Returns:
         One method per stage, in dependency order.
-
-    A chain of one stage that declares no step runs that stage's `forward`
-    as an end-to-end model, its annotated parameters naming the inputs.
 
     Raises:
         TypeError: A stage has no declared step and is not a lone end-to-end

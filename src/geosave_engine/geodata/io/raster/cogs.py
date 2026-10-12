@@ -25,8 +25,11 @@ from pathlib import PurePosixPath
 from string import Formatter
 from typing import TYPE_CHECKING, Any, NamedTuple, Unpack, cast
 
+import numpy as np
 import pandas as pd
 import xarray as xr
+
+from odc.geo.geobox import GeoBox
 
 from geosave_engine.geodata.conventions import TIME_COORDINATE
 
@@ -36,9 +39,8 @@ from ..storage import StorageOptions, absolute_location
 if TYPE_CHECKING:
     from os import PathLike
 
-    from odc.geo.geobox import GeoBox
-
     from geosave_engine.geodata import Dataset
+    from geosave_engine.geodata.transform.warp import Resampling
 
 
 class _Planned(NamedTuple):
@@ -167,7 +169,8 @@ def layout(
             f"{extra_dims}; select those axes away before writing"
         )
 
-    dated = TIME_COORDINATE in ds.dims
+    # A scalar time coordinate dates the raster as one step of a time axis does.
+    dated = TIME_COORDINATE in ds.coords and ds[TIME_COORDINATE].ndim <= 1
     # Field name to the format spec it carries, for messages naming the caller's own.
     named = fields_named(template)
     if not dated and TIME_COORDINATE in named:
@@ -178,13 +181,19 @@ def layout(
 
     scenes: list[tuple[pd.Timestamp | None, xr.Dataset]] = [(None, ds)]
     if dated:
-        times = pd.DatetimeIndex(ds[TIME_COORDINATE].values)
+        times = pd.DatetimeIndex(np.atleast_1d(ds[TIME_COORDINATE].values))
         if times.hasnans or not times.is_unique or len(times) == 0:
             raise ValueError("scene times must be nonempty, unique and not NaT")
-        scenes = [
-            (instant, ds.isel({TIME_COORDINATE: index}))
-            for index, instant in enumerate(times)
-        ]
+        # Free of NaT, as just checked.
+        instants = cast("list[pd.Timestamp]", list(times))
+        scenes = (
+            [
+                (instant, ds.isel({TIME_COORDINATE: index}))
+                for index, instant in enumerate(instants)
+            ]
+            if TIME_COORDINATE in ds.dims
+            else [(instants[0], ds)]
+        )
 
     bands: dict[str, list[str]] = {}
     times_of: dict[str, pd.Timestamp | None] = {}
@@ -237,7 +246,7 @@ def read(
     files: Sequence[CogFile],
     *,
     geobox: GeoBox | None = None,
-    resampling: str = "nearest",
+    resampling: Resampling = "nearest",
     **options: Any,
 ) -> Dataset:
     """Open the records one write produced, or one Item lists, as one raster.
@@ -293,13 +302,14 @@ def read(
     return cast("Dataset", concat_time(scenes) if len(scenes) > 1 else scenes[0])
 
 
-def _window(source: GeoBox | None, target: GeoBox) -> tuple[slice, slice] | None:
+def _window(source: object, target: GeoBox) -> tuple[slice, slice] | None:
     """Return the pixels of `source` that are `target`, when no warp is needed.
 
     A target on the same CRS and resolution, offset by whole pixels and lying
-    inside the source, is a slice of it; anything else is warped.
+    inside the source, is a slice of it; anything else is warped, a grid placed
+    by control points included.
     """
-    if source is None or source.crs != target.crs:
+    if not isinstance(source, GeoBox) or source.crs != target.crs:
         return None
     if source.resolution != target.resolution:
         return None

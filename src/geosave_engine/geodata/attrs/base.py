@@ -94,8 +94,13 @@ class AttrsGroup(BaseModel):
         return self
 
     def to_attrs(self) -> dict[str, Any]:
-        """Return the attrs this value writes; a field at its default writes none."""
-        return self.model_dump(by_alias=True, mode="json", exclude_defaults=True)
+        """Return the attrs this value writes; a field at its default or None writes none.
+
+        netCDF refuses a None attr, so an unset field leaves its key out.
+        """
+        return self.model_dump(
+            by_alias=True, mode="json", exclude_defaults=True, exclude_none=True
+        )
 
     def __eq__(self, other: object) -> bool:
         """Compare by the attrs each writes, as xarray compares attrs: NaN equals NaN."""

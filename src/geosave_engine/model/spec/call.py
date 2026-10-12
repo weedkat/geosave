@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from typing import Any
 from importlib import import_module
 import math
 import re
@@ -59,12 +60,15 @@ class Ref:
         Raises:
             KeyError: A value or key is absent; the note names this path.
             AttributeError: An attribute is absent; the note names this path.
+            TypeError: A key step meets a value without keys; the note names
+                this path.
         """
+        result: Any
         try:
             result = inputs[self.root]
             for attribute, key in _STEP.findall(self.path, len(self.root)):
                 result = getattr(result, attribute) if attribute else result[key]
-        except (KeyError, AttributeError) as error:
+        except (KeyError, AttributeError, TypeError) as error:
             error.add_note(f"While resolving !ref {self.path}")
             raise
         return result

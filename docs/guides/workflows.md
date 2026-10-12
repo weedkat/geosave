@@ -1,174 +1,145 @@
-# Run workflows
-
-GeoSave exposes complete, durable jobs under `geosave workflow`. Commands run
-locally, wait for Prefect to finish, and print the output path only after a
-successful run.
-
-The Python package follows the same separation of concerns:
-
-- `geosave_engine.workflow.configs` defines serializable runtime inputs such
-  as anchor payloads.
-- `geosave_engine.workflow.flows` exposes independently runnable Prefect
-  workflows.
-- `geosave_engine.workflow.tasks` exposes reusable Prefect work units for
-  composing new flows. Sample writing and label reading remain in their
-  focused task modules.
-
-Raster requirements, acquisition recipes, and preprocessing stay on
-`ModelSpec`, which is shared by workflows, training, release, and serving.
-
-| Command | Purpose | Input | Output |
-| --- | --- | --- | --- |
-| `ingest` | Load every model raster on one explicit spatial and temporal target. | Anchor JSON and model spec. | One sample directory holding one raster per model raster. |
-| `prepare-dense-data` | Match imagery to label rasters for training. | Label table or label directory, and model spec. | Public skeleton; currently raises `NotImplementedError`. |
-
-## Ingest one sample
+# Ingest model rasters
 
 ```bash
 geosave workflow ingest \
-  --anchor '{"kind":"raster","path":"data/reference.tif"}' \
+  --anchor '{"kind":"coordinates","latitude":45,"longitude":12,"shape":1024,"resolution":10,"crs":"EPSG:32633","timespan":"2025-01"}' \
   --output data/scenes/s1 \
   --spec model_spec.yaml
 ```
 
-| Option | Required | Default | Meaning |
-| --- | --- | --- | --- |
-| `--anchor JSON` | Yes | — | Spatial and temporal anchor. See the supported shapes below. |
-| `--output PATH` | Yes | — | New sample directory, which takes one raster per model raster. |
-| `--spec PATH` | Yes | — | `model_spec.yaml` file or model artifact directory. |
-| `--format [geotiff\|zarr]` | No | `zarr` | Format of each raster. GeoTIFF holds one instant; Zarr holds a time series. |
-| `--write-options JSON` | No | `{}` | Encoding options passed to the native writer. |
-| `--help` | No | — | Show command help. |
+This loads the rasters declared in your model spec onto one spatial and
+temporal target, then writes them into a new sample directory. It requires a
+`stac` acquisition recipe for **every** declared raster and access to the
+endpoints and assets in those recipes. Create that spec first using
+[Model spec](model-spec.md); the small tensor-only
+training example has no acquisition recipes and cannot be ingested this way.
 
-The sample opens with `open_stack("data/scenes/s1")`, one group per model
-raster. To list the sample in a catalog, build one Item per group with
-`stac.create_items(paths, id="s1")`, where `paths` maps each group to its
-saved files, and store the item table with `rows.gs.to_geoparquet(...)`.
+The command runs a Prefect flow locally and waits for completion. Prefect may
+start a temporary server; a Prefect account is not required. On success, the
+final command output is the directory path:
 
-The anchor may copy an existing raster's exact grid and time:
-
-```json
-{"kind":"raster","path":"data/reference.tif"}
+```text
+data/scenes/s1
 ```
 
-It may cover a local GeoJSON file. Supply exactly one of `shape` or
-`resolution`; `crs`, `timespan`, and `pad` are optional.
+This is the expected result for a successful run with the command above; the
+external data download is separate from the offline training examples.
 
-```json
-{
-  "kind": "geojson",
-  "path": "data/area.geojson",
-  "resolution": 10,
-  "crs": "EPSG:32633",
-  "timespan": "2025-01",
-  "pad": 100
-}
-```
-
-Or it may build a grid around a WGS84 coordinate. `shape` can be one integer
-or `[height, width]`; `crs` and `timespan` are optional.
-
-```json
-{
-  "kind": "coordinates",
-  "latitude": 45.0,
-  "longitude": 12.0,
-  "shape": [1024, 1024],
-  "resolution": 10,
-  "crs": "EPSG:32633",
-  "timespan": ["2025-01-01", "2025-01-31"]
-}
-```
-
-Pass the JSON as one quoted shell argument:
-
-```bash
-geosave workflow ingest \
-  --anchor '{"kind":"coordinates","latitude":45,"longitude":12,"shape":1024,"resolution":10,"timespan":"2025-01"}' \
-  --output data/scenes/s1 \
-  --spec model_spec.yaml
-```
-
-## Prepare dense training data
-
-`prepare_dense_data` and `prepare_dense_sample` retain their public signatures
-as skeletons and raise `NotImplementedError`. Their previous catalog validation,
-reconstruction and resume machinery has been removed. Directory label indexing
-(`read_labels`) and training from catalog rows work; pixel writing and model
-acquisition remain available independently.
-
-## Raster requirements and STAC recipes
-
-The model spec owns both the raster it accepts and, when a workflow must fetch
-that raster, its STAC recipe:
-
-```yaml
-schema_version: 2
-rasters:
-  sentinel_2_l2a:
-    variables: [B04, B08]
-    coordinates: [x, y]
-    dims: [time, y, x]
-    dtypes: [uint16]
-    require_crs: true
-    attrs:
-      data_vars:
-        "*":
-          required: [scale_factor]
-    stac:
-      collection: sentinel-2-l2a
-      endpoints:
-        - https://planetarycomputer.microsoft.com/api/stac/v1/
-      query:
-        datetime: [2025-01-01, 2025-01-31]
-        max_items: 8
-      load:
-        bands: [B04, B08]
-        chunks: {x: 512, y: 512}
-```
-
-`variables` selects named data variables in order. Use `channels` instead when
-the model consumes the first N channels positionally. `coordinates` requires
-coordinate arrays to exist without constraining their values. Grid, dtype, and
-`attrs` requirements are optional and validation stays lazy. A single-date
-raster, such as one read from a GeoTIFF, carries its `time` as a scalar; where
-`dims` names `time` it is given a length-one axis.
-
-The nested `stac` block is required by the `ingest` and
-`prepare-dense-data` flows. It records the collection, fallback endpoints,
-search parameters, and native raster loading settings in one portable model
-artifact. Named `load.bands`, when present, must exactly match `variables` in
-the same order.
-
-Explicit recipe selectors take priority. `bbox`, `intersects`, and `datetime`
-are preserved; the target supplies only an omitted spatial extent or time
-window. An `ids` query receives no target-derived search selectors. The target
-still defines the exact output grid used to load pixels.
-
-If a raster already exists, no STAC recipe is needed. Supplying the native
-`xarray.Dataset` to preprocessing applies the same selection and validation
-before any preprocessing call:
+## Open the saved sample
 
 ```python
-from geosave_engine.model.spec import ModelSpec
+from geosave_engine import geodata as gs
 
-model = ModelSpec.load("model_spec.yaml")
-prepared = model.preprocess({"sentinel_2_l2a": raster})
+scene = gs.open_stack("data/scenes/s1")
+scene
 ```
 
-## Python equivalent
+The result is a native xarray DataTree, with one raster group per name in
+`ModelSpec.rasters`. For example, a spec declaring `sentinel_2_l2a` produces:
+
+```text
+data/scenes/s1/
+└── sentinel_2_l2a.zarr/
+```
+
+The default Zarr format retains a time series. Use `--format geotiff` for
+rasters with no time dimension or exactly one instant; the writer refuses a
+multi-instant raster in that format. Reading the directory opens its rasters;
+it does not create training splits or a torch Dataset.
+
+Ingestion writes only the declared rasters. It does not run the spec's
+preprocessing graph, tensor transforms, or training. Add saved rasters to a
+catalog when you need to organize many samples; see [STAC](stac.md) and
+[catalogs and cuts](catalogs-and-cuts.md).
+
+## Choose the target grid
+
+An **anchor** describes where and when data is needed. Three JSON kinds are
+supported:
+
+| Kind | Grid source | Time source |
+| --- | --- | --- |
+| `coordinates` | A WGS84 point, pixel shape, resolution, and optional target CRS. | Optional `timespan`. |
+| `geojson` | The extent of a local GeoJSON file, with either shape or resolution. | Optional `timespan`. |
+| `raster` | An existing raster's exact grid. | The raster's own temporal metadata. |
+
+For raster labels, use their grid as the anchor:
+
+```json
+{"kind": "raster", "path": "data/reference.tif"}
+```
+
+For a GeoJSON area, provide exactly one of `shape` or `resolution`. Optional
+`pad` expands the area before grid construction:
+
+```json
+{"kind": "geojson", "path": "data/area.geojson", "resolution": 10,
+ "crs": "EPSG:32633", "timespan": "2025-01", "pad": 100}
+```
+
+A coordinate anchor requires positive `shape` and `resolution`. The shape can
+be one integer for a square or `[height, width]`. Select an appropriate CRS
+and temporal range explicitly for your task.
+
+## Call ingestion from Python
 
 ```python
+from pydantic import TypeAdapter
+from geosave_engine.workflow.configs import AnchorConfig
 from geosave_engine.workflow.flows import ingest
 
-scene = ingest(
-    anchor={"kind": "raster", "path": "data/reference.tif"},
+anchor = TypeAdapter(AnchorConfig).validate_python(
+    {"kind": "raster", "path": "data/reference.tif"}
+)
+scene_path = ingest(
+    anchor=anchor,
     output="data/scenes/s1",
     spec="model_spec.yaml",
 )
+scene_path
 ```
 
-Ingestion is synchronous and returns the completed output directory. Existing
-outputs are refused. Raster requirements and STAC acquisition settings come
-from `model_spec.yaml`. Import `AnchorConfig` from
-`geosave_engine.workflow.configs` to validate anchor payloads independently.
+The Python flow accepts a validated anchor configuration, rather than an
+unvalidated dictionary. It opens that anchor, loads the spec's rasters, and
+returns the completed sample directory as a string. Validating the
+configuration alone does not open files or contact STAC services.
+
+| CLI option | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `--anchor JSON` | Yes | — | Spatial and temporal target. |
+| `--output PATH` | Yes | — | New local sample directory. |
+| `--spec PATH` | Yes | — | Model spec YAML file. |
+| `--format [geotiff\|zarr]` | No | `zarr` | Storage for each raster. |
+| `--write-options JSON` | No | `{}` | Encoding options passed to the native writer. |
+
+[`ModelSpec.load`](../reference/model-spec.md#geosave_engine.model.spec.ModelSpec.load)
+reads the supplied YAML file directly. The output directory must not already exist. Files are written into a staging
+directory and the completed sample is then published as the destination.
+The writer also requires co-registered rasters. It owns publication settings,
+so `compute`, `layout`, and `overwrite` are not accepted in `write-options`.
+
+## Prepare an existing catalog for training
+
+```python
+from geosave_engine import geodata as gs
+from geosave_engine.model.spec import ModelSpec
+
+raw = gs.open_vector("data/raw/catalog.parquet")
+spec = ModelSpec.load("model_spec.yaml")
+prepared = spec.prepare(raw, "data/prepared", on="label")
+prepared
+```
+
+For a compatible raw Item table and spec, this returns
+`data/prepared/catalog.parquet`. `on="label"` selects the collection whose
+items define the preparation windows. The method runs model-owned raster
+selection and preprocessing, writes the input rasters and retained labels as
+COGs, and saves the new catalog and model spec. Tensor transforms still run
+later in the DataModule. This operation reads and writes pixels; the output
+folder must be new. See [Model spec](model-spec.md)
+for a complete catalog example.
+
+The Prefect `prepare_dense_data` flow and its optional workspace scaffold are
+unfinished: calling the flow raises `NotImplementedError`. It is not a
+registered CLI command. The supported workflow CLI currently exposes
+`ingest`; use `ModelSpec.prepare` directly for the catalog operation above.

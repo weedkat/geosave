@@ -1,19 +1,16 @@
 import pytest
-from prefect import Flow, Task
+from prefect import Flow
 
 from geosave_engine.workflow import flows, tasks
 from geosave_engine.workflow.flows import prepare_dense_data
-from geosave_engine.workflow.tasks import prepare_dense_sample
 
 
 def test_layers_export_only_supported_operations() -> None:
     assert flows.__all__ == ["ingest", "prepare_dense_data"]
-    assert tasks.__all__ == ["prepare_dense_sample"]
+    assert tasks.__all__ == []
     assert isinstance(flows.ingest, Flow)
     assert isinstance(flows.prepare_dense_data, Flow)
-    assert isinstance(tasks.prepare_dense_sample, Task)
     assert prepare_dense_data is flows.prepare_dense_data
-    assert prepare_dense_sample is tasks.prepare_dense_sample
     for helper in (
         "SampleFormat",
         "find_labels",

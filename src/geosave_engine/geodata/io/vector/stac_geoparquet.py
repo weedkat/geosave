@@ -41,8 +41,10 @@ def from_items(items: Iterable[pystac.Item]) -> GeoDataFrame:
         it. No Items give the empty table a search matching nothing returns.
 
     Examples:
-        >>> from_items(create_items(paths))["id"].tolist()
-        ['forest_20250601T000000', 'forest_20250611T000000']
+        >>> from geosave_engine.geodata.stac import StacClient, StacQuery
+        >>> client = StacClient.open("samples/catalog.parquet")
+        >>> from_items(client.search_items(StacQuery(collections=["forest"])))["id"].tolist()
+        ['forest_20250601', 'forest_20250611']
     """
     records = []
     for item in items:
@@ -115,7 +117,7 @@ def write(
 ) -> UPath:
     """Write an item table as one stac-geoparquet file.
 
-    `GeoCatalog.to_geoparquet` is the public spelling. Asset hrefs are stored
+    `rows.gs.to_geoparquet` is the accessor spelling. Asset hrefs are stored
     relative to the file, so a table and its assets move together. Every
     Collection the rows name is stored in the file's metadata with the extent
     of its rows. Add a batch by concatenating its rows onto the table's and
@@ -141,9 +143,9 @@ def write(
 
     Examples:
         >>> forest = create_collection("forest", description="Forest samples")
-        >>> rows = from_items(create_items(paths, collection=forest))
-        >>> write(rows, "data/catalog.parquet", collections=[forest])
-        PosixUPath('data/catalog.parquet')
+        >>> files = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
+        >>> write(create_items(files, collection=forest), "data/forest.parquet", collections=[forest])
+        PosixUPath('data/forest.parquet')
     """
     if not is_item_table(rows):
         raise ValueError(

@@ -345,7 +345,8 @@ def _mosaic_fills(rasters: Sequence[xr.Dataset]) -> dict[str, float | int]:
     """
     names = rasters[0].gs.variables
     for raster in rasters:
-        missing = sorted(set(names) - set(raster.data_vars))
+        # A variable one raster lacks has no pixels to lay out there.
+        missing = sorted(set(names) ^ set(map(str, raster.data_vars)))
         if missing:
             raise ValueError(
                 f"{missing} are not in every raster's variables; select the same "

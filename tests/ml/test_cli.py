@@ -28,7 +28,6 @@ def test_default_artifacts_use_tensorboard_only(
     assert config.trainer.logger[0]["init_args"] == {
         "save_dir": "artifacts",
         "name": "forest-run",
-        "log_graph": True,
     }
 
 

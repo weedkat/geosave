@@ -10,7 +10,7 @@ import xarray as xr
 import geosave_engine.geodata as gs
 
 from geosave_engine.geodata import GeoAnchor, GeoArray, GeoRaster, GeoStack, GeoVector
-from geosave_engine.geodata.utils.geolocator import Place
+from geosave_engine.geodata.core.geolocator import Place
 
 from tests.geodata.conftest import build_raster
 

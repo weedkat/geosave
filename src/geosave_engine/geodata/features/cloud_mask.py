@@ -10,7 +10,7 @@ import xarray as xr
 from scipy.ndimage import gaussian_filter, uniform_filter
 from s2cloudless.cloud_detector import S2PixelCloudDetector
 
-from geosave_engine.geodata.utils.dask_mapping import map_spatial_overlap
+from geosave_engine.geodata.features.dask_mapping import map_spatial_overlap
 
 
 SCL_VALID_CLASSES = (

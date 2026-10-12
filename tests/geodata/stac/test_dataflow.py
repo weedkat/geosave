@@ -41,7 +41,6 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     assert red.data_type == "uint16"
     assert band_attrs(red, spectral) == {
         "units": "1",
-        "long_name": "red",
         "scale_factor": pytest.approx(1e-4),
         "common_name": "red",
         "center_wavelength": 0.665,

@@ -137,15 +137,23 @@ class GeoSaveModel(PreTrainedModel):
         model.training = chain.training
         return model
 
-    def save_pretrained(self, save_directory: str | os.PathLike, **kwargs: Any) -> None:
+    def save_pretrained(
+        self,
+        save_directory: str | os.PathLike,
+        is_main_process: bool = True,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """Write the Transformers artifact and, when present, the spec beside it.
 
         Args:
             save_directory: Directory to write.
+            is_main_process: Whether this process writes; only it writes the spec.
+            *args: Further positional options of `PreTrainedModel.save_pretrained`.
             **kwargs: Options forwarded to `PreTrainedModel.save_pretrained`.
         """
-        super().save_pretrained(save_directory, **kwargs)
-        if self.spec is not None:
+        super().save_pretrained(save_directory, is_main_process, *args, **kwargs)
+        if self.spec is not None and is_main_process:
             self.spec.save(os.path.join(save_directory, ModelSpec.filename))
 
     @torch.no_grad()

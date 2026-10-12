@@ -42,8 +42,7 @@ def read(
         GeoDataFrame on the CRS the file names.
 
     Raises:
-        TypeError: An option is unsupported or supplied twice.
-        ValueError: A direct option is repeated in `parquet_options`.
+        TypeError: An option is unsupported, or repeated in `parquet_options`.
     """
     storage_options = open_options.pop("storage_options", None)
     parquet_options = dict(open_options.pop("parquet_options", {}))
@@ -56,7 +55,7 @@ def read(
     )
 
 
-# Closed, so a subclass writer may add keywords these options never name.
+# Closed: a keyword these options do not name is a type error, not a pass-through.
 class GeoParquetWriteOptions(typing_extensions.TypedDict, total=False, closed=True):
     """Optional GeoPandas behavior supported when writing GeoParquet."""
 
@@ -90,9 +89,8 @@ def write(
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
-        TypeError: An option is unsupported or supplied twice.
-        ValueError: The suffix is wrong, a direct option is repeated in
-            `parquet_options`.
+        TypeError: An option is unsupported, or repeated in `parquet_options`.
+        ValueError: The suffix is wrong.
     """
     storage_options = write_options.pop("storage_options", None)
     # PyArrow accepts engine-specific keywords that GeoPandas cannot type.

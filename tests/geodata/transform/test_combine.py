@@ -505,6 +505,15 @@ def test_rasters_naming_different_variables_are_refused() -> None:
         mosaic([granule(), granule(name="nir")])
 
 
+def test_a_later_raster_carrying_an_extra_variable_is_refused() -> None:
+    first = granule()
+    second = granule(box((20, 0, 60, 40)))
+    second["nir"] = second["red"]
+
+    with pytest.raises(ValueError, match=r"\['nir'\] are not in every raster's"):
+        mosaic([first, second])
+
+
 def test_rasters_carrying_no_grid_are_refused() -> None:
     bare = xr.Dataset({"red": (("y", "x"), np.zeros((4, 4), "uint16"))})
     bare["red"].attrs["_FillValue"] = 0

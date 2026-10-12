@@ -8,6 +8,8 @@ __all__ = [
     "DroppedInstantsWarning",
     "UncoveredInstantsWarning",
     "DroppedFramesWarning",
+    "DuplicateInstantsWarning",
+    "PartialCoverWarning",
 ]
 
 

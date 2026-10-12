@@ -11,9 +11,6 @@ from terratorch.registry import BACKBONE_REGISTRY
 from geosave_engine.model.registry import register_model
 from geosave_engine.model.chain import Published, chain_step
 
-from geosave_engine.model.encoder.time import time_labels
-from geosave_engine.model.encoder.context import geographic_center
-
 
 def temporal_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     """Encode ordered frame timestamps as year and zero-indexed day of year.
@@ -23,16 +20,22 @@ def temporal_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
 
     Returns:
         Float32 tensor shaped (T, 2).
+
+    Raises:
+        ValueError: The raster has no time labels, or one is missing.
     """
+    times = raster.gs.times
+    if times is None or times.empty or times.hasnans:
+        raise ValueError("Prithvi requires the raster's time labels")
     return torch.tensor(
-        [(when.year, when.timetuple().tm_yday - 1) for when in time_labels(raster)],
-        dtype=torch.float32,
+        [(when.year, when.dayofyear - 1) for when in times], dtype=torch.float32
     )
 
 
 def location_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     """Return the raster's grid centre as a float32 latitude/longitude tensor."""
-    return torch.tensor(geographic_center(raster), dtype=torch.float32)
+    longitude, latitude = raster.gs.anchor.lonlat
+    return torch.tensor([latitude, longitude], dtype=torch.float32)
 
 
 def model_context(raster: xr.Dataset | xr.DataArray) -> dict[str, torch.Tensor]:
@@ -89,10 +92,13 @@ class _Prithvi(nn.Module):
             model_name: terratorch backbone registry name. Must be a key of `MODEL_SPECS`.
             pretrained: load pretrained weights from HuggingFace hub (or `ckpt_path`).
             bands: input bands in channel order, named as TerraTorch's `HLSBands`.
-                Bands in the checkpoint's BLUE, GREEN, RED, NIR_NARROW, SWIR_1,
-                SWIR_2 keep their pretrained patch-embed weights; any other name
-                gets randomly initialized ones. `None` reads those six in that
-                order.
+                They size and initialise only the patch embedding, one weight
+                slice per input band; no pixel is changed. The checkpoint was
+                pretrained on `BLUE, GREEN, RED, NIR_NARROW, SWIR_1, SWIR_2`
+                (Sentinel-2 B02, B03, B04, B8A, B11, B12; B08 is `NIR_BROAD`),
+                and those names keep their pretrained slice. Any other
+                `HLSBands` name, or a misspelt one, gets a random slice with
+                no error. `None` expects exactly those six, in that order.
             input_size: size the positional embedding buffer is built for, in pixels;
                 tuple for non-square. Sizes `model_name`'s patch size does not divide
                 are border-cropped. Call-time tensors may differ — the embedding is

@@ -33,6 +33,7 @@ src/geosave_engine/
 
 tests/            # mirrors src/geosave_engine
 workspace/        # generated consumer workspace, not library source
+planning/         # active proposals, open decisions and maintenance records
 ```
 
 `src/geosave_engine/templates/` is the source for generated workspace files.
@@ -89,17 +90,26 @@ LightningCLI    -> workspace entry point and configuration
 Logger          -> experiment logging
 ```
 
-A training setup is one LightningModule and the DataModule that feeds it, kept together in `ml/<head type>/<method>/`:
+A training setup is one LightningModule and the DataModule that feeds it, kept together in `ml/tasks/<head type>/<method>/`:
 
 ```text
-ml/segmentation/
-├── metrics.py        # shared by every segmentation method
-└── supervised/
-    ├── module.py     # Module(LightningModule)
-    └── data.py       # DataModule(LightningDataModule)
+ml/
+├── metrics/          # MulticlassMetrics, RegressionMetrics
+├── builders/         # criterion, optimizer, scheduler from configuration
+├── criterion/        # losses the library owns
+├── transforms/       # augmentation and mixing
+└── tasks/
+    └── segmentation/
+        ├── calibrate.py  # shared by every segmentation method
+        └── supervised/
+            ├── module.py # Module(LightningModule)
+            └── data.py   # DataModule(LightningDataModule)
 ```
 
-Share code across head types only once two written modules repeat it.
+Each package at the root of `ml/` owns one concern, and only `tasks/` imports
+the others. Each method's `data.py` declares the `Sample` its datasets return;
+torch Datasets are written per data source and passed in per split. Share code
+across head types only once two written modules repeat it.
 
 Generated workspaces compose GeoSave and Lightning APIs; they do not own library implementations.
 

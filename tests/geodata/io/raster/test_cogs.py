@@ -289,3 +289,40 @@ def test_a_grid_inside_the_files_own_is_sliced_not_warped(tmp_path: Path) -> Non
 
     assert read.gs.geobox == window
     np.testing.assert_array_equal(read.red.values, scene.red.values[:, 1:2, 0:2])
+
+
+def test_a_file_placed_by_control_points_is_warped_not_sliced(tmp_path: Path) -> None:
+    from rasterio.control import GroundControlPoint
+    from rasterio.crs import CRS
+
+    from geosave_engine.geodata.io import gdal
+
+    source = tmp_path / "gcp.tif"
+    corners = [
+        GroundControlPoint(row=0, col=0, x=3e5, y=5e6),
+        GroundControlPoint(row=8, col=8, x=3e5 + 80, y=5e6 - 80),
+        GroundControlPoint(row=0, col=8, x=3e5 + 80, y=5e6),
+    ]
+    with rasterio.open(
+        source, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8"
+    ) as dst:
+        dst.write(np.ones((1, 8, 8), "uint8"))
+        dst.gcps = (corners, CRS.from_epsg(32633))
+    placed = gdal.read(source).gs.geobox
+
+    # A control-point grid has no affine transform to slice by.
+    assert cogs._window(placed, build_raster().gs.geobox) is None
+
+
+def test_a_scalar_time_fills_the_time_field(tmp_path: Path) -> None:
+    # A scalar time coordinate is one date, as one step of a time axis is.
+    scene = build_raster(times=2).isel(time=1)
+
+    files = cogs.write(scene, f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+
+    assert [Path(file.href).name for file in files] == ["s_20250602.tif"]
+    assert files[0].datetime == pd.Timestamp("2025-06-02")
+    restored = open_raster(files[0].href)
+    assert pd.DatetimeIndex(restored.time.values).tolist() == [
+        pd.Timestamp("2025-06-02")
+    ]

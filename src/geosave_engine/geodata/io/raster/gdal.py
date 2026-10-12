@@ -28,7 +28,7 @@ from rasterio.enums import ColorInterp, MaskFlags
 
 from geosave_engine.geodata.conventions import TIME_COORDINATE
 from geosave_engine.geodata.utils.datetime import parse_stem_dates
-from ..storage import Location, absolute_location
+from ..storage import Location, StorageOptions, absolute_location
 from .tags import GeoTIFFTags
 
 if TYPE_CHECKING:
@@ -51,6 +51,7 @@ def read(
     *,
     chunks: Any = None,
     mask_and_scale: bool = False,
+    storage_options: StorageOptions | None = None,
     **open_options: Unpack[RasterioOpenOptions],
 ) -> Dataset:
     """Read any GDAL-readable raster as one variable per band.
@@ -65,6 +66,8 @@ def read(
         chunks: Chunk configuration for the opened variables.
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
+        storage_options: Accepted for a uniform call and unused; GDAL reads
+            credentials from the environment `configure_gdal` sets.
         **open_options: Supported rioxarray and rasterio open options.
 
     Returns:
@@ -366,17 +369,24 @@ def _attrs(
         }
         band.update({key: value for key, value in native.items() if value is not None})
 
+        identity = attrs.GDALBand.model_validate(band)
+        name = identity.variable_name or f"band_{index}"
+        # rioxarray describes an unlabelled band by its name, which is no label.
+        if band.get("long_name") == name:
+            del band["long_name"]
+
         legend = attrs.Legend.model_validate(band) if "flag_values" in band else None
         if interpretation is ColorInterp.palette and legend and legend.flag_values:
             colours = src.colormap(index)
-            band["color_map"] = {
+            palette = {
                 value: colours[value][:3]
                 for value in legend.flag_values
                 if value in colours
             }
+            # Spelled as the Legend writes it: text, which every format's attrs hold.
+            coloured = attrs.Legend.model_validate({**band, "color_map": palette})
+            band.update(coloured.to_attrs())
 
-        identity = attrs.GDALBand.model_validate(band)
-        name = identity.variable_name or f"band_{index}"
         if name in bands:
             raise ValueError(
                 f"band {index} names variable {name!r}, which an earlier band "

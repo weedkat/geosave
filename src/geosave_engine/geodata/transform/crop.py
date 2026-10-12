@@ -20,7 +20,7 @@ import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import xarray as xr
 from odc.geo.geobox import GeoBox
-from odc.geo.geom import Geometry
+from odc.geo.geom import BoundingBox, Geometry
 from odc.geo.xr import xr_coords
 
 from geosave_engine.geodata.conventions import SPATIAL_DIMENSIONS
@@ -29,10 +29,10 @@ from geosave_engine.geodata.transform import nodata
 from geosave_engine.geodata.transform.vector import rasterize
 
 # How halo and fringe pixels are filled, as numpy names its pad modes.
-type PaddingMode = Literal["constant", "edge", "reflect", "wrap"]
+type PaddingMode = Literal["constant", "edge", "reflect"]
 
 # A region to cut against, carrying its own CRS.
-type Region = Geometry | gpd.GeoSeries | gpd.GeoDataFrame
+type Region = Geometry | BoundingBox | gpd.GeoSeries | gpd.GeoDataFrame
 
 
 def crop[T: xr.DataArray | xr.Dataset | xr.DataTree](
@@ -43,7 +43,7 @@ def crop[T: xr.DataArray | xr.Dataset | xr.DataTree](
     Args:
         data: Dataset or DataArray on a regular grid, or a stack of them,
             which is cut group by group.
-        region: Geometry, or geometries, to cut against, reprojected onto
+        region: Geometry, geometries, or bounding box to cut against, reprojected onto
             `data`'s CRS where they sit in another. Disconnected geometries
             share one cut, and `mask` blanks the pixels between them.
         mask: Also make nodata the pixels outside the geometries, which then
@@ -53,7 +53,8 @@ def crop[T: xr.DataArray | xr.Dataset | xr.DataTree](
         `data` covering the region's extent, its dtype unchanged.
 
     Raises:
-        TypeError: `region` carries no CRS, as a bare shapely geometry.
+        TypeError: `region` carries no CRS, as a bare shapely geometry or
+            a BoundingBox built without one.
         ValueError: `data` carries no CRS, `region` is empty or does not
             overlap `data`, the crop leaves no regular grid to mask on, or
             `mask` is set while a variable carries no fill value.
@@ -62,6 +63,7 @@ def crop[T: xr.DataArray | xr.Dataset | xr.DataTree](
         >>> crop(scene, field_boundaries).gs.geobox.shape
         (64, 48)
         >>> crop(scene, box(10, 10, 30, 30, "EPSG:32633"))
+        >>> crop(scene, other.gs.bounds)
     """
     if isinstance(data, xr.DataTree):
         cut = map_groups(data, lambda raster: _crop_raster(raster, region, mask))
@@ -104,6 +106,8 @@ def _crop_raster[R: xr.DataArray | xr.Dataset](
 
 def _to_frame(region: Region) -> gpd.GeoDataFrame:
     """Read a region as a GeoDataFrame carrying its CRS."""
+    if isinstance(region, BoundingBox):
+        region = region.polygon
     if isinstance(region, gpd.GeoDataFrame):
         frame = region
     elif isinstance(region, gpd.GeoSeries):
@@ -128,7 +132,7 @@ def window[T: xr.DataArray | xr.Dataset | xr.DataTree](
     mode: PaddingMode = "constant",
     constant_value: int | float | None = None,
 ) -> T:
-    """Read a pixel window with the same padding its native Tiler uses.
+    """Read a pixel window with the padding its cuts use.
 
     Args:
         data: Raster, band, or stack; leading dimensions remain intact.
@@ -143,10 +147,18 @@ def window[T: xr.DataArray | xr.Dataset | xr.DataTree](
         Lazy window of the same native type. Georeferenced rasters retain
         the requested grid, including padded pixels outside the parent.
 
+    Raises:
+        ValueError: The padding mode is not constant, edge, or reflect.
+
     Examples:
         >>> window(scene, (0, 0), (256, 256)).sizes
         Frozen({'y': 256, 'x': 256})
     """
+
+    if mode not in ("constant", "edge", "reflect"):
+        raise ValueError(
+            f"unsupported padding mode {mode!r}; use constant, edge, or reflect"
+        )
 
     def cut(raster: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
         return _window_raster(raster, offset, shape, padding, mode, constant_value)
@@ -209,7 +221,7 @@ def _pad(
     if not any(before or after for before, after in widths.values()):
         # Padding nothing would still promote integers to hold xarray's NaN fill.
         padded = data
-    elif mode in ("reflect", "wrap"):
+    elif mode == "reflect":
         # Dask truncates repeated reflection, so pad index arrays and select by them.
         indices = {
             dim: np.pad(np.arange(data.sizes[dim]), width, mode=mode)

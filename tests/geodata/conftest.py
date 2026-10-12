@@ -125,10 +125,10 @@ def stack_templates(sample, root) -> dict[str, str]:
 def read_items(rows):
     """Read an item table's files as one raster, as a window reads one collection."""
     from geosave_engine.geodata.io.raster import cogs
-    from geosave_engine.geodata.stac._item import cog_files
+    from geosave_engine.geodata.stac.item import cog_files
     from geosave_engine.geodata.io.vector.stac_geoparquet import to_items
 
-    return cogs.read([f for item in to_items(rows) for f in cog_files(item.to_dict())])
+    return cogs.read([f for item in to_items(rows) for f in cog_files(item)])
 
 
 def titled(obj, title: str = "scene"):

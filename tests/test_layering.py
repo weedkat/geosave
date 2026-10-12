@@ -85,6 +85,16 @@ def test_geodata_imports_no_ml_and_no_torch_at_import_time():
         assert not _names(_imports(_import_time_nodes(tree)), "torch"), path
 
 
+def test_only_ml_tasks_import_ml_tasks():
+    root = Path(__file__).parents[1] / "src" / "geosave_engine" / "ml"
+    for path in root.rglob("*.py"):
+        relative = path.relative_to(root)
+        if relative.parts[0] == "tasks":
+            continue
+        tree = ast.parse(path.read_text())
+        assert not _names(_imports(ast.walk(tree)), "geosave_engine.ml.tasks"), path
+
+
 @pytest.mark.slow
 def test_geodata_loads_no_torch():
     assert not _loads(
@@ -107,7 +117,7 @@ def test_every_stage_package_registers_its_models():
     assert ast.literal_eval(listed) == {
         "decoder": ["DPT", "UNET"],
         "encoder": ["CLAY", "DINOV3", "PRITHVI", "PRITHVI_TL"],
-        "head": ["CLASSIFICATION", "DETECTION", "REGRESSION", "SEGMENTATION"],
+        "head": ["CLASSIFICATION", "REGRESSION", "SEGMENTATION"],
         "model": ["IBM_GRANITE_BIOMASS"],
     }
 
@@ -127,7 +137,7 @@ def test_release_loads_no_lightning():
 def test_supervised_segmentation_pairs_its_module_and_data():
     from lightning import LightningDataModule, LightningModule
 
-    from geosave_engine.ml.segmentation import supervised
+    from geosave_engine.ml.tasks.segmentation import supervised
 
     assert issubclass(supervised.Module, LightningModule)
     assert issubclass(supervised.DataModule, LightningDataModule)

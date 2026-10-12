@@ -9,10 +9,74 @@ site_url = "https://weedkat.github.io/geosave-engine"
 copyright = "Copyright © 2026 GeoMoka contributors"
 
 nav = [
-    { "Package ownership" = "guides/architecture.md" },
-    { "Workspaces" = "guides/workspaces.md" },
-    { "Benchmark data" = "guides/benchmarks.md" },
-    { "Workflow guide" = "guides/workflows.md" },
+    { "Home" = "index.md" },
+    { "Getting started" = [
+        { "Installation" = "install.md" },
+        { "Your first raster" = "first-raster.md" },
+        { "From images to training chips" = "quickstart.md" },
+    ] },
+    { "Practical guides" = [
+        { "Raster data" = "basics/rasters.md" },
+        { "Vector data" = "basics/vectors.md" },
+        { "Describe raster values" = "basics/attrs.md" },
+        { "Read and save data" = "basics/io.md" },
+        { "Search and load STAC data" = "guides/stac.md" },
+        { "Build catalogs and read windows" = "guides/catalogs-and-cuts.md" },
+        { "Lazy raster processing" = "guides/large-data.md" },
+        { "Build a model" = "guides/models.md" },
+        { "Declare model inputs" = "guides/model-spec.md" },
+        { "Train a segmentation model" = "guides/training.md" },
+        { "Save and publish a model" = "guides/release.md" },
+        { "Create a training workspace" = "guides/workspaces.md" },
+        { "Ingest data with a workflow" = "guides/workflows.md" },
+        { "Download benchmark files" = "guides/benchmarks.md" },
+    ] },
+    { "Concepts and behavior" = [
+        { "Overview" = "concepts/index.md" },
+        { "Raster grids" = "concepts/raster-grids.md" },
+        { "Metadata and pixel values" = "concepts/metadata.md" },
+        { "Lazy execution" = "concepts/lazy-data.md" },
+        { "Catalogs and windows" = "concepts/catalog-windows.md" },
+        { "Model input contracts" = "concepts/model-inputs.md" },
+        { "Training contracts" = "concepts/training.md" },
+    ] },
+    { "API reference" = [
+        { "Overview" = "reference/index.md" },
+        { "Data" = [
+            { "Overview" = "reference/geodata.md" },
+            { "Raster constructors" = "reference/rasters.md" },
+            { "Dataset accessor" = "reference/raster-accessor.md" },
+            { "DataArray accessor" = "reference/array-accessor.md" },
+            { "DataTree accessor" = "reference/stack-accessor.md" },
+            { "Spatial and temporal targets" = "reference/anchor.md" },
+            { "Vector accessor" = "reference/vectors.md" },
+            { "Readers, writers, and options" = "reference/io.md" },
+            { "Transforms" = "reference/transforms.md" },
+            { "Features and masks" = "reference/features.md" },
+            { "Metadata groups" = "reference/attrs.md" },
+            { "STAC" = "reference/stac.md" },
+            { "Window tables" = "reference/cuts.md" },
+            { "Benchmark downloads" = "reference/benchmarks.md" },
+            { "Errors and warnings" = "reference/errors.md" },
+        ] },
+        { "Models" = [
+            { "Overview" = "reference/model.md" },
+            { "Chains and registry" = "reference/model-chain.md" },
+            { "Encoders, decoders, and heads" = "reference/model-stages.md" },
+            { "Specifications" = "reference/model-spec.md" },
+            { "Releases" = "reference/model-release.md" },
+        ] },
+        { "Training" = [
+            { "Overview" = "reference/ml.md" },
+            { "Tasks and data modules" = "reference/training.md" },
+            { "Metrics" = "reference/metrics.md" },
+            { "Training tools" = "reference/training-tools.md" },
+        ] },
+        { "Workflows" = "reference/workflow.md" },
+    ] },
+    { "Contributing" = [
+        { "Architecture" = "architecture.md" },
+    ] },
 ]
 
 [project.theme]
@@ -37,5 +101,17 @@ scheme = "slate"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
-[plugins.mkdocstrings.handlers.python]
+[project.plugins.mkdocstrings.handlers.python]
 paths = ["src"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+show_source = false
+show_root_heading = true
+show_root_full_path = false
+show_signature_annotations = true
+show_if_no_docstring = true
+merge_init_into_class = true
+members_order = "source"
+group_by_category = false
+line_length = 88
+filters = ["!^_", "!^model_config$"]

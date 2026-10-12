@@ -8,6 +8,7 @@ import pytest
 import xarray as xr
 from dask.delayed import Delayed
 from upath import UPath
+from zarr import open_group
 
 from geosave_engine.geodata import open_raster
 from geosave_engine.geodata.io import zarr
@@ -74,7 +75,8 @@ def test_order_metadata_is_owned_by_storage_without_changing_source_attrs(
     with zarr.read(destination) as restored:
         assert list(restored.data_vars) == names
         assert restored.attrs["title"] == "scene"
-        assert restored.attrs["zarr_variable_order"] == names
+        # The order is restored, so the bookkeeping attr is spent.
+        assert "zarr_variable_order" not in restored.attrs
 
 
 def test_a_zarr_variable_written_elsewhere_trails_the_written_order(
@@ -82,10 +84,13 @@ def test_a_zarr_variable_written_elsewhere_trails_the_written_order(
 ) -> None:
     names = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"]
     destination = zarr.write(build_shuffled(names), tmp_path / "ordered.zarr")
-    grown = zarr.read(destination).assign(swir=lambda ds: ds.zulu)
-    grown.to_zarr(tmp_path / "grown.zarr", zarr_format=3, consolidated=False)
+    # Another tool appends a variable to the store, leaving the order attr as it was.
+    group = open_group(destination, mode="a")
+    group.create_array(
+        "swir", data=build_raster().red.values, dimension_names=("y", "x")
+    )
 
-    restored = zarr.read(tmp_path / "grown.zarr")
+    restored = zarr.read(destination)
 
     assert list(restored.data_vars) == [*names, "swir"]
 
@@ -137,10 +142,16 @@ def test_overwrite_guards_an_existing_store(tmp_path: Path) -> None:
     destination = tmp_path / "scene.zarr"
     zarr.write(raster, destination)
 
-    with pytest.raises(FileExistsError):
+    with pytest.raises(FileExistsError, match="overwrite=True"):
         zarr.write(raster, destination)
 
     assert zarr.write(raster, destination, overwrite=True) == destination
+
+
+def test_the_zarr_suffix_is_matched_without_case(tmp_path: Path) -> None:
+    destination = zarr.write(build_raster(), tmp_path / "SCENE.ZARR")
+
+    assert list(zarr.read(destination).data_vars) == ["red", "nir"]
 
 
 def test_zarr_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:

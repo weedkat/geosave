@@ -9,8 +9,6 @@ from terratorch.models.backbones.clay_v15.model import Encoder
 from geosave_engine.model.registry import register_model
 from geosave_engine.model.chain import Published, chain_step
 
-from geosave_engine.model.encoder.time import time_labels
-from geosave_engine.model.encoder.context import geographic_center
 
 # Only the large variant has a published checkpoint.
 MODEL_SOURCE: dict[str, dict[str, str]] = {
@@ -192,7 +190,9 @@ def time(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     Raises:
         ValueError: More than one frame was selected.
     """
-    times = time_labels(raster)
+    times = raster.gs.times
+    if times is None or times.empty or times.hasnans:
+        raise ValueError("Clay requires the raster's time labels")
     if len(times) != 1:
         raise ValueError("Clay requires one time label; select a single frame first")
     when = times[0]
@@ -201,7 +201,8 @@ def time(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
 
 def latlon(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     """Return the raster's grid centre as a float32 latitude/longitude tensor."""
-    return torch.tensor(geographic_center(raster), dtype=torch.float32)
+    longitude, latitude = raster.gs.anchor.lonlat
+    return torch.tensor([latitude, longitude], dtype=torch.float32)
 
 
 def model_context(raster: xr.Dataset | xr.DataArray) -> dict[str, torch.Tensor]:

@@ -148,7 +148,7 @@ def map_groups(
         root attrs `tree` carried.
 
     Examples:
-        >>> map_groups(scene, lambda raster: raster.isel(time=0)).gs.groups
+        >>> map_groups(scene, lambda raster: raster.isel(x=slice(0, 16))).gs.groups
         ('sentinel-2-l2a', 'dem')
     """
     changed = stack({name: change(raster) for name, raster in tree.gs.rasters.items()})
@@ -272,11 +272,11 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
             }
 
         Examples:
-            Rebuild a stack to add a group, or to join two of them:
+            Rebuild a stack to add a group:
 
             >>> stack({**scene.gs.rasters, "ndvi": ndvi}).gs.groups
             ('sentinel-2-l2a', 'dem', 'ndvi')
-            >>> stack({**optical.gs.rasters, **labels.gs.rasters}).gs.groups
+            >>> stack({**scene.gs.rasters, "labels": labels}).gs.groups
             ('sentinel-2-l2a', 'dem', 'labels')
         """
         # .dataset would return a DatasetView whose attrs still write through here.
@@ -322,7 +322,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         A stack whose groups sit on their own grids names no shared axes, so
         nothing can index them together. This is what brings them onto one,
-        and `Tiles` needs it before it will cut a stack.
+        after which `isel` on `y` and `x` cuts every group at once.
 
         Args:
             target: Grid to align onto, a raster already on one, or a CRS.
@@ -339,7 +339,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
                 reference's own, so the stack comes out co-registered and
                 publishes its grid. `"native"` keeps each group's instead, so
                 the groups cover one extent on nesting grids and the root stays
-                bare — which `Tiles` cuts group by group.
+                bare, so each group is read on its own through `gs.rasters`.
             inplace: Warp into this stack rather than returning a new one.
 
         Returns:
@@ -367,10 +367,13 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
             >>> scene.gs.align(resampling={"*": "bilinear", "labels/mask": "mode"})
 
-            Aligning in place leaves the stack ready to cut:
+            Aligning in place publishes the grid, so one `isel` cuts every
+            group:
 
             >>> sentinel.gs.align(inplace=True)
-            >>> Tiles([sentinel], (256, 256))
+            >>> chip = sentinel.isel(y=slice(0, 256), x=slice(0, 256))
+            >>> chip.gs.geobox.shape
+            Shape2d(x=256, y=256)
         """
         # Only the tree knows its qualified names, so a mapping can name a group.
         geobox = warp.common_grid(
@@ -397,8 +400,8 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
         )
         return None
 
-    def plot(self, *, cols: int = 1) -> hv.Layout:
-        """Draw every group down the page. Needs the `viz` extra.
+    def plot(self, *, cols: int = 1, xlabel: str | None = None) -> hv.Layout:
+        """Draw every group down the page.
 
         Each group draws through `Dataset.gs.plot`. Its group name, time, and
         location appear below the axes. A group spanning `time` contributes
@@ -406,6 +409,8 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Args:
             cols: Panels per row. Defaults to one, stacking them in a column.
+            xlabel: Location caption below each group's name. None uses each
+                group's reverse-geocoded location; an empty string suppresses it.
 
         Returns:
             Layout of every panel, or the sole panel when the stack holds one
@@ -425,12 +430,14 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
         panels: list[hv.Element] = []
         for name in self.groups:
             raster = self._data.children[name].to_dataset(inherit="all_coords")
-            place = raster.gs.anchor.locate()
-            caption = name if place is None else f"{name}\n{place.to_address()}"
+            place = raster.gs.anchor.locate() if xlabel is None else None
+            where = place.to_address() if place is not None else xlabel
+            caption = f"{name}\n{where}" if where else name
             drawn = raster.gs.plot(xlabel=caption)
             panels.extend(drawn.values() if isinstance(drawn, hv.NdLayout) else [drawn])
 
-        return hv.Layout(panels).cols(cols)
+        # Room between columns for each panel's colorbar and its class names.
+        return hv.Layout(panels).cols(cols).opts(hspace=0.9)
 
     def to_numpy(self, *, dtype: DTypeLike | None = None) -> dict[str, np.ndarray]:
         """Stack each group's variables into one model-input array.
@@ -483,7 +490,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
 
         Examples:
             >>> {name: t.shape for name, t in scene.gs.to_tensor().items()}
-            {'image': torch.Size([4, 256, 256]), 'label': torch.Size([1, 256, 256])}
+            {'sentinel-2-l2a': torch.Size([2, 4, 256, 256]), 'dem': torch.Size([1, 256, 256])}
         """
         return {
             name: raster.gs.to_tensor(dtype=dtype)
@@ -529,8 +536,9 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
             FileExistsError: A file exists and `overwrite` is false.
 
         Examples:
-            >>> scene.gs.to_cog("out/{collection}_{time:%Y%m%d}.tif")
-            >>> scene.gs.to_cog({"optical": "out/optical_{time:%Y%m%d}.tif", "dem": "out/dem.tif"})
+            >>> scene.gs.to_cog(
+            ...     {"sentinel-2-l2a": "out/s2_{time:%Y%m%d}.tif", "dem": "out/dem.tif"}
+            ... )
         """
         from geosave_engine.geodata.io import cogs
 
@@ -547,7 +555,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
         planned = {}
         owners: dict[str, str] = {}
         for name, raster in self.rasters.items():
-            dated = TIME_COORDINATE in raster.dims
+            dated = TIME_COORDINATE in raster.coords
             if not dated and TIME_COORDINATE in cogs.fields_named(templates[name]):
                 raise ValueError(
                     f"group {name!r} has no dates, so {{time}} cannot be filled; "

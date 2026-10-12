@@ -19,7 +19,7 @@ accessors, not here.
 """
 
 from . import raster, storage, vector
-from .raster import cogs, gdal, geotiff, netcdf, safe, zarr
+from .raster import cogs, gdal, geotiff, netcdf, zarr
 from .vector import geojson, geopackage, geoparquet
 from .raster.gdal import RasterioOpenOptions, configure_gdal
 from .vector.geojson import GeoJSONOpenOptions
@@ -62,7 +62,6 @@ __all__ = [
     "open_raster",
     "open_stack",
     "open_vector",
-    "safe",
     "storage",
     "vector",
     "zarr",

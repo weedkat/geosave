@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import geopandas as gpd
@@ -12,7 +13,7 @@ from pathlib import Path
 from upath import UPath
 
 from .. import storage
-from ..storage import StorageOptions
+from ..storage import Location, StorageOptions
 
 if TYPE_CHECKING:
     from os import PathLike
@@ -31,7 +32,7 @@ class GeoJSONOpenOptions(TypedDict, total=False):
 
 
 def read(
-    source: str | PathLike[str],
+    source: Location,
     *,
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
     **open_options: Unpack[GeoJSONOpenOptions],
@@ -39,7 +40,8 @@ def read(
     """Open the features of one GeoJSON file.
 
     Args:
-        source: Local GeoJSON path or URI.
+        source: Local path, `file://` URL, or a URL GDAL reads itself, as
+            `s3://` or `https://`, with credentials from `configure_gdal`.
         engine: Concrete GeoPandas file-reading engine.
         **open_options: Supported GeoPandas and file-driver read options.
 
@@ -50,14 +52,40 @@ def read(
         TypeError: An option is unsupported or supplied twice.
         ValueError: A driver option selects an engine or disables geometry.
     """
-    driver_options = dict(open_options.pop("driver_options", {}))
+    options = driver_read_options(open_options)
+    frame = gpd.read_file(
+        storage.openable(storage.location(source)),
+        engine=engine,
+        ignore_geometry=False,
+        **options,
+    )
+    return cast("gpd.GeoDataFrame", frame)
+
+
+def driver_read_options(open_options: Mapping[str, Any]) -> dict[str, Any]:
+    """Join typed read options with `driver_options`, refusing any given twice.
+
+    Args:
+        open_options: Read options, possibly holding `driver_options`.
+
+    Returns:
+        One mapping of keywords for `gpd.read_file`.
+
+    Raises:
+        TypeError: A key is both a typed option and a driver option.
+        ValueError: A driver option selects an engine or disables geometry.
+    """
+    typed = dict(open_options)
+    driver_options = dict(typed.pop("driver_options", {}))
     if "engine" in driver_options:
         raise ValueError("driver_options must not contain engine; use engine=")
     if "ignore_geometry" in driver_options:
         raise ValueError("driver_options must not contain ignore_geometry")
-    options: dict[str, Any] = {**open_options, **driver_options}
-    frame = gpd.read_file(source, engine=engine, ignore_geometry=False, **options)
-    return cast("gpd.GeoDataFrame", frame)
+    if repeated := sorted(typed.keys() & driver_options.keys()):
+        raise TypeError(
+            f"{repeated} given both directly and in driver_options; pass each once"
+        )
+    return {**typed, **driver_options}
 
 
 class GeoJSONWriteOptions(TypedDict, total=False):

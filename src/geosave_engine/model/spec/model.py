@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 
 from pydantic import ConfigDict, Field, JsonValue, model_validator
 import xarray as xr
@@ -16,12 +16,15 @@ from .call import CallSpec, Ref
 from .cuts import FramesSpec, ChipsSpec
 from .rasters import RasterRequirement
 from .stage import StageSpec
+from geosave_engine.geodata import GeoVector, cuts, stac, stack
 from geosave_engine.geodata.core import GeoAnchor
 from geosave_engine.geodata.io import storage
 from geosave_engine.geodata.io.storage import Location
 
 if TYPE_CHECKING:
     import geopandas as gpd
+
+    from geosave_engine.geodata.core.catalog import GeoCatalog
 
 
 class _Loader(yaml.SafeLoader):
@@ -119,10 +122,12 @@ class ModelSpec(SpecModel):
                 "Model inputs reference neither a preprocessing result nor a "
                 f"raster: {sorted(unknown)}"
             )
-        if self.context is not None and (unknown := self.context.inputs - known):
+        # Prepare saves only what the inputs read, so context reads no more.
+        if self.context is not None and (
+            unknown := self.context.inputs - set(self.input_rasters)
+        ):
             raise ValueError(
-                "Context references neither a preprocessing result nor a "
-                f"raster: {sorted(unknown)}"
+                f"Context references what no model input reads: {sorted(unknown)}"
             )
         if unknown := self.transforms.keys() - set(self.pixel_inputs):
             raise ValueError(
@@ -141,29 +146,65 @@ class ModelSpec(SpecModel):
         return tuple(dict.fromkeys(value.root for value in self.inputs.values()))
 
     def load_rasters(self, anchor: GeoAnchor, /) -> dict[str, xr.Dataset]:
-        """Load every declared raster from STAC onto an anchor.
+        """Load and select every declared raster from its STAC recipe.
 
-        Not settled yet: read rasters from a catalog through `cuts.stacks`
-        and `row.gs.to_stack()` instead.
+        Args:
+            anchor: Grid and time the rasters are loaded on.
+
+        Returns:
+            Raster name mapped to its selected lazy raster.
 
         Raises:
-            NotImplementedError: Always.
+            ValueError: A raster declares no `stac` block, or a loaded raster
+                misses its requirement.
+
+        Examples:
+            >>> spec.load_rasters(anchor)["sentinel_2_l2a"].gs.variables
+            ('B02', 'B03', 'B04', 'B08')
         """
-        raise NotImplementedError(
-            "ModelSpec.load_rasters is not settled; read rasters from a catalog "
-            "with cuts.stacks and row.gs.to_stack()"
-        )
+        if missing := [n for n, r in self.rasters.items() if r.stac is None]:
+            raise ValueError(f"Rasters declare no `stac` block: {missing}")
+        rasters = {}
+        for name, requirement in self.rasters.items():
+            assert requirement.stac is not None
+            try:
+                rasters[name] = requirement.select_raster(
+                    requirement.stac.load_raster(anchor)
+                )
+            except Exception as error:
+                error.add_note(f"While loading raster {name!r}")
+                raise
+        return rasters
 
     def preprocess(self, rasters: Mapping[str, Any], /) -> dict[str, Any]:
         """Select the declared rasters and run preprocessing on them.
 
-        Not settled yet: redesigned together with frames, chips, inputs and
-        context.
+        Args:
+            rasters: Rasters by name; names this spec does not declare, such
+                as labels, are ignored.
+
+        Returns:
+            Each selected raster and each preprocessing result, by name.
 
         Raises:
-            NotImplementedError: Always.
+            KeyError: A declared raster is not supplied, or lacks a declared
+                variable or coordinate.
+            ValueError: A raster misses its requirement.
+
+        Examples:
+            >>> sorted(spec.preprocess({"sentinel_2_l2a": scene, "label": label}))
+            ['image', 'sentinel_2_l2a']
         """
-        raise NotImplementedError("ModelSpec.preprocess is not settled")
+        if missing := [name for name in self.rasters if name not in rasters]:
+            raise KeyError(f"Missing declared rasters: {missing}")
+        selected = {}
+        for name, requirement in self.rasters.items():
+            try:
+                selected[name] = requirement.select_raster(rasters[name])
+            except Exception as error:
+                error.add_note(f"While selecting raster {name!r}")
+                raise
+        return {**selected, **self.preprocessing.run(selected)}
 
     def prepare(
         self,
@@ -175,27 +216,86 @@ class ModelSpec(SpecModel):
     ) -> UPath:
         """Preprocess every window of a raw catalog and save what the model reads.
 
-        Not settled yet: until the notebook examples fix the flow, save model
-        inputs with `to_cog` and catalogue them with `stac.create_items`.
+        Each window `cuts.stacks(raw, on=on)` lists is read and preprocessed;
+        the rasters the inputs read, the `keep` collections, and `on` unless
+        it is a declared raster are written as COGs under `output/<anchor>/`.
+        The item table goes to `output/catalog.parquet`, this spec beside it.
+
+        Args:
+            raw: Item table of the raw rasters and the collections kept.
+            output: New folder, as a path, URL, or UPath.
+            on: Collection whose items are the windows, as labels are.
+            keep: Collections copied through unchanged.
+
+        Returns:
+            The prepared item table's file.
 
         Raises:
-            NotImplementedError: Always.
+            FileExistsError: `output` exists.
+            TypeError: `keep` is given as text.
+            KeyError: A window lacks a declared raster or a kept collection.
+
+        Examples:
+            >>> path = spec.prepare(raw, "data/prepared", on="label")
+            >>> cuts.stacks(open_vector(path), on="label").iloc[0].gs.to_stack().gs.groups
+            ('image', 'label')
         """
-        raise NotImplementedError(
-            "ModelSpec.prepare is not settled; save the model inputs with "
-            "to_cog and catalogue them with stac.create_items"
+        if isinstance(keep, str):
+            raise TypeError(f"keep takes a list of collections, as keep=[{keep!r}]")
+        target = storage.location(output)
+        if target.exists():
+            raise FileExistsError(f"{target} exists; prepare writes a new folder")
+        kept: list[str] = list(
+            dict.fromkeys([*keep, *([] if on in self.rasters else [on])])
         )
+        # A window drops its anchor's own time, which an undated group needs.
+        anchors = raw[raw["collection"] == on]
+        instants = dict(zip(anchors["id"], anchors["datetime"], strict=True))
+
+        tables = []
+        for _, row in cuts.stacks(raw, on=on).iterrows():
+            anchor = str(row["anchor"])
+            rasters = row.gs.to_stack().gs.rasters
+            if missing := [name for name in kept if name not in rasters]:
+                raise KeyError(f"Window {anchor!r} lacks {missing}")
+            results = self.preprocess(rasters)
+            groups: dict[str, xr.Dataset] = {
+                name: results[name] for name in self.input_rasters
+            }
+            groups |= {name: rasters[name] for name in kept}
+            templates = {
+                name: _template(target / anchor, name, group)
+                for name, group in groups.items()
+            }
+            files = stack(groups).gs.to_cog(templates)
+            tables.append(
+                stac.create_items(files, id=anchor, datetime=instants[anchor])
+            )
+        self.save(target / self.filename)
+        catalog = cast("GeoCatalog", GeoVector.concat(tables).gs)
+        return catalog.to_geoparquet(target / "catalog.parquet")
 
     def model_context(self, rasters: Mapping[str, Any]) -> dict[str, Any]:
-        """Encode the sample's rasters with the declared context recipe.
+        """Encode a sample's rasters with the declared context recipe.
 
-        Not settled yet: redesigned together with frames, chips, inputs and
-        context.
+        Args:
+            rasters: Prepared rasters, as `model_inputs` takes them.
+
+        Returns:
+            What the recipe returns, or an empty dict without one.
 
         Raises:
-            NotImplementedError: Always.
+            KeyError: A raster the recipe reads is absent.
+            TypeError: The recipe returns something other than a dict.
         """
-        raise NotImplementedError("ModelSpec.model_context is not settled")
+        if self.context is None:
+            return {}
+        values = self.context.invoke(self.context.select_inputs(rasters))
+        if not isinstance(values, dict):
+            raise TypeError(
+                f"model context must return a dict, got {type(values).__name__}"
+            )
+        return values
 
     def model_inputs(
         self,
@@ -203,15 +303,29 @@ class ModelSpec(SpecModel):
         *,
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Combine the declared raster inputs with their context.
+        """Bind each input to its prepared raster and add their context.
 
-        Not settled yet: redesigned together with frames, chips, inputs and
-        context.
+        Args:
+            rasters: Prepared rasters, as `row.gs.to_stack().gs.rasters`
+                reads them.
+            context: Cached encoding of these rasters. None encodes them.
+
+        Returns:
+            Each input's raster and each context value, by name.
 
         Raises:
-            NotImplementedError: Always.
+            KeyError: A raster an input reads is absent.
+            ValueError: Context would replace a pixel input.
+
+        Examples:
+            >>> sorted(spec.model_inputs(chip.gs.rasters))
+            ['image', 'location_coords', 'temporal_coords']
         """
-        raise NotImplementedError("ModelSpec.model_inputs is not settled")
+        pixels = {name: ref.resolve(rasters) for name, ref in self.inputs.items()}
+        encoded = self.model_context(rasters) if context is None else dict(context)
+        if overlap := pixels.keys() & encoded.keys():
+            raise ValueError(f"Context cannot replace pixel inputs: {sorted(overlap)}")
+        return {**pixels, **encoded}
 
     def save(self, path: Location) -> UPath:
         """Write this spec as YAML, with references as `!ref` tags.
@@ -248,3 +362,10 @@ class ModelSpec(SpecModel):
         """
         payload = storage.location(path).read_text(encoding="utf-8")
         return cls.model_validate(yaml.load(payload, Loader=_Loader))
+
+
+def _template(folder: UPath, name: str, raster: xr.Dataset) -> str:
+    """Spell one prepared group's COG path: a file per instant when it is dated."""
+    if "time" in raster.dims:
+        return f"{folder}/{name}/{name}_{{time:%Y%m%dT%H%M%S}}.tif"
+    return f"{folder}/{name}.tif"

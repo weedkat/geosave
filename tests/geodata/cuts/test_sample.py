@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import dask
 import numpy as np
 import pandas as pd
@@ -59,3 +62,46 @@ def test_a_saved_windows_table_reads_the_same_pixels(items, tmp_path) -> None:
     a = cut.iloc[3].gs.to_stack()["s2"].dataset.red.values
     b = back.iloc[3].gs.to_stack()["s2"].dataset.red.values
     np.testing.assert_array_equal(a, b)
+
+
+def test_cuts_registers_the_row_accessor_on_import():
+    code = (
+        "import sys, pandas as pd, geosave_engine; "
+        "assert 'gs' not in dir(pd.Series); "
+        "from geosave_engine.geodata import cuts; "
+        "assert 'gs' in dir(pd.Series); "
+        "assert 'torch' not in sys.modules"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_saved_multiband_sources_keep_band_names(items, sample, tmp_path):
+    import orjson
+    import pystac
+
+    from geosave_engine.geodata import open_vector, stac
+
+    optical = sample["s2"].dataset
+    optical = optical.assign(nir=optical.red + 1)
+    owner = stac.create_collection("s2", description="Optical bands")
+    files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")
+    rows = stac.create_items(files, collection=owner)
+    # A fresh optical collection with multiband assets, anchored by the label.
+    combined = pd.concat(
+        [items[items["collection"] == "label"], rows], ignore_index=True
+    )
+    path = combined.gs.to_geoparquet(tmp_path / "multiband.parquet")
+    windows = cuts.stacks(open_vector(path), on="label")
+
+    snapshots = orjson.loads(windows.iloc[0]["sources"])["s2"]
+    records = stac.cog_files(pystac.Item.from_dict(snapshots[0]))
+    assert records[0].bands == ("red", "nir")
+
+    recovered = windows.iloc[0].gs.to_stack()["s2"].dataset
+
+    assert tuple(recovered.data_vars) == ("red", "nir")
+    assert dask.is_dask_collection(recovered.red)
+    assert recovered.gs.geobox == optical.gs.geobox
+    np.testing.assert_array_equal(recovered.time.values, optical.time.values)
+    np.testing.assert_array_equal(recovered.red.values, optical.red.values)
+    np.testing.assert_array_equal(recovered.nir.values, optical.nir.values)

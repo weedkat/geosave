@@ -264,7 +264,7 @@ def test_a_window_past_the_edge_is_filled_as_asked():
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("mode", ["constant", "edge", "reflect", "wrap"])
+@pytest.mark.parametrize("mode", ["constant", "edge", "reflect"])
 def test_window_negative_offset_pads_before_the_source(mode, lazy):
     import xarray as xr
 
@@ -277,6 +277,11 @@ def test_window_negative_offset_pads_before_the_source(mode, lazy):
         "constant": [[0, 0, 0], [0, 1, 2], [0, 4, 5]],
         "edge": [[1, 1, 2], [1, 1, 2], [4, 4, 5]],
         "reflect": [[5, 4, 5], [2, 1, 2], [5, 4, 5]],
-        "wrap": [[9, 7, 8], [3, 1, 2], [6, 4, 5]],
     }
     np.testing.assert_array_equal(result.values, expected[mode])
+
+
+def test_window_refuses_wrap_even_without_padding():
+    source = build_raster()
+    with pytest.raises(ValueError, match="wrap"):
+        window(source, (0, 0), (1, 1), mode="wrap")

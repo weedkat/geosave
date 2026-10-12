@@ -17,7 +17,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.RichProgressBar
 
 model:
-  class_path: geosave_engine.ml.segmentation.supervised.Module
+  class_path: geosave_engine.ml.tasks.segmentation.supervised.Module
   init_args:
     ignore_index: 255
     model_chain:
@@ -44,12 +44,12 @@ model:
     metrics: [iou.macro, f1.macro]
 
 data:
-  class_path: geosave_engine.ml.segmentation.supervised.DataModule
+  class_path: geosave_engine.ml.tasks.segmentation.supervised.DataModule
   init_args:
     spec: configs/model_spec.yaml
-    train: data/train.parquet
-    val: data/val.parquet
-    target: label
+    # One Dataset class per data source, returning the DataModule's `Sample`.
+    train: {class_path: datasets.MyDataset, init_args: {split: train}}
+    val: {class_path: datasets.MyDataset, init_args: {split: val}}
     ignore_index: 255
     batch_size: 8
     num_workers: 4

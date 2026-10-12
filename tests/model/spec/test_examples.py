@@ -2,8 +2,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
-
 from geosave_engine.cli.core.workspace import create_workspace
 from geosave_engine.model.spec import ModelSpec, Ref
 
@@ -28,10 +26,6 @@ def test_shipped_model_spec_round_trips_as_inert_declarations(tmp_path):
     assert spec.preprocessing["image"].kwargs == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the workspace walkthrough calls ModelSpec.preprocess, a stub",
-)
 def test_walkthrough_runs_without_model_or_external_service(tmp_path):
     create_workspace(tmp_path, "segmentation")
 

@@ -1,8 +1,8 @@
-"""Merge chip outputs saved during prediction back into whole rasters."""
+"""Merge chip outputs back into whole rasters."""
 
 from __future__ import annotations
 
-import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal, cast
 
 import geopandas as gpd
@@ -37,52 +37,46 @@ type Taper = Literal[
 def merge(
     parents: gpd.GeoDataFrame,
     chips: gpd.GeoDataFrame,
-    predictions: gpd.GeoDataFrame,
+    outputs: Mapping[int, np.ndarray],
     *,
+    bands: Sequence[str],
+    valid: Mapping[int, np.ndarray] | None = None,
     taper: Taper | None = None,
 ) -> dict[int, Dataset]:
-    """Merge saved chip outputs onto the grid of each window they were cut from.
+    """Merge chip outputs onto the grid of each window they were cut from.
 
     The layout a cut used is rebuilt from the parent's shape and the chips'
-    settings, so chips may have been predicted in any order and by several
-    writers. Overlaps are weighed and summed, as logits are; classes are
-    taken after merging, with `argmax`.
+    settings, so outputs may arrive in any order. Each pixel is the weighted
+    mean of the chips covering it validly, weighed by `taper`; a pixel no
+    chip covers validly is NaN. Overlaps are averaged as logits are; take
+    classes after merging.
 
     Args:
         parents: The windows the chips were cut from, as given to `chips`.
-        chips: The chips, as `chips` returned them.
-        predictions: Item table of the saved outputs, one per chip, with a
-            `chip` column holding the chip's row position.
+        chips: The chips, as `chips` returned them, or a subset of them.
+        outputs: Each chip's row label in `chips` mapped to its
+            `(band, y, x)` output.
+        bands: Name of each output band, in order.
+        valid: Each chip's row label mapped to its `(y, x)` pixels that
+            count. None counts every finite pixel.
         taper: How overlapping chips are weighed, as a window name such as
             `"hann"`. None weighs every chip alike.
 
     Returns:
         {
-            <parent position>: Dataset on the parent's grid, holding the
-                merged output as `(band, y, x)` under the bands' shared name,
-                or `"output"`,
+            <parent position>: float64 Dataset on the parent's grid, one
+                `(y, x)` variable per band,
         }
 
     Raises:
-        ValueError: A parent's chip has no saved output, or `taper` is given
-            for chips cut without overlap.
+        ValueError: A chip has no output, an output holds other than one
+            band per name, or `taper` is given for chips cut without overlap.
 
     Examples:
-        >>> merged = merge(frames, chips, ChipWriter.read("runs/pred"), taper="hann")
-        >>> merged[0]["logits"].argmax("band")
-        <xarray.DataArray 'logits' (y: 512, x: 512)> ...
+        >>> merged = merge(frames, chips, outputs, bands=["background", "palm"])
+        >>> merged[0].to_dataarray("band").argmax("band")
+        <xarray.DataArray (y: 512, x: 512)> ...
     """
-    from geosave_engine.geodata.io.readers import open_raster
-    from geosave_engine.geodata.stac._item import cog_files
-    from geosave_engine.geodata.io.vector.stac_geoparquet import to_items
-
-    outputs = {
-        int(position): cog_files(item.to_dict())
-        for position, item in zip(
-            predictions["chip"], to_items(predictions), strict=True
-        )
-    }
-    merged: dict[int, Dataset] = {}
     # A tapered edge weighs nearly nothing, so only an overlapping chip restores it.
     if taper is not None and (chips["overlap"] == 0).any():
         raise ValueError(
@@ -90,38 +84,54 @@ def merge(
             f"overlap leave no neighbour to cover it; cut chips with overlap or "
             f"pass taper=None"
         )
+    merged: dict[int, Dataset] = {}
     for key, members in chips.groupby("parent", sort=True):
         # pandas types a group key as Hashable; `parent` holds window positions.
         parent = int(cast("int", key))
-        absent = [int(p) for p in members.index if int(p) not in outputs]
+        absent = [int(label) for label in members.index if int(label) not in outputs]
         if absent:
             raise ValueError(
                 f"window {parent} cannot be merged: chips {absent} have no "
                 f"output; predict them first"
             )
         grid = parents.iloc[parent].gs.geobox
-        height, width = grid.shape
         first = members.iloc[0]
-        chip_height, chip_width = (int(edge) for edge in first["proj:shape"])
         tiler, halo = layout(
-            (height, width),
-            (chip_height, chip_width),
+            grid.shape,
+            (int(first["proj:shape"][0]), int(first["proj:shape"][1])),
             overlap=int(first["overlap"]),
             mode=first["mode"],
         )
-        merger = None
-        name = "output"
-        for position, number in zip(members.index, members["chip"], strict=True):
-            output = open_raster(outputs[int(position)])
-            bands = list(output.gs.variables)
-            name = os.path.commonprefix(bands).rstrip("_") or "output"
-            values = np.stack([output[band].values.squeeze() for band in bands])
-            if merger is None:
-                merger = Merger(
-                    tiler, logits=len(bands), window=taper, save_visits=False
+        # A last channel carries each chip's validity, tapered as its values are.
+        merger = Merger(
+            tiler,
+            logits=len(bands) + 1,
+            window=taper,
+            save_visits=False,
+            data_dtype=np.float64,
+            weights_dtype=np.float64,
+        )
+        for label, number in zip(members.index, members["chip"], strict=True):
+            values = np.asarray(outputs[int(label)], dtype=np.float64)
+            if len(values) != len(bands):
+                raise ValueError(
+                    f"chip {int(label)} holds {len(values)} bands, but bands "
+                    f"names {len(bands)}: {list(bands)}"
                 )
-            merger.add(int(number), values)
-        assert merger is not None
-        data = merger.merge(extra_padding=halo)
-        merged[parent] = raster({name: (("band", *SPATIAL_DIMENSIONS), data)}, grid)
+            counts = np.isfinite(values).all(axis=0)
+            if valid is not None:
+                counts &= np.asarray(valid[int(label)], dtype=bool)
+            contribution = np.concatenate([np.where(counts, values, 0), counts[None]])
+            merger.add(int(number), contribution)
+        sums = merger.merge(extra_padding=halo, normalize_by_weights=False)
+        coverage = sums[-1]
+        means = np.full(sums[:-1].shape, np.nan)
+        np.divide(sums[:-1], coverage, out=means, where=coverage > 0)
+        merged[parent] = raster(
+            {
+                name: (SPATIAL_DIMENSIONS, band)
+                for name, band in zip(bands, means, strict=True)
+            },
+            grid,
+        )
     return merged

@@ -73,6 +73,24 @@ def test_a_cf_long_name_survives_the_round_trip(tmp_path: Path) -> None:
     assert restored[first].attrs["long_name"] == "Red reflectance (665 nm)"
 
 
+def test_a_band_described_by_its_name_gains_no_long_name(tmp_path: Path) -> None:
+    # rioxarray describes an unlabelled band by its variable name.
+    written = build_raster(times=0)
+
+    restored = gdal.read(geotiff.write_cog(written, tmp_path / "scene.tif"))
+
+    for name in written.data_vars:
+        assert "long_name" not in restored[name].attrs
+
+
+def test_storage_options_are_accepted_and_left_to_gdal(tmp_path: Path) -> None:
+    path = geotiff.write_cog(build_raster(times=0), tmp_path / "scene.tif")
+
+    restored = gdal.read(path, storage_options={"anon": True})
+
+    assert list(restored.data_vars) == ["red", "nir"]
+
+
 def test_a_scalar_time_survives_as_a_datetime_tag(tmp_path: Path) -> None:
     instant = np.datetime64("2024-03-05T06:07:08")
     written = build_raster(times=0).assign_coords(time=instant)
@@ -576,4 +594,20 @@ def test_a_palette_outranks_the_interpretation_a_band_was_read_with(
     restored = gdal.read(geotiff.write_cog(labelled, tmp_path / "labels.tif"))
 
     colours = restored.red.gs.legend.color_map
-    assert colours is not None and tuple(colours[1]) == (0, 255, 0)
+    assert colours is not None and colours[1] == "#00FF00"
+
+
+def test_a_palette_read_from_a_cog_writes_to_netcdf(tmp_path: Path) -> None:
+    from geosave_engine.geodata.io import netcdf
+
+    label = (
+        build_raster()[["red"]]
+        .astype("uint8")
+        .gs.write_legend({0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}, target="red")
+    )
+    restored = gdal.read(geotiff.write_cog(label, tmp_path / "labels.tif"))
+
+    # NetCDF attrs hold no mappings, so the palette must be read as the Legend spells it.
+    again = netcdf.read(netcdf.write(restored, tmp_path / "labels.nc"))
+
+    assert again.red.gs.legend.color_map == {0: "#000000", 1: "#00FF00"}

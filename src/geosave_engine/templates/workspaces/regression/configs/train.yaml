@@ -17,7 +17,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.RichProgressBar
 
 model:
-  class_path: geosave_engine.ml.regression.supervised.Module
+  class_path: geosave_engine.ml.tasks.regression.supervised.Module
   init_args:
     model_chain:
       encoder:
@@ -42,12 +42,12 @@ model:
     metrics: [mae, rmse, r2]
 
 data:
-  class_path: geosave_engine.ml.regression.supervised.DataModule
+  class_path: geosave_engine.ml.tasks.regression.supervised.DataModule
   init_args:
     spec: configs/model_spec.yaml
-    train: data/train.parquet
-    val: data/val.parquet
-    target: target
+    # One Dataset class per data source, returning the DataModule's `Sample`.
+    train: {class_path: datasets.MyDataset, init_args: {split: train}}
+    val: {class_path: datasets.MyDataset, init_args: {split: val}}
     batch_size: 8
     num_workers: 4
     augmentations:

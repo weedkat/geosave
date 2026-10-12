@@ -12,7 +12,7 @@ import xarray as xr
 import geosave_engine.geodata.attrs as attrs
 
 from .base import GeoRasterAccessor, as_tensor
-from geosave_engine.geodata.utils.statistics import statistics
+from geosave_engine.geodata.core.statistics import statistics
 from geosave_engine.geodata.conventions import (
     BAND_DIMENSION,
     SPATIAL_DIMENSIONS,
@@ -146,7 +146,9 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         stated = (
             None
             if class_map is None
-            else attrs.Legend(classes=class_map, color_map=color_map)
+            else attrs.Legend.model_validate(
+                {"classes": class_map, "color_map": color_map}
+            )
         )
         return attrs.stamp(self._data, attrs.Legend, stated)
 
@@ -374,13 +376,17 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
     def to_raster(self) -> Dataset:
         """Split this array back into the raster whose variables it stacks.
 
-        The inverse of `GeoRaster.to_array`: each band becomes one variable,
-        carrying the attrs that ride on the `band` coordinate. An array
-        spanning no band axis becomes a one-variable raster named after it.
+        Each band becomes one variable carrying a copy of this array's attrs.
+        It undoes `GeoRaster.to_array` only for the attrs every band shared:
+        a nodata, packing, spectral, or legend that differed between bands
+        was not kept by `to_array` and does not come back. Decode with
+        `mask_and_scale` before stacking where per-band nodata matters. An
+        array spanning no band axis becomes a one-variable raster named after
+        it.
 
         Returns:
             Dataset holding one variable per band, each carrying this array's
-            attrs, which every band of it shares.
+            attrs.
 
         Raises:
             ValueError: This array spans a `band` axis carrying no labels to
@@ -461,7 +467,7 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
     def explore(self, *, alpha: float = 0.7) -> pn.pane.HoloViews:
         """Draw this band over a web map, the way `plot` draws it.
 
-        Needs the `viz` extra. The map shows one date; select it with
+        The map shows one date; select it with
         `.isel(time=...)` first where there are several.
 
         Args:
@@ -489,7 +495,7 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         title: str | None = None,
         xlabel: str | None = None,
     ) -> hv.Element | hv.NdLayout:
-        """Draw this band as an Image. Needs the `viz` extra.
+        """Draw this band as an Image.
 
         Draws the values as they stand, so decode a packed band first. A band
         listing classes in `Legend` draws through that palette with them

@@ -87,6 +87,15 @@ def test_time_on_an_undated_group_points_to_one_template_per_group(
         written.gs.to_cog(f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif")
 
 
+def test_a_group_with_a_scalar_time_fills_the_time_field(tmp_path: Path) -> None:
+    scene = build_raster(times=1).isel(time=0)
+    written = build_stack({"optical": scene})
+
+    saved = written.gs.to_cog(f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif")
+
+    assert [Path(f.href).name for f in saved] == ["optical_20250601.tif"]
+
+
 def test_a_stack_reads_back_from_what_its_cog_export_returns(tmp_path: Path) -> None:
     image = build_raster(times=2)
     written = build_stack({"image": image, "label": (image // 1000).astype("uint8")})
@@ -391,3 +400,31 @@ def test_shared_geographic_stack_spans_y_x() -> None:
     assert tree.gs.geobox == grid
     assert tree["optical"].dataset.red.dims == dims
     assert tree["dem"].dataset.elevation.dims == dims
+
+
+def test_plot_takes_a_caption_without_asking_the_network(monkeypatch) -> None:
+    pytest.importorskip("hvplot", reason="viz extra not installed")
+    from geosave_engine.geodata.core.anchor import GeoAnchor
+
+    def refuse(_):
+        raise AssertionError("an explicit caption must not reverse geocode")
+
+    monkeypatch.setattr(GeoAnchor, "locate", refuse)
+    image = build_raster()
+
+    drawn = build_stack({"red": image[["red"]], "nir": image[["nir"]]}).gs.plot(
+        xlabel=""
+    )
+
+    assert len(drawn) == 2
+
+
+def test_plot_leaves_room_between_columns_for_each_colorbar() -> None:
+    pytest.importorskip("hvplot", reason="viz extra not installed")
+    image = build_raster()
+
+    drawn = build_stack({"red": image[["red"]], "nir": image[["nir"]]}).gs.plot(
+        cols=2, xlabel=""
+    )
+
+    assert drawn.opts.get("plot", backend="matplotlib").kwargs["hspace"] == 0.9

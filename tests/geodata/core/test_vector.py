@@ -463,3 +463,12 @@ def test_a_geometry_factory_adds_no_time_column() -> None:
     frame = GeoVector.from_geometry(Point(0, 0), properties={"name": "a"})
 
     assert list(frame.columns) == ["name", "geometry"]
+
+
+def test_the_footprint_bounds_carry_the_vectors_crs() -> None:
+    frame = gpd.GeoDataFrame(geometry=[box(0, 0, 2, 1)], crs="EPSG:32633")
+
+    bounds = frame.gs.footprint.boundingbox
+
+    assert tuple(bounds) == (0, 0, 2, 1)
+    assert bounds.crs == "EPSG:32633"

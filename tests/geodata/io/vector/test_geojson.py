@@ -69,3 +69,20 @@ def test_a_failed_geojson_write_keeps_the_existing_file(tmp_path, monkeypatch) -
         plots.gs.to_geojson(path, overwrite=True)
 
     assert path.read_text() == before
+
+
+def test_an_option_given_twice_refuses(tmp_path) -> None:
+    path = GeoVector.from_geometry(box(0, 0, 1, 1)).gs.to_geojson(
+        tmp_path / "plots.geojson"
+    )
+
+    with pytest.raises(TypeError, match="rows"):
+        io.geojson.read(path, rows=1, driver_options={"rows": 2})
+
+
+def test_a_file_url_reads_as_its_local_path(tmp_path) -> None:
+    path = GeoVector.from_geometry(box(0, 0, 1, 1)).gs.to_geojson(
+        tmp_path / "plots.geojson"
+    )
+
+    assert len(io.geojson.read(UPath(path.as_uri()))) == 1

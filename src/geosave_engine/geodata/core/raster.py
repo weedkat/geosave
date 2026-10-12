@@ -57,12 +57,12 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 import geosave_engine.geodata.attrs as attrs
-from rasterio.enums import ColorInterp
+from geosave_engine.geodata.attrs.groups.gdal import RGB
 
 from .base import GeoRasterAccessor, as_tensor
 from .constructors import write_cf_axes
-from geosave_engine.geodata.utils.statistics import statistics
-from geosave_engine.geodata.utils.variables import variable_names
+from geosave_engine.geodata.core.statistics import statistics
+from geosave_engine.geodata.core.variables import variable_names
 from geosave_engine.geodata.conventions import (
     BAND_DIMENSION,
     SPATIAL_DIMENSIONS,
@@ -410,7 +410,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
     ) -> pn.pane.HoloViews:
         """Draw this raster over a web map, the way `plot` draws it.
 
-        Needs the `viz` extra. The map shows one date; select it with
+        The map shows one date; select it with
         `.isel(time=...)` first where there are several.
 
         Args:
@@ -445,7 +445,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
         title: str | None = None,
         xlabel: str | None = None,
     ) -> hv.Element | hv.NdLayout:
-        """Draw this raster the way `variable` names it. Needs the `viz` extra.
+        """Draw this raster the way `variable` names it.
 
         Three names give a composite, one gives an Image, and None falls back
         to a sole variable, then to the ones measuring red, green, and blue.
@@ -469,13 +469,14 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
 
         Raises:
             KeyError: A named variable is absent.
-            ValueError: `variable` is None while
-                this raster carries more than one variable and measures no
-                red, green, and blue among them, two variables measure one
-                colour, or the drawing refuses the raster.
+            ValueError: `variable` is None while this raster carries more
+                than one variable and no red, green, and blue among them, or
+                the drawing refuses the raster. Where two variables draw one
+                colour, the first draws it.
 
         Examples:
             >>> hv.save(ds.gs.plot("ndvi"), "ndvi.png")
+            >>> ds = ds.gs.write_rgb("B04", "B03", "B02")
             >>> ds.gs.plot("ndvi", cmap="RdYlGn") + ds.gs.plot(clim=(0.0, 0.3))
         """
         # viz/__init__ re-exports a function named plot, shadowing the submodule.
@@ -533,7 +534,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
 
         Examples:
             >>> ds[["B04", "B08"]].gs.to_numpy().shape
-            (2, 4, 256, 256)
+            (2, 2, 256, 256)
         """
         return self._stacked(dtype).values
 
@@ -555,7 +556,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
 
         Examples:
             >>> ds[["B04", "B08"]].gs.to_tensor(dtype="float32").shape
-            torch.Size([2, 256, 256])
+            torch.Size([2, 2, 256, 256])
         """
         return as_tensor(self.to_numpy, dtype)
 
@@ -684,9 +685,12 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             >>> ds.gs.to_cog("out/{time:%Y%m%d}.tif")
             (CogFile(/abs/out/20250601.tif, bands=['red', 'nir'], 2025-06-01, -),
              CogFile(/abs/out/20250611.tif, bands=['red', 'nir'], 2025-06-11, -))
-            >>> [f.bands for f in ds.gs.to_cog("out/s2_{band}.tif", compress="deflate")]
-            [('red',), ('nir',)]
-            >>> ds.gs.to_cog("out/{lat:.3f}.tif", lat=lambda raster: raster.gs.anchor.lonlat[1])
+            >>> files = ds.gs.to_cog("out/s2_{time:%Y%m%d}_{band}.tif", compress="deflate")
+            >>> [f.bands for f in files]
+            [('red',), ('nir',), ('red',), ('nir',)]
+            >>> ds.isel(time=0).gs.to_cog(
+            ...     "out/{lat:.3f}.tif", lat=lambda raster: raster.gs.anchor.lonlat[1]
+            ... )
             (CogFile(/abs/out/45.130.tif, bands=['red', 'nir'], undated, -),)
         """
         from geosave_engine.geodata.io import cogs
@@ -794,8 +798,7 @@ def _rgb_indices(ds: xr.Dataset) -> tuple[int, int, int]:
     """
     bands = (attrs.parse(band, attrs.GDALBand) for band in ds.data_vars.values())
     measures = [None if band is None else band.colorinterp for band in bands]
-    rgb = (ColorInterp.red.name, ColorInterp.green.name, ColorInterp.blue.name)
-    absent = [colour for colour in rgb if colour not in measures]
+    absent = [colour for colour in RGB if colour not in measures]
     if absent:
         raise ValueError(
             f"no band of {list(ds.data_vars)} draws {absent}, so this raster "
@@ -803,5 +806,5 @@ def _rgb_indices(ds: xr.Dataset) -> tuple[int, int, int]:
             f"ds.gs.write_rgb('B04', 'B03', 'B02'), or name three bands for "
             f"one drawing with ds.gs.plot(('B08', 'B04', 'B03'))"
         )
-    red, green, blue = (measures.index(colour) for colour in rgb)
+    red, green, blue = (measures.index(colour) for colour in RGB)
     return red, green, blue

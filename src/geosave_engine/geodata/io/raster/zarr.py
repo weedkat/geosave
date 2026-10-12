@@ -89,8 +89,8 @@ def read(
 
     Examples:
         >>> raster = read("scene.zarr")
-        >>> raster.red.dtype
-        dtype('uint16')
+        >>> str(raster.red.dtype)
+        'uint16'
     """
     options: dict[str, Any] = dict(open_options)
     store = location(source, options.pop("storage_options", None))
@@ -153,15 +153,20 @@ def _in_written_order(ds: xr.Dataset) -> xr.Dataset:
         ds: Dataset as the store listed it.
 
     Returns:
-        Dataset holding the same variables, ordered as written, or `ds` itself
-        where the store names no order.
+        Dataset holding the same variables, ordered as written and without
+        the order attr, or `ds` itself where the store names no order.
     """
     order = ds.attrs.get(_VARIABLE_ORDER_ATTR)
     if order is None:
         return ds
     named = [name for name in order if name in ds.data_vars]
     trailing = [name for name in ds.data_vars if name not in named]
-    return ds[[*named, *trailing]]
+    ordered = ds[[*named, *trailing]]
+    # The order is restored, so the attr would only leak into other formats.
+    ordered.attrs = {
+        key: value for key, value in ds.attrs.items() if key != _VARIABLE_ORDER_ATTR
+    }
+    return ordered
 
 
 @overload
@@ -226,8 +231,12 @@ def write(
 
     options: dict[str, Any] = dict(write_options)
     store = location(destination, options.pop("storage_options", None))
-    if store.suffix != _STORE_SUFFIX:
+    if store.suffix.lower() != _STORE_SUFFIX:
         raise ValueError(f"destination {store.name!r} must end in {_STORE_SUFFIX!r}")
+    if not overwrite and store.exists():
+        raise FileExistsError(
+            f"{destination} exists; pass overwrite=True to replace it"
+        )
     path = openable(store)
     # zarr refuses storage_options for a local path, so only a URL passes them.
     if store.storage_options:
@@ -279,7 +288,7 @@ def fill_encoding(raster: xr.Dataset) -> dict[str, dict[str, Any]]:
 
     Examples:
         >>> fill_encoding(raster)
-        {'lc': {'fill_value': 255}}
+        {'red': {'fill_value': 0, 'grid_mapping': 'spatial_ref'}, 'nir': {'fill_value': 0, 'grid_mapping': 'spatial_ref'}}
     """
     declared: dict[str, dict[str, Any]] = {}
     for name, variable in raster.data_vars.items():

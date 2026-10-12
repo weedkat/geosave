@@ -12,6 +12,7 @@ import pystac
 import rustac
 from pystac.utils import datetime_to_str
 from pystac_client import Client
+from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 from urllib3.util import Retry
 
@@ -134,7 +135,7 @@ class StacClient:
 
         Examples:
             >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
-            ['forest_20250601T000000']
+            ['forest_20250601', 'forest_20250611']
         """
         return stac_geoparquet.from_items(self.search_items(query))
 
@@ -171,12 +172,19 @@ class StacClient:
             CollectionNotFoundError: `collection` is not on this catalog.
         """
         if collection not in self._collections:
-            found = self._client.get_collection(collection)
-            if found is None:
-                raise CollectionNotFoundError(
-                    f"collection {collection!r} not found on this STAC endpoint; "
-                    f"call collections() to see what is available"
-                )
+            missing = CollectionNotFoundError(
+                f"collection {collection!r} not found on this STAC endpoint; "
+                f"call collections() to see what is available"
+            )
+            try:
+                found = self._client.get_collection(collection)
+            except KeyError as error:  # a static catalog
+                raise missing from error
+            except APIError as error:
+                # A transport failure carries no status, and is not an answer.
+                if getattr(error, "status_code", None) != 404:
+                    raise
+                raise missing from error
             self._collections[collection] = found
         return self._collections[collection]
 
@@ -247,7 +255,7 @@ class _StacTableClient:
 
         Examples:
             >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
-            ['forest_20250601T000000']
+            ['forest_20250601', 'forest_20250611']
         """
         return stac_geoparquet.from_items(self.search_items(query))
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, cast
 
 import geopandas as gpd
+import pandas as pd
 from affine import Affine
 from odc.geo.geobox import GeoBox
 from tiler import Tiler
@@ -43,7 +44,7 @@ def layout(
     Examples:
         >>> tiler, halo = layout((300, 500), (128, 128), overlap=32)
         >>> len(tiler), halo
-        (24, [(16, 16), (16, 16)])
+        (24, [(48, 48), (48, 48)])
     """
     tiler = Tiler(shape, size, overlap=overlap, mode=mode, constant_value=float("nan"))
     halo = [(0, 0), (0, 0)]
@@ -77,8 +78,8 @@ def chips(
 
     Examples:
         >>> cut = chips(stacks(items, on="label"), 224, overlap=32)
-        >>> cut.iloc[0][["parent", "chip", "proj:shape"]].tolist()
-        [0, 0, [224, 224]]
+        >>> cut.iloc[0][["parent", "chip"]].astype(int).tolist(), cut.iloc[0]["proj:shape"]
+        ([0, 0], [224, 224])
     """
     side = (size, size) if isinstance(size, int) else (size[0], size[1])
     cut = []
@@ -113,7 +114,7 @@ def chips(
                 }
             )
     # No window cut leaves an empty table, which still names its columns.
-    columns = list(
+    columns = pd.Index(
         dict.fromkeys([*windows.columns, "chip", "halo", "overlap", "mode", "pad"])
     )
     return cast(

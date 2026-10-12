@@ -3,7 +3,7 @@
 `model` owns the native model graph, input specification, and release artifacts.
 Lightning training and development prediction live in `ml`; the examples using
 Trainer below are consumers of model APIs. See the
-[package ownership guide](../../../docs/guides/architecture.md) for the full tiler.
+[architecture guide](../../../docs/architecture.md) for package ownership.
 
 ```python
 class Encoder(nn.Module):
@@ -98,10 +98,8 @@ context:
 ```
 
 ```python
-from geosave_engine.ml.inputs import model_inputs
-
 rasters = windows.iloc[position].gs.to_stack().gs.rasters
-inputs = model_inputs(spec, rasters)
+inputs = {name: value.gs.to_tensor() for name, value in spec.model_inputs(rasters).items()}
 ```
 
 `inputs` binds prepared raster pixels; `context` references rasters the same
@@ -172,7 +170,7 @@ after loading, not stored in the artifact.
 ## Releasing a trained model
 
 ```python
-from geosave_engine.ml.segmentation import supervised
+from geosave_engine.ml.tasks.segmentation import supervised
 
 # Restore the selected checkpoint, not whichever epoch remains in memory.
 task = supervised.Module.load_from_checkpoint(checkpoint)
@@ -218,7 +216,6 @@ it cannot be published until the stage is given as a specification.
 ```python
 from lightning import Trainer
 from torch.utils.data import DataLoader, Dataset
-from geosave_engine.ml.inputs import model_inputs
 
 # frames lists the windows to predict; each chip row reads its own pixels.
 windows = spec.chips.cut(frames)
@@ -229,7 +226,8 @@ class PredictionDataset(Dataset):
 
     def __getitem__(self, position):
         rasters = windows.iloc[position].gs.to_stack().gs.rasters
-        return model_inputs(spec, rasters), position
+        values = spec.model_inputs(rasters)
+        return {name: value.gs.to_tensor() for name, value in values.items()}, position
 
 predictions = trainer.predict(task, dataloaders=DataLoader(PredictionDataset(), batch_size=8))
 ```
@@ -242,11 +240,6 @@ item table with a `chip` column, merge back with
 The PyTorch Dataset belongs to the consuming method. Reads remain lazy until
 tensor conversion.
 
-Prediction batches are `(model_inputs, ids)` and results are `(logits, ids)`.
-Supervised training/evaluation batches are `(model_inputs, target, ids, valid)`.
-Validation/test blend validity-weighted logits and coverage, score only complete
-parents, and retrieve original categorical labels without blending them.
-Classification and detection retain IDs but require their own output policies.
-Supervised scene validation/test currently require a single device. Ordinary
-distributed tile sampling can split every scene across ranks, so the module
-rejects that configuration instead of reporting incomplete scene metrics.
+Training modules have no prediction step yet. Supervised training and
+evaluation batches are the `Sample` dictionaries each DataModule declares;
+validation and test score chips one by one over their valid pixels.

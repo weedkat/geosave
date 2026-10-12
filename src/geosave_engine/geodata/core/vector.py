@@ -15,7 +15,7 @@ from odc.geo.crs import CRS as OdcCRS
 from odc.geo.geom import Geometry
 
 from geosave_engine.geodata.utils.datetime import naive_utc
-from geosave_engine.geodata.utils.geometry import SomeGeometry, to_shapely
+from geosave_engine.geodata.core.geometry import SomeGeometry, to_shapely
 
 if TYPE_CHECKING:
     from numpy.typing import DTypeLike
@@ -61,7 +61,7 @@ class GeoVector:
         PosixUPath('plots.parquet')
     """
 
-    def __init__(self, data: gpd.GeoDataFrame) -> None:
+    def __init__(self, data: pd.DataFrame) -> None:
         """Bind the accessor to one GeoDataFrame."""
         # pandas reads AttributeError as "this object has no such accessor".
         if not isinstance(data, gpd.GeoDataFrame):
@@ -330,7 +330,8 @@ class GeoVector:
         Args:
             like: Anchor or geolocated xarray object supplying the target grid.
             column: Property to burn. None returns a boolean presence mask.
-            fill: Value outside geometries.
+            fill: Value outside geometries. A presence mask takes only 0 or
+                False, since it is False outside them.
             dtype: Output dtype for property values.
             all_touched: Burn every touched pixel instead of pixel centres.
 
@@ -339,8 +340,9 @@ class GeoVector:
 
         Raises:
             KeyError: The selected property is absent.
-            ValueError: A geometry is null, empty, or invalid, or values or
-                fill cannot be represented by the dtype.
+            ValueError: A geometry is null, empty, or invalid, values or fill
+                cannot be represented by the dtype, or `column` is None with a
+                truthy `fill`.
         """
         from geosave_engine.geodata.transform.vector import rasterize
 

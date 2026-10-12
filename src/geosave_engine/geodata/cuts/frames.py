@@ -12,7 +12,7 @@ import orjson
 import pandas as pd
 
 from geosave_engine import __path__ as _package_paths
-from geosave_engine.geodata.stac._item import instant
+from geosave_engine.geodata.stac.item import instant
 from geosave_engine.geodata.warnings import (
     DroppedFramesWarning,
     DroppedInstantsWarning,
@@ -64,8 +64,9 @@ def frames(
         `start_datetime` and `end_datetime` state what they span.
 
     Raises:
-        ValueError: `tolerance` is not a positive duration; a window has no collection of several items; `length` or `stride` is
-            below 1; `length` exceeds the joint axis; a group's labels are
+        ValueError: `tolerance` is not a positive duration; a window has no
+            collection of several items; `length` or `stride` is below 1;
+            `length` exceeds the joint axis; a group's labels are
             unchronological or repeat; the groups share no interval; a group
             matches no instant; or `mode` is `"strict"` and a frame covers an
             incomplete instant.
@@ -102,7 +103,7 @@ def frames(
     cut = []
     skips = 0
     for position, (_, window) in enumerate(windows.iterrows()):
-        members = orjson.loads(window["sources"])
+        members = orjson.loads(str(window["sources"]))
         # A collection with one item is static, as a label or an elevation model.
         dated = {
             name: sorted(
@@ -173,7 +174,7 @@ def frames(
     return cast(
         "GeoDataFrame",
         gpd.GeoDataFrame(
-            cut, columns=list(windows.columns), geometry="geometry", crs=windows.crs
+            cut, columns=windows.columns, geometry="geometry", crs=windows.crs
         ).reset_index(drop=True),
     )
 

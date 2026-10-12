@@ -13,6 +13,10 @@ class GeosaveCLI(LightningCLI):
 
     Pass ``auto_configure_optimizers=False`` for tasks that own their optimizer
     and scheduler configuration, as the generated workspace entry point does.
+
+    A module's `model_chain` is a plain mapping, so dotted overrides do not
+    reach inside a stage: override the whole stage, as
+    ``--model.init_args.model_chain.encoder '{name: dinov3, init_args: {...}}'``.
     """
 
     def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
@@ -41,7 +45,6 @@ class GeosaveCLI(LightningCLI):
                 "init_args": {
                     "save_dir": ARTIFACTS_ROOT,
                     "name": model_name,
-                    "log_graph": True,
                 },
             },
         ]

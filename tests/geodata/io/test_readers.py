@@ -72,6 +72,19 @@ def test_a_directory_of_zarr_layers_opens_one_group_per_store(tmp_path: Path) ->
     assert open_stack(folder).gs.groups == ("label", "optical")
 
 
+def test_storage_options_reach_a_folder_of_cog_and_zarr_layers(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "s1"
+    folder.mkdir()
+    geotiff.write_cog(_flat()[["red"]], folder / "optical.tif")
+    zarr.write(_flat()[["nir"]], folder / "label.zarr")
+
+    stack = open_stack(folder, storage_options={})
+
+    assert stack.gs.groups == ("label", "optical")
+
+
 @pytest.mark.parametrize("remote", [True, False], ids=["memory", "file-url"])
 def test_a_folder_url_of_zarr_layers_opens_one_group_per_store(
     bucket: str, tmp_path: Path, remote: bool

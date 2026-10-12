@@ -184,8 +184,8 @@ def resample(
 
     Examples:
         >>> monthly = resample(daily, "MS").median()
-        >>> monthly.time.values
-        array(['2024-01-01', '2024-02-01', '2024-03-01'], dtype='datetime64[ns]')
+        >>> monthly.time.dt.strftime("%Y-%m-%d").values.tolist()
+        ['2024-01-01', '2024-02-01', '2024-03-01']
         >>> attrs.parse(monthly.time, TimeSpec).time_freq
         'MS'
     """

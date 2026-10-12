@@ -8,12 +8,12 @@ Joins pass `combine_attrs=attrs.combine`.
 
 from .base import AttrsGroup, Decoded, Join, decode, parse, stamp
 from .combine import combine, shared
-from .gdal import GDALBand
-from .legend import Legend, is_flag
-from .nodata import Nodata
-from .packing import Packing
-from .spectral import Spectral
-from .timespec import TimeSpec
+from .groups.gdal import GDALBand
+from .groups.legend import Legend, is_flag
+from .groups.nodata import Nodata
+from .groups.packing import Packing
+from .groups.spectral import Spectral
+from .groups.timespec import TimeSpec
 
 __all__ = [
     "AttrsGroup",

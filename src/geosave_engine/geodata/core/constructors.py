@@ -41,8 +41,9 @@ def raster(
             Dimensions must end with `y` and `x`.
         reference: Where the pixels sit. A GeoBox or GCPGeoBox supplies the
             grid. An xarray object also passes on, as-is, its coordinates on
-            every dimension the variables use, such as `time`; its attrs and
-            band metadata are not passed on. None leaves placement to the
+            every dimension the variables use, such as `time`, and each of its
+            bands' attrs, such as a legend, to the variable of the same name.
+            A variable's own attrs win. None leaves placement to the
             variables.
         nodata: Fill value written on every variable. None leaves it unchanged.
         **coords: Coordinates for dimensions the reference lacks, such as
@@ -68,6 +69,9 @@ def raster(
         >>> predicted = raster({"prediction": (("time", "y", "x"), pixels)}, scene)
         >>> predicted.time.equals(scene.time)
         True
+        >>> predicted = raster({"label": (("y", "x"), classes)}, labels)
+        >>> predicted.label.gs.legend == labels.label.gs.legend
+        True
     """
     if not variables:
         raise ValueError("a raster needs at least one named array")
@@ -86,6 +90,8 @@ def raster(
 
     if reference is not None:
         dataset = _assign_reference_coords(dataset, reference, replaced=coords)
+    if isinstance(reference, (xr.Dataset, xr.DataArray)):
+        dataset = _pass_on_band_attrs(dataset, reference)
     if nodata is not None:
         dataset = dataset.gs.write_nodata(nodata)
     return cast("Dataset", dataset)
@@ -156,6 +162,24 @@ def write_cf_axes[T: xr.Dataset](raster: T, geobox: GeoBox) -> T:
         coord.attrs = {**native[dim].attrs, "standard_name": name, "axis": axis}
         described[dim] = coord
     return raster.assign_coords(described)
+
+
+def _pass_on_band_attrs(
+    dataset: xr.Dataset, reference: xr.Dataset | xr.DataArray
+) -> xr.Dataset:
+    """Give each variable the attrs of the reference's band of the same name."""
+    bands = (
+        dict(reference.data_vars)
+        if isinstance(reference, xr.Dataset)
+        else {reference.name: reference}
+    )
+    return dataset.assign(
+        {
+            name: variable.assign_attrs({**bands[name].attrs, **variable.attrs})
+            for name, variable in dataset.data_vars.items()
+            if name in bands
+        }
+    )
 
 
 def _assign_reference_coords(

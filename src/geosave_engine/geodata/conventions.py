@@ -8,7 +8,7 @@ Examples:
     pair trails, and `spatial_ref` rides along carrying the CRS:
 
     >>> array(pixels, geobox, dims=("time", "band", "y", "x"),
-    ...       coords={"time": labels, "band": ["red", "green", "blue"]})
+    ...       time=labels, band=["red", "green", "blue"])
     <xarray.DataArray (time: 2, band: 3, y: 512, x: 512)>
     Coordinates:
       * time         (time) datetime64[ns] 2025-06-01 2025-06-11
@@ -21,7 +21,7 @@ Examples:
     axes — `red` repeats over `time`, `dem` does not:
 
     >>> raster({"red": (("time", "y", "x"), cube),
-    ...         "dem": (("y", "x"), flat)}, geobox, coords={"time": labels})
+    ...         "dem": (("y", "x"), flat)}, geobox, time=labels)
     <xarray.Dataset>
     Dimensions:      (y: 512, x: 512, time: 2)
     Coordinates:
