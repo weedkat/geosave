@@ -5,23 +5,26 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime as dt
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import odc.stac
 from odc.stac.model import PropertyLoadRequest
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._bands import load_attrs, read_asset_fields
 from geosave.geodata.conventions import to_yx
 from geosave.geodata.errors import AnchorFetchError
+from geosave.geodata.io.vector import stac_geoparquet
 from geosave.geodata.transform.warp import Resampling
 
-from .query import StacQuery
+from .search.query import StacQuery
+from .translate import asset, load_attrs
 
 if TYPE_CHECKING:
     import pystac
 
     from geosave.geodata.core import GeoAnchor
+    from geosave.geodata.stac.search.api import StacClient
+    from geosave.geodata.stac.search.table import StacTable
     from geosave.geodata import Dataset, GeoDataFrame
 
 Bands = list[str] | tuple[str, ...]
@@ -32,14 +35,6 @@ ChunkSize = int | Literal["auto"]
 def _default_chunks() -> dict[str, ChunkSize]:
     """Return the default spatial Dask chunks."""
     return {"x": 1024, "y": 1024}
-
-
-class SearchClient(Protocol):
-    """Any client that can run a STAC search and read a collection."""
-
-    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]: ...
-
-    def collection(self, collection: str) -> pystac.Collection: ...
 
 
 class StacSourceConfig(BaseModel):
@@ -121,7 +116,7 @@ class StacSource:
         >>> ds = source.load(anchor)
     """
 
-    def __init__(self, client: SearchClient, *, collection: str) -> None:
+    def __init__(self, client: StacClient | StacTable, *, collection: str) -> None:
         """Bind the client and collection, on default settings.
 
         Args:
@@ -322,8 +317,8 @@ class StacSource:
             sorted(
                 {
                     key
-                    for asset in sample.assets.values()
-                    for key in read_asset_fields(asset)
+                    for entry in sample.assets.values()
+                    for key in asset.fields(entry)
                 }
             )
         )
@@ -347,17 +342,17 @@ class StacSource:
             >>> source.search(anchor)["eo:cloud_cover"].tolist()
             [4.2, 11.0]
         """
-        from geosave.geodata.io.vector import stac_geoparquet
-
-        return stac_geoparquet.from_items(
+        return stac_geoparquet.from_item(
             self.client.search_items(self._search_query(anchor))
         )
 
     def load(self, anchor: GeoAnchor) -> Dataset:
         """Load this collection onto an anchor's grid.
 
-        Collection metadata becomes ACDD root attrs. Each variable carries effective loader nodata and units, plus its
-        resolved source band's packing. Pixels stay the published DN.
+        Collection metadata becomes the root's ACDD attrs, read back with
+        `ds.gs.acdd`. Each variable carries the loader's nodata plus the
+        packing, units, spectral facts and legend its band states. Pixels stay
+        the published digital numbers.
 
         Args:
             anchor: Grid and datetime window to load.

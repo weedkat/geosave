@@ -38,8 +38,8 @@ Attributes:
 
 The reopened object is an xarray `Dataset`, with one variable per band.
 The file preserves this raster's grid, `uint8` values, variable name, and nodata.
-`to_cog` returns a tuple of `CogFile` records: each describes a file actually
-written. You can pass those records directly to `gs.open_raster(files)`.
+`to_cog` returns the paths it wrote. Each file states its bands and date, so
+`gs.open_raster(files)` reads them back as one raster.
 
 Readers open data through the format named by the path suffix. Start with the
 native object you need:
@@ -121,10 +121,10 @@ the same dtype and nodata. For a stack, include `{collection}` to name each
 group. `{prefix}` is also available when supplied to the writer.
 
 Existing destinations raise `FileExistsError` by default. Pass `overwrite=True`
-to replace them. COG records describe the files written by a successful call;
-they are not an inventory of a destination folder.
-Build [STAC Items](../guides/stac.md) from the returned
-records when you need a searchable catalog.
+to replace them. The returned paths are the files this call wrote, not an
+inventory of the destination folder.
+Build [STAC Items](../guides/stac.md) from them with `gs.stac.create_item`
+when you need a searchable catalog.
 
 ## Read a stack
 

@@ -13,7 +13,7 @@ def _sliced_geographic_scene():
     """Build a raster whose sliced coordinates drift from its geobox's own."""
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import raster
+    from geosave.geodata.core.create import raster
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(
@@ -61,7 +61,7 @@ def test_a_presence_mask_refuses_a_truthy_fill() -> None:
 def _flags(values, dtype):
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     pixels = np.asarray(values, dtype=dtype)
     side = pixels.shape[0] * 10

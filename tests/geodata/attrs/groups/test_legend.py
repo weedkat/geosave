@@ -131,7 +131,7 @@ def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
 
     labelled = _labelled()
     (file,) = labelled.gs.to_cog(str(tmp_path / "label.tif"))
-    restored = open_raster(file.href)
+    restored = open_raster(file)
 
     joined = attrs.combine([restored.label.attrs, labelled.label.attrs])
 
@@ -150,6 +150,6 @@ def test_a_legend_survives_each_raster_format(tmp_path, suffix) -> None:
         written = labelled.gs.to_netcdf(path)
     else:
         (file,) = labelled.gs.to_cog(str(path))
-        written = file.href
+        written = str(file)
 
     assert open_raster(written).label.gs.legend == labelled.label.gs.legend

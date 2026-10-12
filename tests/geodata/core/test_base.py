@@ -10,7 +10,7 @@ import xarray as xr
 import geosave.geodata as gs
 
 from geosave.geodata import GeoAnchor, GeoArray, GeoRaster, GeoStack, GeoVector
-from geosave.geodata.core.geolocator import Place
+from geosave.geodata.utils.geocode import Place
 
 from tests.geodata.conftest import build_raster
 
@@ -286,6 +286,6 @@ def test_a_band_read_from_disk_decodes_to_float32(tmp_path) -> None:
 
     (written,) = build_raster(packed=True).gs.to_cog(f"{tmp_path}/scene.tif")
 
-    decoded = open_raster(written.href).gs.mask_and_scale()
+    decoded = open_raster(written).gs.mask_and_scale()
 
     assert decoded.red.dtype == np.float32

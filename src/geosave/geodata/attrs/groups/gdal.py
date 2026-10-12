@@ -7,7 +7,7 @@ from typing import Annotated, ClassVar
 from pydantic import Field, field_validator
 from rasterio.enums import ColorInterp
 
-from ..base import AttrsGroup, Join
+from .base import AttrsGroup, Join
 
 # GDAL's names for the three display channels, in the order a composite draws them.
 RGB = (ColorInterp.red.name, ColorInterp.green.name, ColorInterp.blue.name)

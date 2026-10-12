@@ -5,9 +5,9 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata.core.anchor import GeoAnchor
-from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.create import raster as build_raster
 from geosave.geodata.core.stack import stack as build_stack
-from geosave.geodata.core.geolocator import Place
+from geosave.geodata.utils.geocode import Place
 
 pytest.importorskip("hvplot", reason="viz extra not installed")
 

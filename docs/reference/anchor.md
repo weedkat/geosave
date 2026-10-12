@@ -10,4 +10,4 @@ See [Raster grids](../concepts/raster-grids.md) before choosing a target for rep
 `anchor.locate()` returns a Place when reverse geocoding finds an address.
 This lookup needs network access and does not affect the anchor's grid.
 
-::: geosave.geodata.core.geolocator.Place
+::: geosave.geodata.utils.geocode.Place

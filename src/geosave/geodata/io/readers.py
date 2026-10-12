@@ -15,7 +15,6 @@ from upath import UPath
 from . import storage
 from .storage import Location
 from .raster import cogs, gdal, netcdf, safe, zarr
-from .raster.cogs import CogFile
 from .vector import geojson, geopackage, geoparquet
 
 if TYPE_CHECKING:
@@ -35,23 +34,22 @@ _VECTOR_SUFFIXES = (".geojson", ".json", ".gpkg", ".parquet", ".geoparquet")
 _PRODUCT_SUFFIXES = (".safe",)
 
 
-def open_raster(source: Location | Sequence[CogFile], **options: Any) -> Dataset:
-    """Open one raster file or store, or the records one `to_cog` wrote.
+def open_raster(source: Location | Sequence[Location], **options: Any) -> Dataset:
+    """Open one raster file or store, or the files one `to_cog` wrote.
 
     `options` are forwarded untouched; each format module types its own.
 
     Args:
         source: Local path or URI ending in a recognised raster suffix, or
-            the `CogFile` records a `to_cog` returned.
+            the paths a `to_cog` returned.
         **options: Forwarded to the reader the suffix selects.
 
     Returns:
         Dataset holding one variable per band or stored variable.
 
     Raises:
-        TypeError: A sequence holds anything but `CogFile` records.
         ValueError: The suffix names a vector format or no supported format,
-            or no record is given.
+            or no file is given.
 
     Examples:
         >>> open_raster("scene.zarr").gs.variables
@@ -60,13 +58,7 @@ def open_raster(source: Location | Sequence[CogFile], **options: Any) -> Dataset
         ('red', 'nir')
     """
     if not isinstance(source, (str, PathLike, UPath)):
-        files = list(source)
-        if not all(isinstance(file, CogFile) for file in files):
-            raise TypeError(
-                "open_raster reads one path, or the CogFile records to_cog "
-                "returned; open other files one at a time"
-            )
-        return cogs.read(files, **options)
+        return cogs.read(list(source), **options)
 
     # A signed URL carries its token in the query; the path names the format.
     text = str(source)
@@ -99,13 +91,14 @@ def open_raster(source: Location | Sequence[CogFile], **options: Any) -> Dataset
 
 
 def open_stack(
-    source: Location | Mapping[str, Location] | Sequence[CogFile],
+    source: Location | Mapping[str, Location] | Sequence[Location],
     **options: Any,
 ) -> DataTree:
     """Open the layers of a saved stack as one stack.
 
     Args:
-        source: The `CogFile` records a stack's `to_cog` returned; layer names
+        source: The paths a stack's `to_cog` returned, grouped by the layer
+            each file states as its ACDD `id`; layer names
             mapped to the file or store each is; a local folder holding one
             file or store per layer, each named by its stem; or a vendor
             product such as a `.SAFE` folder.
@@ -116,7 +109,7 @@ def open_stack(
         their own order, a folder's in name order.
 
     Raises:
-        ValueError: A record names no layer, the folder holds no layer or two
+        ValueError: A file states no layer, the folder holds no layer or two
             entries naming one layer, or the source is one raster.
 
     Examples:
@@ -128,15 +121,18 @@ def open_stack(
     from geosave.geodata.core.stack import stack
 
     if not isinstance(source, (str, PathLike, UPath, Mapping)):
-        layers: dict[str, list[CogFile]] = {}
-        for file in source:
-            if file.collection is None:
+        storage_options = options.get("storage_options")
+        layers: dict[str, list[Location]] = {}
+        for path in source:
+            acdd = open_raster(path, storage_options=storage_options).gs.acdd
+            if acdd is None or acdd.id is None:
                 raise ValueError(
-                    "these files name no collection; open_raster reads a lone raster"
+                    f"{path} and its siblings name no layer; open_raster reads a "
+                    f"lone raster"
                 )
-            layers.setdefault(file.collection, []).append(file)
+            layers.setdefault(acdd.id, []).append(path)
         return stack(
-            {name: cogs.read(files, **options) for name, files in layers.items()}
+            {name: cogs.read(paths, **options) for name, paths in layers.items()}
         )
 
     if isinstance(source, Mapping):

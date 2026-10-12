@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import xarray as xr
 
-from . import transform
+from . import attrs, transform
 from .core import (
     GeoAnchor,
     GeoArray,
@@ -83,6 +83,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "attrs",
     "GeoAnchor",
     "GeoArray",
     "DataArray",

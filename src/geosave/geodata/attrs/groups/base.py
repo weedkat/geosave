@@ -1,8 +1,7 @@
-"""What an attr group is, and how one is parsed off a band and stamped onto it.
+"""What an attr group is: a few attr keys that mean one value together.
 
-A group is a few attr keys that mean one value together, validated by a
-pydantic model. `parse` reads it lazily from a band's attrs; `stamp` writes it,
-replacing every key the group reads.
+Each group is a pydantic model over its keys; `attrs.parse` reads one off a
+band and `attrs.stamp` writes it.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from xarray.core.utils import equivalent
 if TYPE_CHECKING:
     import xarray as xr
 
-type Join = Literal["agree", "drop"]
+type Join = Literal["agree", "drop", "each"]
 
 
 def decode(value: object) -> object:
@@ -51,7 +50,9 @@ class AttrsGroup(BaseModel):
     Attributes:
         KEYS: Every key the group reads; stamping replaces all of them.
         JOIN: What a join does when objects state different values:
-            `"agree"` refuses it, `"drop"` leaves the group out.
+            `"agree"` refuses it, `"drop"` leaves the group out, `"each"`
+            joins every key on its own, as for facts that do not depend on
+            each other.
     """
 
     # Groups are values; the other keys of an attrs mapping are none of theirs.
@@ -112,55 +113,3 @@ class AttrsGroup(BaseModel):
         )
 
     __hash__ = BaseModel.__hash__
-
-
-def parse[G: AttrsGroup](band: xr.DataArray, group: type[G]) -> G | None:
-    """Read one group off a band, validated against the band's dtype.
-
-    Args:
-        band: Variable whose attrs state the group.
-        group: Group to read.
-
-    Returns:
-        The group's value, or None where the band states none of its keys.
-
-    Raises:
-        ValueError: The attrs state the group invalidly or the band's dtype
-            cannot hold it.
-
-    Examples:
-        >>> parse(ds["B04"], Nodata)
-        Nodata(value=0)
-    """
-    value = group.from_attrs(band.attrs)
-    return None if value is None else value.held_by(band)
-
-
-def stamp[G: AttrsGroup, X: xr.DataArray](
-    band: X, group: type[G], value: G | None
-) -> X:
-    """Return a copy of the band stating `value` for one group.
-
-    Every key of the group is removed first, so no stale spelling survives.
-
-    Args:
-        band: Variable to stamp.
-        group: Group the value belongs to.
-        value: Value to state. None removes the group.
-
-    Returns:
-        Shallow copy of the band with replaced attrs; pixels are not copied.
-
-    Raises:
-        ValueError: The band's dtype cannot hold the value.
-
-    Examples:
-        >>> stamp(ds["B04"], Nodata, Nodata(value=0)).attrs["_FillValue"]
-        0
-    """
-    attrs = {key: v for key, v in band.attrs.items() if key not in group.KEYS}
-    if value is not None:
-        attrs |= value.held_by(band).to_attrs()
-    stamped = band.copy(deep=False)
-    stamped.attrs = attrs
-    return stamped

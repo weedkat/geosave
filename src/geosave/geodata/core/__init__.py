@@ -6,7 +6,7 @@ from .raster import GeoRaster
 
 # After .array and .raster, so `core.array` and `core.raster` name these
 # functions rather than the same-named submodules.
-from .constructors import RasterVariable, array, raster
+from .create import RasterVariable, array, raster
 from .stack import GeoStack, stack
 from .vector import GeoVector
 

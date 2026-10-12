@@ -16,7 +16,7 @@ from geosave.geodata.utils.datetime import (
     freq_offset,
 )
 
-from ..base import AttrsGroup, Join
+from .base import AttrsGroup, Join
 
 
 class TimeSpec(AttrsGroup):

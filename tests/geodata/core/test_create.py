@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.constructors import array, raster
+from geosave.geodata.core.create import array, raster
 from geosave.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster, geobox
@@ -397,7 +397,7 @@ def test_raster_refuses_a_coord_of_the_wrong_length() -> None:
 
 
 def test_array_builds_the_band_raster_would() -> None:
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     pixels = np.ones((2, *geobox().shape), "int16")
     labels = pd.date_range("2024-01-01", periods=2)
@@ -435,7 +435,7 @@ def test_array_builds_the_band_raster_would() -> None:
     ],
 )
 def test_array_refuses_what_raster_refuses(pixels, dims, coords, message) -> None:
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     with pytest.raises(ValueError, match=message):
         array(

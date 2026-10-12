@@ -28,12 +28,12 @@ if TYPE_CHECKING:
     from geosave.geodata.io.storage import Location, StorageOptions
 
 
-def from_items(items: Iterable[pystac.Item]) -> GeoDataFrame:
+def from_item(items: pystac.Item | Iterable[pystac.Item]) -> GeoDataFrame:
     """Build a table with one row per Item.
 
     Args:
-        items: Items whose assets carry absolute hrefs, or a self href that
-            resolves relative ones. They are not changed.
+        items: One Item or many, whose assets carry absolute hrefs, or a self
+            href that resolves relative ones. They are not changed.
 
     Returns:
         GeoDataFrame in WGS84 with the Items' properties as columns and their
@@ -41,18 +41,22 @@ def from_items(items: Iterable[pystac.Item]) -> GeoDataFrame:
         it. No Items give the empty table a search matching nothing returns.
 
     Examples:
-        >>> from geosave.geodata.stac import StacClient, StacQuery
-        >>> client = StacClient.open("samples/catalog.parquet")
-        >>> from_items(client.search_items(StacQuery(collections=["forest"])))["id"].tolist()
+        >>> root = pystac.Catalog.from_file("data/stac/catalog.json")
+        >>> from_item(root.get_items(recursive=True))["id"].tolist()
         ['forest_20250601', 'forest_20250611']
+        >>> from_item(next(root.get_items(recursive=True)))["id"].tolist()
+        ['forest_20250601']
     """
+    if isinstance(items, pystac.Item):
+        items = [items]
     records = []
     for item in items:
         # A row keeps no self href, so a relative href is resolved while it can be.
         if item.get_self_href() is not None:
             item = item.clone()
             item.make_asset_hrefs_absolute()
-        records.append(item.to_dict(include_self_link=False))
+        # Transforming link hrefs reads a searched Item's API root over HTTP.
+        records.append(item.to_dict(include_self_link=False, transform_hrefs=False))
     if not records:
         return cast(
             "GeoDataFrame",
@@ -67,18 +71,18 @@ def from_items(items: Iterable[pystac.Item]) -> GeoDataFrame:
     return cast("GeoDataFrame", gpd.GeoDataFrame.from_arrow(table).drop(columns="bbox"))
 
 
-def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
+def to_item(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
     """Build the Item each row of an item table states.
 
     Args:
-        rows: Rows of an item table, as `from_items` or `open_vector` returns
+        rows: Rows of an item table, as `from_item` or `open_vector` returns
             them, filtered or concatenated like any GeoDataFrame.
 
     Returns:
         One new Item per row, in row order, holding only the assets its row has.
 
     Examples:
-        >>> [item.id for item in to_items(rows[rows["collection"] == "label"])]
+        >>> [item.id for item in to_item(rows[rows["collection"] == "label"])]
         ['s0/label']
     """
     # rustac reads the table as geopandas left it, including all-null columns.
@@ -101,10 +105,10 @@ def resolve(rows: gpd.GeoDataFrame, path: Location) -> GeoDataFrame:
     if rows.empty or not is_item_table(rows):
         return cast("GeoDataFrame", rows)
     location = absolute_location(path)
-    items = to_items(rows)
+    items = to_item(rows)
     for item in items:
         item.set_self_href(location)
-    return from_items(items)
+    return from_item(items)
 
 
 def write(
@@ -124,7 +128,7 @@ def write(
     writing again, passing the Collections the table already holds.
 
     Args:
-        rows: Item table, as `from_items` or `open_vector` returns it.
+        rows: Item table, as `from_item` or `open_vector` returns it.
         path: Output path or URL ending in `.parquet` or `.geoparquet`.
         collections: Collections the rows belong to. They are not changed. A
             collection the rows name and this omits is stored with its id as
@@ -144,7 +148,7 @@ def write(
     Examples:
         >>> forest = create_collection("forest", description="Forest samples")
         >>> files = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
-        >>> write(create_items(files, collection=forest), "data/forest.parquet", collections=[forest])
+        >>> write(create_item(files, collection=forest), "data/forest.parquet", collections=[forest])
         PosixUPath('data/forest.parquet')
     """
     if not is_item_table(rows):
@@ -152,25 +156,17 @@ def write(
             "to_geoparquet writes an item table as stac-geoparquet; this frame "
             "has no STAC Item columns"
         )
-    location = absolute_location(path)
-    items = to_items(rows)
-    given = {collection.id: collection for collection in collections or ()}
-    if unused := sorted(set(given) - {item.collection_id for item in items}):
-        raise ValueError(f"no row belongs to the given collections {unused}")
+    # Deferred: the STAC package imports this module while it loads.
+    from geosave.geodata.stac.translate.collection import describe
 
-    stored = {}
-    for collection_id in dict.fromkeys(item.collection_id for item in items):
-        if collection_id is None:
-            continue
-        members = [item for item in items if item.collection_id == collection_id]
-        extent = pystac.Extent.from_items(members)
-        if collection_id in given:
-            collection = given[collection_id].clone()
-            collection.extent = extent
-        else:
-            collection = pystac.Collection(collection_id, collection_id, extent)
-        collection.clear_links()
-        stored[collection_id] = collection.to_dict(include_self_link=False)
+    location = absolute_location(path)
+    items = to_item(rows)
+    stored = {
+        collection_id: collection.to_dict(
+            include_self_link=False, transform_hrefs=False
+        )
+        for collection_id, collection in describe(items, collections).items()
+    }
 
     for item in items:
         item.set_self_href(location)
@@ -184,7 +180,9 @@ def write(
                     pystac.RelType.COLLECTION, make_relative_href(location, location)
                 )
             )
-    records = [item.to_dict(include_self_link=False) for item in items]
+    records = [
+        item.to_dict(include_self_link=False, transform_hrefs=False) for item in items
+    ]
     table = parse_stac_items_to_arrow(records).read_all()
 
     return storage.write(

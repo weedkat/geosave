@@ -24,7 +24,8 @@ when the project needs them.
 - `import geosave as gs` is the one alias for data. Model names come
   from `geosave.model`.
 - Around five code cells. One sentence of markdown states the problem before
-  each cell. Every cell ends in something visible.
+  each cell. Every cell moves the project forward; a cell that only displays
+  an object, or builds something the notebook never uses, is cut.
 - One or two "what the library did for you" callouts, each one line, each
   smoke-tested before it is written down.
 - Explain a property only when the project needs it. No tours of `crs_name`,
@@ -71,10 +72,13 @@ Not in this notebook: catalog, chips, STAC, spec, CRS, `chain_step`.
 
 1. The same three stages gain `chain_step`; `Encoder` publishes its channel
    width with `Published`.
-2. `build_model({"encoder": Encoder, "decoder": Decoder, "head": Head})` wires
-   them; the model's repr prints the data flow.
-3. Augmentations on image and label together.
-4. Fit again with Lightning's default TensorBoard logger; show how to open it.
+2. `ModelChain` wires them; a decoder that also reads `image` swaps in without
+   glue. `build_model` widens the encoder in one place.
+3. The trained model is a recipe by registered name, at notebook 0's width, so
+   the flips added next are the one change between the two runs.
+4. Augmentations on image and label together; compare the runs in TensorBoard.
+
+The pretrained encoder (DINOv3) waits for notebook 5, where it is trained.
 
 Callout: sizes published by one stage reach the next without being repeated.
 
@@ -139,6 +143,25 @@ Open naming question for this notebook: `transform.crop.crop` (a pixel window
 with halo padding, used only by `cuts.select_pixels`) shares its name with
 `.gs.crop` (cut to a geographic region). Recommended: move it into `cuts` as a
 private `_window`.
+
+## Revised plan for notebooks 2 and 3 (2026-10-12)
+
+The files are `02_inputs.ipynb` and `03_sources.ipynb`; the numbered sections
+above predate them.
+
+- **2 · Inputs** splits the work into `make_features` (raster → raster:
+  reflectance plus spectral indices) and `preprocess` (raster → tensor: NaN
+  filled, each band standardized with a mean and spread from 20 training
+  tiles).
+- **3 · Make a dataset** builds a small dataset (3 labels) in notebook 0's
+  layout plus a catalog. Each step answers the problem the last one left:
+  where a label's picture comes from (anchor → search → load); which date
+  (the clearest by `SCL`); saving it for every label (`to_cog` +
+  `create_items`); splits; feeding one pair through `make_features` →
+  `preprocess` → a model instance; labels that are polygons (GeoJSON →
+  `GeoAnchor.from_geometry` → `rasterize`); sharing (`to_stac`). No training.
+- **Composites** move to a later notebook that combines Sentinel-1 and
+  Sentinel-2.
 
 ## API changes
 

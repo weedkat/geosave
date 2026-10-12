@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Self, get_args
 
@@ -19,7 +20,7 @@ from geosave.geodata.utils.crs import (
     validate_wgs84_bbox,
     validate_wgs84_coordinate,
 )
-from geosave.geodata.core.geometry import SomeGeometry
+from geosave.geodata.utils.geometry import SomeGeometry
 
 # Where pixel edges sit relative to the CRS origin, spelled as odc accepts it.
 type GridAnchor = Literal["edge", "centre", "floating"]
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from odc.geo import Resolution
     from pyproj import CRS
 
-    from geosave.geodata.core.geolocator import Place
+    from geosave.geodata.utils.geocode import Place
 
 
 @dataclass(frozen=True, eq=False)
@@ -86,10 +87,27 @@ class GeoAnchor:
             Resolved place, or None when Nominatim has no result or is
             unavailable.
         """
-        from geosave.geodata.core.geolocator import Place
+        from geosave.geodata.utils.geocode import Place
 
         longitude, latitude = self.lonlat
         return Place.from_coordinate(latitude, longitude)
+
+    def replace(self, *, timespan: AnchorDatetime | None) -> GeoAnchor:
+        """Return this anchor over another time, on the same grid.
+
+        Args:
+            timespan: Temporal coverage, as `parse_daterange` accepts it, such
+                as a month `"2025-06"`. None makes the anchor timeless.
+
+        Returns:
+            New anchor; this one is unchanged.
+
+        Examples:
+            >>> month = anchor.replace(timespan=anchor.format("{start:%Y-%m}"))
+            >>> source.search(month)
+        """
+        window = None if timespan is None else parse_daterange(timespan)
+        return dataclasses.replace(self, timespan=window)
 
     def format(self, template: str) -> str:
         """Spell this anchor through a `str.format` template.

@@ -1,7 +1,7 @@
-"""Join attrs inside xarray's own concat and merge.
+"""Join the attrs of several xarray objects inside xarray's own concat and merge.
 
-Pass `combine_attrs=attrs.combine`. xarray calls it once per variable,
-coordinate and root with every object's attrs; it sees keys, not names.
+Pass `combine_attrs=attrs.combine`; xarray calls it once per variable,
+coordinate and root with every object's attrs.
 """
 
 from __future__ import annotations
@@ -10,12 +10,12 @@ import warnings
 from collections.abc import Hashable, Mapping, Sequence
 from typing import Any
 
+from xarray.core.utils import equivalent
+
 from geosave import __path__ as _package_paths
 from geosave.geodata.warnings import DroppedAttrsWarning
 
-from xarray.core.utils import equivalent
-
-from .base import AttrsGroup
+from .groups.base import AttrsGroup
 
 # CF keys outside any group whose disagreement changes what the pixels mean.
 AGREE = frozenset({"units", "standard_name", "cell_methods"})
@@ -53,7 +53,7 @@ def combine(
     respelled = {
         key
         for group in AttrsGroup.__subclasses__()
-        if group.stated_in(joined)
+        if group.JOIN != "each" and group.stated_in(joined)
         for key in group.KEYS
     }
     stated = {str(key) for attrs in attrs_list for key in attrs}
@@ -87,6 +87,9 @@ def _join(
     joined: dict[str, Any] = {}
     owned: set[str] = set()
     for group in AttrsGroup.__subclasses__():
+        # An "each" group's keys are facts on their own, joined below as plain keys.
+        if group.JOIN == "each":
+            continue
         owned.update(group.KEYS)
         joined |= _join_group(group, attrs_list, refuse=refuse)
     for attrs in attrs_list:

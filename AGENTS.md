@@ -28,8 +28,17 @@ src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
 ├── model/        # what a release contains: chain, registry, spec, release; stages/ holds encoder/decoder/head/monolith
-├── ml/           # Lightning training: modules, datamodules, builders, callbacks, datasets
+├── ml/           # Lightning training: tasks/ holds Module + DataModule pairs; builders, criterion, metrics, transforms
 └── templates/    # source for generated workspaces
+
+src/geosave/geodata/
+├── core/         # `gs` accessors (raster, array, stack, vector, catalog), GeoAnchor, constructors
+├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
+├── io/           # readers and writers; storage.py turns every path or URL into a UPath
+├── stac/         # extensions/ per schema, translate/ per STAC level, search/, source.py, create.py
+├── cuts/         # item table -> stacks -> frames -> chips; window rows read as aligned stacks
+├── transform/    # explicit warp, crop, combine, nodata, temporal operations
+└── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
 
@@ -43,7 +52,11 @@ It contains `common/` startup, `workspaces/` starters, and optional `scaffolds/`
 Public geospatial I/O lives in `geodata/io/`; original benchmark downloads live
 in `geodata/benchmarks/`. Internal helpers stay with their owning package.
 
-Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`.
+Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`, so a release loads and preprocesses without the training stack.
+
+Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
+
+STAC is organized on two axes. `stac/extensions/` has one module per extension schema and is the only importer of `pystac.extensions`. `stac/translate/` has one module per STAC level, each translating to its xarray counterpart and composing the level below: Collection <-> root ACDD attrs, Item <-> a scene (files of one collection, instant and grid), Asset <-> one file and its variables, band <-> one variable's attrs. Public builders and clients (`create_items`, `StacClient`, `StacTable`, `StacSource`) stay thin over these.
 
 ## Design
 

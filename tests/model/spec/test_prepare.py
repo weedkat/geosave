@@ -11,7 +11,7 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata import GeoStack, GeoVector, cuts, open_vector, raster, stack
-from geosave.geodata.stac import create_items
+from geosave.geodata.stac import create_item
 from geosave.model.spec import ModelSpec, Ref
 
 WHEN = datetime(2025, 6, 1, tzinfo=UTC)
@@ -58,7 +58,7 @@ def _raw(root) -> GeoVector:
         sample = stack({"optical": optical, "label": label})
         # One file per band, so each asset is one variable named by its key.
         files = sample.gs.to_cog(f"{root}/s{index}/{{collection}}/{{band}}.tif")
-        tables.append(create_items(files, id=f"s{index}", datetime=WHEN))
+        tables.append(create_item(files, id=f"s{index}", datetime=WHEN))
     return open_vector(GeoVector.concat(tables).gs.to_geoparquet(root / "raw.parquet"))
 
 

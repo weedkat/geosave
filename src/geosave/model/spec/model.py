@@ -269,7 +269,7 @@ class ModelSpec(SpecModel):
             }
             files = stack(groups).gs.to_cog(templates)
             tables.append(
-                stac.create_items(files, id=anchor, datetime=instants[anchor])
+                stac.create_item(files, id=anchor, datetime=instants[anchor])
             )
         self.save(target / self.filename)
         catalog = cast("GeoCatalog", GeoVector.concat(tables).gs)

@@ -5,7 +5,7 @@ import numpy as np
 from prefect import Flow
 import pytest
 
-from geosave.geodata.core.constructors import raster
+from geosave.geodata.core.create import raster
 from geosave.geodata import io
 from geosave.model.spec import ModelSpec, RasterRequirement, StacRecipe
 from geosave_flows.configs import CoordinateAnchorConfig, RasterAnchorConfig

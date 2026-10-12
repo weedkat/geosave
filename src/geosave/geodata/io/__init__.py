@@ -33,12 +33,10 @@ from .raster.geotiff import (
 )
 from .raster.netcdf import NetCDFOpenOptions, NetCDFWriteOptions
 from .raster.zarr import ZarrOpenOptions, ZarrWriteOptions
-from .raster.cogs import CogFile
 from .readers import open_raster, open_stack, open_vector
 
 __all__ = [
     "COGWriteOptions",
-    "CogFile",
     "GTiffWriteOptions",
     "GeoJSONOpenOptions",
     "GeoPackageOpenOptions",

@@ -1,4 +1,4 @@
-"""Joining attrs inside xarray's own concat and merge."""
+"""Joining attrs inside xarray's concat and merge."""
 
 from __future__ import annotations
 
@@ -7,16 +7,26 @@ import pytest
 import xarray as xr
 
 from geosave.geodata import attrs
+from geosave.geodata.warnings import DroppedAttrsWarning
 
 
-def _band(**attributes) -> xr.DataArray:
+def _timestep(**attributes) -> xr.DataArray:
     return xr.DataArray(
         np.zeros((1, 2), "uint16"), dims=("time", "x"), attrs=attributes
     )
 
 
+def _band(dtype="uint8", **attributes) -> xr.DataArray:
+    return xr.DataArray(
+        np.zeros((2, 2), dtype),
+        dims=("y", "x"),
+        coords={"x": xr.DataArray([0, 1], dims="x", attrs={"axis": "X"})},
+        attrs={"units": "1", **attributes},
+    )
+
+
 def test_agreeing_groups_and_keys_are_kept() -> None:
-    a = _band(_FillValue=0, units="1", long_name="red")
+    a = _timestep(_FillValue=0, units="1", long_name="red")
 
     joined = xr.concat([a, a.copy()], "time", combine_attrs=attrs.combine)
 
@@ -36,7 +46,7 @@ def test_one_nodata_spelled_two_ways_agrees() -> None:
 def test_an_agree_group_that_differs_refuses_the_join() -> None:
     with pytest.raises(ValueError, match="Nodata"):
         xr.concat(
-            [_band(_FillValue=0), _band(_FillValue=1)],
+            [_timestep(_FillValue=0), _timestep(_FillValue=1)],
             "time",
             combine_attrs=attrs.combine,
         )
@@ -78,3 +88,13 @@ def test_nan_fills_agree() -> None:
     )
 
     assert np.isnan(joined["_FillValue"])
+
+
+def test_an_each_group_joins_its_keys_one_by_one() -> None:
+    first = {"title": "scene", "license": "CC0"}
+    second = {"title": "other", "license": "CC0"}
+
+    with pytest.warns(DroppedAttrsWarning, match="title"):
+        joined = attrs.combine([first, second])
+
+    assert joined == {"license": "CC0"}

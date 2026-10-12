@@ -201,7 +201,7 @@ def test_an_item_table_of_cogs_loads_back(remote) -> None:
         f"{prefix}/forest_{{time:%Y%m%d}}.tif", storage_options=options
     )
     # GDAL reads a remote TIFF with the keys in its environment, not fsspec options.
-    rows = stac.create_items(paths)
+    rows = stac.create_item(paths)
 
     catalog = rows.gs.to_geoparquet(
         f"{prefix}/catalog.parquet", storage_options=options

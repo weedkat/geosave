@@ -33,7 +33,7 @@ from odc.geo.geobox import GeoBox
 
 from geosave.geodata.transform import warp
 
-from .base import GeoRasterAccessor
+from .accessor import GeoRasterAccessor
 from geosave.geodata.conventions import (
     CRS_COORDINATE,
     SPATIAL_DIMENSIONS,
@@ -41,7 +41,6 @@ from geosave.geodata.conventions import (
 )
 
 if TYPE_CHECKING:
-    from geosave.geodata.io.raster.cogs import CogFile
     import torch
     from collections.abc import Callable
 
@@ -512,7 +511,7 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **keywords: Any,
-    ) -> tuple[CogFile, ...]:
+    ) -> tuple[UPath, ...]:
         """Write every layer as Cloud Optimized GeoTIFFs, as its path template names.
 
         Each layer is written as `Dataset.gs.to_cog` writes a raster, with one
@@ -531,8 +530,8 @@ class GeoStack(GeoRasterAccessor["DataTree"]):
                 `Dataset.gs.to_cog` takes them.
 
         Returns:
-            One `CogFile` per file, layers in order, each naming its layer as
-            `collection`.
+            Each file written, layers in order. A file states its layer as its
+            ACDD `id`, so `open_stack` and `stac.create_item` group by it.
 
         Raises:
             ValueError: Two groups would share a file, a group without dates

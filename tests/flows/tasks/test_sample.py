@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from geosave.geodata import open_stack
-from geosave.geodata.core.constructors import raster
+from geosave.geodata.core.create import raster
 from geosave.geodata import io
 import geosave_flows.tasks.sample as save_module
 

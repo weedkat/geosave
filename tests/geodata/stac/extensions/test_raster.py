@@ -27,7 +27,7 @@ def _asset(href: str = "scene.tif") -> pystac.Asset:
 
 
 def test_a_saved_cog_states_what_it_stores(scene, tmp_path) -> None:
-    path = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")[0].href
+    path = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")[0]
     asset = _asset(str(path))
 
     with open_raster(path) as saved, dask.config.set(scheduler=_refuse):

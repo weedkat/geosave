@@ -173,7 +173,7 @@ def rasterize(
     from rasterio.features import rasterize as burn
 
     from geosave.geodata.core.anchor import GeoAnchor
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     # The target owns the exact output grid; only burn geometry is reprojected.
     geobox = like.geobox if isinstance(like, GeoAnchor) else like.gs.geobox

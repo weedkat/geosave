@@ -51,5 +51,5 @@ def sample(grid):
 def items(sample, tmp_path):
     """The sample written as COGs and catalogued, read back from its table."""
     files = sample.gs.to_cog(stack_templates(sample, tmp_path / "s0"))
-    rows = stac.create_items(files, id="s0")
+    rows = stac.create_item(files, id="s0")
     return open_vector(rows.gs.to_geoparquet(tmp_path / "items.parquet"))

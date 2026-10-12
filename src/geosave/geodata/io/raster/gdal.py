@@ -12,7 +12,9 @@ from __future__ import annotations
 import os
 import warnings
 from enum import Enum, auto
+from collections.abc import Mapping
 from pathlib import PurePath
+from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import numpy as np
@@ -66,8 +68,11 @@ def read(
         chunks: Chunk configuration for the opened variables.
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
-        storage_options: Accepted for a uniform call and unused; GDAL reads
-            credentials from the environment `configure_gdal` sets.
+        storage_options: fsspec options for an `s3://` URL, as `{"key": ...,
+            "secret": ..., "client_kwargs": {"endpoint_url": ...}}` or
+            `{"anon": True}`. They replace the process's GDAL S3 config, as
+            `configure_gdal` sets it. Other services read with the keys
+            `configure_gdal` sets. None takes a UPath's own options.
         **open_options: Supported rioxarray and rasterio open options.
 
     Returns:
@@ -87,6 +92,10 @@ def read(
         >>> read("20190507_red.tif").time.item()
         datetime.datetime(2019, 5, 7, 0, 0)
     """
+    # A UPath carries the options its write was given.
+    options = storage_options or getattr(source, "storage_options", None)
+    if options and split_protocol(str(source))[0] in ("s3", "s3a"):
+        _replace_s3_config(options)
     with rasterio.open(hf_to_s3(source)) as src:
         # `{}` asks for the backend's preferred chunks, as Zarr's are its own;
         # a tiled file's are its tiles, so a window reads only what it overlaps.
@@ -158,6 +167,46 @@ def read(
 
     cube.encoding["source"] = absolute_location(source)
     return cast("Dataset", cube)
+
+
+# GDAL's S3 config keys, which one read's storage_options replace together.
+_S3_KEYS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_DEFAULT_REGION",
+    "AWS_NO_SIGN_REQUEST",
+    "AWS_S3_ENDPOINT",
+    "AWS_HTTPS",
+    "AWS_VIRTUAL_HOSTING",
+)
+
+
+def _replace_s3_config(options: Mapping[str, Any]) -> None:
+    """Replace the process's GDAL S3 config with what fsspec's S3 options state."""
+    # A key from an earlier read would otherwise sign, or route, this one.
+    for name in _S3_KEYS:
+        os.environ.pop(name, None)
+
+    client = options.get("client_kwargs") or {}
+    config: dict[str, Any] = {}
+    if options.get("anon"):
+        config["aws_no_sign_request"] = True
+    if key := options.get("key") or options.get("username"):
+        config["aws_access_key_id"] = key
+    if secret := options.get("secret") or options.get("password"):
+        config["aws_secret_access_key"] = secret
+    if token := options.get("token"):
+        config["aws_session_token"] = token
+    if region := client.get("region_name"):
+        config["aws_default_region"] = region
+    if endpoint := options.get("endpoint_url") or client.get("endpoint_url"):
+        # GDAL takes an S3-compatible service as a host, addressed by path.
+        address = urlsplit(endpoint)
+        config["aws_s3_endpoint"] = address.netloc
+        config["aws_https"] = address.scheme == "https"
+        config["aws_virtual_hosting"] = False
+    configure_gdal(**config)
 
 
 def hf_to_s3(location: Location) -> str:
@@ -360,19 +409,24 @@ def _attrs(
             for key, value in src.tags(index).items()
             if not key.startswith("STATISTICS_")
         }
-        scale, offset = src.scales[position], src.offsets[position]
         interpretation = src.colorinterp[position]
         native: dict[str, Any] = {
             "long_name": src.descriptions[position],
             "units": src.units[position],
-            "scale_factor": None if scale == 1.0 else scale,
-            "add_offset": None if offset == 0.0 else offset,
-            "_FillValue": src.nodatavals[position],
             "colorinterp": None
             if interpretation is ColorInterp.undefined
             else interpretation.name,
         }
         band.update({key: value for key, value in native.items() if value is not None})
+
+        # GDAL keeps packing and fill as band properties; they read as CF's attrs.
+        packing = attrs.Packing(
+            scale_factor=src.scales[position], add_offset=src.offsets[position]
+        )
+        band.update(packing.to_attrs())
+        fill = src.nodatavals[position]
+        if fill is not None:
+            band.update(attrs.Nodata(value=fill).to_attrs())
 
         identity = attrs.GDALBand.model_validate(band)
         name = identity.variable_name or f"band_{index}"

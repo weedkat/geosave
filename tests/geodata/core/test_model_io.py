@@ -5,7 +5,7 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.constructors import raster
+from geosave.geodata.core.create import raster
 
 UTM = "EPSG:32633"
 

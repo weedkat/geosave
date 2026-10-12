@@ -11,7 +11,7 @@ from pydantic import BeforeValidator, field_serializer, model_validator
 
 from geosave.geodata.utils.color import parse_color
 
-from ..base import AttrsGroup, Decoded, Join, decode
+from .base import AttrsGroup, Decoded, Join, decode
 
 if TYPE_CHECKING:
     import xarray as xr

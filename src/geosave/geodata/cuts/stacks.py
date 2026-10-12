@@ -15,7 +15,7 @@ from pystac.extensions.projection import ProjectionExtension
 
 from geosave import __path__ as _package_paths
 from geosave.geodata.io.vector import stac_geoparquet
-from geosave.geodata.stac.item import instant
+from geosave.geodata.stac.translate.item import instant
 from geosave.geodata.warnings import (
     DuplicateInstantsWarning,
     PartialCoverWarning,
@@ -125,8 +125,8 @@ def stacks(items: gpd.GeoDataFrame, *, on: str) -> GeoDataFrame:
             skip_file_prefixes=tuple(_package_paths),
         )
 
-    anchor_items = stac_geoparquet.to_items(anchors)
-    other_items = [] if others.empty else stac_geoparquet.to_items(others)
+    anchor_items = stac_geoparquet.to_item(anchors)
+    other_items = [] if others.empty else stac_geoparquet.to_item(others)
     rows = []
     for position, anchor in enumerate(anchor_items):
         members: dict[str, list[dict[str, Any]]] = {on: [_stripped(anchor)]}
@@ -177,7 +177,7 @@ def stacks(items: gpd.GeoDataFrame, *, on: str) -> GeoDataFrame:
 
 def _stripped(item: pystac.Item) -> dict[str, Any]:
     """Keep what reading an Item needs, its hrefs absolute."""
-    fields = item.to_dict(include_self_link=False)
+    fields = item.to_dict(include_self_link=False, transform_hrefs=False)
     for key, asset in item.assets.items():
         fields["assets"][key]["href"] = asset.get_absolute_href()
     return {

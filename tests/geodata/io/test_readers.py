@@ -175,11 +175,38 @@ def test_vectors_open_through_open_vector_and_read_vector_is_gone(tmp_path) -> N
     assert not hasattr(gs.geodata, "read_vector")
 
 
-def test_open_raster_takes_one_path_not_a_list(tmp_path: Path) -> None:
-    (file,) = build_raster().gs.to_cog(f"{tmp_path}/scene.tif")
+def test_open_raster_reads_back_what_to_cog_wrote(tmp_path: Path) -> None:
+    import numpy as np
 
-    with pytest.raises(TypeError, match="CogFile"):
-        open_raster([file.href, file.href])
+    scene = build_raster(times=2)
+    paths = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}_{{band}}.tif")
+
+    restored = open_raster(paths)
+
+    assert restored.gs.variables == ("red", "nir")
+    np.testing.assert_array_equal(restored.red.values, scene.red.values)
+
+
+def test_open_stack_groups_files_by_the_layer_each_states(tmp_path: Path) -> None:
+    from geosave.geodata import stack
+
+    image = build_raster(times=1)
+    label = image.isel(time=0, drop=True)[["red"]].rename(red="label")
+    paths = stack({"optical": image, "label": label}).gs.to_cog(
+        {
+            "optical": f"{tmp_path}/optical_{{time:%Y%m%d}}.tif",
+            "label": f"{tmp_path}/label.tif",
+        }
+    )
+
+    assert open_stack(paths).gs.groups == ("optical", "label")
+
+
+def test_open_stack_refuses_files_stating_no_layer(tmp_path: Path) -> None:
+    paths = build_raster(times=2).gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+
+    with pytest.raises(ValueError, match="name no layer"):
+        open_stack(paths)
 
 
 def test_a_tag_the_records_agree_on_survives(tmp_path: Path) -> None:

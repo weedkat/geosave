@@ -12,7 +12,7 @@ import orjson
 import pandas as pd
 
 from geosave import __path__ as _package_paths
-from geosave.geodata.stac.item import instant
+from geosave.geodata.stac.translate.item import instant
 from geosave.geodata.warnings import (
     DroppedFramesWarning,
     DroppedInstantsWarning,

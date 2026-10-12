@@ -7,17 +7,10 @@ from datetime import datetime as dt, timezone
 import pytest
 import pystac
 import xarray as xr
-from pystac.extensions.eo import Band
-from pystac.extensions.raster import RasterBand
 
 import geosave.geodata  # noqa: F401  — registers the .gs accessor
 from geosave.geodata.attrs import Packing, Spectral
-from geosave.geodata.stac._bands import (
-    band_attrs,
-    load_attrs,
-    read_asset_fields,
-    read_bands,
-)
+from geosave.geodata.stac.translate import load_attrs
 from geosave.geodata.warnings import DroppedAttrsWarning
 
 
@@ -84,6 +77,8 @@ def test_reading_uses_band_description_not_common_name() -> None:
 
 
 @pytest.mark.parametrize("second", [{}, {"scale": 0.0002}])
+
+
 def test_disagreeing_packing_drops_with_a_warning(second) -> None:
     items = [
         _item("scene-1", dt(2025, 1, 1), {"scale": 0.0001}),
@@ -178,21 +173,6 @@ def test_reader_uses_the_selected_band_without_mutating_the_item() -> None:
     assert item.to_dict() == before
 
 
-def test_asset_reader_keeps_core_band_precedence() -> None:
-    asset = pystac.Asset(
-        "https://example.com/a.tif",
-        extra_fields={
-            "unit": "asset",
-            "description": "asset",
-            "raster:bands": [{"unit": "raster"}],
-            "eo:bands": [{"description": "EO"}],
-            "bands": [{"unit": "core", "description": "Core"}],
-        },
-    )
-
-    assert read_asset_fields(asset) == {"unit": "core", "description": "Core"}
-
-
 def test_loader_packing_overrides_the_agreed_source_packing() -> None:
     item = _item("scene", dt(2025, 1, 1), {"scale": 0.1, "offset": 2})
     loaded = xr.Dataset({"red": xr.DataArray([1], attrs={"scale_factor": 1.0})})
@@ -227,51 +207,3 @@ def test_core_bands_read_like_legacy_ones() -> None:
 
     assert loaded.red.attrs["units"] == "1"
     assert loaded.red.gs.packing == Packing(scale_factor=0.0001)
-
-
-def test_a_band_states_units_and_packing_as_attrs() -> None:
-    raster = RasterBand.create(nodata=0, unit="1", scale=0.0001)
-    spectral = Band.create(name="red", description="Red")
-
-    assert band_attrs(raster, spectral) == {
-        "units": "1",
-        "long_name": "Red",
-        "scale_factor": 0.0001,
-    }
-
-
-def test_a_bare_band_states_no_attrs() -> None:
-    assert band_attrs(RasterBand({"data_type": "float32"}), Band({"name": "dem"})) == {}
-
-
-def test_legacy_listings_pair_by_index() -> None:
-    asset = pystac.Asset(
-        "a.tif",
-        extra_fields={
-            "raster:bands": [{"data_type": "uint16", "nodata": 0, "scale": 0.0001}],
-            "eo:bands": [{"name": "B04", "common_name": "red"}, {"name": "B08"}],
-        },
-    )
-
-    (first, red), (second, nir) = read_bands(asset)
-
-    assert (first.scale, red.common_name) == (0.0001, "red")
-    assert (second.to_dict(), nir.name) == ({}, "B08")
-
-
-def test_core_bands_read_without_parquet_nulls() -> None:
-    asset = pystac.Asset(
-        "a.tif",
-        extra_fields={
-            "bands": [{"name": "label", "unit": None, "raster:scale": None}],
-            "raster:bands": [{"unit": "ignored"}],
-        },
-    )
-
-    ((raster, spectral),) = read_bands(asset)
-
-    assert (raster.to_dict(), spectral.to_dict()) == ({}, {"name": "label"})
-
-
-def test_an_asset_without_bands_reads_as_none() -> None:
-    assert read_bands(pystac.Asset("thumbnail.png")) == []

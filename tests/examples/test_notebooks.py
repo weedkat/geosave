@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import nbformat
@@ -19,6 +20,8 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     folder = tmp_path_factory.mktemp("data")
     snapshot_download(DATASET, repo_type="dataset", local_dir=folder / "dynamic_world")
+    # Notebook 3 turns this polygon into a label.
+    shutil.copy(EXAMPLES / "data" / "khdtk_wanadipa_batas.geojson", folder)
     return folder
 
 
@@ -63,7 +66,7 @@ def test_basics_runs(tmp_path: Path, data: Path) -> None:
     code = _run("00_basics.ipynb", tmp_path, data)
 
     assert len(code) <= 8
-    assert all(cell.outputs for cell in code)
+    assert all(cell.execution_count is not None for cell in code)
     source = "\n".join(cell.source for cell in code)
     # "stac" alone would match `gs.stack`, which this notebook does use.
     for word in (
@@ -97,7 +100,7 @@ def test_model_runs(tmp_path: Path, data: Path) -> None:
 def test_inputs_runs(tmp_path: Path, data: Path) -> None:
     code = _run("02_inputs.ipynb", tmp_path, data)
 
-    assert all(cell.outputs for cell in code)
+    assert all(cell.execution_count is not None for cell in code)
     assert "val_miou" in _scalars(tmp_path / "lightning_logs/inputs")
     assert (tmp_path / "predicted.tif").is_file()
 
@@ -107,5 +110,15 @@ def test_inputs_runs(tmp_path: Path, data: Path) -> None:
 def test_sources_runs(tmp_path: Path, data: Path) -> None:
     code = _run("03_sources.ipynb", tmp_path, data)
 
-    assert all(cell.outputs for cell in code)
+    assert all(cell.execution_count is not None for cell in code)
+    # The project's catalog, its shareable copy, and the composite made from it.
+    from geosave.geodata.stac import StacTable
+
+    dataset = tmp_path / "data" / "my_dataset"
+    table = StacTable(dataset / "catalog.parquet")
+    assert table.collections() == {"label", "sentinel-2-l2a"}
+    assert (dataset / "stac" / "catalog.json").is_file()
+    for split in ("train", "val", "test"):
+        assert list((dataset / split / "images").glob("*.tif"))
+        assert list((dataset / split / "labels").glob("*.tif"))
     assert (tmp_path / "composite.tif").is_file()

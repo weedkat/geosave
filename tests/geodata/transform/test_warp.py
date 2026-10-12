@@ -8,7 +8,7 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.create import raster as build_raster
 from geosave.geodata.core.stack import stack as build_stack
 from geosave.geodata.transform.warp import Resampling, align, reproject
 

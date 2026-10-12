@@ -10,12 +10,11 @@ def test_the_stac_namespace_exposes_item_helpers_and_clients() -> None:
         "StacQuery",
         "StacSource",
         "StacSourceConfig",
-        "cog_files",
+        "StacTable",
         "create_collection",
         "create_item",
-        "create_items",
+            "from_item",
         "get_collections",
-        "instant",
     ]
     assert not hasattr(gs.stac, "table")
     assert not hasattr(gs.stac, "StacTableClient")

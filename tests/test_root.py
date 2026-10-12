@@ -52,3 +52,10 @@ def test_importing_the_root_registers_raster_and_vector_accessors_without_torch(
         "assert not heavy, heavy"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_the_root_offers_the_attrs_groups() -> None:
+    from geosave.geodata import attrs
+
+    assert gs.attrs is attrs
+    assert gs.attrs.ACDD(id="label", summary="Classes").id == "label"

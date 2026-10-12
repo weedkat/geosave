@@ -1,3 +1,4 @@
+import pystac
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
@@ -60,3 +61,47 @@ def test_named_provider_uses_its_stac_client_constructor(monkeypatch, provider):
     )
 
     assert StacClient.open(provider) is expected
+
+
+def _offering(native: Client, collection: str) -> Client:
+    found = pystac.Collection(
+        collection,
+        "Rows",
+        pystac.Extent.from_dict(
+            {
+                "spatial": {"bbox": [[-180, -90, 180, 90]]},
+                "temporal": {"interval": [[None, None]]},
+            }
+        ),
+    )
+    native.get_collection = lambda _name: found
+    return native
+
+
+def test_a_client_hands_its_url_patch_to_every_source():
+    def sign(href: str) -> str:
+        return f"{href}?token"
+
+    native = _offering(Client(id="local", description="Local catalog"), "forest")
+
+    source = StacClient(native, patch_url=sign).source("forest")
+
+    assert source.config.patch_url is sign
+
+
+def test_planetary_computer_signs_when_loading_not_when_searching(monkeypatch):
+    import planetary_computer
+
+    opened = {}
+
+    def open_client(url, **options):
+        opened.update(options)
+        return _offering(Client(id="pc", description="Planetary Computer"), "s2")
+
+    monkeypatch.setattr(Client, "open", open_client)
+
+    client = StacClient.planetary_computer()
+
+    # Searched hrefs stay unsigned, so a saved table outlives the day-long token.
+    assert "modifier" not in opened
+    assert client.source("s2").config.patch_url is planetary_computer.sign

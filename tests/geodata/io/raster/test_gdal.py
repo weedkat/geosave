@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -85,6 +86,35 @@ def test_band_slots_and_tags_read_as_one_variables_attrs() -> None:
     assert bands["red"]["variable_name"] == "red"
 
 
+@pytest.mark.parametrize(
+    ("scale", "offset", "nodata", "expected"),
+    [
+        (1e-4, -0.1, 0, {"scale_factor": 1e-4, "add_offset": -0.1, "_FillValue": 0}),
+        (1e-4, 0.0, None, {"scale_factor": 1e-4}),
+        (1.0, 0.0, None, {}),
+    ],
+)
+def test_band_packing_and_fill_read_as_their_cf_attrs(
+    scale, offset, nodata, expected
+) -> None:
+    from rasterio.io import MemoryFile
+
+    from geosave.geodata.io.raster.gdal import _attrs
+
+    with MemoryFile() as memory:
+        with memory.open(
+            driver="GTiff", width=1, height=1, count=1, dtype="uint16", nodata=nodata
+        ) as dst:
+            dst.write(np.array([[[1]]], dtype="uint16"))
+            dst.scales, dst.offsets = (scale,), (offset,)
+
+        with memory.open() as src:
+            _, bands = _attrs(src)
+
+    keys = ("scale_factor", "add_offset", "_FillValue")
+    assert {key: bands["band_1"][key] for key in keys if key in bands["band_1"]} == expected
+
+
 def _tiff(path, *, tiled: bool) -> str:
     import rasterio
     from rasterio.transform import from_origin
@@ -114,3 +144,153 @@ def test_a_striped_file_stays_one_chunk(tmp_path) -> None:
     band = read(_tiff(tmp_path / "striped.tif", tiled=False), chunks={}).band_1
 
     assert band.data.chunksize == (1024, 1024)
+
+
+def _tiff_bytes(tmp_path) -> bytes:
+    import geosave as gs
+    from geosave.geodata import GeoAnchor
+
+    anchor = GeoAnchor.from_coordinates(52, 13, 4, 10)
+    band = (("y", "x"), np.full((4, 4), 7, "uint16"))
+    (file,) = gs.raster({"red": band}, anchor.geobox).gs.to_cog(tmp_path / "a.tif")
+    return Path(file).read_bytes()
+
+
+def _refuse_to_open(monkeypatch) -> list:
+    """Record what rasterio is asked to open, opening nothing."""
+    import rasterio
+
+    opened = []
+
+    def spy(fp, *args, **kwargs):
+        opened.append(str(fp))
+        raise rasterio.errors.RasterioIOError("no network in tests")
+
+    monkeypatch.setattr(rasterio, "open", spy)
+    return opened
+
+
+AWS_KEYS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_DEFAULT_REGION",
+    "AWS_NO_SIGN_REQUEST",
+    "AWS_S3_ENDPOINT",
+    "AWS_HTTPS",
+    "AWS_VIRTUAL_HOSTING",
+)
+
+
+@pytest.fixture
+def clean_aws(monkeypatch):
+    # Setting first registers each key with monkeypatch, so what a read sets is undone.
+    for name in AWS_KEYS:
+        monkeypatch.setenv(name, "unset")
+        monkeypatch.delenv(name)
+
+
+def test_s3_storage_options_reach_gdal_as_its_config(monkeypatch, clean_aws) -> None:
+    import rasterio
+
+    from geosave.geodata.io.raster.gdal import read
+
+    opened = _refuse_to_open(monkeypatch)
+    options = {
+        "key": "minio",
+        "secret": "secret",
+        "client_kwargs": {"endpoint_url": "http://localhost:9000"},
+    }
+
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        read("s3://bucket/a.tif", storage_options=options)
+
+    assert opened == ["s3://bucket/a.tif"]
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "minio"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "secret"
+    assert os.environ["AWS_S3_ENDPOINT"] == "localhost:9000"
+    assert os.environ["AWS_HTTPS"] == "NO"
+    assert os.environ["AWS_VIRTUAL_HOSTING"] == "FALSE"
+
+
+def test_an_anonymous_s3_read_skips_signing(monkeypatch, clean_aws) -> None:
+    import rasterio
+
+    from geosave.geodata.io.raster.gdal import read
+
+    _refuse_to_open(monkeypatch)
+
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        read("s3://bucket/a.tif", storage_options={"anon": True})
+
+    assert os.environ["AWS_NO_SIGN_REQUEST"] == "TRUE"
+
+
+def test_a_second_s3_read_replaces_what_the_first_set(monkeypatch, clean_aws) -> None:
+    import rasterio
+
+    from geosave.geodata.io.raster.gdal import read
+
+    _refuse_to_open(monkeypatch)
+    minio = {"anon": True, "client_kwargs": {"endpoint_url": "http://localhost:9000"}}
+    aws = {"key": "id", "secret": "secret"}
+
+    for options in (minio, aws):
+        with pytest.raises(rasterio.errors.RasterioIOError):
+            read("s3://bucket/a.tif", storage_options=options)
+
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "id"
+    for stale in ("AWS_NO_SIGN_REQUEST", "AWS_S3_ENDPOINT", "AWS_HTTPS"):
+        assert stale not in os.environ
+
+
+def test_storage_options_for_another_service_are_left_to_its_reader(
+    monkeypatch, clean_aws
+) -> None:
+    import rasterio
+
+    from geosave.geodata.io.raster.gdal import read
+
+    opened = _refuse_to_open(monkeypatch)
+
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        read("gs://bucket/a.tif", storage_options={"token": "anon"})
+
+    assert opened == ["gs://bucket/a.tif"]
+    assert not any(name in os.environ for name in AWS_KEYS)
+
+
+def test_a_upath_carries_its_options_to_the_read(monkeypatch, clean_aws) -> None:
+    import rasterio
+    from upath import UPath
+
+    from geosave.geodata.io.raster.gdal import read
+
+    _refuse_to_open(monkeypatch)
+
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        read(UPath("s3://bucket/a.tif", key="id", secret="secret"))
+
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "id"
+
+
+def test_a_local_file_ignores_no_options(tmp_path) -> None:
+    from geosave.geodata.io.raster.gdal import read
+
+    path = tmp_path / "b.tif"
+    path.write_bytes(_tiff_bytes(tmp_path))
+
+    assert int(read(path, storage_options={}).red.max()) == 7
+
+
+def test_an_hf_bucket_without_options_keeps_its_s3_gateway(monkeypatch) -> None:
+    import rasterio
+
+    from geosave.geodata.io.raster.gdal import read
+
+    opened = _refuse_to_open(monkeypatch)
+
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        read("hf://buckets/me/samples/a.tif")
+
+    assert opened == ["s3://me/samples/a.tif"]

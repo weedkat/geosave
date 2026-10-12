@@ -8,11 +8,11 @@ import pytest
 
 from geosave.geodata import GeoVector, open_raster
 from geosave.geodata import attrs
-from geosave.geodata.stac._bands import band_attrs, read_bands
+from geosave.geodata.stac.translate import asset, band
 from geosave.geodata.features import ndvi
 from geosave.geodata import open_vector
 from geosave.geodata.io.vector import stac_geoparquet as table
-from geosave.geodata.stac import create_items
+from geosave.geodata.stac import create_item
 
 from tests.geodata.conftest import build_raster
 
@@ -28,24 +28,24 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     when = datetime(2025, 6, 1, tzinfo=UTC)
     rows = GeoVector.concat(
         [
-            create_items(optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")),
-            create_items(label.gs.to_cog(f"{tmp_path}/label.tif"), datetime=when),
+            create_item(optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")),
+            create_item(label.gs.to_cog(f"{tmp_path}/label.tif"), datetime=when),
         ]
     )
 
     saved = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
-    restored = table.to_items(open_vector(saved))
-    red, spectral = read_bands(restored[0].assets["red"])[0]
-    classes, named = read_bands(restored[-1].assets["label"])[0]
+    restored = table.to_item(open_vector(saved))
+    red, spectral = asset.bands(restored[0].assets["red"])[0]
+    classes, named = asset.bands(restored[-1].assets["label"])[0]
     assert red.data_type == "uint16"
-    assert band_attrs(red, spectral) == {
+    assert band.read(red, spectral) == {
         "units": "1",
         "scale_factor": pytest.approx(1e-4),
         "common_name": "red",
         "center_wavelength": 0.665,
     }
-    legend = attrs.Legend.model_validate(band_attrs(classes, named))
+    legend = attrs.Legend.model_validate(band.read(classes, named))
     assert legend.classes == {0: "background", 1: "forest"}
 
 
@@ -53,8 +53,8 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
 def test_described_items_validate_against_their_schemas(tmp_path) -> None:
     scene = build_raster(times=1, packed=True)
 
-    (item,) = table.to_items(
-        create_items(scene.gs.to_cog(f"{tmp_path}/scene_{{time:%Y%m%d}}.tif"))
+    (item,) = table.to_item(
+        create_item(scene.gs.to_cog(f"{tmp_path}/scene_{{time:%Y%m%d}}.tif"))
     )
 
     item.validate()

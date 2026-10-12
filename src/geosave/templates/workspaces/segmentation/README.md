@@ -39,7 +39,7 @@ import geosave as gs
 
 files = sample.gs.to_cog({"image": "data/train/s0/image/image_{time:%Y%m%d}.tif",
                           "label": "data/train/s0/label.tif"})
-gs.stac.create_items(files, id="s0").gs.to_geoparquet("data/train.parquet")
+gs.stac.create_item(files, id="s0").gs.to_geoparquet("data/train.parquet")
 ```
 
 `supervised.DataModule` reads the prepared item tables through

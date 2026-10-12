@@ -5,7 +5,7 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
-from geosave.geodata.core.constructors import raster as build
+from geosave.geodata.core.create import raster as build
 from geosave.geodata.core.stack import stack as build_stack
 
 
@@ -125,10 +125,10 @@ def stack_templates(sample, root) -> dict[str, str]:
 def read_items(rows):
     """Read an item table's files as one raster, as a window reads one collection."""
     from geosave.geodata.io.raster import cogs
-    from geosave.geodata.stac.item import cog_files
-    from geosave.geodata.io.vector.stac_geoparquet import to_items
+    from geosave.geodata.stac.translate.item import files
+    from geosave.geodata.io.vector.stac_geoparquet import to_item
 
-    return cogs.read([f for item in to_items(rows) for f in cog_files(item)])
+    return cogs.read([f for item in to_item(rows) for f in files(item)])
 
 
 def titled(obj, title: str = "scene"):

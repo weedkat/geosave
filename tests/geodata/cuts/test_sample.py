@@ -80,6 +80,7 @@ def test_a_multiband_source_numbers_its_bands_by_asset(items, sample, tmp_path):
     import pystac
 
     from geosave.geodata import open_vector, stac
+    from geosave.geodata.stac import translate
 
     import geosave.geodata.attrs as attrs
 
@@ -90,7 +91,7 @@ def test_a_multiband_source_numbers_its_bands_by_asset(items, sample, tmp_path):
     )
     owner = stac.create_collection("s2", description="Optical bands")
     files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}.tif")
-    rows = stac.create_items(files, collection=owner)
+    rows = stac.create_item(files, collection=owner)
     # A fresh optical collection with multiband assets, anchored by the label.
     combined = pd.concat(
         [items[items["collection"] == "label"], rows], ignore_index=True
@@ -99,7 +100,7 @@ def test_a_multiband_source_numbers_its_bands_by_asset(items, sample, tmp_path):
     windows = cuts.stacks(open_vector(path), on="label")
 
     snapshots = orjson.loads(windows.iloc[0]["sources"])["s2"]
-    records = stac.cog_files(pystac.Item.from_dict(snapshots[0]))
+    records = translate.item.files(pystac.Item.from_dict(snapshots[0]))
     assert records[0].bands == ("image.1", "image.2")
 
     recovered = windows.iloc[0].gs.to_stack()["s2"].dataset
@@ -123,17 +124,41 @@ def test_catalog_eo_facts_reach_a_file_that_states_none(items, sample, tmp_path)
     optical = sample["s2"].dataset[["red"]]
     assert optical.red.gs.spectral is None
     files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}_{{band}}.tif")
-    rows = table.to_items(stac.create_items(files, collection="s2"))
+    rows = table.to_item(stac.create_item(files, collection="s2"))
     # The host states facts its files do not carry, as Planetary Computer does.
     for item in rows:
         EOExtension.ext(item.assets["red"]).bands = [
             Band.create(name="B04", common_name="red", center_wavelength=0.665)
         ]
     combined = pd.concat(
-        [items[items["collection"] == "label"], table.from_items(rows)],
+        [items[items["collection"] == "label"], table.from_item(rows)],
         ignore_index=True,
     )
 
     recovered = cuts.stacks(combined, on="label").iloc[0].gs.to_stack()["s2"].dataset
 
+    assert recovered.red.gs.spectral.common_name == "red"
+
+
+def test_catalog_packing_reaches_a_file_that_states_none(items, sample, tmp_path):
+    from geosave.geodata import stac
+    from geosave.geodata.io.vector import stac_geoparquet as table
+
+    optical = sample["s2"].dataset[["red"]]
+    assert optical.red.gs.packing is None
+    files = optical.gs.to_cog(f"{tmp_path}/optical_{{time:%Y%m%d}}_{{band}}.tif")
+    rows = table.to_item(stac.create_item(files, collection="s2"))
+    # A STAC 1.1 host states packing and names in one `bands` listing.
+    for item in rows:
+        item.assets["red"].extra_fields["bands"] = [
+            {"name": "B04", "raster:scale": 0.0001, "eo:common_name": "red"}
+        ]
+    combined = pd.concat(
+        [items[items["collection"] == "label"], table.from_item(rows)],
+        ignore_index=True,
+    )
+
+    recovered = cuts.stacks(combined, on="label").iloc[0].gs.to_stack()["s2"].dataset
+
+    assert recovered.red.gs.packing.scale_factor == 0.0001
     assert recovered.red.gs.spectral.common_name == "red"

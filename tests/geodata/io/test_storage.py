@@ -190,3 +190,8 @@ def test_a_remote_write_returns_a_upath_carrying_its_options(bucket: str) -> Non
     )
 
     assert written.storage_options == {"skip_instance_cache": True}
+
+
+def test_storage_options_cannot_choose_the_filesystem() -> None:
+    with pytest.raises(ValueError, match="protocol"):
+        location("memory://catalogs/catalog.parquet", {"protocol": "s3"})  # type: ignore[typeddict-unknown-key]

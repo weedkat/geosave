@@ -20,8 +20,8 @@ import xarray as xr
 
 from geosave.geodata.core import GeoAnchor
 from geosave.geodata.errors import CollectionNotFoundError
-from geosave.geodata.stac.client import StacClient, StacProvider
-from geosave.geodata.stac.query import StacQuery
+from geosave.geodata.stac.search.api import StacClient, StacProvider
+from geosave.geodata.stac.search.query import StacQuery
 from geosave.geodata.stac.source import StacSourceConfig
 
 from .base import SpecModel, Text

@@ -21,7 +21,7 @@ scene = scene.expand_dims(time=[np.datetime64("2025-01-01")])
 
 collection = gs.stac.create_collection("forest", description="Forest samples")
 files = scene.gs.to_cog(root / "samples/forest_{time:%Y%m%d}.tif")
-items = gs.stac.create_items(files, collection=collection)
+items = gs.stac.create_item(files, collection=collection)
 path = items.gs.to_geoparquet(root / "catalog.parquet", collections=[collection])
 items[["collection", "datetime"]]
 ```
@@ -42,15 +42,15 @@ Here `items` is a GeoPandas `GeoDataFrame`, with one Item per row. Properties
 are table columns; `assets` contains the nested file descriptions. The
 GeoParquet file stores this metadata, while the pixels remain in the TIFF.
 
-`create_items` reads saved file headers to describe their actual grid, bands,
+`create_item` reads saved file headers to describe their actual grid, bands,
 dtype, and nodata. It groups files with the same collection, instant, and grid
-into one Item. The returned COG records describe files written by a successful
-call; they are not an inventory of a destination folder.
+into one Item. A stack's files state their layer, so they fall into one
+collection per layer without `collection=`.
 
 ## Search the local table
 
 ```python
-client = gs.stac.StacClient.open(path)
+client = gs.stac.StacTable(path)
 found = client.search(gs.stac.StacQuery(collections=["forest"]))
 found[["collection", "datetime"]]
 ```
@@ -65,6 +65,35 @@ Output:
 Search returns another item table, suitable for normal GeoPandas filtering or
 [window selection](catalogs-and-cuts.md). Search does not load raster pixels.
 `client.collection("forest")` returns the native PySTAC `Collection`.
+
+## Share as STAC JSON
+
+Tools that read static STAC, such as STAC Browser or QGIS, expect a folder of
+JSON files rather than one table. `to_stac` writes one:
+
+```python
+catalog = items.gs.to_stac(root / "stac", collections=[collection])
+```
+
+```text
+stac/catalog.json
+stac/forest/collection.json
+stac/forest/forest_20250101/forest_20250101.json
+```
+
+Asset hrefs are relative, so the folder moves with its TIFFs. A URL writes
+the folder to that filesystem, as
+`items.gs.to_stac("s3://bucket/stac", storage_options={"anon": False})`. PySTAC reads it
+back, and `from_item` turns its Items, one or many, into an item table again:
+
+```python
+import pystac
+
+root_catalog = pystac.Catalog.from_file(catalog)
+items = gs.stac.from_item(root_catalog.get_items(recursive=True))
+```
+
+`items.gs.to_item()` goes the other way, one PySTAC `Item` per row.
 
 ## Load onto a chosen grid
 
@@ -93,7 +122,9 @@ Attributes:
 ```
 
 The source searches within the anchor's footprint and time range, then loads
-the selected bands onto its exact grid. `cube` is a lazy xarray `Dataset`.
+the selected bands onto its exact grid. The Collection lands on the root as
+ACDD attrs, read back with `cube.gs.acdd`; each variable carries the packing,
+units, spectral facts and classes its STAC band states. `cube` is a lazy xarray `Dataset`.
 It keeps the stored `uint16` measurements; decoding is explicit with
 `cube.gs.mask_and_scale()`.
 
@@ -139,7 +170,7 @@ session.execute("""
         ENDPOINT 'localhost:9000', URL_STYLE 'path', USE_SSL false
     )
 """)
-client = gs.stac.StacClient.open("s3://samples/catalog.parquet", duckdb=session)
+client = gs.stac.StacTable("s3://samples/catalog.parquet", duckdb=session)
 ```
 
 The same session searches rows and reads stored Collection metadata directly

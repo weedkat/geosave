@@ -6,7 +6,7 @@ for [Dataset](raster-accessor.md), [DataArray](array-accessor.md), and [DataTree
 
 ## Arrays and rasters
 
-::: geosave.geodata.core.constructors
+::: geosave.geodata.core.create
     options:
       members:
         - array

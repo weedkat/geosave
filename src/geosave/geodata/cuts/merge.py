@@ -10,7 +10,7 @@ import numpy as np
 from tiler import Merger
 
 from geosave.geodata.conventions import SPATIAL_DIMENSIONS
-from geosave.geodata.core.constructors import raster
+from geosave.geodata.core.create import raster
 
 from .chips import layout
 

@@ -116,7 +116,7 @@ label = gs.raster({
 files = gs.stack({"optical": scene, "label": label}).gs.to_cog(
     "data/raw/{collection}.tif"
 )
-raw = gs.stac.create_items(
+raw = gs.stac.create_item(
     files, id="sample", datetime=datetime(2025, 6, 1, tzinfo=UTC)
 )
 

@@ -33,14 +33,17 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 from geosave import __path__ as _package_paths
+import geosave.geodata.attrs as attrs
 from geosave.geodata.conventions import TIME_COORDINATE
 from geosave.geodata.warnings import AssumedFillWarning
 
 from .geotiff import COGWriteOptions, write_cog
-from ..storage import StorageOptions, absolute_location
+from ..storage import Location, StorageOptions, absolute_location, location
 
 if TYPE_CHECKING:
     from os import PathLike
+
+    from upath import UPath
 
     from geosave.geodata import Dataset
     from geosave.geodata.transform.warp import Resampling
@@ -220,9 +223,22 @@ def layout(
             bands.setdefault(path, []).append(str(band))
 
     return [
-        _Planned(path, rasters[path][names], times_of[path], collection)
+        _Planned(
+            path,
+            _stating_layer(rasters[path][names], collection),
+            times_of[path],
+            collection,
+        )
         for path, names in bands.items()
     ]
+
+
+def _stating_layer(raster: xr.Dataset, collection: str | None) -> xr.Dataset:
+    """Return the raster stating the stack layer it is, as a loaded STAC raster does."""
+    if collection is None:
+        return raster
+    stated = raster.gs.acdd or attrs.ACDD()
+    return raster.gs.write_acdd(stated.model_copy(update={"id": collection}))
 
 
 def _collision(
@@ -246,19 +262,21 @@ def _collision(
 
 
 def read(
-    files: Sequence[CogFile],
+    files: Sequence[Location | CogFile],
     *,
     geobox: GeoBox | None = None,
     resampling: Resampling = "nearest",
     **options: Any,
 ) -> Dataset:
-    """Open the records one write produced, or one Item lists, as one raster.
+    """Open the files one write produced, or one Item lists, as one raster.
 
     Files of one instant are merged band by band, after each is placed on
     `geobox` when one is given; instants join along `time` in order.
 
     Args:
-        files: Records of one raster: one layer, any instants and bands.
+        files: Files of one raster, one layer, any instants and bands: the
+            paths `to_cog` returned, each read as its own variables and date,
+            or records naming a catalog's bands by their asset keys.
         geobox: Grid every file is reprojected onto. None keeps the files'
             own grid, which they must share.
         resampling: Kernel `reproject` applies where a file is reprojected.
@@ -282,18 +300,25 @@ def read(
     from .gdal import read as read_tiff
 
     if not files:
-        raise ValueError("read needs at least one CogFile")
-    instants: dict[pd.Timestamp | None, list[CogFile]] = {}
-    for file in files:
-        instants.setdefault(file.datetime, []).append(file)
+        raise ValueError("read needs at least one file")
+    instants: dict[pd.Timestamp | None, list[xr.Dataset]] = {}
+    for entry in files:
+        if isinstance(entry, CogFile):
+            raster = read_tiff(entry.href, **{"chunks": {}, **options})
+            # A catalog names a file's bands by their asset keys.
+            raster = raster.rename(_names(entry, raster))
+            when = entry.datetime
+        else:
+            raster = read_tiff(entry, **{"chunks": {}, **options})
+            times = raster.gs.times
+            when = None if times is None else times[0]
+        instants.setdefault(when, []).append(raster)
 
     scenes = []
     unfilled: dict[str, None] = {}
     for when in sorted(instants, key=lambda instant: (instant is None, instant)):
         bands = []
-        for file in instants[when]:
-            raster = read_tiff(file.href, **{"chunks": {}, **options})
-            raster = raster.rename(_names(file, raster))
+        for raster in instants[when]:
             if geobox is not None:
                 window = _window(raster.gs.geobox, geobox)
                 if window is not None:
@@ -398,7 +423,7 @@ def write(
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> tuple[CogFile, ...]:
+) -> tuple[UPath, ...]:
     """Write a raster as the COG files its path template names.
 
     Args:
@@ -412,7 +437,8 @@ def write(
         **options: COG creation options passed to every file.
 
     Returns:
-        One record per file written, in time then variable order.
+        Each file written, in time then variable order; a URL's UPath carries
+        `storage_options`.
 
     Raises:
         FileExistsError: A file exists and `overwrite` is false.
@@ -420,8 +446,8 @@ def write(
         TypeError: As `layout` raises.
 
     Examples:
-        >>> write(ds, "samples/forest_{time:%Y%m%d}.tif")[0].bands
-        ('red', 'nir')
+        >>> write(ds, "samples/forest_{time:%Y%m%d}.tif")[0]
+        PosixUPath('/abs/samples/forest_20250601.tif')
     """
     return write_files(
         layout(ds, str(template), fields=fields),
@@ -439,7 +465,7 @@ def write_files(
     overwrite: bool = False,
     storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> tuple[CogFile, ...]:
+) -> tuple[UPath, ...]:
     """Write the files a `layout` planned.
 
     Args:
@@ -450,14 +476,14 @@ def write_files(
         **options: COG creation options passed to every file.
 
     Returns:
-        One record per file written, in the order given.
+        Each file written, in the order given.
 
     Raises:
         FileExistsError: A file exists and `overwrite` is false.
     """
     written = []
     for file in files:
-        written_path = write_cog(
+        path = write_cog(
             cast("Dataset", file.raster),
             file.path,
             map_scale=map_scale,
@@ -465,12 +491,6 @@ def write_files(
             storage_options=storage_options,
             **options,
         )
-        written.append(
-            CogFile(
-                href=absolute_location(written_path),
-                bands=tuple(str(name) for name in file.raster.data_vars),
-                datetime=file.time,
-                collection=file.collection,
-            )
-        )
+        # A file is named absolutely, as a catalog stores it.
+        written.append(location(absolute_location(path), storage_options))
     return tuple(written)

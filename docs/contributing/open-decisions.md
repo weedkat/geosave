@@ -48,8 +48,13 @@ design history lives in git.
 - **Catalog per collection.** Approved, not built: a catalog is a folder with one
   item table per Collection, so replacing labels rewrites only `label.parquet`.
   Today `to_geoparquet` rejects a suffix-less path and `open_vector` and
-  `StacClient.open` reject a folder. See
+  `StacTable` reject a folder. See
   `specs/2026-10-09-catalog-per-collection-design.md`.
+- **Remote `StacTable` credentials.** rustac reads a table through DuckDB,
+  which takes DuckDB secrets (`duckdb=`), not the fsspec `storage_options`
+  every other remote read and write takes. Translating `S3StorageOptions` into
+  a DuckDB secret is not built. See
+  `specs/2026-10-12-stac-structure-design.md`.
 - **Remote catalog writes** go through `io.vector.geoparquet.write` and were not
   smoke-tested.
 - **Single-band COG without a stored band name** (for example `<scene>/B04.tif`)

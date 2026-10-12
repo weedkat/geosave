@@ -54,7 +54,7 @@ def read(
     """
     options = driver_read_options(open_options)
     frame = gpd.read_file(
-        storage.openable(storage.location(source)),
+        storage.absolute_location(storage.location(source)),
         engine=engine,
         ignore_geometry=False,
         **options,

@@ -71,7 +71,7 @@ class GeoSample:
         """
         from geosave.geodata.core.stack import stack
         from geosave.geodata.io.raster import cogs
-        from geosave.geodata.stac.item import band_attrs, cog_files, instant
+        from geosave.geodata.stac.translate import item
         from geosave.geodata.transform.crop import window
 
         row = self._row
@@ -87,25 +87,25 @@ class GeoSample:
         for name, members in orjson.loads(str(row["sources"])).items():
             # A frame lists an item once per instant it answers; read it once.
             unique = [
-                pystac.Item.from_dict(item)
-                for item in {item["id"]: item for item in members}.values()
+                pystac.Item.from_dict(entry)
+                for entry in {entry["id"]: entry for entry in members}.values()
             ]
-            files = [file for item in unique for file in cog_files(item)]
+            files = [file for entry in unique for file in item.files(entry)]
             raster = cogs.read(
                 files, geobox=inner, resampling=kernels.get(name, "nearest")
             )
-            # The catalog's EO facts describe bands their files may not carry.
-            stated = band_attrs(unique[0])
+            # The catalog describes bands their files may not carry.
+            described = item.attrs(unique[0])
             raster = raster.assign(
                 {
-                    band: raster[band].assign_attrs(stated[band])
+                    band: raster[band].assign_attrs(described[str(band)])
                     for band in raster.data_vars
-                    if band in stated
+                    if str(band) in described
                 }
             )
             if len(unique) < len(members):
                 raster = raster.sel(
-                    time=pd.DatetimeIndex([instant(item) for item in members])
+                    time=pd.DatetimeIndex([item.instant(entry) for entry in members])
                 )
             groups[name] = raster
         tree = stack(groups)

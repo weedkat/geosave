@@ -8,7 +8,7 @@ import xarray as xr
 from upath import UPath
 
 
-from geosave.geodata.stac import create_items
+from geosave.geodata.stac import create_item
 from geosave.geodata import open_raster, open_stack
 from geosave.geodata.core.stack import map_groups, stack as build_stack
 from geosave.geodata.io import gdal
@@ -35,9 +35,10 @@ def test_cog_export_retains_groups_with_repeated_band_names(
 
     saved = written.gs.to_cog(f"{tmp_path}/{template}")
 
-    assert list(dict.fromkeys(f.collection for f in saved)) == ["image.v2", "label.v1"]
+    layers = [gdal.read(f).gs.acdd.id for f in saved]
+    assert list(dict.fromkeys(layers)) == ["image.v2", "label.v1"]
     for group in ("image.v2", "label.v1"):
-        paths = [Path(f.href) for f in saved if f.collection == group]
+        paths = [Path(f) for f, layer in zip(saved, layers) if layer == group]
         assert len(paths) == files
         source = written.gs.rasters[group]
         for path in paths:
@@ -71,7 +72,7 @@ def test_groups_take_a_template_each(tmp_path: Path) -> None:
         }
     )
 
-    assert [(f.collection, Path(f.href)) for f in saved] == [
+    assert [(gdal.read(f).gs.acdd.id, Path(f)) for f in saved] == [
         ("optical", tmp_path / "optical_20250601.tif"),
         ("optical", tmp_path / "optical_20250602.tif"),
         ("dem", tmp_path / "dem.tif"),
@@ -93,7 +94,7 @@ def test_a_group_with_a_scalar_time_fills_the_time_field(tmp_path: Path) -> None
 
     saved = written.gs.to_cog(f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif")
 
-    assert [Path(f.href).name for f in saved] == ["optical_20250601.tif"]
+    assert [f.name for f in saved] == ["optical_20250601.tif"]
 
 
 def test_a_stack_reads_back_from_what_its_cog_export_returns(tmp_path: Path) -> None:
@@ -372,7 +373,7 @@ def test_a_saved_stack_indexes_one_item_per_group_scene(tmp_path: Path) -> None:
             "dem": f"{tmp_path}/dem.tif",
         }
     )
-    rows = create_items(saved, id="s0")
+    rows = create_item(saved, id="s0")
 
     assert rows["id"].tolist() == [
         "s0/optical_20250601T000000",
@@ -433,7 +434,7 @@ def test_plot_leaves_room_between_columns_for_each_colorbar() -> None:
 def test_bands_stack_as_one_variable_groups() -> None:
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import raster as build
+    from geosave.geodata.core.create import raster as build
     from geosave.geodata.core.stack import stack as build_stack
 
     box = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32749", resolution=10)

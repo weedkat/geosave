@@ -6,7 +6,7 @@ from typing import Annotated, ClassVar
 
 from pydantic import Field
 
-from ..base import AttrsGroup, Decoded, Join
+from .base import AttrsGroup, Decoded, Join
 
 
 class Spectral(AttrsGroup):

@@ -15,7 +15,7 @@ from geosave.geodata import (
     GeoVector,
     open_raster,
 )
-from geosave.geodata.core.constructors import array
+from geosave.geodata.core.create import array
 from geosave.geodata.core.vector import SpatialPredicate
 from geosave.geodata.transform.vector import rasterize, vectorize
 from geosave.geodata.io import geotiff, zarr

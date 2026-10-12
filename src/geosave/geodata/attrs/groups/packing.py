@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from pydantic import field_validator
 
-from ..base import AttrsGroup, Decoded, Join
+from .base import AttrsGroup, Decoded, Join
 
 
 class Packing(AttrsGroup):

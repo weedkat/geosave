@@ -28,7 +28,7 @@ labels = gs.raster(
 
 sample = gs.stack({"optical": optical, "label": labels})
 files = sample.gs.to_cog(root / "s0/{collection}_{time:%Y%m%d}.tif")
-rows = gs.stac.create_items(files, id="s0")
+rows = gs.stac.create_item(files, id="s0")
 path = rows.gs.to_geoparquet(root / "catalog.parquet")
 items = gs.open_vector(path)
 items[["collection", "datetime"]]

@@ -9,7 +9,7 @@ from pydantic import AliasChoices, Field, model_validator
 
 from xarray.core.utils import equivalent
 
-from ..base import AttrsGroup, Decoded, Join, decode
+from .base import AttrsGroup, Decoded, Join, decode
 
 if TYPE_CHECKING:
     import xarray as xr

@@ -20,7 +20,7 @@ def test_crop_cuts_a_band_and_marks_outside_pixels_nodata() -> None:
     import shapely
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
     band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0)
@@ -59,7 +59,7 @@ def _triangle():
 def _band(times: int = 0):
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
     band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0).rename(
@@ -116,7 +116,7 @@ def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() ->
     import shapely
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import array
+    from geosave.geodata.core.create import array
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(

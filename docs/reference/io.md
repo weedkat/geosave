@@ -18,7 +18,6 @@ See [Read and save data](../basics/io.md) for complete examples.
 ::: geosave.geodata.io.raster.cogs
     options:
       members:
-        - CogFile
         - read
         - write
         - write_files
@@ -117,12 +116,20 @@ See [Read and save data](../basics/io.md) for complete examples.
 ::: geosave.geodata.io.vector.stac_geoparquet
     options:
       members:
-        - from_items
-        - to_items
+        - from_item
+        - to_item
         - write
+        - describe
         - get_collections
         - resolve
         - parse_collections
+
+## Static STAC JSON
+
+::: geosave.geodata.io.vector.stac_json
+    options:
+      members:
+        - write
 
 ## Locations and storage
 
@@ -134,6 +141,5 @@ See [Read and save data](../basics/io.md) for complete examples.
         - location
         - is_local
         - local_path
-        - openable
         - absolute_location
         - write

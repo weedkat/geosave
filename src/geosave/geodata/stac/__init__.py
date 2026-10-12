@@ -1,10 +1,11 @@
 """Build, read and search STAC: item tables in, item tables out."""
 
-from .item import cog_files, create_collection, create_item, create_items, instant
-from geosave.geodata.io.vector.stac_geoparquet import get_collections
+from geosave.geodata.io.vector.stac_geoparquet import from_item, get_collections
 
-from .client import StacClient, StacProvider
-from .query import StacQuery
+from .create import create_collection, create_item
+from .search.api import StacClient, StacProvider
+from .search.query import StacQuery
+from .search.table import StacTable
 from .source import StacSource, StacSourceConfig
 
 __all__ = [
@@ -13,10 +14,9 @@ __all__ = [
     "StacQuery",
     "StacSource",
     "StacSourceConfig",
-    "cog_files",
-    "instant",
+    "StacTable",
     "create_collection",
     "create_item",
-    "create_items",
+    "from_item",
     "get_collections",
 ]

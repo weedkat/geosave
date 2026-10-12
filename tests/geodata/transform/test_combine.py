@@ -13,7 +13,7 @@ from affine import Affine
 from odc.geo import CRS
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.constructors import raster as build_raster
+from geosave.geodata.core.create import raster as build_raster
 from geosave.geodata.core.stack import stack
 from geosave.geodata.transform.combine import concat_time, merge_bands, mosaic
 from geosave.geodata.warnings import DroppedAttrsWarning, GeoSaveWarning
@@ -540,7 +540,7 @@ def test_mosaic_lays_floats_whose_nodata_is_nan() -> None:
     import numpy as np
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.constructors import raster as build
+    from geosave.geodata.core.create import raster as build
 
     west = GeoBox.from_bbox((0, 0, 80, 80), crs="EPSG:32633", resolution=10)
     east = GeoBox.from_bbox((40, 0, 120, 80), crs="EPSG:32633", resolution=10)

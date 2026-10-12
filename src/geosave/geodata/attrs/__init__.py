@@ -6,8 +6,11 @@ boundary; `gs` reads each one as a property and writes it with `write_*`.
 Joins pass `combine_attrs=attrs.combine`.
 """
 
-from .base import AttrsGroup, Decoded, Join, decode, parse, stamp
+from .groups.base import AttrsGroup, Decoded, Join, decode
 from .combine import combine, shared
+from .parse import parse
+from .stamp import stamp
+from .groups.acdd import ACDD
 from .groups.gdal import GDALBand
 from .groups.legend import Legend, is_flag
 from .groups.nodata import Nodata
@@ -16,6 +19,7 @@ from .groups.spectral import Spectral
 from .groups.timespec import TimeSpec
 
 __all__ = [
+    "ACDD",
     "AttrsGroup",
     "Decoded",
     "GDALBand",

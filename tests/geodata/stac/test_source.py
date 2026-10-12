@@ -258,3 +258,13 @@ def test_a_source_searches_the_items_it_loads_and_keeps_no_copy(local_source) ->
     assert source.collection.id == rows["collection"].iloc[0]
     assert "stac_items" not in loaded.attrs
     assert "stac_groupby" not in loaded.attrs
+
+
+def test_a_load_states_its_collection_as_acdd(local_source) -> None:
+    from geosave.geodata.stac.translate import collection
+
+    source, anchor = local_source
+    loaded = source.load(anchor)
+
+    assert loaded.gs.acdd == collection.read(source.collection)
+    assert loaded.attrs["summary"] == "Local reflectance"

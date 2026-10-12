@@ -36,7 +36,7 @@ class GeoCatalog(GeoVector):
     """GeoSave operations on an item table, read through `gs`.
 
     An item table is a GeoDataFrame of STAC Items, as `open_vector` reads a
-    stac-geoparquet file and `stac.create_items` builds one. It is a vector,
+    stac-geoparquet file and `stac.create_item` builds one. It is a vector,
     so `query` and `rasterize` apply. It is written only as stac-geoparquet,
     the format that keeps its assets.
 
@@ -90,6 +90,67 @@ class GeoCatalog(GeoVector):
         from geosave.geodata.io.vector import stac_geoparquet
 
         return stac_geoparquet.write(
+            self._data,
+            path,
+            collections=collections,
+            overwrite=overwrite,
+            storage_options=storage_options,
+        )
+
+    def to_item(self) -> list[pystac.Item]:
+        """Build the pystac Item each row states, in row order.
+
+        Returns:
+            One new Item per row, holding only the assets its row has.
+
+        Examples:
+            >>> [item.id for item in rows.iloc[[0]].gs.to_item()]
+            ['s0']
+        """
+        from geosave.geodata.io.vector import stac_geoparquet
+
+        return stac_geoparquet.to_item(self._data)
+
+    def to_stac(
+        self,
+        path: Location,
+        *,
+        collections: Iterable[pystac.Collection] | None = None,
+        overwrite: bool = False,
+        storage_options: StorageOptions | None = None,
+    ) -> UPath:
+        """Write this item table as a self-contained static STAC catalog.
+
+        The folder holds `catalog.json`, one `<collection>/collection.json` per
+        Collection and one `<collection>/<id>/<id>.json` per Item, asset hrefs
+        relative so the folder and its assets move together.
+
+        Args:
+            path: Folder to write into, as a path, URL, or UPath.
+            collections: Collections the rows belong to, stored with the
+                extent of their rows. A collection the rows name and this
+                omits is described by its id.
+            overwrite: Replace a catalog already in the folder when true.
+            storage_options: Options for the filesystem a URL names.
+
+        Returns:
+            The root `catalog.json`: a `PosixUPath` locally, else the remote
+            UPath carrying its storage options.
+
+        Raises:
+            FileExistsError: The folder holds a catalog and `overwrite` is false.
+            ValueError: An id repeats within one collection, or a given
+                Collection has no rows.
+
+        Examples:
+            >>> rows.gs.to_stac("data/stac", collections=[forest])
+            PosixUPath('data/stac/catalog.json')
+            >>> root = pystac.Catalog.from_file("data/stac/catalog.json")
+            >>> gs.stac.from_item(root.get_items(recursive=True))
+        """
+        from geosave.geodata.io.vector import stac_json
+
+        return stac_json.write(
             self._data,
             path,
             collections=collections,

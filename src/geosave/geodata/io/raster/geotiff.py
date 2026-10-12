@@ -45,7 +45,6 @@ if TYPE_CHECKING:
 type CreationOptionValue = str | int | float | bool
 
 _FILE_SUFFIXES = (".tif", ".tiff")
-_PACKING_KEYS = ("scale_factor", "add_offset")
 
 
 def _repack(ds: Dataset) -> Dataset:
@@ -65,21 +64,21 @@ def _repack(ds: Dataset) -> Dataset:
     """
     packed = ds.copy()
     for name, variable in ds.data_vars.items():
-        if not any(key in variable.encoding for key in _PACKING_KEYS):
+        if not attrs.Packing.stated_in(variable.encoding):
             continue
         encoded = encode_cf_variable(variable.variable)
         # The CF encoder names the grid mapping, which rioxarray writes itself.
-        attrs = {
+        packed_attrs = {
             key: value for key, value in encoded.attrs.items() if key != "grid_mapping"
         }
         stored = xr.DataArray(
             encoded.data, dims=variable.dims, coords=variable.coords, name=name
         )
-        stored.attrs = {**variable.attrs, **attrs}
+        stored.attrs = {**variable.attrs, **packed_attrs}
         stored.encoding = {
             key: value
             for key, value in variable.encoding.items()
-            if key not in (*_PACKING_KEYS, "_FillValue")
+            if key not in (*attrs.Packing.KEYS, *attrs.Nodata.KEYS)
         }
         packed[name] = stored
     return packed

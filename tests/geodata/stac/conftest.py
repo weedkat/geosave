@@ -1,6 +1,4 @@
 from datetime import datetime, timezone
-from types import SimpleNamespace
-from typing import cast
 
 import numpy as np
 import pytest
@@ -9,8 +7,7 @@ from pystac.extensions.projection import ProjectionExtension
 import rasterio
 
 from geosave.geodata import GeoAnchor
-from geosave.geodata.stac import StacSource
-from geosave.geodata.stac.source import SearchClient
+from geosave.geodata import stac
 
 
 @pytest.fixture
@@ -78,10 +75,10 @@ def local_source(tmp_path):
             },
         ),
     )
-    client = SimpleNamespace(
-        search_items=lambda query: [item], collection=lambda name: collection
+    path = stac.from_item([item]).gs.to_geoparquet(
+        tmp_path / "local.parquet", collections=[collection]
     )
-    source = StacSource(cast(SearchClient, client), collection="local").set_config(
+    source = stac.StacTable(path).source("local").set_config(
         bands=["red", "nir"],
         groupby="time",
         stac_cfg={

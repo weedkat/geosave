@@ -54,7 +54,7 @@ def read(
         ValueError: `layer` is ambiguous, or a driver option selects an engine
             or disables geometry.
     """
-    path = storage.openable(storage.location(source))
+    path = storage.absolute_location(storage.location(source))
     selected_layer = layer
     if selected_layer is None:
         layer_names = [str(name) for name in gpd.list_layers(path)["name"]]

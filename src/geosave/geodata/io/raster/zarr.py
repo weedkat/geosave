@@ -12,7 +12,7 @@ from dask.delayed import delayed
 from xarray.core.types import T_Chunks
 
 from geosave.geodata.conventions import to_yx
-from ..storage import Location, absolute_location, location, openable
+from ..storage import Location, absolute_location, location
 
 
 if TYPE_CHECKING:
@@ -100,7 +100,7 @@ def read(
     # A grid mapping variable is a coordinate; the CF default leaves it a data variable.
     options.setdefault("decode_coords", "all")
     opened = xr.open_dataset(
-        openable(store),
+        absolute_location(store),
         engine="zarr",
         chunks=chunks,
         mask_and_scale=mask_and_scale,
@@ -110,7 +110,7 @@ def read(
     try:
         cube = to_yx(_in_written_order(opened))
         group = zarr.open_group(
-            openable(store), mode="r", storage_options=remote_options
+            absolute_location(store), mode="r", storage_options=remote_options
         )
         cube.encoding["zarr"] = {
             "zarr_format": group.metadata.zarr_format,
@@ -237,7 +237,7 @@ def write(
         raise FileExistsError(
             f"{destination} exists; pass overwrite=True to replace it"
         )
-    path = openable(store)
+    path = absolute_location(store)
     # zarr refuses storage_options for a local path, so only a URL passes them.
     if store.storage_options:
         options["storage_options"] = dict(store.storage_options)

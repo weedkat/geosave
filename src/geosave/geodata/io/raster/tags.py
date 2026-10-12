@@ -9,6 +9,9 @@ import numpy as np
 from odc.geo.geobox import GeoBox
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
+
+import geosave.geodata.attrs as attrs
+
 if TYPE_CHECKING:
     import xarray as xr
 
@@ -86,9 +89,9 @@ class GeoTIFFTags(BaseModel):
         values = cls.model_validate(obj.attrs).model_dump(exclude_none=True)
 
         # ACDD's summary is the image description GDAL shows.
-        summary = obj.attrs.get("summary")
-        if isinstance(summary, str):
-            values["TIFFTAG_IMAGEDESCRIPTION"] = summary
+        acdd = attrs.ACDD.from_attrs(obj.attrs)
+        if acdd is not None and acdd.summary is not None:
+            values["TIFFTAG_IMAGEDESCRIPTION"] = acdd.summary
 
         time = obj.coords.get("time")
         if time is not None and time.ndim == 0:

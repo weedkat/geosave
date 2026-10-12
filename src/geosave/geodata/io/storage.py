@@ -3,14 +3,33 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from upath import UPath
+from upath.types.storage_options import (
+    AzureStorageOptions,
+    FileStorageOptions,
+    GCSStorageOptions,
+    HfStorageOptions,
+    HTTPStorageOptions,
+    MemoryStorageOptions,
+    S3StorageOptions,
+)
 
-type StorageOptions = Mapping[str, object]
+# The filesystems a catalog or raster commonly lives on, typed as upath states them.
+type StorageOptions = (
+    S3StorageOptions
+    | GCSStorageOptions
+    | AzureStorageOptions
+    | HTTPStorageOptions
+    | HfStorageOptions
+    | FileStorageOptions
+    | MemoryStorageOptions
+)
 type Location = str | PathLike[str] | UPath
 
 # Protocols UPath reports for a path on this machine: none for a plain path.
@@ -35,7 +54,15 @@ def location(path: Location, storage_options: StorageOptions | None = None) -> U
         >>> location("file:///data/scene.tif")
         PosixUPath('/data/scene.tif')
     """
-    found = UPath(path, **dict(storage_options or {}))
+    # upath's option types are open TypedDicts, so a checker cannot rule out a
+    # key UPath reserves; one would silently choose another filesystem.
+    options: dict[str, Any] = dict(storage_options or {})
+    if reserved := sorted({"protocol", "chain_parser"} & set(options)):
+        raise ValueError(
+            f"storage_options cannot set {reserved}; the path's URL names its "
+            f"filesystem"
+        )
+    found = UPath(path, **options)
     # A `file://` URL reads as a FilePath, which pathlib and GDAL do not take.
     if found.protocol in ("file", "local"):
         return UPath(found.path)
@@ -52,19 +79,22 @@ def local_path(path: Location) -> Path:
     return Path(location(path).path)
 
 
-def openable(path: UPath) -> Path | str:
-    """Spell a location the way xarray, zarr, and GDAL open it.
+def absolute_location(path: Location) -> str:
+    """Spell a location as the one string xarray, zarr, GDAL and STAC take.
 
     A remote UPath is not `os.PathLike`, so libraries beneath take its URL,
-    with its `storage_options` passed beside it where they read through fsspec.
+    with its `storage_options` passed beside it where they read through
+    fsspec.
+
+    Returns:
+        The resolved absolute path of a local location, else its URL.
+
+    Examples:
+        >>> absolute_location("scene.tif")
+        '/home/me/scene.tif'
+        >>> absolute_location(UPath("s3://bucket/scene.tif", anon=True))
+        's3://bucket/scene.tif'
     """
-    if is_local(path):
-        return local_path(path)
-    return str(path)
-
-
-def absolute_location(path: Location) -> str:
-    """Resolve local source paths while retaining remote URIs."""
     if is_local(path):
         return str(local_path(path).resolve())
     return str(path)

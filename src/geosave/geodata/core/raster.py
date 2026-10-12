@@ -59,10 +59,8 @@ from odc.geo.geobox import GeoBox
 import geosave.geodata.attrs as attrs
 from geosave.geodata.attrs.groups.gdal import RGB
 
-from .base import GeoRasterAccessor, as_tensor
-from .constructors import write_cf_axes
-from geosave.geodata.core.statistics import statistics
-from geosave.geodata.core.variables import variable_names
+from .accessor import GeoRasterAccessor, as_tensor, statistics
+from .create import write_cf_axes
 from geosave.geodata.conventions import (
     BAND_DIMENSION,
     SPATIAL_DIMENSIONS,
@@ -79,7 +77,7 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
     from odc.geo import SomeCRS
 
-    from geosave.geodata.io.raster.cogs import CogFile
+    from upath import UPath
     from geosave.geodata.io.raster.netcdf import (
         NetCDFEngine,
         NetCDFWriteOptions,
@@ -146,6 +144,28 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
     def spectral(self) -> dict[str, attrs.Spectral | None]:
         """Read where in the spectrum each variable was measured, None where unknown."""
         return {name: self._data[name].gs.spectral for name in self.variables}
+
+    @property
+    def acdd(self) -> attrs.ACDD | None:
+        """Read what the whole dataset is, None where its root states no ACDD key."""
+        return attrs.parse(self._data, attrs.ACDD)
+
+    def write_acdd(self, acdd: attrs.ACDD | None) -> Dataset:
+        """Write what the whole dataset is onto its root attrs.
+
+        Every ACDD key is replaced first, so no stale one survives.
+
+        Args:
+            acdd: Description to state. None removes every ACDD key.
+
+        Returns:
+            Shallow copy of the Dataset; pixels are not copied.
+
+        Examples:
+            >>> ds.gs.write_acdd(attrs.ACDD(title="Forest")).gs.acdd.title
+            'Forest'
+        """
+        return cast("Dataset", attrs.stamp(self._data, attrs.ACDD, acdd))
 
     def write_crs(self, crs: SomeCRS | None = None) -> Dataset:
         """Write onto the spatial coordinates what they measure.
@@ -214,7 +234,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             >>> ds.gs.write_nodata(-9999, target="elevation")
         """
         written = self._data.copy()
-        for name in variable_names(self._data, target):
+        for name in _variable_names(self._data, target):
             written[name] = self._data[name].gs.write_nodata(value)
         return written
 
@@ -248,7 +268,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             >>> labels.gs.write_legend({0: "water", 1: "trees"}, {0: "#419bdf", 1: "#397d49"})
         """
         written = self._data.copy()
-        for name in variable_names(self._data, target):
+        for name in _variable_names(self._data, target):
             written[name] = self._data[name].gs.write_legend(class_map, color_map)
         return written
 
@@ -283,7 +303,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             >>> ds.gs.write_packing(1e-4, -0.1, target=["B04", "B08"])
         """
         written = self._data.copy()
-        for name in variable_names(self._data, target):
+        for name in _variable_names(self._data, target):
             written[name] = self._data[name].gs.write_packing(scale_factor, add_offset)
         return written
 
@@ -313,7 +333,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             >>> ds.gs.write_spectral("red", center_wavelength=0.665, target="B04")
         """
         written = self._data.copy()
-        for name in variable_names(self._data, target):
+        for name in _variable_names(self._data, target):
             written[name] = self._data[name].gs.write_spectral(
                 common_name,
                 center_wavelength=center_wavelength,
@@ -346,7 +366,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
         """
         channels = dict(zip(("red", "green", "blue"), (red, green, blue), strict=True))
 
-        variable_names(self._data, list(channels.values()))
+        _variable_names(self._data, list(channels.values()))
         if len(set(channels.values())) < len(channels):
             raise ValueError(
                 f"one variable cannot draw two channels, but these name "
@@ -498,7 +518,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
             names = self.variables
             selected = tuple(names[band] for band in _rgb_indices(self._data))
 
-        variable_names(self._data, selected)
+        _variable_names(self._data, selected)
         array = self._data[list(selected)].gs.to_array()
 
         # A composite carries colour rather than class codes, so it draws no legend.
@@ -647,7 +667,7 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **keywords: Any,
-    ) -> tuple[CogFile, ...]:
+    ) -> tuple[UPath, ...]:
         """Write this raster as Cloud Optimized GeoTIFFs, as its path template names.
 
         The path is a `str.format` template, filled in once per date and band;
@@ -676,8 +696,9 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
                 template fields, as `prefix="s2"`.
 
         Returns:
-            One `CogFile` per file written, in time then variable order: its
-            href, the bands it holds, and its instant.
+            Each file written, in time then variable order. A file states its
+            bands and its date, so `open_raster` and `stac.create_item` read
+            them back from it.
 
         Raises:
             ValueError: The path does not end in `.tif`, several dates would
@@ -689,15 +710,14 @@ class GeoRaster(GeoRasterAccessor["Dataset"]):
 
         Examples:
             >>> ds.gs.to_cog("out/{time:%Y%m%d}.tif")
-            (CogFile(/abs/out/20250601.tif, bands=['red', 'nir'], 2025-06-01, -),
-             CogFile(/abs/out/20250611.tif, bands=['red', 'nir'], 2025-06-11, -))
+            (PosixUPath('/abs/out/20250601.tif'), PosixUPath('/abs/out/20250611.tif'))
             >>> files = ds.gs.to_cog("out/s2_{time:%Y%m%d}_{band}.tif", compress="deflate")
-            >>> [f.bands for f in files]
-            [('red',), ('nir',), ('red',), ('nir',)]
+            >>> [f.name for f in files]
+            ['s2_20250601_red.tif', 's2_20250601_nir.tif', 's2_20250611_red.tif', 's2_20250611_nir.tif']
             >>> ds.isel(time=0).gs.to_cog(
             ...     "out/{lat:.3f}.tif", lat=lambda raster: raster.gs.anchor.lonlat[1]
             ... )
-            (CogFile(/abs/out/45.130.tif, bands=['red', 'nir'], undated, -),)
+            (PosixUPath('/abs/out/45.130.tif'),)
         """
         from geosave.geodata.io import cogs
 
@@ -814,3 +834,34 @@ def _rgb_indices(ds: xr.Dataset) -> tuple[int, int, int]:
         )
     red, green, blue = (measures.index(colour) for colour in RGB)
     return red, green, blue
+
+
+def _variable_names(
+    raster: xr.Dataset, target: str | Sequence[str] | None
+) -> list[str]:
+    """Return the data variable names `target` refers to, every one when None.
+
+    Args:
+        raster: Dataset holding the variables.
+        target: One variable name, several, or None for every data variable.
+
+    Returns:
+        Variable names, in the order `target` gives or else in Dataset order.
+
+    Raises:
+        KeyError: A name is not a data variable of the raster.
+    """
+    names_held = [str(name) for name in raster.data_vars]
+    if target is None:
+        return names_held
+    if isinstance(target, str):
+        names = [target]
+    else:
+        names = list(target)
+
+    missing = [name for name in names if name not in names_held]
+    if missing:
+        raise KeyError(
+            f"{missing} are not data variables of this raster; it carries {names_held}"
+        )
+    return names

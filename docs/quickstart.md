@@ -78,7 +78,7 @@ collection, and `to_cog` writes one file per collection and date.
 ```python
 sample = gs.stack({"optical": optical, "label": label})
 files = sample.gs.to_cog(str(root / "s0/{collection}_{time:%Y%m%d}.tif"))
-rows = gs.stac.create_items(files, id="s0")
+rows = gs.stac.create_item(files, id="s0")
 rows.gs.to_geoparquet(str(root / "catalog.parquet"))
 rows[["collection", "datetime"]]
 ```

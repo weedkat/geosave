@@ -1,4 +1,4 @@
-"""Items built from the rasters a writer saved."""
+"""Collections and Items built from the rasters a writer saved."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import dask
 import numpy as np
+import pystac
 import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
@@ -41,7 +42,7 @@ def _refuse(*args, **kwargs):
 @pytest.mark.integration
 def test_items_validate_against_the_stac_schemas(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    for built in table.to_items(stac.create_items(_saved(source, tmp_path, "forest"))):
+    for built in table.to_item(stac.create_item(_saved(source, tmp_path, "forest"))):
         built.validate()
 
 
@@ -53,7 +54,7 @@ def test_a_footprint_is_built_for_a_grid_without_an_epsg_code(tmp_path: Path) ->
     ).assign_coords(time=np.datetime64("2025-01-15T12:00:00"))
     path = io.geotiff.write_cog(label, tmp_path / "laea.tif")
 
-    (built,) = table.to_items(stac.create_item({"label": path}, id="laea"))
+    (built,) = table.to_item(stac.create_item({"label": path}, id="laea"))
 
     assert built.bbox[0] == pytest.approx(56.78, abs=0.01)
     assert built.bbox[1] == pytest.approx(12.34, abs=0.01)
@@ -61,11 +62,11 @@ def test_a_footprint_is_built_for_a_grid_without_an_epsg_code(tmp_path: Path) ->
 
 def test_items_survive_the_table(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    rows = stac.create_items(_saved(source, tmp_path, "forest", by_band=True))
+    rows = stac.create_item(_saved(source, tmp_path, "forest", by_band=True))
 
     saved = rows.gs.to_geoparquet(tmp_path / "catalog.parquet")
 
-    restored = table.to_items(open_vector(saved))
+    restored = table.to_item(open_vector(saved))
     assert [entry.id for entry in restored] == IDS
     assert sorted(restored[0].assets) == ["nir", "red"]
     assert RasterExtension.ext(restored[0].assets["red"]).bands[0].data_type == "uint16"
@@ -74,14 +75,14 @@ def test_items_survive_the_table(tmp_path: Path) -> None:
 def test_one_file_per_scene_is_one_item_per_instant(scene, tmp_path):
     paths = _saved(scene, tmp_path, "forest")
 
-    built = table.to_items(stac.create_items(paths))
+    built = table.to_item(stac.create_item(paths))
 
     assert [each.id for each in built] == [
         "forest_20250601T000000",
         "forest_20250611T000000",
     ]
     assert [list(each.assets) for each in built] == [["image"], ["image"]]
-    assert built[1].assets["image"].href == paths[1].href
+    assert built[1].assets["image"].href == str(paths[1])
     assert built[1].datetime == datetime(2025, 6, 11, tzinfo=UTC)
     assert [each.datetime.isoformat() for each in built] == [
         "2025-06-01T00:00:00+00:00",
@@ -93,21 +94,21 @@ def test_one_file_per_scene_is_one_item_per_instant(scene, tmp_path):
 def test_split_bands_become_one_asset_per_variable(scene, tmp_path):
     paths = _saved(scene, tmp_path, "forest", by_band=True)
 
-    built = table.to_items(stac.create_items(paths))
+    built = table.to_item(stac.create_item(paths))
 
     assert [each.id for each in built] == [
         "forest_20250601T000000",
         "forest_20250611T000000",
     ]
     assert sorted(built[0].assets) == ["nir", "red"]
-    assert built[1].assets["nir"].href == paths[3].href
+    assert built[1].assets["nir"].href == str(paths[3])
 
 
 def test_items_take_the_id_of_their_collection_without_a_link(scene, tmp_path):
     forest = stac.create_collection("forest", description="Forest samples")
 
-    built = table.to_items(
-        stac.create_items(_saved(scene, tmp_path, "forest"), collection=forest)
+    built = table.to_item(
+        stac.create_item(_saved(scene, tmp_path, "forest"), collection=forest)
     )
 
     assert [each.collection_id for each in built] == ["forest", "forest"]
@@ -119,7 +120,7 @@ def test_two_files_claiming_one_asset_key_refuse(scene, tmp_path):
     (second,) = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/b_{{time:%Y%m%d}}.tif")
 
     with pytest.raises(ValueError, match="both be the asset 'image'"):
-        stac.create_items([first, second])
+        stac.create_item([first, second])
 
 
 def test_an_item_states_what_the_file_stores(tmp_path):
@@ -128,7 +129,7 @@ def test_an_item_states_what_the_file_stores(tmp_path):
     # A GeoTIFF written by another tool stores the type it was told to.
     source.red.isel(time=0).rio.to_raster(path, dtype="uint8")
 
-    (built,) = table.to_items(
+    (built,) = table.to_item(
         stac.create_item(
             {"red": path}, id="small", datetime=datetime(2025, 6, 1, tzinfo=UTC)
         )
@@ -139,31 +140,31 @@ def test_an_item_states_what_the_file_stores(tmp_path):
 
 
 def test_no_paths_refuse():
-    with pytest.raises(ValueError, match="records to_cog returned"):
-        stac.create_items([])
+    with pytest.raises(ValueError, match="saved raster files"):
+        stac.create_item([])
 
 
 def test_an_id_template_is_filled_per_scene(scene, tmp_path):
     paths = _saved(scene, tmp_path, "forest")
 
-    built = table.to_items(stac.create_items(paths, id="{lat:.2f}N_{start:%Y%m%d}"))
+    built = table.to_item(stac.create_item(paths, id="{lat:.2f}N_{start:%Y%m%d}"))
 
     assert [each.id for each in built] == ["45.13N_20250601", "45.13N_20250611"]
-    assert built[0].assets["image"].href == paths[0].href
+    assert built[0].assets["image"].href == str(paths[0])
 
 
 def test_an_id_template_that_repeats_refuses(scene, tmp_path):
     paths = _saved(scene, tmp_path, "forest")
 
     with pytest.raises(ValueError, match="same id"):
-        stac.create_items(paths, id="{lat:.2f}N")
+        stac.create_item(paths, id="{lat:.2f}N")
 
 
 def test_building_items_computes_no_pixels(scene, tmp_path):
     paths = _saved(scene, tmp_path, "forest")
 
     with dask.config.set(scheduler=_refuse):
-        built = stac.create_items(paths, chunks={})
+        built = stac.create_item(paths)
 
     assert len(built) == 2
 
@@ -172,19 +173,19 @@ def test_a_timeless_raster_needs_a_time(label, tmp_path):
     files = _saved(label, tmp_path, "label")
 
     with pytest.raises(ValueError, match="pass datetime="):
-        stac.create_items(files)
+        stac.create_item(files)
 
-    (built,) = table.to_items(
-        stac.create_items(files, datetime=datetime(2025, 6, 1, tzinfo=UTC))
+    (built,) = table.to_item(
+        stac.create_item(files, datetime=datetime(2025, 6, 1, tzinfo=UTC))
     )
     assert built.datetime == datetime(2025, 6, 1, tzinfo=UTC)
 
 
 def test_the_caller_names_the_assets_of_one_item(scene, label, tmp_path):
-    (optical, _) = (file.href for file in _saved(scene, tmp_path, "optical"))
-    (classes,) = (file.href for file in _saved(label, tmp_path, "label"))
+    (optical, _) = (str(file) for file in _saved(scene, tmp_path, "optical"))
+    (classes,) = (str(file) for file in _saved(label, tmp_path, "label"))
 
-    (built,) = table.to_items(
+    (built,) = table.to_item(
         stac.create_item({"optical": optical, "label": classes}, id="s0")
     )
 
@@ -204,9 +205,9 @@ def test_a_named_asset_cannot_be_a_datacube_store(scene, tmp_path) -> None:
 
 def test_a_label_item_declares_only_what_it_uses(label, tmp_path: Path) -> None:
     classes = label.gs.write_legend({1: "forest"}, target="label")
-    (path,) = (file.href for file in _saved(classes, tmp_path, "label"))
+    (path,) = (str(file) for file in _saved(classes, tmp_path, "label"))
 
-    (built,) = table.to_items(
+    (built,) = table.to_item(
         stac.create_item(
             {"label": path}, id="label", datetime=datetime(2025, 1, 1, tzinfo=UTC)
         )
@@ -221,9 +222,9 @@ def test_a_label_item_declares_only_what_it_uses(label, tmp_path: Path) -> None:
 
 
 def test_a_plain_scene_declares_its_grid_bands_and_time(scene, tmp_path: Path) -> None:
-    (path, _) = (file.href for file in _saved(scene, tmp_path, "scene"))
+    (path, _) = (str(file) for file in _saved(scene, tmp_path, "scene"))
 
-    (built,) = table.to_items(stac.create_item({"image": path}, id="scene"))
+    (built,) = table.to_item(stac.create_item({"image": path}, id="scene"))
 
     assert built.stac_extensions == [
         ProjectionExtension.get_schema_uri(),
@@ -237,14 +238,34 @@ def test_a_collection_starts_with_an_open_extent() -> None:
         "forest", description="Forest samples", license="CC-BY-4.0"
     )
 
-    assert (forest.id, forest.license) == ("forest", "CC-BY-4.0")
+    assert (forest.id, forest.description, forest.license) == (
+        "forest",
+        "Forest samples",
+        "CC-BY-4.0",
+    )
     assert forest.extent.spatial.bboxes == [[-180.0, -90.0, 180.0, 90.0]]
     assert forest.extent.temporal.intervals == [[None, None]]
 
 
+def test_a_collection_takes_stacs_own_fields() -> None:
+    host = pystac.Provider("GeoSave", roles=[pystac.ProviderRole.HOST])
+
+    forest = stac.create_collection(
+        "forest",
+        description="Forest samples",
+        title="Forest",
+        keywords=["forest", "label"],
+        providers=[host],
+    )
+
+    assert (forest.title, forest.keywords) == ("Forest", ["forest", "label"])
+    assert [provider.name for provider in forest.providers] == ["GeoSave"]
+    assert forest.license == "other"
+
+
 def test_every_extension_module_writes_onto_each_asset(scene, tmp_path) -> None:
-    (path, _) = (file.href for file in _saved(scene, tmp_path, "scene"))
-    (built,) = table.to_items(stac.create_item({"image": path}, id="scene"))
+    (path, _) = (str(file) for file in _saved(scene, tmp_path, "scene"))
+    (built,) = table.to_item(stac.create_item({"image": path}, id="scene"))
 
     asset = built.assets["image"]
     assert ProjectionExtension.ext(asset).code == "EPSG:32633"
@@ -257,8 +278,8 @@ def test_odc_stac_names_a_multiband_asset_after_its_bands(tmp_path: Path) -> Non
     import odc.stac
 
     scene = build_raster()
-    (built,) = table.to_items(
-        stac.create_items(
+    (built,) = table.to_item(
+        stac.create_item(
             _saved(scene, tmp_path, "forest"),
             datetime=datetime(2025, 6, 1, tzinfo=UTC),
         )
@@ -270,7 +291,7 @@ def test_odc_stac_names_a_multiband_asset_after_its_bands(tmp_path: Path) -> Non
 
 
 def test_create_item_returns_one_row(label, tmp_path: Path) -> None:
-    (path,) = (file.href for file in _saved(label, tmp_path, "label"))
+    (path,) = (str(file) for file in _saved(label, tmp_path, "label"))
 
     rows = stac.create_item(
         {"label": path}, id="s0", datetime=datetime(2025, 6, 1, tzinfo=UTC)
@@ -283,10 +304,10 @@ def test_create_item_returns_one_row(label, tmp_path: Path) -> None:
 def test_records_become_one_item_per_scene(scene, tmp_path) -> None:
     files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
 
-    rows = stac.create_items(files)
+    rows = stac.create_item(files)
 
     assert len(rows) == 2
-    item = table.to_items(rows)[0]
+    item = table.to_item(rows)[0]
     assert sorted(item.assets) == ["nir", "red"]
     assert [b.name for b in EOExtension.ext(item.assets["red"]).bands] == ["red"]
 
@@ -294,7 +315,7 @@ def test_records_become_one_item_per_scene(scene, tmp_path) -> None:
 def test_a_multiband_file_is_one_image_asset_with_bands_in_order(scene, tmp_path) -> None:
     files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
 
-    item = table.to_items(stac.create_items(files))[0]
+    item = table.to_item(stac.create_item(files))[0]
 
     assert list(item.assets) == ["image"]
     names = [b.name for b in EOExtension.ext(item.assets["image"]).bands]
@@ -309,110 +330,110 @@ def test_a_stacks_layers_become_collections(scene, label, tmp_path) -> None:
         }
     )
 
-    rows = stac.create_items(files, id="s0")
+    rows = stac.create_item(files, id="s0")
 
     assert rows["collection"].tolist() == ["optical", "optical", "label"]
     assert rows["id"].tolist()[2] == "s0/label"
     assert str(rows.iloc[2]["start_datetime"])[:10] == "2025-06-01"
 
 
-def test_a_collection_cannot_override_named_layers(scene, tmp_path) -> None:
-    files = stack({"optical": scene}).gs.to_cog(
-        f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif"
-    )
+def test_collection_overrides_what_files_state(scene, tmp_path) -> None:
+    from geosave.geodata import attrs
 
-    with pytest.raises(ValueError, match="already name"):
-        stac.create_items(
-            files, collection=stac.create_collection("x", description="x")
-        )
+    named = scene.gs.write_acdd(attrs.ACDD(id="sentinel-2-l2a"))
+    paths = named.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
 
+    rows = stac.create_item(paths, collection="image")
 
-def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
-    from geosave.geodata.stac.item import cog_files
-
-    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}_{{band}}.tif")
-    item = table.to_items(stac.create_items(files))[0]
-
-    back = cog_files(item)
-
-    assert sorted(f.bands for f in back) == [("nir",), ("red",)]
-    assert {f.datetime for f in back} == {files[0].datetime}
+    assert rows["collection"].tolist() == ["image", "image"]
 
 
-def test_paths_are_not_records(scene, tmp_path) -> None:
-    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
+def test_create_item_reads_each_file_with_its_storage_options(
+    scene, tmp_path, monkeypatch
+) -> None:
+    from geosave.geodata.stac import create as module
 
-    with pytest.raises(TypeError, match="CogFile"):
-        stac.create_items([file.href for file in files])
+    (path, _) = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+    seen = []
+    original = module.open_raster
+
+    def spy(source, **options):
+        seen.append(options.get("storage_options"))
+        return original(source)
+
+    monkeypatch.setattr(module, "open_raster", spy)
+
+    stac.create_item([path], storage_options={"anon": True})
+
+    assert seen == [{"anon": True}]
+
+def test_saved_paths_become_one_item_each_named_after_its_file(label, tmp_path):
+    north = label.expand_dims(time=[np.datetime64("2025-06-01")])
+    # A label 10 km south lies on another grid, so it is another Item.
+    south = north.assign_coords(y=north.y - 10_000)
+    paths = []
+    for name, tile in (("north", north), ("south", south)):
+        (file,) = tile.gs.to_cog(f"{tmp_path}/{name}.tif")
+        paths.append(Path(file))
+
+    rows = stac.create_item(paths, collection="label")
+
+    assert rows["id"].tolist() == ["north", "south"]
+    assert rows["collection"].tolist() == ["label", "label"]
+    assert [sorted(item.assets) for item in table.to_item(rows)] == [
+        ["label"],
+        ["label"],
+    ]
 
 
 def test_a_collection_can_be_named_by_its_id(scene, tmp_path):
     (path,) = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
 
-    one = stac.create_item({"image": path.href}, id="s0", collection="image")
-    many = stac.create_items([path], collection="image")
+    one = stac.create_item({"image": str(path)}, id="s0", collection="image")
+    many = stac.create_item([path], collection="image")
 
     assert one["collection"].tolist() == ["image"]
     assert many["collection"].tolist() == ["image"]
 
 
-def test_records_name_variables_by_asset_key(tmp_path) -> None:
-    # Planetary Computer's shape: per-band files beside a true-colour rendering
-    # whose eo:bands repeat their names, with no raster:bands count.
-    from datetime import UTC, datetime
+def test_named_assets_take_their_files_stem_without_an_id(label, tmp_path) -> None:
+    (path,) = (str(file) for file in _saved(label, tmp_path, "label"))
 
-    import pystac
-    from pystac.extensions.eo import Band
+    rows = stac.create_item({"label": path}, datetime=datetime(2025, 1, 1, tzinfo=UTC))
 
-    from geosave.geodata.stac.item import cog_files
-
-    item = pystac.Item(
-        "scene",
-        {"type": "Point", "coordinates": [0.0, 0.0]},
-        [0.0, 0.0, 0.0, 0.0],
-        datetime(2019, 1, 30, tzinfo=UTC),
-        {},
-    )
-    EOExtension.add_to(item)
-    for key, names in (("B04", ["B04"]), ("visual", ["B04", "B03", "B02"])):
-        item.add_asset(key, pystac.Asset(f"{tmp_path}/{key}.tif", roles=["data"]))
-        EOExtension.ext(item.assets[key]).bands = [Band.create(name=n) for n in names]
-
-    records = cog_files(item)
-
-    assert [record.bands for record in records] == [
-        ("B04",),
-        ("visual.1", "visual.2", "visual.3"),
-    ]
+    assert rows["id"].tolist() == ["label"]
 
 
-def test_band_attrs_carry_eo_facts_by_variable_name(tmp_path) -> None:
-    from datetime import UTC, datetime
+def test_records_may_arrive_as_a_generator(scene, tmp_path) -> None:
+    files = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
 
-    import pystac
-    from pystac.extensions.eo import Band
+    rows = stac.create_item(file for file in files)
 
-    import geosave.geodata.attrs as attrs
-    from geosave.geodata.stac.item import band_attrs
+    assert rows["id"].tolist() == ["forest_20250601", "forest_20250611"]
 
-    item = pystac.Item(
-        "scene",
-        {"type": "Point", "coordinates": [0.0, 0.0]},
-        [0.0, 0.0, 0.0, 0.0],
-        datetime(2019, 1, 30, tzinfo=UTC),
-        {},
-    )
-    EOExtension.add_to(item)
-    listed = {
-        "B04": [Band.create(name="B04", common_name="red", center_wavelength=0.665)],
-        "visual": [Band.create(name=n) for n in ("B04", "B03", "B02")],
-    }
-    for key, bands in listed.items():
-        item.add_asset(key, pystac.Asset(f"{tmp_path}/{key}.tif", roles=["data"]))
-        EOExtension.ext(item.assets[key]).bands = bands
 
-    found = band_attrs(item)
+def test_an_id_without_fields_prefixes_several_scenes(scene, tmp_path) -> None:
+    files = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
 
-    assert attrs.Spectral.from_attrs(found["B04"]).common_name == "red"
-    # visual's bands state only a name, which names no CF attr.
-    assert set(found) == {"B04"}
+    rows = stac.create_item(files, id="s0")
+
+    assert rows["id"].tolist() == ["s0/s_20250601", "s0/s_20250611"]
+
+
+def test_an_id_without_fields_names_one_scene(scene, tmp_path) -> None:
+    files = scene.isel(time=[0]).gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
+
+    assert stac.create_item(files, id="s0")["id"].tolist() == ["s0"]
+
+
+def test_an_id_template_fills_whatever_collections_files_state(scene, tmp_path):
+    from geosave.geodata import attrs
+
+    paths = []
+    for day, collection in ((0, "sentinel-2-l2a"), (1, "landsat")):
+        named = scene.isel(time=[day]).gs.write_acdd(attrs.ACDD(id=collection))
+        paths += named.gs.to_cog(f"{tmp_path}/{collection}_{{time:%Y%m%d}}.tif")
+
+    rows = stac.create_item(paths, id="{start:%Y%m%d}")
+
+    assert rows["id"].tolist() == ["20250601", "20250611"]

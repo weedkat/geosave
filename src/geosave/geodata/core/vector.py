@@ -15,7 +15,7 @@ from odc.geo.crs import CRS as OdcCRS
 from odc.geo.geom import Geometry
 
 from geosave.geodata.utils.datetime import naive_utc
-from geosave.geodata.core.geometry import SomeGeometry, to_shapely
+from geosave.geodata.utils.geometry import SomeGeometry, to_shapely
 
 if TYPE_CHECKING:
     from numpy.typing import DTypeLike

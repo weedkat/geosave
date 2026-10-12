@@ -152,7 +152,7 @@ def test_a_merged_window_round_trips_through_a_cog(items, grid, tmp_path) -> Non
     (result,) = cuts.merge(windows, chips, _predict(chips), bands=BANDS).values()
 
     (file,) = result.gs.to_cog(f"{tmp_path}/merged.tif")
-    reopened = open_raster(file.href)
+    reopened = open_raster(file)
 
     assert reopened.gs.geobox == grid
     assert list(reopened.data_vars) == BANDS

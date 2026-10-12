@@ -1,4 +1,4 @@
-"""Properties and pixel operations shared by every `gs` raster accessor."""
+"""Properties, pixel operations and summaries shared by every `gs` raster accessor."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 import pandas as pd
 import xarray as xr
+from dask.base import compute
 
 import geosave.geodata.attrs as attrs
 from geosave.geodata.utils.datetime import parse_daterange
@@ -16,7 +17,7 @@ from geosave.geodata.conventions import TIME_COORDINATE, require_yx
 if TYPE_CHECKING:
     import geopandas as gpd
     import torch
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Hashable, Mapping
 
     from odc.geo import CRS, BoundingBox, Resolution
     from odc.geo.gcp import GCPGeoBox
@@ -78,6 +79,53 @@ def as_tensor(
     return torch.as_tensor(
         np.require(to_numpy(dtype=reading), requirements=["C", "W"]), dtype=target
     )
+
+
+def statistics(variables: Mapping[Hashable, xr.DataArray]) -> pd.DataFrame:
+    """Summarise variables while computing shared pixel sources only once.
+
+    Args:
+        variables: Row names mapped to variables. Each variable is reduced
+            across all axes, excluding NaN and its own fill value.
+
+    Returns:
+        DataFrame in input order with minimum, maximum, mean, population
+        stddev, and valid_percent columns. An empty input keeps these columns.
+
+    Raises:
+        ValueError: A variable holds no present pixels.
+    """
+    reductions = []
+    for band in variables.values():
+        fill = band.gs.nodata
+        values = band if fill is None else band.where(band != fill)
+        present = values.notnull().sum()
+        reductions.append(
+            xr.Dataset(
+                {
+                    "present": present,
+                    "minimum": values.min(),
+                    "maximum": values.max(),
+                    "mean": values.mean(),
+                    "stddev": values.std(),
+                    "valid_percent": 100.0 * present / values.size,
+                }
+            )
+        )
+
+    columns = ["minimum", "maximum", "mean", "stddev", "valid_percent"]
+    rows = {}
+    for name, summary in zip(variables, compute(*reductions), strict=True):
+        if not int(summary["present"]):
+            raise ValueError(
+                f"{name} holds no present pixel, so it summarises to "
+                f"nothing; drop the band or give it pixels that are not fill"
+            )
+        row = {}
+        for column in columns:
+            row[column] = float(summary[column])
+        rows[name] = row
+    return pd.DataFrame.from_dict(rows, orient="index", columns=pd.Index(columns))
 
 
 class GeoRasterAccessor[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:

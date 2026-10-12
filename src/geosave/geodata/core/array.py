@@ -11,15 +11,13 @@ import xarray as xr
 
 import geosave.geodata.attrs as attrs
 
-from .base import GeoRasterAccessor, as_tensor
-from geosave.geodata.core.statistics import statistics
+from .accessor import GeoRasterAccessor, as_tensor, statistics
 from geosave.geodata.conventions import (
     BAND_DIMENSION,
     SPATIAL_DIMENSIONS,
 )
 
 if TYPE_CHECKING:
-    from geosave.geodata.io.raster.cogs import CogFile
     from geosave.geodata.utils.color import Palette
     import panel as pn
     import torch
@@ -270,7 +268,7 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **keywords: Any,
-    ) -> tuple[CogFile, ...]:
+    ) -> tuple[UPath, ...]:
         """Write this band as Cloud Optimized GeoTIFFs, as its path template names.
 
         Written as `Dataset.gs.to_cog` writes the one-band raster this band
@@ -285,7 +283,7 @@ class GeoArray(GeoRasterAccessor["DataArray"]):
             **keywords: COG creation options and template fields.
 
         Returns:
-            One `CogFile` per file written, in time order.
+            Each file written, in time order.
 
         Raises:
             ValueError: This array names none of the bands it spans or carries

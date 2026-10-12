@@ -10,7 +10,7 @@ import xarray as xr
 from odc.geo import CRS
 
 from geosave.geodata import GeoArray, GeoRaster, GeoStack
-from geosave.geodata.core.constructors import raster
+from geosave.geodata.core.create import raster
 from geosave.geodata.io import gdal
 
 from tests.geodata.conftest import build_raster, geobox
@@ -33,7 +33,7 @@ def test_cog_export_returns_readable_files(
 ) -> None:
     written = build_raster(times=times)
 
-    paths = [file.href for file in written.gs.to_cog(f"{tmp_path}/{template}")]
+    paths = [str(file) for file in written.gs.to_cog(f"{tmp_path}/{template}")]
 
     assert len(paths) == count
     for path in paths:
@@ -52,7 +52,7 @@ def test_cog_export_takes_fields_and_creation_options_as_keywords(
     (file,) = build_raster().gs.to_cog(
         f"{tmp_path}/{{prefix}}.tif", prefix="s2", compress="deflate"
     )
-    path = Path(file.href)
+    path = Path(file)
 
     assert path == tmp_path / "s2.tif"
     with rasterio.open(path) as src:
@@ -417,16 +417,16 @@ def test_writers_that_name_nothing_take_no_id(writer) -> None:
 
 def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
     from geosave.geodata.io.vector import stac_geoparquet
-    from geosave.geodata.stac import create_items
+    from geosave.geodata.stac import create_item
 
     band = build_raster(times=2)["red"].isel(time=0)
     (file,) = band.gs.to_cog(tmp_path / "red.tif")
 
-    (item,) = stac_geoparquet.to_items(create_items([file]))
+    (item,) = stac_geoparquet.to_item(create_item([file]))
 
     assert item.id == "red"
     assert list(item.assets) == ["red"]
-    assert item.assets["red"].href == file.href
+    assert item.assets["red"].href == str(file)
 
 
 def _classes() -> xr.Dataset:
@@ -489,7 +489,7 @@ def test_a_dated_band_writes_through_the_raster_template(tmp_path: Path) -> None
 
     paths = band.gs.to_cog(f"{tmp_path}/red_{{time:%Y%m%d}}.tif")
 
-    assert [Path(f.href) for f in paths] == [
+    assert [Path(f) for f in paths] == [
         tmp_path / "red_20250601.tif",
         tmp_path / "red_20250602.tif",
     ]
@@ -527,3 +527,38 @@ def test_a_raster_crops_to_its_own_bounds() -> None:
     cut = scene.gs.crop(scene.gs.bounds)
 
     assert cut.gs.geobox == scene.gs.geobox
+
+
+def _bands() -> xr.Dataset:
+    band = (("y", "x"), np.zeros((2, 2), dtype="uint16"))
+    return xr.Dataset({"red": band, "green": band, "nir": band}, coords={"y": [0, 1]})
+
+
+def test_a_write_without_target_reaches_every_data_variable() -> None:
+    written = _bands().gs.write_nodata(0)
+
+    assert [written[name].gs.nodata for name in ("red", "green", "nir")] == [0, 0, 0]
+
+
+def test_a_write_reaches_only_the_variables_it_targets() -> None:
+    written = _bands().gs.write_nodata(0, target=["nir", "red"])
+
+    assert written["green"].gs.nodata is None
+    assert written["nir"].gs.nodata == written["red"].gs.nodata == 0
+
+
+@pytest.mark.parametrize("target", ["blue", ["red", "blue"], ["y"]])
+def test_a_target_that_is_not_a_data_variable_is_refused(target) -> None:
+    with pytest.raises(KeyError, match="carries \\['red', 'green', 'nir'\\]"):
+        _bands().gs.write_nodata(0, target=target)
+
+
+def test_write_acdd_replaces_every_acdd_key_on_the_root() -> None:
+    from geosave.geodata.attrs import ACDD
+
+    ds = xr.Dataset(attrs={"title": "stale", "license": "CC0", "history": "kept"})
+
+    written = ds.gs.write_acdd(ACDD(title="Forest"))
+
+    assert written.attrs == {"history": "kept", "title": "Forest"}
+    assert written.gs.acdd == ACDD(title="Forest")
