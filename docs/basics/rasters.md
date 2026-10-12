@@ -41,6 +41,17 @@ by 10 metres. `red` and `nir` are two measurements of those same locations.
 reference system (CRS). GeoSave adds geospatial operations through `.gs`.
 You can still use normal xarray selection and arithmetic.
 
+| Object | Stores | Use when |
+| --- | --- | --- |
+| `DataArray` | One named or unnamed array with coordinates and attrs | Working with one band or a model output. |
+| `Dataset` | Named arrays on shared coordinates | Working with several bands or derived features. |
+| `DataTree` | Named Dataset groups | Keeping inputs with different variables, dates, or grids together. |
+
+The constructors accept NumPy and lazy arrays. They attach coordinates and
+metadata; they do not resample or compute the pixels. Use dimensions such as
+`("time", "y", "x")` for a time series and supply `time=dates` when the reference
+has no time coordinate. Pixel lengths must match the reference's coordinates.
+
 ## Select bands and pixels
 
 ```python
@@ -181,6 +192,10 @@ Output:
 The tensor has channels first, in the selected variable order. Converting to a
 tensor reads the pixels. It does not mask nodata or scale stored values for you.
 Keep the georeferenced raster alongside the tensor to place model outputs later.
+For a time series, the shape is `[time, band, y, x]`; other shared nonspatial
+axes also precede `band`. All variables must span the same axes. If their
+dtypes differ, pass `dtype=` explicitly; GeoSave does not choose a common dtype
+for you.
 
 ## Put rasters together
 
@@ -225,5 +240,6 @@ can keep each group's native grid until you align them explicitly.
 
 Continue with [raster grids](../concepts/raster-grids.md) for CRS, alignment,
 and resampling, or [large rasters](../guides/large-data.md) for lazy processing.
+For a task starting with files, follow [file ingestion](../guides/ingest-files.md).
 The full API is in [rasters](../reference/rasters.md) and
 [features](../reference/features.md).

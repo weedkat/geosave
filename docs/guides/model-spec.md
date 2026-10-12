@@ -33,6 +33,12 @@ Loading validates the declaration without importing or running its calls. The
 spec describes data preparation; model architecture is configured separately
 through [model stages](models.md).
 
+`rasters` checks and selects the supplied data; it does not rename bands or
+reproject them to meet a requirement. `preprocessing` holds the explicit calls
+that change pixels. `inputs` maps their results to the chain's argument names.
+Only `schema_version` and `rasters` are required to load a spec; this example
+also declares preparation and a model input so it can supply a model call.
+
 ## Prepare a raster in memory
 
 Here is a small raster with packed reflectance values. The same `preprocess`
@@ -100,6 +106,21 @@ Feed `image` into the two-band chain from [Build and use a model](models.md):
 `chain(image=image)`. For a DataLoader, your dataset performs the raster-to-tensor
 conversion per sample and batching adds the batch dimension. See
 [Training](training.md) for the dataset and DataModule contracts.
+
+The stages run at different times:
+
+| Call | Takes | Returns or applies |
+| --- | --- | --- |
+| `spec.preprocess(rasters)` | Named raw xarray Datasets | Selected rasters and explicit preprocessing results |
+| `spec.model_inputs(prepared)` | Named prepared rasters | Pixel inputs as xarray objects, plus declared context tensors |
+| `raster.gs.to_tensor()` | One selected raster | Pixel tensor; this reads lazy data |
+| The DataModule's batch-transfer hook | A collated tensor batch | Training augmentation, then `spec.transforms` in every split |
+
+`model_inputs` binds prepared values without rerunning preprocessing or raster
+validation. `preprocess` and `model_inputs` also leave `transforms` for the
+DataModule or your own inference code to apply. A direct model call needs that
+same tensor normalization. [Pretrained weights](pretrained.md) shows an image
+input with time/location context and explicit inference normalization.
 
 ## Save prepared inputs for repeated training
 

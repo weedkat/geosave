@@ -76,6 +76,17 @@ Writing nodata or a legend changes metadata, not pixel values. The fill value
 and class codes must fit the stored dtype: `255` fits `uint8`, while `-1` does
 not. Do not choose a valid class as nodata unless you intend to exclude it.
 
+| Operation | Input | Result |
+| --- | --- | --- |
+| `.gs.write_nodata(value)` | A fill value representable in each selected dtype | New object with nodata attrs; existing pixels keep their values. |
+| `.gs.write_legend(classes)` | Integer codes mapped to names | New object with class metadata; existing pixels keep their values. |
+| `.gs.mask(valid)` | Boolean mask, `True` where pixels are valid | New object with invalid pixels replaced by each variable's nodata. |
+| `.gs.mask_and_scale()` | Stored values with optional nodata and packing | New object with missing values masked and packing decoded. |
+
+The writers return a new xarray object; assign their result to keep the change.
+Masking needs a declared nodata value or an explicit `fill=`. Attribute writers
+do not find, replace, or validate every pixel in the raster.
+
 ## Decode stored measurements
 
 Some files store integers and describe the physical values with a scale and
@@ -144,6 +155,12 @@ Attributes:
 Ordinary keys such as `long_name`, `units`, and dataset `title` remain ordinary
 xarray attrs. Their preservation depends on the operation and output format;
 adding attrs does not change values or coordinates.
+
+Dataset-level identity and discovery fields use ACDD metadata, available as
+`raster.gs.acdd` and written with `raster.gs.write_acdd(gs.attrs.ACDD(...))`.
+Band-level nodata, packing, spectral facts, and legends stay on the variables.
+When loading STAC, Collection descriptions become dataset ACDD metadata, while
+each Asset's band metadata describes its variables.
 
 Read [metadata rules](../concepts/metadata.md) for validated groups, joins, and
 format boundaries. See the [attrs API](../reference/attrs.md) for direct parsing

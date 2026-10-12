@@ -107,6 +107,13 @@ def _spatial_pair(data: xr.DataArray | xr.Dataset) -> tuple[str, str] | None:
     return dims
 
 
+def _rename_yx[T: xr.DataArray | xr.Dataset](data: T) -> T:
+    dims = _spatial_pair(data)
+    if dims in (None, SPATIAL_DIMENSIONS):
+        return data
+    return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))
+
+
 def to_yx[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
     """Rename a foreign spatial pair to `y` and `x`.
 
@@ -125,12 +132,8 @@ def to_yx[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
         ('time', 'y', 'x')
     """
     if isinstance(data, xr.DataTree):
-        return cast("T", data.map_over_datasets(to_yx))
-
-    dims = _spatial_pair(data)
-    if dims in (None, SPATIAL_DIMENSIONS):
-        return data
-    return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))
+        return cast("T", data.map_over_datasets(lambda ds: _rename_yx(ds)))
+    return _rename_yx(data)
 
 
 def require_yx(data: xr.DataArray | xr.Dataset | xr.DataTree) -> None:

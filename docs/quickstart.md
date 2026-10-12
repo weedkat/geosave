@@ -58,10 +58,9 @@ metadata.
 
 ## 2. Give each raster a date
 
-<!-- PENDING-SCALAR-TIME -->
-
-Writers name files after the `time` coordinate, so the raster needs a `time`
-dimension. A scalar `time` coordinate is not accepted by `to_cog` yet.
+The `time` coordinate gives the saved files their acquisition date. Here a
+singleton dimension keeps one-date and multi-date model inputs in the same
+form. `to_cog` also accepts a scalar `time` coordinate for one image.
 
 ```python
 day = np.datetime64("2025-01-01")
@@ -91,8 +90,9 @@ Output:
 1      label 2025-01-01 00:00:00+00:00
 ```
 
-`files` are the records the writer returned; the item table is built from them,
-so what is catalogued is exactly what was saved.
+`files` is a tuple of the destination `UPath` objects. `create_item` reads their
+headers to build the item table, without reading pixels. The table describes
+the files this call saved; it does not scan the output folder.
 
 ## 4. Cut windows
 
@@ -115,6 +115,14 @@ Output:
 
 The four rows describe 128 × 128 windows on the saved scene. A cut takes a
 table and returns one; it does not read the pixel arrays.
+
+| Step | Input | Output | Execution |
+| --- | --- | --- | --- |
+| Save | Named raster groups in a DataTree | TIFF paths | Computes and writes pixels. |
+| Describe | Saved TIFF paths | Item GeoDataFrame | Reads headers. |
+| Cut | Item/window GeoDataFrame | Window GeoDataFrame | Uses grid, time, and source metadata. |
+| Open | One window row | DataTree | Builds lazy raster reads on the window grid. |
+| Convert | Raster or stack | Tensor or tensor mapping | Reads the selected pixels. |
 
 ## 5. Read a chip as tensors
 
@@ -164,5 +172,6 @@ DataModule's remaining input preparation.
 ## Where next
 
 - The core objects: [Rasters](basics/rasters.md), [Vectors](basics/vectors.md).
+- Start with your files: [File ingestion](guides/ingest-files.md).
 - Search real imagery: [STAC](guides/stac.md).
 - Feed the chips to a model: [Training](guides/training.md).

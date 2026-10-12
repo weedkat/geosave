@@ -1,5 +1,14 @@
 # Build and use a model
 
+```bash
+pip install 'geosave[ml]'
+```
+
+Start with an ordinary PyTorch module, then add named stages when you need to
+reuse an encoder or swap a decoder or head. This guide uses random weights and
+runs without downloads. For published encoder weights, follow
+[Build from pretrained weights](pretrained.md).
+
 ## Start with PyTorch
 
 ```python
@@ -24,6 +33,10 @@ The input has one sample, two bands, and a 16 × 16 grid. The model produces
 three class scores at each pixel. For mutually exclusive classes,
 `logits.argmax(dim=1)` gives a class code per pixel. These weights are randomly
 initialized; train the model before using its predictions.
+
+Inputs use `(batch, band, y, x)` here. The model does not read raster metadata,
+mask nodata, reorder bands, or normalize values. Those belong to the
+[input preparation](model-spec.md) you run before the tensor call.
 
 GeoSave models are ordinary PyTorch modules. You can call them directly, move
 them to a device, and put them inside a LightningModule.
@@ -72,6 +85,9 @@ The encoder produces the runtime value `feature_map`; the head asks for that
 same name and declared type. The chain finds the dependencies and runs the
 stages in that order. `chain_step` leaves the method's normal calling
 convention intact, so `chain.encoder(image)` still returns a tensor.
+
+Intermediate tensors retain their gradients. You can train the whole chain
+with a normal loss and `loss.backward()`; routing does not detach features.
 
 `outputs=("feature_map",)` names an intermediate result. `head=True` marks a
 terminal result returned to the caller. With one terminal the chain returns
@@ -202,4 +218,5 @@ classes and instances are useful for exploration but do not satisfy that
 export contract.
 
 Continue with [model inputs](model-spec.md) to turn raster bands into the
-`image` tensor, then [training](training.md) to optimize the weights.
+`image` tensor, then [training](training.md) to optimize the weights. To reuse
+a published encoder with a task-specific head, see [pretrained weights](pretrained.md).

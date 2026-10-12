@@ -92,13 +92,18 @@ Attributes:
     AREA_OR_POINT:  Area
 ```
 
-`to_cog` writes a Cloud Optimized GeoTIFF and returns a tuple of file records.
-`open_raster` accepts those records or a file path. The reopened bands are dask
+`to_cog` writes a Cloud Optimized GeoTIFF and returns a tuple of destination
+`UPath` objects. `open_raster` accepts those paths or a single file path. The reopened bands are Dask
 arrays: their pixel data loads when you compute, plot, or convert it to tensors.
 Close the dataset with `opened.close()` when finished.
 
 For your own image, use `gs.open_raster("path/to/scene.tif")`. Its band names and
 grid come from the file; no anchor is needed to open it.
+
+This example starts with NumPy arrays, so creating and calculating the image
+uses pixels already in memory. Opening a file with `chunks={}` instead builds
+Dask arrays; selection and arithmetic can then stay lazy until saving or
+computing. The [file-ingestion guide](guides/ingest-files.md) follows that path.
 
 Continue with [Raster data](basics/rasters.md) for selection and processing, or
 [From images to training chips](quickstart.md) for a complete data preparation

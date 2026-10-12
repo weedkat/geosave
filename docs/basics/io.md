@@ -17,7 +17,7 @@ anchor = gs.GeoAnchor.from_coordinates(
 pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
 scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
 files = scene.gs.to_cog(root / "scene.tif")
-reopened = gs.open_raster(files[0].href)
+reopened = gs.open_raster(files[0])
 reopened
 ```
 
@@ -38,7 +38,7 @@ Attributes:
 
 The reopened object is an xarray `Dataset`, with one variable per band.
 The file preserves this raster's grid, `uint8` values, variable name, and nodata.
-`to_cog` returns the paths it wrote. Each file states its bands and date, so
+`to_cog` returns a tuple of destination `UPath` objects. Each file states its bands and date, so
 `gs.open_raster(files)` reads them back as one raster.
 
 Readers open data through the format named by the path suffix. Start with the
@@ -49,6 +49,21 @@ native object you need:
 | Raster: xarray `Dataset` | `gs.open_raster(path)` | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf` |
 | Stack: xarray `DataTree` | `gs.open_stack(paths)` | `.gs.to_cog`, `.gs.to_zarr` |
 | Vector: GeoPandas `GeoDataFrame` | `gs.open_vector(path)` | `.gs.to_geoparquet`, `.gs.to_geojson`, `.gs.to_geopackage` |
+
+A location can be a string, `Path`, or `UPath`. Reader options such as `chunks`
+and `mask_and_scale` go to the selected backend; they are not acquisition or
+preprocessing instructions. Start with [existing files](../guides/ingest-files.md)
+for selection, feature calculation, and saving in one workflow.
+
+| Reader | Recognized suffixes |
+| --- | --- |
+| Raster | `.tif`, `.tiff`, `.jp2`, `.png`, `.zarr`, `.nc`, `.nc4`, `.cdf`, `.safe` |
+| Vector | `.parquet`, `.geoparquet`, `.geojson`, `.json`, `.gpkg` |
+
+Suffix matching is case-insensitive. `.SAFE` is a vendor product directory,
+not an arbitrary folder of rasters. A PNG without georeferencing can be opened,
+but spatial operations still need a locatable grid. Unsupported suffixes raise
+`ValueError`; use the format's reader directly when suffix dispatch is unsuitable.
 
 ## Choose a format
 
@@ -97,8 +112,9 @@ Data variables:
 
 Zarr and NetCDF writers return a destination `UPath`, which readers accept.
 They preserve variable order. Opening with `chunks={}` requests Dask arrays
-using the backend's preferred chunks; `chunks=None` keeps the backend's lazy
-array access without Dask. Writing normally computes the data needed for the
+using the backend's preferred chunks; `chunks=None` uses the backend's lazy
+array access. A dated GeoTIFF is Dask-backed even with `chunks=None`, so adding
+its singleton time axis can stay lazy. Writing normally computes the data needed for the
 output. See [lazy data](../concepts/lazy-data.md) for when pixels are read.
 
 ## Save a time series as image files
@@ -106,7 +122,7 @@ output. See [lazy data](../concepts/lazy-data.md) for when pixels are read.
 ```python
 dated = scene.expand_dims(time=[np.datetime64("2025-01-01")])
 files = dated.gs.to_cog(root / "dated/scene_{time:%Y%m%d}.tif")
-[Path(file.href).name for file in files]
+[file.name for file in files]
 ```
 
 Output:
@@ -118,7 +134,10 @@ Output:
 The path template determines how data splits into files. `{time}` writes a
 file per date; `{band}` writes a file per band. Bands sharing a file must have
 the same dtype and nodata. For a stack, include `{collection}` to name each
-group. `{prefix}` is also available when supplied to the writer.
+group. Other fields such as `{prefix}` take caller-supplied keyword values;
+callable values receive each date's raster. A scalar `time` coordinate is
+accepted for one image. Several dates need distinct paths, or the writer
+raises before writing them.
 
 Existing destinations raise `FileExistsError` by default. Pass `overwrite=True`
 to replace them. The returned paths are the files this call wrote, not an
@@ -129,7 +148,7 @@ when you need a searchable catalog.
 ## Read a stack
 
 ```python
-sample = gs.open_stack({"optical": files[0].href, "label": store})
+sample = gs.open_stack({"optical": files[0], "label": store})
 sample
 ```
 
@@ -164,9 +183,11 @@ Group: /
 
 The mapping names the groups; each value is a raster file or store. This example
 uses the same pixels twice to show the structure. You can also open a folder
-containing one raster file or store per group, or the records a stack's COG
+containing one raster file or store per group, or the paths a stack's COG
 writer returns. A stack saved with `.gs.to_zarr(folder)` is a folder with one
-Zarr store per group.
+Zarr store per group. A folder names groups by file/store stem, in sorted name
+order; a mapping keeps your names and order. Two folder entries with the same
+stem are ambiguous and raise `ValueError`.
 
 Close file-backed objects when you finish:
 
@@ -194,12 +215,15 @@ store = scene.gs.to_zarr("s3://my-bucket/scene.zarr", storage_options=options)
 remote = gs.open_raster(store, storage_options=options, chunks={})
 ```
 
-Zarr and GeoParquet use fsspec for remote access. COG and NetCDF writes use a
-local temporary file before uploading. NetCDF reads, GeoJSON, and GeoPackage
-are local-only. Use explicit URLs or returned file records for remote rasters.
+Zarr and GeoParquet use fsspec for remote access. COG, NetCDF, GeoJSON, and
+GeoPackage writes use a local temporary file before uploading. NetCDF reads
+require local files. GeoJSON and GeoPackage readers can use URLs their GDAL
+driver supports, with GDAL credentials.
 
-Remote TIFF reads use GDAL credentials rather than `storage_options`.
-Configure GDAL before creating reads, including lazy ones:
+For S3 TIFFs, `storage_options` can supply `key`, `secret`, `token`, `anon`, and
+`client_kwargs` with region or endpoint settings. The reader translates these
+to GDAL's process-wide S3 configuration; returned `UPath` objects also carry
+their storage options. Alternatively configure GDAL before creating reads:
 
 <!-- CREDENTIALS: AWS S3 bucket and access keys -->
 ```python
