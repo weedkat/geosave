@@ -24,91 +24,121 @@ Public calls do not change: `.gs.plot()`, `.gs.explore()`, `Explorer`,
 | Mixed geometry frames | Split once by `geom_type`, one element per part | hvPlot refuses a mixed frame |
 | Text column colouring | `aggregator=ds.count_cat(column)` + `shade(color_key=...)` | `rasterize` refuses non-numeric `c`; `ds.by(col, ds.any())` breaks `shade` |
 | Explorer map | One persistent plot; each layer renders through `rasterize` / `shade` / `spread`, stacked by HoloViews' `stack` | Swapping an overlay per layer change works without errors but resets the zoom and leaves the old plot in the document; a DynamicMap with a varying overlay is refused |
-| Class figures | Keep class positions + named `cbar_ticks` | A `{code: colour}` cmap on matplotlib misaligns colours and labels the colorbar numerically |
+| Class rasters | Drawn as RGB through `.gs.colorize()`, named by a legend of swatches | Classes are colour already; a `{code: colour}` cmap on matplotlib misaligns colours, so a third colormap path buys nothing |
+| Dated figures | A `HoloMap` of one hvPlot element per date | `hvplot.rgb(groupby="time")` refuses a `(time, band, y, x)` array |
+
+## Two ways a raster draws
+
+HoloViews draws a raster two ways: `Image`, one band through a colormap, and
+`RGB`, three colour channels. geosave keeps exactly those two. A band whose
+`Legend` lists classes is colour already, so `.gs.colorize()` turns it into
+channels and it draws like a composite; its names come from the `Legend`,
+never copied elsewhere.
+
+```python
+def as_rgb(raster: xr.Dataset, variables: tuple[str, ...]) -> xr.DataArray | None:
+    """Return the colour channels a selection draws as, None for one band a colour ramp draws."""
+    if len(variables) == 3:
+        return raster[list(variables)].gs.to_array()      # a composite
+    legend = raster[variables[0]].gs.legend
+    if legend is not None and legend.classes:
+        return raster[variables[0]].gs.colorize()         # classes in their legend's colours
+    return None
+```
+
+Figures and the map both call `as_rgb`, so a selection draws the same way on
+both; the map calls it on the window it regridded, so class codes are never
+blended before they are coloured.
 
 ## Structure
 
 ```text
 viz/
-├── style.py      # Style: how values become colour; also how a vector column does
+├── style.py      # ColorRamp, Stretch, as_rgb, category_colors
 ├── plot.py       # static figures through hvPlot (matplotlib)
-├── map.py        # Web Mercator: View, Overview, basemaps, map colours
+├── map.py        # Web Mercator: View, Overview, image helpers, basemaps, map colours
 └── explorer/     # Panel app; layers render through HoloViews operations
 ```
 
 `elements.py` is deleted. Map colours (`COLOR`, `HIGHLIGHT`, `OUTLINE`) and
-`CMAPS` move into `map.py`, the only module that defines how a map looks; the
+`CMAPS` live in `map.py`, the only module that defines how a map looks; the
 explorer's `THEME` and `CUT` stay in `app.py`, which alone uses them.
 
 ### `style.py`
 
-`Style` stays the one rule from values to colour, shared by figures and maps.
-It loses the pixel work HoloViz does (`rgba`) and gains what
-`Paint` did, so a vector column and a raster band use one model. Constructors say what
-they read (`from_band`, `from_column`); `Style.of` and `Paint.of` go:
+`Style` and `Paint` are replaced by two small values named as a GIS user
+knows them, a function per remaining decision, and nothing that repeats the
+`Legend`:
 
 ```python
 @dataclass(frozen=True)
-class Style:
-    kind: Kind                       # "continuous" | "classes" | "rgb"
+class ColorRamp:
+    """A colormap between two limits: how one band or numeric column draws."""
     cmap: str | Sequence[str] = DEFAULT_CMAP
     clim: tuple[float, float] | None = None
-    classes: Mapping[object, str] | None = None   # code or category -> name
-    colors: Mapping[object, str] | None = None    # code or category -> #rrggbb
+    def fit(self, values: np.ndarray) -> ColorRamp: ...   # limits from the finite range, set ones kept
+    @property
+    def palette(self) -> list[str]: ...                   # 256 hex colours, for a legend's ramp
 
-    @classmethod
-    def from_band(cls, array, *, cmap=None, clim=None, legend=None) -> Style: ...
-    @classmethod
-    def from_column(cls, values: pd.Series, *, dark: bool, cmap=DEFAULT_CMAP) -> Style:
-        """Categories by name on a glasbey palette for the theme, quantities on a ramp."""
-    def resolve(self, values) -> Style: ...        # limits from pixels, unchanged
-    def positions(self, values) -> np.ndarray: ...  # class figures only
+
+@dataclass(frozen=True)
+class Stretch:
+    """The limits a composite's channels stretch between onto [0, 1]."""
+    clim: tuple[float, float] | None = None
+    def fit(self, values: np.ndarray) -> Stretch: ...     # uint8 as stored, else 2-98 percentile
+    def apply(self, channels): ...                        # ndarray or DataArray, nan kept
+
+
+def category_colors(values: pd.Series, theme: Theme = "light") -> dict[object, str]:
+    """Colour each category of a text column from the theme's glasbey palette, in sorted order."""
 ```
 
-`nodata` leaves `Style`: a map reads rasters through `.gs.to_nan()`, so
-nodata is already nan. A figure keeps drawing values as stored, nodata
-included, as it does today. `stretch` stays: a composite's percentile stretch
-onto `[0, 1]` is ours, and works on an array or a DataArray. `Paint`, `Paint.numbers` and `_plain` are deleted.
+Nodata leaves colour entirely: a map reads rasters through `.gs.to_nan()`, so
+nodata is nan before anything is coloured. A figure keeps drawing values as
+stored, nodata included, as it does today.
 
 ### `plot.py`
 
-```python
-def figure(array, style, *, cols=4, title=None, xlabel=None):
-    if style.kind == "rgb":
-        drawn = _stretched(array, style).hvplot.rgb(x="x", y="y", bands="band", groupby=TIME, ...)
-    else:
-        drawn = array.squeeze("band", drop=True).hvplot.image(x="x", y="y", groupby=TIME, **_options(style))
-    return _captioned(drawn, array, cols=cols, title=title, xlabel=xlabel)
+`figure` takes the raster and the variables it draws, so the accessors pass
+through what the caller named:
 
-def outline(frame, *, color, alpha):
-    return hv.Overlay([
-        spd.GeoDataFrame(part).hvplot(color=color, alpha=alpha, data_aspect=1)
-        for part in split_by_geometry(frame).values()
-    ])
+```python
+def figure(raster, variables, *, cmap=None, clim=None, cols=4, title=None, xlabel=None):
+    rgb = as_rgb(raster, variables)
+    if rgb is None:
+        ramp = ColorRamp(cmap or DEFAULT_CMAP, clim)
+        frames = _by_date(raster[variables[0]], lambda band: band.hvplot.image(
+            x="x", y="y", cmap=ramp.cmap, clim=ramp.clim, colorbar=True, data_aspect=1))
+    else:
+        if legend is None:
+            rgb = Stretch(clim).fit(rgb.values).apply(rgb)  # one stretch for every date
+        frames = _by_date(rgb, lambda channels: channels.hvplot.rgb(
+            x="x", y="y", bands="band", data_aspect=1))
+        if legend is not None:
+            frames = frames * _swatches(legend)             # named classes beside the map
+    return _captioned(frames, raster, cols=cols, title=title, xlabel=xlabel)
 ```
 
-hvPlot builds each element; `_styled` then sets the matplotlib options a
-Style calls for with `.opts` (`cmap`, `clim`, `colorbar`; classes add
-`clim=(-0.5, n-0.5)`, `color_levels`, `cbar_ticks`), which hvPlot does not
-expose. Caption and
-layout code is unchanged. `map.split_by_geometry` is the one place geometry
-types are split, on `geom_type` with the `Multi` prefix dropped, and is
-shared with the explorer.
+A colormap is refused for a composite or a class band, and limits for a class
+band, as today. `outline` draws `split_by_geometry(frame)` part by part with
+`spd.GeoDataFrame(part).hvplot()`. Caption and layout code is unchanged.
 
 ### `map.py`
 
-Keeps `View` (ranges and screen size) and `Overview` (zoomed-out copy plus
+Keeps `View` (ranges and screen size; `View.canvas` gives the keywords that
+put a datashader operation on its grid) and `Overview` (zoomed-out copy plus
 full-detail windows), because multiscale reading of a lazy raster is ours.
-`Overview` is built on geosave rather than odc directly:
+`Overview` reads the selected variables as a Dataset through geosave:
 
 ```python
-values = array.gs.to_nan()
-self.full = values.gs.reproject(WEB_MERCATOR, resampling=kernel)   # refuses blending classes
-self.coarse = values.gs.reproject(self.full.gs.geobox.zoom_to(size), resampling=kernel).compute()
+values = raster.gs.to_nan().gs.write_nodata(float("nan"))
+self.full = values.gs.reproject(WEB_MERCATOR, resampling=kernels)   # refuses blending classes
+self.coarse = values.gs.reproject(self.full.gs.geobox.zoom_to(size), resampling=kernels).compute()
 ```
 
-`View.canvas`, `aggregate`, `spread`, `stack`, `composite`, `on_web`,
-`plain_columns` and `_hoverable` are deleted. `tiles(name)` stays.
+Image helpers: `blank(view)`, `rgb_element(channels, alpha)`, `rgba(image)`.
+`aggregate`, `spread`, `stack`, `composite`, `on_web`, `plain_columns`,
+`Paint` and `_hoverable` are deleted. `tiles(name)` stays.
 
 ### Explorer layers
 
@@ -117,25 +147,21 @@ Each layer returns a HoloViews `RGB` for a view; the explorer stacks them.
 ```python
 # RasterLayer
 def image(self, view) -> hv.RGB | None:
-    window = self.overview(...).view(view)                  # GDAL regrid, unchanged
-    if style.kind == "classes":
-        return hv.RGB(window.gs.colorize(), ...)            # the band's own legend
-    if style.kind == "rgb":
-        return hv.RGB(stretched(window, style), ...)
-    return shade(hv.Image(window), cmap=self.cmap, clims=style.clim,
-                 cnorm="linear", alpha=round(self.alpha * 255), dynamic=False)
+    window = self.overview(...).view(view)                  # GDAL regrid of the selection
+    rgb = as_rgb(window, self.variable)
+    if rgb is None:
+        return shade(hv.Image(window[self.variable[0]]), cmap=self.cmap,
+                     clims=self.ramp.clim, cnorm="linear", alpha=..., dynamic=False)
+    if len(self.variable) == 3:
+        rgb = self.stretch.apply(rgb)
+    return webmap.rgb_element(rgb, self.alpha)
 
-# VectorLayer
-def image(self, view) -> hv.RGB | None:
-    agg = rasterize(self._elements, aggregator=self._aggregator, dynamic=False, **view.ranges)
-    shaded = shade(agg, color_key=style.colors) if categorical else shade(agg, cmap=..., clims=...)
-    ...                                                     # boundaries, dots: spread(..., px=2)
-
+# VectorLayer: count_cat with category_colors, mean with a ColorRamp, any() for one colour
 # Explorer._draw
 return stack(hv.Overlay([x.image(view) for x in shown]), dynamic=False)
 ```
 
-The vector layer builds its spatialpandas elements once, per geometry type,
+The vector layer builds its spatialpandas shapes once, per geometry type,
 with the row number and size columns it already carries. Swipe keeps cutting
 two RGBA arrays at the split column.
 
@@ -196,9 +222,9 @@ today's facts (CRS, rows, geometry, columns, dates).
 
 ## Testing
 
-- `tests/geodata/viz/test_style.py`: `Style.from_column` for categories and
-  quantities; `positions`; `resolve`. `rgba`/`stretch` tests go.
-- `test_plot.py`: band, classes (named ticks), RGB, `time` layout, mixed
+- `tests/geodata/viz/test_style.py`: `ColorRamp.fit`, `Stretch.fit`/`apply`,
+  `category_colors` per theme, `as_rgb` for a band, a composite and classes.
+- `test_plot.py`: band, classes (colorized, legend swatches), RGB, `time` layout, mixed
   frame outline; existing figure assertions kept.
 - `test_map.py`: `Overview` stays lazy until a view reads it (a dask graph
   check); nodata reads nan; classes refuse blending through `.gs.reproject`.

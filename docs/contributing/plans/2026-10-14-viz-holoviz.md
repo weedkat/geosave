@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild `geodata/viz` on hvPlot, HoloViews' datashader operations and geosave's own accessors, then give the explorer a left sidebar, light and dark themes, and a raster Info tab.
 
-**Architecture:** `Style` stays the one colour rule; figures draw through hvPlot on matplotlib; each explorer layer renders a HoloViews `RGB` for the view on screen with `rasterize`/`shade`/`spread`, and the explorer stacks them with `stack` into one persistent bokeh plot. Rasters reach Web Mercator through `.gs.to_nan()` and `.gs.reproject`; class rasters colour through `.gs.colorize()`.
+**Architecture:** a raster draws two ways, as HoloViews does: one band through a `ColorRamp`, or RGB channels from `as_rgb` (a composite, or classes through `.gs.colorize()`); figures draw through hvPlot on matplotlib; each explorer layer renders a HoloViews `RGB` for the view on screen with `rasterize`/`shade`/`spread`, and the explorer stacks them with `stack` into one persistent bokeh plot. Rasters reach Web Mercator through `.gs.to_nan()` and `.gs.reproject`; class rasters colour through `.gs.colorize()`.
 
 **Tech Stack:** hvPlot 0.12, HoloViews 1.23, datashader 0.19, spatialpandas 0.6, Panel 1.9 + panel-material-ui 0.16, xarray, geopandas, pytest, Playwright with Brave for browser checks.
 
@@ -14,7 +14,7 @@
 
 - No GeoViews or cartopy: vectors reach hvPlot/HoloViews as `spatialpandas.GeoDataFrame`, rasters through `.gs.reproject`.
 - `hvplot` joins the core `dependencies` in `pyproject.toml`, beside `holoviews`.
-- No vague constructor names: `Style.from_band`, `Style.from_column`; nothing named `of`.
+- Names take the term a GIS user knows and say what a value holds: `ColorRamp`, `Stretch`, `as_rgb`, `category_colors`, `View.canvas`; nothing named `of`, nothing vague or verbose.
 - Public calls keep their signatures except `basemap`, whose default becomes `None` (follow the theme): `.gs.plot()`, `.gs.explore()`, `Explorer`, `RasterLayer`, `VectorLayer`, `CatalogLayer`.
 - Figures draw values as stored, nodata included; only the map reads through `.gs.to_nan()`.
 - A lazy raster stays lazy: the explorer reads only a coarse copy and the windows a view shows.
@@ -33,172 +33,269 @@
 
 ---
 
-### Task 1: `Style.from_band`, `Style.from_column`, nodata off `Style`
+### Task 1: Colour rules — `ColorRamp`, `Stretch`, `as_rgb`, `category_colors`
 
 **Files:**
-- Modify: `pyproject.toml` (dependencies)
-- Modify: `src/geosave/geodata/viz/style.py`
-- Modify: `src/geosave/geodata/viz/map.py` (`Overview.__init__` only)
-- Modify: `src/geosave/geodata/viz/explorer/layers.py` (`RasterLayer._style` only)
-- Modify: `src/geosave/geodata/core/dataset.py:563`, `src/geosave/geodata/core/dataarray.py:554`
-- Test: `tests/geodata/viz/test_style.py`, `tests/geodata/viz/test_map.py`
+- Modify: `pyproject.toml`, `uv.lock` (dependencies)
+- Modify: `src/geosave/geodata/viz/style.py` (add beside `Style`; Task 3 deletes `Style`)
+- Test: `tests/geodata/viz/test_style.py`
 
 **Interfaces:**
-- Produces: `Style.from_band(array, *, cmap=None, clim=None, legend=None) -> Style`; `Style.from_column(values: pd.Series, *, theme: Theme = "light", cmap: str = DEFAULT_CMAP) -> Style`; `type Theme = Literal["light", "dark"]`; `CATEGORIES: dict[Theme, list[str]]`. `Style` has no `nodata` field. `Style.stretch` accepts an ndarray or a DataArray.
+- Produces, in `geosave.geodata.viz.style`:
+  - `DEFAULT_CMAP = "viridis"`; `type Theme = Literal["light", "dark"]`; `CATEGORY_PALETTE: dict[Theme, list[str]]`
+  - `ColorRamp(cmap=DEFAULT_CMAP, clim=None)`, `.fit(values: np.ndarray) -> ColorRamp`, `.palette -> list[str]`
+  - `Stretch(clim=None)`, `.fit(values: np.ndarray) -> Stretch`, `.apply(channels: ndarray | DataArray) -> same type`
+  - `as_rgb(raster: xr.Dataset, variables: tuple[str, ...]) -> xr.DataArray | None`
+  - `category_colors(values: pd.Series, theme: Theme = "light") -> dict[object, str]`
 
 - [ ] **Step 1: Add hvplot**
 
 Run: `uv add "hvplot>=0.12"`
-Expected: `pyproject.toml` lists `"hvplot>=0.12"` in `dependencies`; `uv.lock` updated.
+Expected: `"hvplot>=0.12"` in `pyproject.toml` `dependencies`; `uv.lock` updated.
 
 - [ ] **Step 2: Write the failing tests**
 
-In `tests/geodata/viz/test_style.py`: rename `class TestOf` to `class TestFromBand` and every `Style.of(` to `Style.from_band(`; delete `test_continuous_skips_nodata` (nodata leaves `Style`); leave `class TestRgba` until Task 3 deletes it; add:
+Append to `tests/geodata/viz/test_style.py` (the existing `Style` tests stay until Task 3):
 
 ```python
 import colorcet as cc
 import pandas as pd
 
+from geosave.geodata.core.create import raster as build_raster
+from geosave.geodata.viz.style import ColorRamp, Stretch, as_rgb, category_colors
+from tests.geodata.viz.conftest import grid
 
-class TestFromColumn:
-    def test_numbers_take_a_ramp(self) -> None:
-        style = Style.from_column(pd.Series([1.0, 3.0, 2.0]))
 
-        assert style.kind == "continuous" and style.clim == (1.0, 3.0)
+class TestColorRamp:
+    def test_fits_the_finite_range(self) -> None:
+        assert ColorRamp().fit(np.array([np.nan, 1.0, 3.0])).clim == (1.0, 3.0)
 
-    def test_text_takes_one_colour_per_category_in_order(self) -> None:
-        style = Style.from_column(pd.Series(["rice", "palm", None, "rice"]))
+    def test_keeps_limits_already_set(self) -> None:
+        assert ColorRamp(clim=(0.0, 1.0)).fit(np.array([5.0])).clim == (0.0, 1.0)
 
-        assert style.kind == "classes"
-        assert style.colors == {"palm": cc.glasbey_dark[0], "rice": cc.glasbey_dark[1]}
-        assert style.classes == {"palm": "palm", "rice": "rice"}
+    def test_refuses_nothing_to_draw(self) -> None:
+        with pytest.raises(ValueError, match="nothing to draw"):
+            ColorRamp().fit(np.array([np.nan]))
+
+    def test_palette_runs_low_to_high(self) -> None:
+        palette = ColorRamp(["#000000", "#ffffff"]).palette
+
+        assert len(palette) == 256 and palette[0] == "#000000" and palette[-1] == "#ffffff"
+
+
+class TestStretch:
+    def test_fits_the_middle_percentiles(self) -> None:
+        clim = Stretch().fit(np.linspace(0.0, 1.0, 101)).clim
+
+        assert clim == pytest.approx((0.02, 0.98))
+
+    def test_eight_bit_draws_as_stored(self) -> None:
+        assert Stretch().fit(np.zeros(4, "uint8")).clim == (0.0, 255.0)
+
+    def test_refuses_flat_channels_and_inverted_limits(self) -> None:
+        with pytest.raises(ValueError, match="flat"):
+            Stretch().fit(np.ones(10))
+        with pytest.raises(ValueError, match="inverted"):
+            Stretch((1.0, 0.0)).fit(np.ones(10))
+
+    def test_apply_keeps_a_dataarray_and_its_nan(self) -> None:
+        stretched = Stretch((0.0, 10.0)).apply(band([[5.0, 20.0, np.nan]]))
+
+        assert isinstance(stretched, xr.DataArray)
+        assert stretched.values[0, :2].tolist() == [0.5, 1.0]
+        assert np.isnan(stretched.values[0, 2])
+
+
+class TestCategoryColors:
+    def test_colours_categories_in_sorted_order(self) -> None:
+        colors = category_colors(pd.Series(["rice", "palm", None, "rice"]))
+
+        assert colors == {"palm": cc.glasbey_dark[0], "rice": cc.glasbey_dark[1]}
 
     def test_dark_theme_takes_light_hues(self) -> None:
-        style = Style.from_column(pd.Series(["rice"]), theme="dark")
-
-        assert style.colors == {"rice": cc.glasbey_light[0]}
+        assert category_colors(pd.Series(["rice"]), "dark") == {"rice": cc.glasbey_light[0]}
 
 
-def test_stretch_keeps_a_dataarray() -> None:
-    stretched = Style("rgb", clim=(0.0, 10.0)).stretch(band([[5.0, 20.0, np.nan]]))
+class TestAsRgb:
+    def raster(self) -> xr.Dataset:
+        codes = np.tile(np.array([[0, 1], [8, 1]], "uint8"), (32, 32))
+        values = np.random.default_rng(0).random((64, 64)).astype("float32")
+        raster = build_raster(
+            {"B04": (("y", "x"), values), "B03": (("y", "x"), values), "B02": (("y", "x"), values),
+             "cover": (("y", "x"), codes)},
+            grid(),
+        )
+        return raster.gs.write_legend({1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target="cover")
 
-    assert isinstance(stretched, xr.DataArray)
-    assert stretched.values.tolist()[0][:2] == [0.5, 1.0]
-    assert np.isnan(stretched.values[0, 2])
+    def test_three_variables_compose(self) -> None:
+        rgb = as_rgb(self.raster(), ("B04", "B03", "B02"))
+
+        assert rgb is not None and list(rgb["band"].values) == ["B04", "B03", "B02"]
+
+    def test_classes_take_their_legends_colours(self) -> None:
+        rgb = as_rgb(self.raster(), ("cover",))
+
+        assert rgb is not None and rgb.sizes["band"] == 3
+        # Code 0 names no class, so it draws nothing.
+        assert np.isnan(rgb.values[:, 0, 0]).all()
+        assert rgb.values[:, 0, 1] == pytest.approx([0x39 / 255, 0x7D / 255, 0x49 / 255])
+
+    def test_a_band_without_classes_draws_through_a_ramp(self) -> None:
+        assert as_rgb(self.raster(), ("B04",)) is None
 ```
 
-In `tests/geodata/viz/test_map.py`: replace every `Style.of(` with `Style.from_band(`, and rewrite `test_nodata_draws_transparent`:
+- [ ] **Step 3: Run them to see them fail**
 
-```python
-    def test_nodata_draws_transparent(self) -> None:
-        values = np.full((64, 64), -9999.0, "float32")
-        values[:, :32] = 1.0
-        raster = build_raster({"ndvi": (("y", "x"), values)}, grid(), nodata=-9999.0)
-        array = raster[["ndvi"]].gs.to_array()
-
-        overview = webmap.Overview(array, Style.from_band(array))
-
-        assert np.isnan(overview.coarse.values).any()
-        assert overview.style.clim == (1.0, 1.0)
-```
-
-- [ ] **Step 3: Run the tests to see them fail**
-
-Run: `uv run pytest tests/geodata/viz/test_style.py tests/geodata/viz/test_map.py -q`
-Expected: FAIL with `AttributeError: type object 'Style' has no attribute 'from_band'`.
+Run: `uv run pytest tests/geodata/viz/test_style.py -q`
+Expected: FAIL with `ImportError: cannot import name 'ColorRamp'`.
 
 - [ ] **Step 4: Implement in `style.py`**
 
-Add the imports and constants under `DEFAULT_CMAP`:
+Module docstring: `"""How raster values and table columns become colour, one rule for figures and maps."""`. Add imports `import colorcet as cc`, `import pandas as pd` and `import xarray as xr` under `TYPE_CHECKING`. Under `DEFAULT_CMAP`:
 
 ```python
-import colorcet as cc
-
 type Theme = Literal["light", "dark"]
 
-# Category colours readable on each theme's basemap: dark hues on light, light on dark.
-CATEGORIES: dict[Theme, list[str]] = {"light": cc.glasbey_dark, "dark": cc.glasbey_light}
-```
+# Category colours readable on each theme's basemap: dark hues on light, light hues on dark.
+CATEGORY_PALETTE: dict[Theme, list[str]] = {"light": cc.glasbey_dark, "dark": cc.glasbey_light}
 
-(`pandas` goes under `TYPE_CHECKING` as `import pandas as pd`.)
 
-Replace the class docstring's attribute list and fields: drop `nodata`; `classes` and `colors` become `Mapping[object, str] | None` described as "Class code or category mapped to its name" and "... to `#rrggbb`, covering every class". Change the docstring example to `Style.from_band(ds["landcover"], legend=ds["landcover"].gs.legend).kind`.
+@dataclass(frozen=True)
+class ColorRamp:
+    """A colormap between two limits: how one band or numeric column draws.
 
-Rename `of` to `from_band`, drop its `nodata` argument and docstring line, and drop `nodata=nodata` from its three `cls(...)` calls. Add after it:
+    Attributes:
+        cmap: Matplotlib, colorcet or bokeh name, or a list of colours.
+        clim: Values at the ramp's ends. None reads them from the values drawn.
 
-```python
-    @classmethod
-    def from_column(
-        cls, values: pd.Series, *, theme: Theme = "light", cmap: str = DEFAULT_CMAP
-    ) -> Style:
-        """Colour a table column: quantities on a ramp, anything else by category.
+    Examples:
+        >>> ColorRamp("YlGn").fit(ds["ndvi"].values).clim
+        (-0.12, 0.91)
+    """
 
-        Categories take the theme's glasbey palette in sorted order, so one
-        category keeps its colour across geometry types and redraws.
+    cmap: str | Sequence[str] = DEFAULT_CMAP
+    clim: tuple[float, float] | None = None
 
-        Args:
-            values: Column of a frame.
-            theme: Theme the map shows in, deciding which hues stay visible.
-            cmap: Ramp of a quantity.
+    def fit(self, values: np.ndarray) -> ColorRamp:
+        """Fill in limits spanning the finite values; limits already set stay.
 
-        Returns:
-            Continuous style spanning the column, or classes naming each category.
-
-        Examples:
-            >>> list(Style.from_column(fields["crop"]).colors)
-            ['palm', 'rice']
+        Raises:
+            ValueError: Every value is nan.
         """
-        if values.dtype.kind in "biuf":
-            return cls("continuous", cmap=cmap, clim=(float(values.min()), float(values.max())))
-        palette = CATEGORIES[theme]
-        names = sorted(values.dropna().unique(), key=str)
-        return cls(
-            "classes",
-            classes={name: str(name) for name in names},
-            colors={name: palette[i % len(palette)] for i, name in enumerate(names)},
-        )
+        if self.clim is not None:
+            return self
+        finite = values[np.isfinite(values)]
+        if not finite.size:
+            raise ValueError("every pixel is nan or nodata; nothing to draw")
+        return replace(self, clim=(float(finite.min()), float(finite.max())))
+
+    @property
+    def palette(self) -> list[str]:
+        """Return the ramp as 256 hex colours, low to high."""
+        return process_cmap(self.cmap, ncolors=256)
+
+
+@dataclass(frozen=True)
+class Stretch:
+    """The limits a composite's channels stretch between onto `[0, 1]`.
+
+    Attributes:
+        clim: Value drawn dark and value drawn full. None reads them from the channels.
+
+    Examples:
+        >>> Stretch((0.0, 0.3)).apply(ds[["B04", "B03", "B02"]].gs.to_array())
+    """
+
+    clim: tuple[float, float] | None = None
+
+    def fit(self, values: np.ndarray) -> Stretch:
+        """Fill in limits: `uint8` as stored, else the 2-98 percentile, so dark reflectance fills the display.
+
+        Raises:
+            ValueError: The limits set are empty or inverted, every value is
+                nan, or the channels are flat.
+        """
+        if self.clim is not None:
+            if not self.clim[1] > self.clim[0]:
+                raise ValueError(f"stretch bounds {self.clim} are empty or inverted")
+            return self
+        if values.dtype == np.uint8:
+            return Stretch((0.0, 255.0))
+        finite = values[np.isfinite(values)]
+        if not finite.size:
+            raise ValueError("every pixel is nan or nodata; nothing to draw")
+        low, high = (float(v) for v in np.percentile(finite, (2, 98)))
+        if not high > low:
+            raise ValueError(f"channels are flat near {low}; pass clim=(low, high)")
+        return Stretch((low, high))
+
+    def apply[T: (np.ndarray, xr.DataArray)](self, channels: T) -> T:
+        """Map channels onto `[0, 1]`, clipping outside the limits; nan stays nan."""
+        low, high = self.fit(np.asarray(channels)).clim  # type: ignore[misc]
+        return np.clip((channels.astype("float32") - low) / (high - low), 0.0, 1.0)
+
+
+def as_rgb(raster: xr.Dataset, variables: tuple[str, ...]) -> xr.DataArray | None:
+    """Return the colour channels a selection draws as, None for one band a colour ramp draws.
+
+    Three variables compose red, green and blue. One band whose `Legend`
+    lists classes is colour already: each pixel takes its class's colour.
+
+    Args:
+        raster: Raster holding the variables.
+        variables: One variable, or three drawn red, green, blue.
+
+    Returns:
+        `(*axes, band, y, x)` channels: a composite's as stored, classes'
+        valued in `[0, 1]` and nan where no class is named. None for a band
+        without classes.
+
+    Raises:
+        ValueError: A class carries no colour.
+
+    Examples:
+        >>> as_rgb(ds, ("B04", "B03", "B02")).sizes["band"]
+        3
+        >>> as_rgb(ds, ("ndvi",)) is None
+        True
+    """
+    if len(variables) == 3:
+        return raster[list(variables)].gs.to_array()
+    band = raster[variables[0]]
+    legend = band.gs.legend
+    if legend is not None and legend.classes:
+        return band.gs.colorize()
+    return None
+
+
+def category_colors(values: pd.Series, theme: Theme = "light") -> dict[object, str]:
+    """Colour each category of a text column from the theme's glasbey palette.
+
+    Categories take colours in sorted order, so one keeps its colour across
+    geometry types and redraws; missing values take none.
+
+    Returns:
+        {category: "#rrggbb"}
+
+    Examples:
+        >>> list(category_colors(fields["crop"]))
+        ['palm', 'rice']
+    """
+    palette = CATEGORY_PALETTE[theme]
+    names = sorted(values.dropna().unique(), key=str)
+    return {name: palette[i % len(palette)] for i, name in enumerate(names)}
 ```
 
-In `resolve`, delete the two lines filtering `self.nodata`. In `rgba`, delete `if self.nodata is not None: drawn &= values != self.nodata`. Retype `stretch`:
+- [ ] **Step 5: Run the style tests**
 
-```python
-    def stretch[T: (np.ndarray, xr.DataArray)](self, values: T) -> T:
-        """Map composite values onto `[0, 1]`, clipping outside the limits; nan stays nan."""
-        low, high = self.resolve(np.asarray(values)).clim  # type: ignore[misc]
-        return np.clip((values.astype("float32") - low) / (high - low), 0.0, 1.0)
-```
+Run: `uv run pytest tests/geodata/viz/test_style.py -q`
+Expected: PASS.
 
-- [ ] **Step 5: Update the callers**
-
-`dataset.py:563` and `dataarray.py:554`: `Style.of(` → `Style.from_band(`.
-
-`layers.py` `RasterLayer._style`: return `Style.from_band(data[list(variable)].gs.to_array(), legend=band.gs.legend if len(variable) == 1 else None)`.
-
-`map.py` `Overview.__init__`: replace
-
-```python
-        values = array.astype("float32")
-        if style.nodata is not None:
-            values = values.where(array != style.nodata)
-```
-
-with
-
-```python
-        # Nodata reads as nan, so a map leaves it clear
-        values = array.gs.to_nan().astype("float32").gs.write_nodata(float("nan"))
-```
-
-- [ ] **Step 6: Run the viz tests**
-
-Run: `uv run pytest tests/geodata/viz -q`
-Expected: PASS (132 before, minus the deleted nodata test, plus 4 new).
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml uv.lock src/geosave/geodata/viz/style.py src/geosave/geodata/viz/map.py src/geosave/geodata/viz/explorer/layers.py src/geosave/geodata/core/dataset.py src/geosave/geodata/core/dataarray.py tests/geodata/viz/test_style.py tests/geodata/viz/test_map.py
-git commit -m "refactor(viz): Style.from_band and from_column; maps read nodata as nan"
+git add pyproject.toml uv.lock src/geosave/geodata/viz/style.py tests/geodata/viz/test_style.py
+git commit -m "feat(viz): ColorRamp, Stretch, as_rgb and category_colors"
 ```
 
 ---
@@ -207,16 +304,20 @@ git commit -m "refactor(viz): Style.from_band and from_column; maps read nodata 
 
 **Files:**
 - Modify: `src/geosave/geodata/viz/plot.py`
-- Modify: `src/geosave/geodata/viz/map.py` (add `drawable`, `split_by_geometry`, `GEOMETRIES`)
+- Modify: `src/geosave/geodata/viz/map.py` (add `GEOMETRY_TYPES`, `drawable`, `split_by_geometry`)
+- Modify: `src/geosave/geodata/core/dataset.py` (`plot`), `src/geosave/geodata/core/dataarray.py` (`plot`)
 - Test: `tests/geodata/viz/test_plot.py`, `tests/geodata/viz/test_map.py`
 
 **Interfaces:**
-- Consumes: `Style.stretch`, `Style.positions`, `Style.resolve` (Task 1).
-- Produces: `map.GEOMETRIES = ("Polygon", "LineString", "Point")`; `map.drawable(frame) -> gpd.GeoDataFrame`; `map.split_by_geometry(frame) -> dict[str, gpd.GeoDataFrame]` keyed by `GEOMETRIES`, in that order, only types present, original index kept. `plot.figure` and `plot.outline` keep their signatures.
+- Consumes: `ColorRamp`, `Stretch`, `as_rgb`, `DEFAULT_CMAP` (Task 1).
+- Produces:
+  - `plot.figure(raster: xr.Dataset, variables: tuple[str, ...], *, cmap=None, clim=None, cols=4, title=None, xlabel=None) -> hv.Element | hv.Layout`
+  - `plot.outline(frame, *, color, alpha)` unchanged.
+  - `map.GEOMETRY_TYPES = ("Polygon", "LineString", "Point")`; `map.drawable(frame) -> gpd.GeoDataFrame`; `map.split_by_geometry(frame) -> dict[str, gpd.GeoDataFrame]` keyed by `GEOMETRY_TYPES` in that order, only types present, original index kept.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/geodata/viz/test_map.py` add:
+`tests/geodata/viz/test_map.py`, add:
 
 ```python
 class TestSplitByGeometry:
@@ -242,28 +343,80 @@ class TestSplitByGeometry:
             )
 ```
 
-In `tests/geodata/viz/test_plot.py`, replace the body of `test_dark_reflectance_is_stretched_to_fill_the_display`'s assertion with:
+`tests/geodata/viz/test_plot.py`: replace `class TestClassMap` with
 
 ```python
-        assert float(np.nanmax(drawn.dimension_values("R"))) == 1.0
+class TestClassMap:
+    def test_draws_each_class_in_its_colour(self, labels: xr.Dataset) -> None:
+        drawn = labels.gs.plot("landcover")
+        (image,) = drawn.select(hv.RGB)  # the map under the legend
+
+        red = image.dimension_values("R", flat=False)
+        # Pixel (0, 0) of the fixture is water, #419bdf.
+        assert red[0, 0] == pytest.approx(0x41 / 255)
+
+    def test_names_every_class_in_a_legend(self, labels: xr.Dataset) -> None:
+        drawn = labels.gs.plot("landcover")
+
+        names = [x.label for x in drawn if isinstance(x, hv.Points)]
+        assert names == ["water", "trees", "snow"]
+
+    def test_absent_pixels_draw_as_no_class(self) -> None:
+        codes = np.array(
+            [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
+        )
+        raster = build_raster({"cover": (("y", "x"), codes)}, geobox(), nodata=0)
+        raster = raster.gs.write_legend(
+            {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target="cover"
+        )
+
+        (image,) = raster.gs.plot("cover").select(hv.RGB)
+
+        assert np.isnan(image.dimension_values("R")).any()
+
+    def test_refuses_a_colormap_or_limits(self, labels: xr.Dataset) -> None:
+        with pytest.raises(ValueError, match="drop cmap"):
+            labels.gs.plot("landcover", cmap="gray")
+        with pytest.raises(ValueError, match="clim cannot apply"):
+            labels.gs.plot("landcover", clim=(0, 1))
+
+    def test_uncoloured_class_refuses(self) -> None:
+        raster = build_raster(
+            {"cover": (("y", "x"), np.zeros((4, 4), dtype="uint8"))}, geobox()
+        )
+        raster = raster.gs.write_legend(
+            {0: "water", 1: "trees"}, {0: "#419bdf"}, target="cover"
+        )
+        with pytest.raises(ValueError, match="carry no colour"):
+            raster.gs.plot("cover")
 ```
 
-(hvPlot's RGB holds its channels as dimensions, not a Dataset; every other
-figure test stays as written and pins the behaviour hvPlot must keep.)
+In `TestConstraints.test_dark_reflectance_is_stretched_to_fill_the_display`, assert `float(np.nanmax(drawn.dimension_values("R"))) == 1.0`. In `TestOutput.test_opts_reach_hvplot`, keep the assertion (`cmap == "RdYlGn"`). Add to `TestVariables`:
+
+```python
+    def test_a_composite_refuses_a_colormap(self, rgb: xr.Dataset) -> None:
+        with pytest.raises(ValueError, match="drop cmap"):
+            rgb.gs.plot(cmap="gray")
+
+    def test_a_stacked_array_draws_its_bands_as_colour(self, rgb: xr.Dataset) -> None:
+        assert isinstance(rgb.gs.to_array().gs.plot(), hv.RGB)
+```
+
+(If `drawn.select(hv.RGB)` returns the whole overlay rather than a tuple of elements, read the map with `drawn.get(0)`; the overlay's first layer is the RGB.)
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `uv run pytest tests/geodata/viz/test_map.py::TestSplitByGeometry tests/geodata/viz/test_plot.py -q`
-Expected: FAIL with `AttributeError: module 'geosave.geodata.viz.map' has no attribute 'split_by_geometry'`.
+Run: `uv run pytest tests/geodata/viz/test_plot.py tests/geodata/viz/test_map.py::TestSplitByGeometry -q`
+Expected: FAIL — no `split_by_geometry`; classes still draw as an Image.
 
 - [ ] **Step 3: Add the geometry split to `map.py`**
 
-Under the colour constants:
+Move `import geopandas as gpd` out of `TYPE_CHECKING`. Under the colour constants:
 
 ```python
 # Geometry types a map or figure draws, in drawing order. hvPlot and HoloViews
 # draw one type per element, a Multi* geometry with its single type.
-GEOMETRIES = ("Polygon", "LineString", "Point")
+GEOMETRY_TYPES = ("Polygon", "LineString", "Point")
 
 
 def drawable(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -275,7 +428,7 @@ def drawable(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     shown = frame[~(frame.geometry.is_empty | frame.geometry.isna())]
     if shown.empty:
         raise ValueError("nothing to draw: the frame holds no geometry")
-    if unknown := set(shown.geom_type.str.removeprefix("Multi")) - set(GEOMETRIES):
+    if unknown := set(shown.geom_type.str.removeprefix("Multi")) - set(GEOMETRY_TYPES):
         raise ValueError(f"cannot draw {sorted(unknown)}; explode them first")
     return cast("gpd.GeoDataFrame", shown)
 
@@ -292,26 +445,27 @@ def split_by_geometry(frame: gpd.GeoDataFrame) -> dict[str, gpd.GeoDataFrame]:
     """
     shown = drawable(frame)
     types = shown.geom_type.str.removeprefix("Multi")
-    return {kind: shown[types == kind] for kind in GEOMETRIES if (types == kind).any()}
+    return {kind: shown[types == kind] for kind in GEOMETRY_TYPES if (types == kind).any()}
 ```
-
-`map.py` needs `import geopandas as gpd` at runtime now (move it out of `TYPE_CHECKING`).
 
 - [ ] **Step 4: Rewrite `plot.py`**
 
-Replace the imports and `figure`/`outline` bodies (keep `_styled` and `_captioned` unchanged):
+Module docstring: `"""Static figures behind `.gs.plot`, drawn through hvPlot and rendered with matplotlib.` + the existing `hv.save`/`+`/`*` paragraph.
+
+Imports:
 
 ```python
 from __future__ import annotations
 
 import operator
+from collections.abc import Callable
 from functools import reduce
 from typing import TYPE_CHECKING, cast
 
 import geopandas as gpd
 import holoviews as hv
-import hvplot.xarray  # noqa: F401  — registers .hvplot on xarray
 import hvplot.pandas  # noqa: F401  — registers .hvplot on spatialpandas frames
+import hvplot.xarray  # noqa: F401  — registers .hvplot on xarray
 import numpy as np
 import spatialpandas as spd
 import xarray as xr
@@ -319,34 +473,125 @@ from matplotlib.colors import to_hex, to_rgba
 
 from geosave.geodata.conventions import BAND_DIMENSION, SPATIAL_DIMENSIONS, TIME_COORDINATE
 from geosave.geodata.viz.map import split_by_geometry
+from geosave.geodata.viz.style import DEFAULT_CMAP, ColorRamp, Stretch, as_rgb
 
 if TYPE_CHECKING:
-    from geosave.geodata.viz.style import Style
+    from collections.abc import Sequence
+
+    from geosave.geodata.attrs import Legend
 
 hv.extension("matplotlib")
+```
 
+`figure`:
 
-def figure(array, style, *, cols=4, title=None, xlabel=None):  # signature and docstring unchanged
+```python
+def figure(
+    raster: xr.Dataset,
+    variables: tuple[str, ...],
+    *,
+    cmap: str | Sequence[str] | None = None,
+    clim: tuple[float, float] | None = None,
+    cols: int = 4,
+    title: str | None = None,
+    xlabel: str | None = None,
+) -> hv.Element | hv.Layout:
+    """Draw variables of a raster: one band through a colour ramp, else as colour.
+
+    Three variables draw red, green and blue, stretched by `clim`. A band
+    whose `Legend` lists classes draws each class in its colour, named in a
+    legend beside the map. Values draw as stored, nodata included.
+
+    Args:
+        raster: Raster spanning the spatial pair and, optionally, `time`.
+        variables: One variable, or three drawn red, green, blue.
+        cmap: Colormap of one band. Refused where the variables draw as colour.
+        clim: Ramp limits of one band, or a composite's stretch. Refused for classes.
+        cols: Columns a `time` axis lays panels into. Ignored otherwise.
+        title: Panel title above the axes. None suppresses the title.
+        xlabel: Caption appended below each panel's timestamp. None adds no caption.
+
+    Returns:
+        Image, RGB or RGB with a legend over the raster's grid, or a Layout
+        of one panel per `time` value, `cols` wide.
+
+    Raises:
+        ValueError: `cmap` accompanies colour, `clim` accompanies classes, a
+            class carries no colour, or a composite's pixels are all nan or flat.
+
+    Examples:
+        >>> figure(ds, ("ndvi",), cmap="YlGn")
+        >>> figure(ds, ("B04", "B03", "B02"), clim=(0.0, 0.3))
+    """
     y, x = SPATIAL_DIMENSIONS
-    # A time axis draws one held panel per date, laid out below
-    grouped = {"groupby": TIME_COORDINATE, "dynamic": False} if TIME_COORDINATE in array.dims else {}
+    rgb = as_rgb(raster, variables)
 
-    if style.kind == "rgb":
-        # One stretch for every date, so dates compare
-        stretched = style.resolve(array.values).stretch(array)
-        drawn = stretched.hvplot.rgb(x=x, y=y, bands=BAND_DIMENSION, **grouped)
-    else:
-        band = array.squeeze(BAND_DIMENSION, drop=True) if BAND_DIMENSION in array.dims else array
-        if style.kind == "classes":
-            # Classes draw on their position, so sparse codes leave no empty colours
-            band = band.copy(data=style.positions(band.values))
-        drawn = band.rename(band.name or "value").hvplot.image(x=x, y=y, **grouped)
+    # One band draws through a colour ramp
+    if rgb is None:
+        ramp = ColorRamp(cmap or DEFAULT_CMAP, clim)
+        band = raster[variables[0]]
+        band = band.rename(band.name or "value")
+        drawn = _by_date(
+            band,
+            lambda frame: frame.hvplot.image(
+                x=x, y=y, cmap=ramp.cmap, clim=ramp.clim, colorbar=True, data_aspect=1
+            ),
+        )
+        return _captioned(drawn, raster, cols=cols, title=title, xlabel=xlabel)
 
-    drawn = drawn.map(lambda element: _styled(element, style), [hv.Image, hv.RGB])
-    return _captioned(drawn, array, cols=cols, title=title, xlabel=xlabel)
+    # Colour carries no quantity, and a class's colour is its legend's
+    legend = raster[variables[0]].gs.legend if len(variables) == 1 else None
+    if cmap is not None:
+        raise ValueError("these variables draw as colour rather than a quantity; drop cmap")
+    if legend is not None and clim is not None:
+        raise ValueError(
+            "the band lists classes, so clim cannot apply; its palette is Legend.color_map"
+        )
+
+    # A composite stretches once for every date, so dates compare
+    if legend is None:
+        rgb = Stretch(clim).apply(rgb)
+    drawn = _by_date(
+        rgb, lambda frame: frame.hvplot.rgb(x=x, y=y, bands=BAND_DIMENSION, data_aspect=1)
+    )
+    if legend is not None:
+        drawn = (drawn * _swatches(legend)).opts(
+            hv.opts.Overlay(legend_position="right", backend="matplotlib")
+        )
+    return _captioned(drawn, raster, cols=cols, title=title, xlabel=xlabel)
 
 
-def outline(frame, *, color, alpha):  # signature and docstring unchanged
+def _by_date(
+    array: xr.DataArray, draw: Callable[[xr.DataArray], hv.Element]
+) -> hv.Element | hv.HoloMap:
+    """Draw an array once, or once per date in a HoloMap keyed by `time`."""
+    if TIME_COORDINATE not in array.dims:
+        return draw(array)
+    return hv.HoloMap(
+        {time: draw(array.sel({TIME_COORDINATE: time})) for time in array[TIME_COORDINATE].values},
+        kdims=[TIME_COORDINATE],
+    )
+
+
+def _swatches(legend: Legend) -> hv.Overlay:
+    """Return a legend entry per class: its name beside a square of its colour."""
+    colors = legend.color_map or {}
+    # A point off the axes carries each entry; the legend shows its marker
+    return hv.Overlay(
+        [
+            hv.Points([(np.nan, np.nan)], label=name).opts(
+                color=colors[code], marker="s", s=80, backend="matplotlib"
+            )
+            for code, name in (legend.classes or {}).items()
+        ]
+    )
+```
+
+`Stretch.apply` fits from the whole array, so one stretch serves every date.
+
+`outline` (signature and docstring unchanged; "geometry families" → "geometry types"):
+
+```python
     color = to_hex(color)
     looks = {
         "Polygon": {"facecolor": to_rgba(color, alpha), "edgecolor": color},
@@ -358,24 +603,48 @@ def outline(frame, *, color, alpha):  # signature and docstring unchanged
         spd.GeoDataFrame(part).hvplot().opts(**looks[kind], backend="matplotlib")
         for kind, part in split_by_geometry(frame).items()
     ]
-    return cast(
-        "hv.Element",
-        reduce(operator.mul, drawn).opts(aspect="equal", backend="matplotlib"),
-    )
+    return cast("hv.Element", reduce(operator.mul, drawn).opts(aspect="equal", backend="matplotlib"))
 ```
 
-Update the module docstring's mention of `elements` (none remain in `plot.py`).
+Delete `_styled`. `_captioned` keeps its body; its `array: xr.DataArray` parameter becomes `raster: xr.Dataset` (it only reads the `time` coordinate).
 
-- [ ] **Step 5: Run the figure tests**
+- [ ] **Step 5: Point the accessors at the new `figure`**
 
-Run: `uv run pytest tests/geodata/viz/test_plot.py tests/geodata/viz/test_map.py tests/geodata/core -q -k "plot or Split"`
-Expected: PASS. If hvPlot adds a title or axis label a caption test rejects, set `title=""`/`xlabel=""` in the hvPlot call rather than post-processing.
+`dataset.py` `plot`, from `from geosave.geodata.viz.plot import figure` on:
 
-- [ ] **Step 6: Commit**
+```python
+        from geosave.geodata.viz.plot import figure
+
+        selected = self._drawn(variables)
+        place = self.anchor.locate() if xlabel is None else None
+        caption = place.to_address() if place is not None else xlabel
+        return figure(
+            self._data, selected, cmap=cmap, clim=clim, cols=cols, title=title, xlabel=caption
+        )
+```
+
+`dataarray.py` `plot`, replacing its body after the docstring (docstring adds: "An array stacking three bands on `band` draws them red, green, blue."):
+
+```python
+        # A stacked array draws its bands; a lone band draws under its name
+        array = self._data if self._data.name is not None else self._data.rename("value")
+        raster = array.gs.to_raster()
+        return raster.gs.plot(
+            *(str(name) for name in raster.data_vars),
+            cmap=cmap, clim=clim, cols=cols, title=title, xlabel=xlabel,
+        )
+```
+
+- [ ] **Step 6: Run the figure tests**
+
+Run: `uv run pytest tests/geodata/viz/test_plot.py tests/geodata/viz/test_map.py tests/geodata/core -q`
+Expected: PASS. If hvPlot adds a title a caption test rejects, pass `title=""` in the hvPlot call rather than post-processing.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/geosave/geodata/viz/plot.py src/geosave/geodata/viz/map.py tests/geodata/viz/test_plot.py tests/geodata/viz/test_map.py
-git commit -m "refactor(viz): figures draw through hvPlot; one geometry split in map"
+git add src/geosave/geodata/viz/plot.py src/geosave/geodata/viz/map.py src/geosave/geodata/core/dataset.py src/geosave/geodata/core/dataarray.py tests/geodata/viz/test_plot.py tests/geodata/viz/test_map.py
+git commit -m "refactor(viz): figures draw through hvPlot; classes draw as colour with a legend"
 ```
 
 ---
@@ -384,28 +653,100 @@ git commit -m "refactor(viz): figures draw through hvPlot; one geometry split in
 
 **Files:**
 - Modify: `src/geosave/geodata/viz/map.py`
-- Modify: `src/geosave/geodata/viz/style.py` (delete `rgba`)
+- Modify: `src/geosave/geodata/viz/style.py` (delete `Style`, `Kind`)
 - Modify: `src/geosave/geodata/viz/explorer/layers.py`
 - Modify: `src/geosave/geodata/viz/explorer/app.py` (`_draw`, `_swipe`)
 - Delete: `src/geosave/geodata/viz/elements.py`, `tests/geodata/viz/test_elements.py`
 - Test: `tests/geodata/viz/test_map.py`, `tests/geodata/viz/test_style.py`, `tests/geodata/viz/explorer/test_layers.py`, `tests/geodata/viz/explorer/test_app.py`
 
 **Interfaces:**
-- Consumes: `Style.from_column`, `Theme` (Task 1); `map.drawable`, `map.split_by_geometry` (Task 2).
+- Consumes: `ColorRamp`, `Stretch`, `as_rgb`, `category_colors`, `Theme` (Task 1); `map.drawable`, `map.split_by_geometry` (Task 2).
 - Produces:
-  - `map.View.ranges -> dict` (keywords for `rasterize`), `map.View.bounds -> (left, bottom, right, top)`.
-  - `map.Overview.view(view) -> xr.DataArray` on `view.geobox`, nan outside.
-  - `map.clear(view) -> hv.RGB`; `map.rgb_element(channels: xr.DataArray, alpha: float) -> hv.RGB`; `map.pixels(image: hv.RGB) -> np.ndarray` `(rows, columns, 4)` uint8, north up.
-  - `map.OUTLINE: dict[Theme, str]`; `map.COLOR`, `map.HIGHLIGHT`, `map.CMAPS`, `map.BASEMAPS`, `map.tiles` kept.
+  - `map.View.canvas -> dict` (keywords putting a datashader operation on the view's grid); `map.View.bounds -> (left, bottom, right, top)`.
+  - `map.Overview(raster: xr.Dataset, *, resampling: Resampling | Mapping[str, Resampling], size=2048)`; `.view(view) -> xr.Dataset` on `view.geobox`; `.value_at(x, y) -> dict[str, float] | None`; `.full`, `.coarse` Datasets.
+  - `map.blank(view) -> hv.RGB`; `map.rgb_element(channels, alpha) -> hv.RGB`; `map.rgba(image) -> np.ndarray` `(rows, columns, 4)` uint8, north up.
+  - `map.OUTLINE: dict[Theme, str]`, `map.THEME_BASEMAP: dict[Theme, str]`, `map.CMAPS`; `COLOR`, `HIGHLIGHT`, `BASEMAPS`, `tiles` kept.
   - `Layer.theme = param.Selector("light", ["light", "dark"])`; `Layer.image(view) -> hv.RGB | None`.
-  - `VectorLayer.style -> Style | None` (replaces `paint`).
-  - Deleted: `map.Paint`, `aggregate`, `spread`, `stack`, `composite`, `on_web`, `plain_columns`, `View.canvas`, `Style.rgba`, `elements.*`.
+  - `RasterLayer.ramp -> ColorRamp` (bands), `RasterLayer.stretch -> Stretch` (composites); `VectorLayer.colors -> dict | None`, `VectorLayer.ramp -> ColorRamp | None`.
+  - Deleted: `style.Style`, `map.Paint`, `aggregate`, `spread`, `stack`, `composite`, `on_web`, `plain_columns`, `_hoverable`, `elements.*`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`tests/geodata/viz/test_map.py`: delete `class TestShapes`, `test_composite_lays_the_last_image_on_top`, and the `elements`/`datashader`/`pandas` imports they used. Change `test_view_draws_on_the_screen_grid` and `test_class_codes_never_blend` to read `drawn.values` (a DataArray now) and `drawn.shape`. Add:
+`tests/geodata/viz/test_style.py`: delete every test of `Style` (`TestOf`, `TestResolve`, `test_positions_leave_no_gap_for_sparse_codes`, `TestRgba`) and the `LEGEND`/`composite` helpers they alone used.
+
+`tests/geodata/viz/test_map.py`: delete `class TestShapes`, `test_composite_lays_the_last_image_on_top`, and the `elements`, `datashader`, `pandas`, `Style` imports. Rewrite `TestOverview` against a Dataset:
 
 ```python
+def lazy_raster(size: int = 64) -> xr.Dataset:
+    values = da.random.random((size, size), chunks=size // 4).astype("float32")
+    return build_raster({"ndvi": (("y", "x"), values)}, grid(size))
+
+
+class TestOverview:
+    def test_reads_lazily_beyond_its_coarse_copy(self) -> None:
+        overview = webmap.Overview(lazy_raster(256), resampling="average", size=64)
+
+        assert isinstance(overview.full["ndvi"].data, da.Array)
+        assert max(overview.coarse["ndvi"].shape) == 64
+        assert isinstance(overview.coarse["ndvi"].data, np.ndarray)
+
+    def test_warps_a_raster_in_memory_lazily(self) -> None:
+        overview = webmap.Overview(lazy_raster(256).compute(), resampling="average", size=64)
+
+        # Only the windows a map shows are warped at full detail.
+        assert isinstance(overview.full["ndvi"].data, da.Array)
+
+    def test_wide_views_read_the_coarse_copy(self) -> None:
+        overview = webmap.Overview(lazy_raster(256), resampling="average", size=64)
+        left, bottom, right, top = overview.bounds
+
+        assert overview.window((left, right), (bottom, top)) is overview.coarse
+
+    def test_small_views_read_full_detail(self) -> None:
+        overview = webmap.Overview(lazy_raster(256), resampling="average", size=64)
+        left, bottom, right, top = overview.bounds
+        step = (right - left) / 8
+
+        window = overview.window((left, left + step), (top - step, top))
+
+        assert isinstance(window["ndvi"].data, np.ndarray)
+        assert 0 < window.sizes["x"] <= 256 // 8 + 2
+
+    def test_view_draws_on_the_screen_grid(self) -> None:
+        overview = webmap.Overview(lazy_raster(), resampling="average")
+        left, bottom, right, top = overview.bounds
+
+        drawn = overview.view(webmap.View((left, right), (bottom, top), 40, 30))
+
+        # A square raster fills the screen's height; its pixels stay square.
+        assert drawn["ndvi"].shape == (30, 30)
+
+    def test_class_codes_never_blend(self) -> None:
+        codes = np.tile(np.array([[0, 8], [8, 1]], "uint8"), (32, 32))
+        raster = build_raster({"cover": (("y", "x"), codes)}, grid())
+        raster = raster.gs.write_legend(
+            {0: "water", 1: "trees", 8: "snow"},
+            {0: "#419bdf", 1: "#397d49", 8: "#b39fe1"},
+            target="cover",
+        )
+        overview = webmap.Overview(raster, resampling="nearest")
+        left, bottom, right, top = overview.bounds
+
+        drawn = overview.view(webmap.View((left, right), (bottom, top), 17, 13))["cover"].values
+
+        assert set(drawn[~np.isnan(drawn)]) <= {0.0, 1.0, 8.0}
+
+    def test_nodata_reads_as_nan(self) -> None:
+        values = np.full((64, 64), -9999.0, "float32")
+        values[:, :32] = 1.0
+        raster = build_raster({"ndvi": (("y", "x"), values)}, grid(), nodata=-9999.0)
+
+        overview = webmap.Overview(raster, resampling="average")
+
+        assert np.isnan(overview.coarse["ndvi"].values).any()
+        assert np.nanmax(overview.coarse["ndvi"].values) == 1.0
+
+
 def test_rgb_element_is_clear_where_a_channel_is_nan() -> None:
     view = webmap.View((0.0, 2.0), (0.0, 1.0), 2, 1)
     channels = xr.DataArray(
@@ -414,27 +755,51 @@ def test_rgb_element_is_clear_where_a_channel_is_nan() -> None:
         coords={"y": view.geobox.coords["y"].values, "x": view.geobox.coords["x"].values},
     )
 
-    rgba = webmap.pixels(webmap.rgb_element(channels, 0.5))
+    rgba = webmap.rgba(webmap.rgb_element(channels, 0.5))
 
     assert list(rgba[0, 0]) == [255, 0, 0, 128] and rgba[0, 1, 3] == 0
 
 
-def test_clear_covers_the_view() -> None:
+def test_blank_covers_the_view() -> None:
     view = webmap.View((0.0, 100.0), (0.0, 10.0), 50, 50)
 
-    assert webmap.pixels(webmap.clear(view)).shape == (5, 50, 4)
+    assert webmap.rgba(webmap.blank(view)).shape == (5, 50, 4)
 ```
 
-`tests/geodata/viz/test_style.py`: delete `class TestRgba`.
-
-`tests/geodata/viz/explorer/test_layers.py`: change the helper and colour expectations:
+`tests/geodata/viz/explorer/test_layers.py`:
 
 ```python
 def drawn(image) -> int:
-    return int((webmap.pixels(image)[..., 3] > 0).sum())
+    return int((webmap.rgba(image)[..., 3] > 0).sum())
 ```
 
-In `test_draws_a_band_or_a_composite_in_colour` use `composite, classes = webmap.pixels(shown.image(view)), ...` after each draw (convert both with `webmap.pixels`). In `test_steps_through_its_dates` wrap each image in `webmap.pixels(...)`. In `test_outlines_the_selection_bright` wrap `plain` and `chosen` in `webmap.pixels(...)`. In `test_colours_one_category_alike_in_every_family` expect `palm, rice = cc.glasbey_dark[:2]`. Add:
+Wrap every raw image in `webmap.rgba(...)` where a test indexes channels (`test_draws_a_band_or_a_composite_in_colour`, `test_steps_through_its_dates`, `test_outlines_the_selection_bright`). Replace style assertions:
+
+```python
+    def test_offers_a_colormap_only_where_it_colours(self, scene: xr.Dataset) -> None:
+        shown = RasterLayer(scene, "B04", cmap="magma")
+
+        assert shown.ramp.cmap == "magma"
+        assert shown.param.cmap.precedence > 0
+        shown.variable = ("cover",)
+        assert shown.param.cmap.precedence < 0
+
+    def test_dates_share_colour_limits(self, monthly: xr.Dataset) -> None:
+        shown = RasterLayer(monthly, "B04")
+
+        before = shown.ramp.clim
+        shown.time = shown.dates[1]
+
+        assert shown.ramp.clim == before
+
+    def test_takes_a_band(self, scene: xr.Dataset) -> None:
+        shown = RasterLayer(scene["cover"])
+
+        assert shown.name == "cover"
+        assert shown.key().swatches == {"water (0)": "#419bdf", "trees (1)": "#397d49"}
+```
+
+In `test_colours_one_category_alike_in_every_family`, expect `palm, rice = cc.glasbey_dark[:2]`. Add to `TestVectorLayer`:
 
 ```python
     def test_missing_categories_draw_nothing(self, fields: gpd.GeoDataFrame) -> None:
@@ -451,7 +816,7 @@ In `test_draws_a_band_or_a_composite_in_colour` use `composite, classes = webmap
         assert shown.key().swatches["palm"] == cc.glasbey_light[0]
 ```
 
-`tests/geodata/viz/explorer/test_app.py` `TestSwipe`: add
+`tests/geodata/viz/explorer/test_app.py` `TestSwipe`, add:
 
 ```python
     def test_swipe_keeps_orientation(self, monthly: xr.Dataset) -> None:
@@ -465,8 +830,8 @@ In `test_draws_a_band_or_a_composite_in_colour` use `composite, classes = webmap
         x_range, y_range = explorer._ranges
         view = webmap.View(x_range, y_range, 60, 60)
 
-        swiped = webmap.pixels(explorer._swipe(view))
-        left = webmap.pixels(raster.image(view, sides[0][1]))
+        swiped = webmap.rgba(explorer._swipe(view))
+        left = webmap.rgba(raster.image(view, sides[0][1]))
 
         # Left of the cut line, the swipe shows the left side exactly as drawn.
         assert (swiped[:, :-2] == left[:, :-2]).all()
@@ -475,7 +840,7 @@ In `test_draws_a_band_or_a_composite_in_colour` use `composite, classes = webmap
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `uv run pytest tests/geodata/viz -q`
-Expected: FAIL — `rgb_element`, `clear`, `pixels` missing; layers still return arrays.
+Expected: FAIL — `Overview` still takes an array and a Style; `rgb_element`, `blank`, `rgba` missing.
 
 - [ ] **Step 3: Rewrite `map.py`**
 
@@ -490,9 +855,9 @@ through HoloViews' datashader operations, rasters regridded by GDAL first.
 """
 ```
 
-Imports: `cast`, `geopandas as gpd`, `holoviews as hv`, `holoviews.plotting.bokeh  # noqa: F401`, `numpy as np`, `xarray as xr`, `tile_sources`, `GeoBox`, `BAND_DIMENSION`, `SPATIAL_DIMENSIONS`, `Style`, `Theme`. Drop `colorcet`, `pandas`, `process_cmap`, `datashader`, `odc.geo.xr`, `elements`.
+Imports: `Mapping`, `cast`, `geopandas as gpd`, `holoviews as hv`, `holoviews.plotting.bokeh  # noqa: F401  — registers bokeh's options`, `numpy as np`, `xarray as xr`, `tile_sources`, `GeoBox`, `BAND_DIMENSION`, `SPATIAL_DIMENSIONS`, `Theme`; `Resampling` from `geosave.geodata.transform.warp` under `TYPE_CHECKING`. Drop `colorcet`, `pandas`, `process_cmap`, `odc.geo.xr`, `elements`, `Style`.
 
-Constants (replacing the old colour block, `CMAPS` moved here from `layers.py`):
+Constants:
 
 ```python
 # Colour of features no column colours, and of selected features.
@@ -502,11 +867,11 @@ HIGHLIGHT = "#ffd400"
 OUTLINE: dict[Theme, str] = {"light": "#333333", "dark": "#e0e0e0"}
 # Basemap a map opens on in each theme.
 THEME_BASEMAP: dict[Theme, str] = {"light": "Light", "dark": "Dark"}
-# Offered in the picker; any matplotlib, colorcet or bokeh name is accepted.
+# Offered in the colormap picker; any matplotlib, colorcet or bokeh name is accepted.
 CMAPS = ["viridis", "cividis", "magma", "RdYlGn", "YlGn", "Spectral", "gray"]
 ```
 
-`View`: delete `canvas`; add
+`View`: keep `pixel`, `geobox`; replace `canvas` with
 
 ```python
     @property
@@ -516,8 +881,8 @@ CMAPS = ["viridis", "cividis", "magma", "RdYlGn", "YlGn", "Spectral", "gray"]
         return left, bottom, right, top
 
     @property
-    def ranges(self) -> dict[str, object]:
-        """Return the keywords that make a datashader operation draw on this view's grid."""
+    def canvas(self) -> dict[str, object]:
+        """Return the keywords that put a datashader operation on this view's grid."""
         rows, columns = self.geobox.shape
         return {
             "x_range": self.x_range,
@@ -528,45 +893,86 @@ CMAPS = ["viridis", "cividis", "magma", "RdYlGn", "YlGn", "Spectral", "gray"]
         }
 ```
 
-`Overview` (keep `bounds`, `value_at`, `window`; replace `__init__` and `view`):
+`Overview`:
 
 ```python
-    def __init__(self, array: xr.DataArray, style: Style, *, size: int = 2048) -> None:
-        if style.kind != "rgb" and BAND_DIMENSION in array.dims:
-            array = array.squeeze(BAND_DIMENSION, drop=True)
+class Overview:
+    """Variables of a raster on Web Mercator, read at the detail a view needs.
+
+    Zoomed out, a view draws a small copy computed once; zoomed in, it reads
+    only the window it shows at full detail, so a lazy raster is never read
+    whole after the first pass.
+
+    Args:
+        raster: The variables a layer shows, holding one date.
+        resampling: GDAL kernel, or one per variable; class codes take
+            `nearest`, which `.gs.reproject` insists on.
+        size: Longest side of the zoomed-out copy, in pixels.
+
+    Examples:
+        >>> overview = Overview(ds[["ndvi"]], resampling="average")
+        >>> overview.view(View(x_range, y_range))["ndvi"].shape
+        (600, 800)
+    """
+
+    def __init__(
+        self,
+        raster: xr.Dataset,
+        *,
+        resampling: Resampling | Mapping[str, Resampling],
+        size: int = 2048,
+    ) -> None:
         # Nodata reads as nan, so a map leaves it clear
-        values = array.gs.to_nan().astype("float32").gs.write_nodata(float("nan"))
-        # An array in memory warps lazily too, so a map warps only the windows it shows
-        if values.chunks is None:
-            y, x = SPATIAL_DIMENSIONS
+        values = raster.gs.to_nan().astype("float32").gs.write_nodata(float("nan"))
+        # A raster in memory warps lazily too, so a map warps only the windows it shows
+        y, x = SPATIAL_DIMENSIONS
+        if all(band.chunks is None for band in values.data_vars.values()):
             values = values.chunk({y: size, x: size})
 
-        # Class codes must not blend; continuous values average into a display pixel
-        self.classes = style.kind == "classes"
-        kernel = "nearest" if self.classes else "average"
-        self.full = values.gs.reproject(WEB_MERCATOR, resampling=kernel)
+        self.resampling = resampling
+        self.full = values.gs.reproject(WEB_MERCATOR, resampling=resampling)
         grid = self.full.gs.geobox
         self.coarse = values.gs.reproject(
-            grid.zoom_to(min(size, max(grid.shape))), resampling=kernel
+            grid.zoom_to(min(size, max(grid.shape))), resampling=resampling
         ).compute()
         self.size = size
-        # Limits come from the whole raster, so colours hold still while panning.
-        self.style = style.resolve(self.coarse.values)
-
-    def view(self, view: View) -> xr.DataArray:
-        """Return the values a view shows, one per screen pixel, north up, nan outside the raster."""
-        window = self.window(view.x_range, view.y_range)
-        # GDAL regrids to the screen, so no first-use compile delays a map
-        return window.gs.reproject(view.geobox, resampling="mode" if self.classes else "average")
 ```
 
-In `bounds`, read `self.coarse.gs.geobox.extent.boundingbox`.
-
-Image helpers (replace `on_web` … `_hoverable`, keep `tiles`):
+Keep `bounds` (read `self.coarse.gs.geobox.extent.boundingbox`) and `window` (unchanged; it slices the Dataset). Replace `value_at` and `view`:
 
 ```python
-def clear(view: View) -> hv.RGB:
-    """Return a clear image covering a view."""
+    def value_at(self, x: float, y: float) -> dict[str, float] | None:
+        """Read each variable's full-detail value under a Web Mercator point, None outside."""
+        left, bottom, right, top = self.bounds
+        if not (left <= x <= right and bottom <= y <= top):
+            return None
+        ys, xs = SPATIAL_DIMENSIONS
+        pixel = self.full.sel({xs: x, ys: y}, method="nearest").compute()
+        return {str(name): float(value) for name, value in pixel.data_vars.items()}
+
+    def view(self, view: View) -> xr.Dataset:
+        """Return the values a view shows, one per screen pixel, north up, nan outside the raster."""
+        window = self.window(view.x_range, view.y_range)
+        # Class codes take the most common code under a screen pixel, never a blend
+        kernels = {
+            name: "mode" if self._kernel(name) == "nearest" else "average"
+            for name in window.data_vars
+        }
+        # GDAL regrids to the screen, so no first-use compile delays a map
+        return window.gs.reproject(view.geobox, resampling=kernels)
+
+    def _kernel(self, name: str) -> Resampling:
+        """Return the kernel one variable warps with."""
+        if isinstance(self.resampling, str):
+            return self.resampling
+        return self.resampling.get(name, self.resampling.get("*", "average"))
+```
+
+Image helpers (replace `on_web` … `_hoverable`; keep `tiles`):
+
+```python
+def blank(view: View) -> hv.RGB:
+    """Return an empty image covering a view."""
     rows, columns = view.geobox.shape
     return hv.RGB(np.zeros((rows, columns, 4), np.uint8), bounds=view.bounds)
 
@@ -575,8 +981,7 @@ def rgb_element(channels: xr.DataArray, alpha: float) -> hv.RGB:
     """Return three channels valued in `[0, 1]` as an RGB element, clear where any is nan.
 
     Args:
-        channels: `(band, y, x)` on a view's grid, as `.gs.colorize` or
-            `Style.stretch` return them.
+        channels: `(band, y, x)` on a view's grid, as `as_rgb` or `Stretch.apply` return them.
         alpha: Opacity of every pixel drawn.
     """
     y, x = SPATIAL_DIMENSIONS
@@ -590,22 +995,25 @@ def rgb_element(channels: xr.DataArray, alpha: float) -> hv.RGB:
     )
 
 
-def pixels(image: hv.RGB) -> np.ndarray:
+def rgba(image: hv.RGB) -> np.ndarray:
     """Return an RGB element's `(rows, columns, 4)` bytes, north up."""
-    bands = [image.dimension_values(d, flat=False) for d in image.vdims]
-    rgba = np.dstack(bands)
-    if rgba.dtype != np.uint8:
-        rgba = np.round(np.nan_to_num(rgba) * 255).astype(np.uint8)
+    channels = np.dstack([image.dimension_values(d, flat=False) for d in image.vdims])
+    if channels.dtype != np.uint8:
+        channels = np.round(np.nan_to_num(channels) * 255).astype(np.uint8)
     # HoloViews hands rows south to north when y ascends
     ys = image.dimension_values(1, expanded=False)
-    return rgba[::-1] if len(ys) > 1 and ys[0] < ys[-1] else rgba
+    return channels[::-1] if len(ys) > 1 and ys[0] < ys[-1] else channels
 ```
 
-(Step 5 confirms `pixels` orientation against `test_swipe_keeps_orientation`; if HoloViews already returns rows north up, drop the flip and its comment.)
+(Step 7 confirms `rgba`'s orientation through `test_swipe_keeps_orientation`; if HoloViews already returns rows north up, drop the flip and its comment.)
 
-- [ ] **Step 4: Rewrite layer drawing in `layers.py`**
+- [ ] **Step 4: Delete `Style` from `style.py`**
 
-Imports: drop `elements`, `datashader as ds` stays, add `holoviews as hv`, `spatialpandas as spd`, `from holoviews.operation.datashader import rasterize, shade, spread, stack`, `from geosave.geodata.viz.style import DEFAULT_CMAP, Style, Theme`; take `CMAPS` from `webmap`. Add `ROW = "row"` beside `SIZE`:
+Delete `type Kind`, the `Style` class and the `ListedColormap`/`to_rgba_array`/`BAND_DIMENSION`/`Legend`/`Colormap`/`Mapping` imports only it used. The module now holds `DEFAULT_CMAP`, `Theme`, `CATEGORY_PALETTE`, `ColorRamp`, `Stretch`, `as_rgb`, `category_colors`.
+
+- [ ] **Step 5: Raster layers in `layers.py`**
+
+Imports: drop `elements`, `dataclass(replace)` if unused, `Style`; add `holoviews as hv`, `spatialpandas as spd`, `from holoviews.operation.datashader import rasterize, shade, spread, stack`, `from geosave.geodata.viz.style import DEFAULT_CMAP, ColorRamp, Stretch, Theme, as_rgb, category_colors`; `CMAPS` from `webmap`. Constants:
 
 ```python
 # Columns every shape carries: the position of its frame row, and its larger side in metres.
@@ -613,17 +1021,86 @@ ROW = "row"
 SIZE = "size"
 ```
 
-`Layer`: add
+`Layer` gains
 
 ```python
     theme = param.Selector(default="light", objects=["light", "dark"], precedence=-1)
 ```
 
-and change `image`'s docstring return to "RGB element on the view's grid, None where the layer lies off the view."
+and `image`'s docstring returns "RGB element on the view's grid, None where the layer lies off the view."
 
-`RasterLayer.image`:
+`RasterLayer`: `self._limits: dict[tuple[str, ...], tuple[float, float]]` keeps one ramp or stretch per variable across dates. Delete the `style` property and `_style`; replace `_offer_cmap`, `key`, `identify`, `overview`, `image`, and add `_legend`, `ramp`, `stretch`:
 
 ```python
+    @param.depends("variable", watch=True, on_init=True)
+    def _offer_cmap(self) -> None:
+        """Offer the colormap only where it colours: classes and composites carry their own."""
+        if self.variable is not None:
+            self.param.cmap.precedence = 0.3 if self._legend is None and len(self.variable) == 1 else -1
+
+    @property
+    def _legend(self) -> Legend | None:
+        """Return the shown band's legend where it lists classes."""
+        legend = self._data[self.variable[0]].gs.legend if len(self.variable) == 1 else None
+        return legend if legend is not None and legend.classes else None
+
+    @property
+    def ramp(self) -> ColorRamp:
+        """Return the shown band's colour ramp, limits read from its first date drawn."""
+        overview = self.overview(self.variable, self.time)
+        if self.variable not in self._limits:
+            values = overview.coarse[self.variable[0]].values
+            self._limits[self.variable] = ColorRamp().fit(values).clim  # type: ignore[assignment]
+        return ColorRamp(self.cmap, self._limits[self.variable])
+
+    @property
+    def stretch(self) -> Stretch:
+        """Return the shown composite's stretch, read from its first date drawn."""
+        overview = self.overview(self.variable, self.time)
+        if self.variable not in self._limits:
+            values = overview.coarse[list(self.variable)].to_array().values
+            self._limits[self.variable] = Stretch().fit(values).clim  # type: ignore[assignment]
+        return Stretch(self._limits[self.variable])
+
+    def key(self) -> Key:
+        """Return the shown variable's classes, ramp or stretch."""
+        legend = self._legend
+        if legend is not None:
+            colors = legend.color_map or {}
+            return Key(swatches={
+                f"{name} ({code})": colors[code].lower()
+                for code, name in (legend.classes or {}).items()
+            })
+        if len(self.variable) == 3:
+            low, high = self.stretch.clim  # type: ignore[misc]
+            return Key(note=f"RGB stretch {low:.4g} – {high:.4g}")
+        ramp = self.ramp
+        return Key(ramp=ramp.palette, clim=ramp.clim)
+
+    def identify(self, x: float, y: float, tolerance: float) -> dict[str, str]:
+        """Return the shown variable's full-detail value under a point, a class by its name."""
+        values = self.overview(self.variable, self.time).value_at(x, y)
+        if values is None or all(np.isnan(v) for v in values.values()):
+            return {}
+        legend = self._legend
+        if legend is not None:
+            (name, value), = values.items()
+            code = int(value)
+            return {name: f"{(legend.classes or {}).get(code, 'unnamed')} ({code})"}
+        return {name: f"{value:.4g}" for name, value in values.items()}
+
+    def overview(self, variable: tuple[str, ...], time: object = None) -> Overview:
+        """Return one variable's map copy on one date, warped the first time it shows."""
+        key = (variable, time)
+        if key not in self._overviews:
+            data = self._data if time is None else self._data.sel({TIME_COORDINATE: time})
+            # Class codes warp without blending; anything else averages
+            classes = len(variable) == 1 and self._legend is not None
+            self._overviews[key] = webmap.Overview(
+                data[list(variable)], resampling="nearest" if classes else "average"
+            )
+        return self._overviews[key]
+
     def image(self, view: View, time: object = None) -> hv.RGB | None:
         """Draw the shown variable at a view's detail, on the bar's date or `time`.
 
@@ -632,27 +1109,30 @@ and change `image`'s docstring return to "RGB element on the view's grid, None w
         """
         if not _overlaps(self.bounds, view):
             return None
-        overview = self.overview(self.variable, self.time if time is None else time)
-        style = overview.style
-        window = overview.view(view)
+        window = self.overview(self.variable, self.time if time is None else time).view(view)
 
-        # Classes take their legend's colours, a composite its stretch, a band its ramp
-        if style.kind == "classes":
-            return webmap.rgb_element(window.gs.colorize(), self.alpha)
-        if style.kind == "rgb":
-            return webmap.rgb_element(style.stretch(window), self.alpha)
-        y, x = SPATIAL_DIMENSIONS
-        return shade(
-            hv.Image(window, kdims=[x, y]),
-            cmap=self.cmap,
-            clims=style.clim,
-            cnorm="linear",
-            alpha=round(self.alpha * 255),
-            dynamic=False,
-        )
+        # One band draws through its ramp; a composite stretches; classes take their colours
+        rgb = as_rgb(window, self.variable)
+        if rgb is None:
+            y, x = SPATIAL_DIMENSIONS
+            return shade(
+                hv.Image(window[self.variable[0]], kdims=[x, y]),
+                cmap=self.cmap,
+                clims=self.ramp.clim,
+                cnorm="linear",
+                alpha=round(self.alpha * 255),
+                dynamic=False,
+            )
+        if len(self.variable) == 3:
+            rgb = self.stretch.apply(rgb)
+        return webmap.rgb_element(rgb, self.alpha)
 ```
 
-`VectorLayer.__init__` (replacing everything from `web = webmap.on_web(frame)` on):
+(`Legend` imports from `geosave.geodata.attrs` under `TYPE_CHECKING`. `info` still reads `self._data[self.variable[0]].gs.nodata`; Task 6 replaces it.)
+
+- [ ] **Step 6: Vector layers in `layers.py`**
+
+`VectorLayer.__init__`, replacing everything from `web = webmap.on_web(frame)` on:
 
 ```python
         if frame.crs is None:
@@ -672,7 +1152,7 @@ and change `image`'s docstring return to "RGB element on the view's grid, None w
         self.param.column.objects = {"single colour": None, **{c: c for c in columns}}
         self.column = column
 
-        # Rows carry their position and size; text becomes a category datashader counts
+        # Rows carry their position and size; text becomes the categories datashader counts
         width, height = (
             web.bounds[["maxx", "maxy"]].values - web.bounds[["minx", "miny"]].values
         ).T
@@ -681,7 +1161,7 @@ and change `image`'s docstring return to "RGB element on the view's grid, None w
             **{ROW: np.arange(len(web)), SIZE: np.maximum(width, height)},
         )
 
-        # Shapes by how they draw, converted once to spatialpandas
+        # Shapes by how they draw, converted to spatialpandas once
         parts = webmap.split_by_geometry(rows)
         shapes = {kind: part for kind, part in parts.items() if kind != "Point"}
         if "Polygon" in parts:
@@ -691,32 +1171,35 @@ and change `image`'s docstring return to "RGB element on the view's grid, None w
         self._shapes = {kind: spd.GeoDataFrame(part) for kind, part in shapes.items()}
 ```
 
-Replace `paint` with:
+Replace `paint` and `key`:
 
 ```python
     @property
-    def style(self) -> Style | None:
-        """Return how `column` colours the features in this theme, None for one colour."""
-        if self.column is None:
+    def colors(self) -> dict[object, str] | None:
+        """Return each category of a text `column` with its colour in this theme, else None."""
+        if self.column is None or self.frame[self.column].dtype.kind in "biuf":
             return None
-        return Style.from_column(cast("pd.Series", self.frame[self.column]), theme=self.theme)
-```
+        return category_colors(cast("pd.Series", self.frame[self.column]), self.theme)
 
-`key`:
+    @property
+    def ramp(self) -> ColorRamp | None:
+        """Return the colour ramp of a numeric `column`, else None."""
+        if self.column is None or self.frame[self.column].dtype.kind not in "biuf":
+            return None
+        return ColorRamp().fit(self.frame[self.column].to_numpy(dtype=float))
 
-```python
     def key(self) -> Key:
         """Return the colour of every feature, or of each value of `column`."""
-        style = self.style
-        if style is None:
+        if self.column is None:
             return Key(swatches={"every feature": self.color})
-        if style.kind == "classes":
-            colors = style.colors or {}
-            return Key(swatches={name: colors[code] for code, name in (style.classes or {}).items()})
-        return Key(ramp=style.palette, clim=style.clim)
+        colors = self.colors
+        if colors is not None:
+            return Key(swatches={str(name): color for name, color in colors.items()})
+        ramp = cast("ColorRamp", self.ramp)
+        return Key(ramp=ramp.palette, clim=ramp.clim)
 ```
 
-`image`:
+`image` and `_shade`:
 
 ```python
     def image(self, view: View) -> hv.RGB | None:
@@ -755,11 +1238,11 @@ Replace `paint` with:
                 if kind in self._shapes:
                     chosen = large(kind)
                     chosen = chosen[chosen[ROW].isin(self.selected)]
-                    shaded = self._shade(hv.Path, chosen, view, color=webmap.HIGHLIGHT)
-                    images.append(spread(shaded, px=1, dynamic=False))
+                    outlined = self._shade(hv.Path, chosen, view, color=webmap.HIGHLIGHT)
+                    images.append(spread(outlined, px=1, dynamic=False))
             chosen = dots[dots[ROW].isin(self.selected)]
-            shaded = self._shade(hv.Points, chosen, view, color=webmap.HIGHLIGHT)
-            images.append(spread(shaded, px=3, dynamic=False))
+            ringed = self._shade(hv.Points, chosen, view, color=webmap.HIGHLIGHT)
+            images.append(spread(ringed, px=3, dynamic=False))
         return stack(hv.Overlay(images), dynamic=False)
 
     def _shade(
@@ -772,26 +1255,25 @@ Replace `paint` with:
     ) -> hv.RGB:
         """Draw shapes on a view's grid: in `color`, else as `column` colours them."""
         if shapes.empty:
-            return webmap.clear(view)
+            return webmap.blank(view)
         drawn = element(shapes, vdims=[c for c in shapes.columns if c != shapes.geometry.name])
         opacity = round(alpha * 255)
-        style = None if color else self.style
 
         # One colour marks coverage, a category counts its shapes, a quantity averages
-        if style is None:
-            covered = rasterize(drawn, aggregator=ds.any(), **view.ranges)
+        if color is not None or self.column is None:
             fill = color or self.color
+            covered = rasterize(drawn, aggregator=ds.any(), **view.canvas)
             return shade(covered, cmap=[fill, fill], alpha=opacity, dynamic=False)
-        if style.kind == "classes":
-            counts = rasterize(drawn, aggregator=ds.count_cat(self.column), **view.ranges)
-            return shade(
-                counts, color_key=dict(style.colors or {}), min_alpha=opacity, alpha=opacity, dynamic=False
-            )
-        means = rasterize(drawn, aggregator=ds.mean(self.column), **view.ranges)
-        return shade(means, cmap=style.palette, clims=style.clim, cnorm="linear", alpha=opacity, dynamic=False)
+        colors = self.colors
+        if colors is not None:
+            counts = rasterize(drawn, aggregator=ds.count_cat(self.column), **view.canvas)
+            return shade(counts, color_key=colors, min_alpha=opacity, alpha=opacity, dynamic=False)
+        ramp = cast("ColorRamp", self.ramp)
+        means = rasterize(drawn, aggregator=ds.mean(self.column), **view.canvas)
+        return shade(means, cmap=ramp.palette, clims=ramp.clim, cnorm="linear", alpha=opacity, dynamic=False)
 ```
 
-Module helpers: delete `_plain`; keep `_overlaps`; change `_counted` to
+Module helpers: delete `_plain`; keep `_overlaps`; `_counted` becomes
 
 ```python
 def _counted(frame: gpd.GeoDataFrame) -> str:
@@ -814,26 +1296,19 @@ def _colourable(values: pd.Series) -> bool:
 
 
 def _categories(values: pd.Series) -> pd.Categorical:
-    """Return text as categories in sorted order, the order `Style.from_column` colours them."""
+    """Return text as categories in the sorted order `category_colors` colours them."""
     return pd.Categorical(values, categories=sorted(values.dropna().unique(), key=str))
 ```
 
 `CatalogLayer.__init__`: `self._items = webmap.drawable(frame)`.
 
-- [ ] **Step 5: Stack in the explorer**
+- [ ] **Step 7: Stack in the explorer**
 
-`app.py` imports `from holoviews.operation.datashader import stack`. `_draw`, from `images = []` on:
+`app.py` imports `from holoviews.operation.datashader import stack`. In `_draw`, after the loop collecting `images`:
 
 ```python
-        images = []
-        for shown in self.stacked:
-            if shown in compared:
-                if shown is next(x for x in self.stacked if x in compared):
-                    images.append(self._swipe(view))
-            elif shown.visible:
-                images.append(shown.image(view))
         drawn = [x for x in images if x is not None]
-        composite = stack(hv.Overlay(drawn), dynamic=False) if drawn else webmap.clear(view)
+        composite = stack(hv.Overlay(drawn), dynamic=False) if drawn else webmap.blank(view)
         return composite.opts(hooks=[self._move], backend="bokeh")
 ```
 
@@ -843,8 +1318,8 @@ def _categories(values: pd.Series) -> pd.Categorical:
     def _swipe(self, view: webmap.View) -> hv.RGB:
         """Return the left side's raster left of the cut, the right side's right of it."""
         (left, left_time), (right, right_time) = self.left, self.right
-        sides = [left.image(view, left_time), right.image(view, right_time)]
-        image, other = (webmap.pixels(x if x is not None else webmap.clear(view)) for x in sides)
+        drawn = [left.image(view, left_time), right.image(view, right_time)]
+        image, other = (webmap.rgba(x if x is not None else webmap.blank(view)) for x in drawn)
         cut = round(self.split * image.shape[1])
         image[:, cut:] = other[:, cut:]
         # A line marks the cut
@@ -852,24 +1327,24 @@ def _categories(values: pd.Series) -> pd.Categorical:
         return hv.RGB(image, bounds=view.bounds)
 ```
 
-- [ ] **Step 6: Delete `elements`**
+- [ ] **Step 8: Delete `elements`**
 
 ```bash
 git rm src/geosave/geodata/viz/elements.py tests/geodata/viz/test_elements.py
 ```
 
-Remove `elements` from `viz/__init__.py`'s docstring: "`style` decides how values become colour, `plot` draws figures through hvPlot on matplotlib, `map` holds the Web Mercator view and raster overviews, and `explorer` lays maps and controls out as a Panel app."
+`viz/__init__.py` docstring: "`style` decides how values become colour, `plot` draws figures through hvPlot on matplotlib, `map` holds the Web Mercator view and raster overviews, and `explorer` lays maps and controls out as a Panel app."
 
-- [ ] **Step 7: Run the viz tests**
+- [ ] **Step 9: Run the viz tests**
 
-Run: `uv run pytest tests/geodata/viz -q`
-Expected: PASS. If `test_swipe_keeps_orientation` fails with an upside-down match, flip the `pixels` orientation rule as noted in Step 3.
+Run: `uv run pytest tests/geodata/viz tests/geodata/core -q`
+Expected: PASS. If `test_swipe_keeps_orientation` matches upside down, flip `rgba`'s orientation rule as noted in Step 3.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add -A src/geosave/geodata/viz tests/geodata/viz
-git commit -m "refactor(viz): layers render through rasterize, shade and stack; drop hand-written canvas"
+git commit -m "refactor(viz): layers render through rasterize, shade and stack; Style and elements go"
 ```
 
 ---
