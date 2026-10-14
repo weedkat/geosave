@@ -44,7 +44,8 @@ explorer's `THEME` and `CUT` stay in `app.py`, which alone uses them.
 
 `Style` stays the one rule from values to colour, shared by figures and maps.
 It loses the pixel work HoloViz does (`rgba`, `stretch`) and gains what
-`Paint` did, so a vector column and a raster band use one model:
+`Paint` did, so a vector column and a raster band use one model. Constructors say what
+they read (`from_band`, `from_column`); `Style.of` and `Paint.of` go:
 
 ```python
 @dataclass(frozen=True)
@@ -56,10 +57,10 @@ class Style:
     colors: Mapping[object, str] | None = None    # code or category -> #rrggbb
 
     @classmethod
-    def of(cls, array, *, cmap=None, clim=None, legend=None) -> Style: ...
+    def from_band(cls, array, *, cmap=None, clim=None, legend=None) -> Style: ...
     @classmethod
-    def of_column(cls, values: pd.Series, cmap=DEFAULT_CMAP) -> Style:
-        """Categories by name with glasbey colours, quantities on a ramp."""
+    def from_column(cls, values: pd.Series, *, dark: bool, cmap=DEFAULT_CMAP) -> Style:
+        """Categories by name on a glasbey palette for the theme, quantities on a ramp."""
     def resolve(self, values) -> Style: ...        # limits from pixels, unchanged
     def positions(self, values) -> np.ndarray: ...  # class figures only
 ```
@@ -135,9 +136,64 @@ The vector layer builds its spatialpandas elements once, per geometry type,
 with the row number and size columns it already carries. Swipe keeps cutting
 two RGBA arrays at the split column.
 
+## Explorer page
+
+Layout, served and in a notebook alike:
+
+```text
+┌ sidebar ──────────┬ main ──────────────────────────────────────┐
+│ Catalogs          │ basemap · theme toggle                      │
+│ Layers            │                                             │
+│ ───────────────── │                 map (fills the width)       │
+│ Style | Info |    │                                             │
+│ Identify          │ time bar · swipe                            │
+│ (selected layer)  │ attribute table: search, header filters,    │
+│                   │ rows per page, pager                        │
+└───────────────────┴─────────────────────────────────────────────┘
+```
+
+The selected layer's tabs move from the right contextbar into the sidebar
+under the layer list, as Planetary Computer and Copernicus Browser keep them,
+so the map takes every column the sidebar does not. Served, it is a
+`pmui.Page` with `sidebar` and `main` only; in a notebook, a `pmui.Row` of the
+same two columns. The attribute table keeps today's search, header filters,
+rows-per-page and pager.
+
+### Light and dark
+
+- The page follows panel-material-ui's theme: `Page`'s toggle when served,
+  the JupyterLab or VS Code theme in a notebook. The explorer reads it from
+  the components' `dark_theme` parameter.
+- Map colours that sit on the basemap switch with the theme: the default
+  basemap is `CartoLight` or `CartoDark`, and text categories use colorcet's
+  `glasbey_dark` on light and `glasbey_light` on dark, so every category
+  stays visible against its background. A basemap the user picked is kept.
+- Text never carries a hard-coded colour: legends, facts and identify
+  results are pmui components (`Typography`, `List`), not inline HTML, and
+  take the theme's text colour. A swatch is the only coloured element.
+- Tables use Tabulator's `materialize` theme on light and `midnight` on dark,
+  switched with the theme.
+
+### Raster Info tab
+
+Modelled on Planetary Computer's item panel and Copernicus Browser's layer
+info, built from the attr groups geosave already parses, nothing read twice:
+
+| Section | Source |
+|---|---|
+| Overview: title, summary, institution, license, keywords | `ACDD` on the raster |
+| Grid: CRS, size, pixel size, extent in degrees | `.gs.crs_name`, `.gs.geobox` |
+| Time: dates, first and last, step | `.gs.times`, `TimeSpec` |
+| Bands: one row per variable with dtype, nodata, units, common name, centre wavelength, FWHM, scale and offset | `Nodata`, `Quantity`, `Spectral`, `Packing` |
+| Classes: code, name, swatch for a band with a legend | `Legend` |
+| All attrs: the raw attrs, grouped and searchable, collapsed by default | today's table |
+
+A section with nothing to show is left out. Vector and catalog layers keep
+today's facts (CRS, rows, geometry, columns, dates).
+
 ## Testing
 
-- `tests/geodata/viz/test_style.py`: `Style.of_column` for categories and
+- `tests/geodata/viz/test_style.py`: `Style.from_column` for categories and
   quantities; `positions`; `resolve`. `rgba`/`stretch` tests go.
 - `test_plot.py`: band, classes (named ticks), RGB, `time` layout, mixed
   frame outline; existing figure assertions kept.
@@ -146,9 +202,13 @@ two RGBA arrays at the split column.
 - `test_elements.py` is deleted; its geometry-split cases move to `test_plot.py`.
 - `explorer/test_layers.py`: each layer's `image` returns an RGB on the
   view's grid; selection and identify unchanged.
-- Browser smoke test (Playwright + Brave): open a raster, a vector and a
-  catalog; pan, zoom, add, remove, reorder, swipe, time step; zero console
-  errors and the zoom kept across each.
+- `explorer/test_docks.py`: the raster Info tab lists each section its attrs
+  fill and leaves out empty ones; the table still searches and filters.
+- Browser smoke test (Playwright + Brave), once light and once dark: open a
+  raster, a vector with a text column and a catalog; pan, zoom, add, remove,
+  reorder, swipe, time step, search the table; zero console errors, the zoom
+  kept across each, and screenshots checked for legible text and categories
+  in both themes.
 
 ## Risks
 
