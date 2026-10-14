@@ -18,7 +18,7 @@ Public calls do not change: `.gs.plot()`, `.gs.explore()`, `Explorer`,
 
 | Decision | Choice | Evidence (probes, 2026-10-14) |
 |---|---|---|
-| High-level API | Add `hvplot` to the viz dependencies | `.hvplot.image`, `.hvplot.rgb(bands="band")` draw rasters on bokeh and matplotlib |
+| High-level API | Add `hvplot` to the core dependencies, beside holoviews and panel | `.hvplot.image`, `.hvplot.rgb(bands="band")` draw rasters on bokeh and matplotlib |
 | GeoViews | Not added | hvPlot on a geopandas frame imports geoviews; on a spatialpandas frame it does not. Data reaches Web Mercator through `.gs.reproject` and `to_crs` |
 | Vectors | Hand hvPlot/HoloViews a `spatialpandas.GeoDataFrame` | Polygons, lines, points and Multi* draw and rasterize |
 | Mixed geometry frames | Split once by `geom_type`, one element per part | hvPlot refuses a mixed frame |
@@ -43,7 +43,7 @@ explorer's `THEME` and `CUT` stay in `app.py`, which alone uses them.
 ### `style.py`
 
 `Style` stays the one rule from values to colour, shared by figures and maps.
-It loses the pixel work HoloViz does (`rgba`, `stretch`) and gains what
+It loses the pixel work HoloViz does (`rgba`) and gains what
 `Paint` did, so a vector column and a raster band use one model. Constructors say what
 they read (`from_band`, `from_column`); `Style.of` and `Paint.of` go:
 
@@ -65,14 +65,15 @@ class Style:
     def positions(self, values) -> np.ndarray: ...  # class figures only
 ```
 
-`nodata` leaves `Style`: rasters reach a figure or map through `.gs.to_nan()`,
-so nodata is already nan. `Paint`, `Paint.numbers` and `_plain` are deleted.
+`nodata` leaves `Style`: a map reads rasters through `.gs.to_nan()`, so
+nodata is already nan. A figure keeps drawing values as stored, nodata
+included, as it does today. `stretch` stays: a composite's percentile stretch
+onto `[0, 1]` is ours, and works on an array or a DataArray. `Paint`, `Paint.numbers` and `_plain` are deleted.
 
 ### `plot.py`
 
 ```python
 def figure(array, style, *, cols=4, title=None, xlabel=None):
-    array = array.gs.to_nan()
     if style.kind == "rgb":
         drawn = _stretched(array, style).hvplot.rgb(x="x", y="y", bands="band", groupby=TIME, ...)
     else:
@@ -82,14 +83,16 @@ def figure(array, style, *, cols=4, title=None, xlabel=None):
 def outline(frame, *, color, alpha):
     return hv.Overlay([
         spd.GeoDataFrame(part).hvplot(color=color, alpha=alpha, data_aspect=1)
-        for _, part in _by_geometry(frame)
+        for part in split_by_geometry(frame).values()
     ])
 ```
 
-`_options` maps a Style onto hvPlot keywords (`cmap`, `clim`, `colorbar`;
-classes add `clim=(-0.5, n-0.5)`, `color_levels`, `cbar_ticks`). Caption and
-layout code is unchanged. `_by_geometry` is the one place geometry types are
-split, a `groupby` on `geom_type` with the `Multi` prefix dropped, and is
+hvPlot builds each element; `_styled` then sets the matplotlib options a
+Style calls for with `.opts` (`cmap`, `clim`, `colorbar`; classes add
+`clim=(-0.5, n-0.5)`, `color_levels`, `cbar_ticks`), which hvPlot does not
+expose. Caption and
+layout code is unchanged. `map.split_by_geometry` is the one place geometry
+types are split, on `geom_type` with the `Multi` prefix dropped, and is
 shared with the explorer.
 
 ### `map.py`
@@ -212,12 +215,9 @@ today's facts (CRS, rows, geometry, columns, dates).
 
 ## Risks
 
-- `hvplot` is a new dependency of the viz extra.
+- `hvplot` is a new core dependency.
 - datashader's categorical colouring blends overlapping categories by count,
   where today the highest category wins; overlapping polygons may tint.
-- `.gs.colorize` on a map window needs the band's `Legend` to survive
-  `.gs.reproject` and `.gs.to_nan`; the first plan step checks it, and a
-  band without one falls back to the colours `Style` already holds.
 - `.gs.reproject` warns about a band with no fill value; after `.gs.to_nan`
   the overview passes nan explicitly so a map raises no warning.
 - `stack`, `shade` and `spread` per layer per pan must stay as fast as the
