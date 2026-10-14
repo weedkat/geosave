@@ -6,6 +6,7 @@ documented in the guides and API reference.
 
 | Date | Spec |
 | --- | --- |
+| 2026-10-14 | [viz on HoloViz's intended layers](2026-10-14-viz-holoviz-design.md) |
 | 2026-10-12 | [STAC package structure](2026-10-12-stac-structure-design.md) |
 | 2026-10-10 | [Cuts as self-contained window rows](2026-10-10-cuts-windows-design.md) |
 | 2026-10-09 | [Examples series: one project, from image files to deployment](2026-10-09-examples-series-design.md) |
