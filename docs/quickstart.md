@@ -58,26 +58,26 @@ metadata.
 
 ## 2. Give each raster a date
 
-The `time` coordinate gives the saved files their acquisition date. Here a
-singleton dimension keeps one-date and multi-date model inputs in the same
-form. `to_cog` also accepts a scalar `time` coordinate for one image.
+The `time` coordinate gives the saved files their acquisition date. One image
+holds one date, so `time` is a scalar coordinate rather than an axis; a series
+of dates would span a `time` axis instead.
 
 ```python
 day = np.datetime64("2025-01-01")
-optical = optical.expand_dims(time=[day])
-label = label.expand_dims(time=[day])
+optical = optical.assign_coords(time=day)
+label = label.assign_coords(time=day)
 ```
 
-## 3. Stack, save, and catalogue
+## 3. Group, save, and catalogue
 
-These two rasters share a grid. `gs.stack` groups them without resampling;
+These two rasters share a grid. `gs.tree` groups them without resampling;
 other groups can retain different grids. Here each group becomes a STAC
-collection, and `to_cog` writes one file per collection and date.
+collection, and `to_cog` writes one file per collection, date, and band.
 
 ```python
-sample = gs.stack({"optical": optical, "label": label})
-files = sample.gs.to_cog(str(root / "s0/{collection}_{time:%Y%m%d}.tif"))
-rows = gs.stac.create_item(files, id="s0")
+sample = gs.tree({"optical": optical, "label": label})
+scenes = sample.gs.to_cog(root / "s0/{collection}_{time:%Y%m%d}_{band}.tif")
+rows = gs.stac.create_catalog(gs.stac.create_items(scenes, id_format="s0"))
 rows.gs.to_geoparquet(str(root / "catalog.parquet"))
 rows[["collection", "datetime"]]
 ```
@@ -90,16 +90,20 @@ Output:
 1      label 2025-01-01 00:00:00+00:00
 ```
 
-`files` is a tuple of the destination `UPath` objects. `create_item` reads their
-headers to build the item table, without reading pixels. The table describes
+`scenes` is a list of `Scene`s, one per collection and date, each mapping asset
+keys to `RasterFile`s. `create_items` builds one Item from each, from the
+headers they carry, reading nothing again and no pixels; `create_catalog` lays
+them out as the item table. The table describes
 the files this call saved; it does not scan the output folder.
+Separate band files give the STAC assets the names `red`, `nir`, and `label`,
+so loading through the catalog retains those variable names.
 
 ## 4. Cut windows
 
 ```python
 items = gs.open_vector(str(root / "catalog.parquet"))
-windows = gs.cuts.stacks(items, on="label")   # one window per label item
-windows = gs.cuts.chips(windows, 128)         # split in space
+windows = items.gs.sample()   # one sample per shared footprint
+windows = windows.gs.chip(128, target=anchor.geobox)         # split in space
 windows[["proj:shape", "start_datetime", "end_datetime"]]
 ```
 
@@ -118,18 +122,22 @@ table and returns one; it does not read the pixel arrays.
 
 | Step | Input | Output | Execution |
 | --- | --- | --- | --- |
-| Save | Named raster groups in a DataTree | TIFF paths | Computes and writes pixels. |
-| Describe | Saved TIFF paths | Item GeoDataFrame | Reads headers. |
+| Save | Named raster groups in a DataTree | `Scene`s of `RasterFile`s | Computes and writes pixels; captures file headers. |
+| Describe | Saved `Scene`s | Item GeoDataFrame | Uses their headers without reopening files. |
 | Cut | Item/window GeoDataFrame | Window GeoDataFrame | Uses grid, time, and source metadata. |
-| Open | One window row | DataTree | Builds lazy raster reads on the window grid. |
-| Convert | Raster or stack | Tensor or tensor mapping | Reads the selected pixels. |
+| Open | One stack row | DataTree | Builds lazy raster reads on the window grid. |
+| Convert | Raster or tree | Tensor or tensor mapping | Reads the selected pixels. |
 
 ## 5. Read a chip as tensors
 
 ```python
-chip = windows.iloc[0].gs.to_stack()          # lazy DataTree
-decoded = chip.gs.mask_and_scale()
-tensors = decoded.gs.to_tensor()
+chip = windows.iloc[0].gs.to_xarray()          # lazy DataTree
+optical = chip["optical"].dataset[["red", "nir"]].gs.mask_and_scale()
+label = chip["label"].dataset[["label"]]
+tensors = {
+    "optical": optical.gs.to_tensor(dtype="float32"),
+    "label": label.gs.to_tensor(),
+}
 chip.close()
 {name: tuple(t.shape) for name, t in tensors.items()}
 ```
@@ -137,23 +145,29 @@ chip.close()
 Output:
 
 ```text
-{'label': (1, 1, 128, 128), 'optical': (1, 2, 128, 128)}
+{'optical': (2, 128, 128), 'label': (1, 128, 128)}
 ```
 
 Decoding turns optical nodata (`0`) into NaN; any declared scale and offset
-would also be applied. Conversion to tensors reads the selected chip window.
-Here the axes are `[time, band, y, x]`.
+would also be applied. Label class codes stay unchanged. Conversion reads the
+selected chip window; here the axes are `[band, y, x]`.
+
+A Dataset identifies bands by variable name. Select them explicitly when
+stacking them into positional tensor channels; their order after a storage or
+catalog round trip is not the model's channel contract. Here the selection
+sets channel 0 to red and channel 1 to near-infrared.
 
 ## Use the single-date sample
 
-For a model taking one image, remove the singleton time axis and make the
-label an integer class map:
+For a model taking one image, take the label's one band as an integer class
+map:
 
 ```python
-image = tensors["optical"][0]
-target = tensors["label"][0, 0].long()
-valid = image.isfinite().all(dim=0)
-target[~valid] = 255
+image = tensors["optical"]
+target = tensors["label"][0].long()
+known = image.isfinite().all(dim=0)
+target[~known] = 255
+image = image.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 image.shape, target.shape
 ```
 
@@ -164,8 +178,9 @@ Output:
 ```
 
 The two input channels are red and near-infrared. Labels are class `0` or `1`,
-with `255` marking pixels whose inputs are missing. These are the `image`,
-`target`, and `valid` values a segmentation Dataset returns. The
+with `255` marking pixels whose inputs are missing. This example explicitly
+fills missing image values before returning model-ready inputs and the target;
+the DataModule does not infer availability or repair input values. The
 [training guide](guides/training.md) shows that sample contract and the
 DataModule's remaining input preparation.
 

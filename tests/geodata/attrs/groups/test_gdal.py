@@ -28,10 +28,3 @@ def test_rasterios_enum_and_gdals_undefined_read_as_names() -> None:
 def test_an_unknown_interpretation_is_refused() -> None:
     with pytest.raises(ValueError, match="GDAL colour interpretation"):
         attrs.GDALBand(colorinterp="purple")
-
-
-def test_the_keys_cover_what_it_writes() -> None:
-    written = attrs.GDALBand(variable_name="B04", colorinterp="red").model_dump(
-        by_alias=True
-    )
-    assert set(written) <= set(attrs.GDALBand.KEYS)

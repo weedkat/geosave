@@ -1,7 +1,7 @@
 """Marking pixels nodata and decoding stored values.
 
 A pixel's nodata is its `Nodata`, never an implicit NaN. Packing is read out
-only after nodata is blanked, so a stored fill value is never scaled into a
+only after nodata is masked, so a stored fill value is never scaled into a
 bogus physical reading.
 
 Examples:
@@ -34,7 +34,7 @@ def mask[T: xr.DataArray | xr.Dataset | xr.DataTree](
 ) -> T:
     """Make nodata every pixel a boolean mask does not keep.
 
-    Blanked pixels take the fill value their own variable carries, so no dtype
+    Masked pixels take the fill value their own variable carries, so no dtype
     is promoted and no variable gains a NaN it never carried.
 
     Args:
@@ -43,8 +43,8 @@ def mask[T: xr.DataArray | xr.Dataset | xr.DataTree](
             names its own axes and may span fewer than `data`, broadcasting
             over the rest; a bare numpy array names none, so it is read as the
             grid alone and must match its shape.
-        fill: Value the blanked pixels take, also written onto the result for
-            variables carrying no fill value yet. None reads what each
+        fill: Value the masked pixels take, replacing the result's nodata
+            metadata for every affected variable. None reads what each
             variable already carries.
 
     Returns:
@@ -75,44 +75,33 @@ def mask[T: xr.DataArray | xr.Dataset | xr.DataTree](
             f"valid is {valid.dtype}, not boolean; pass a comparison such as "
             f"scl.isin([...]) rather than the values themselves"
         )
-
     if isinstance(data, xr.DataTree):
+        # No pixel moves, so the tree keeps its root; the root holds no variables.
+        masked_tree = data.map_over_datasets(
+            lambda raster: (
+                mask(raster, valid, fill=fill) if raster.data_vars else raster
+            )
+        )
+        return cast("T", masked_tree)
 
-        def mask_group(raster: xr.Dataset) -> xr.Dataset:
-            # The root of a stack holds no variables, so it has nothing to mask.
-            return _mask_raster(raster, valid, fill) if raster.data_vars else raster
-
-        result = data.map_over_datasets(mask_group)
-    else:
-        result = _mask_raster(data, valid, fill)
-    return cast("T", result)
-
-
-def _mask_raster[R: xr.DataArray | xr.Dataset](
-    raster: R,
-    valid: xr.DataArray | np.ndarray,
-    fill: float | int | None,
-) -> R:
-    """Make nodata every pixel of one raster or band a mask does not keep."""
-    valid = _grid_mask(raster, valid)
-
-    # Writing the fill first means every variable reads one spelling of nodata.
+    valid = _validate_mask(data, valid)
+    # Writing the fill first gives every variable one stated fill value.
     if fill is not None:
-        raster = raster.gs.write_nodata(fill)
+        data = data.gs.write_nodata(fill)
 
-    def blank(band: xr.DataArray) -> xr.DataArray:
-        band_fill = band.gs.nodata
-        if band_fill is None:
+    def mask_variable(variable: xr.DataArray) -> xr.DataArray:
+        variable_fill = variable.gs.nodata
+        if variable_fill is None:
             raise ValueError(
-                f"{str(band.name)!r} carries no fill value; write one with "
+                f"{str(variable.name)!r} carries no fill value; write one with "
                 f"raster.gs.write_nodata(...) first"
             )
-        return band.where(valid, band_fill)
+        return variable.where(valid, variable_fill)
 
-    return _map_bands(raster, blank)
+    return _map_variables(data, mask_variable)
 
 
-def _grid_mask(
+def _validate_mask(
     raster: xr.DataArray | xr.Dataset, valid: xr.DataArray | np.ndarray
 ) -> xr.DataArray:
     """Read a mask as a DataArray spanning the raster's grid and no foreign axis."""
@@ -136,10 +125,10 @@ def _grid_mask(
             f"least the two spatial axes"
         )
 
-    foreign = sorted(str(dim) for dim in valid.dims if dim not in raster.dims)
-    if foreign:
+    foreign_dims = sorted(str(dim) for dim in valid.dims if dim not in raster.dims)
+    if foreign_dims:
         raise ValueError(
-            f"valid spans {foreign}, which {type(raster).__name__} does not "
+            f"valid spans {foreign_dims}, which {type(raster).__name__} does not "
             f"carry, so those axes name no pixels to mask; select them off "
             f"valid first"
         )
@@ -151,7 +140,7 @@ def to_nan[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
 
     A reduction reads a stored fill value as data unless it finds NaN there
     instead. A variable carrying no fill value passes through unchanged. A
-    stack is blanked group by group.
+    tree is decoded group by group.
 
     Args:
         data: DataArray, Dataset, or DataTree holding stored values.
@@ -166,14 +155,32 @@ def to_nan[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
         >>> to_nan(scene).red.attrs  # packing stays; the fill value is gone
         {'scale_factor': 0.0001, 'add_offset': -0.1}
     """
-    return _map_bands(data, _band_to_nan)
+
+    def blank_fill(variable: xr.DataArray) -> xr.DataArray:
+        value = variable.gs.nodata
+        if value is None:
+            return variable
+        # The codec compares in the variable's dtype, so the fill is cast to it first.
+        fill = attrs.Nodata(value=np.asarray(value).astype(variable.dtype).item())
+        # Packing read off disk would widen 16-bit variables to float64; mask without it.
+        packing = variable.gs.packing
+        stamped = attrs.stamp_attrs(variable, fill)
+        coded = attrs.clear_attrs(stamped, attrs.Packing).variable
+        blanked = xr.DataArray(
+            CFMaskCoder().decode(coded, name=variable.name),
+            coords=variable.coords,
+            name=variable.name,
+        )
+        return blanked if packing is None else attrs.stamp_attrs(blanked, packing)
+
+    return _map_variables(data, blank_fill)
 
 
 def unpack[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
     """Read physical values out of each variable's stored digital numbers.
 
     A variable carrying neither `scale_factor` nor `add_offset` passes through
-    unchanged. A stack is unpacked group by group.
+    unchanged. A tree is unpacked group by group.
 
     Args:
         data: DataArray, Dataset, or DataTree holding stored values.
@@ -194,13 +201,44 @@ def unpack[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
         >>> unpack(to_nan(scene)).red.max().item()
         0.09
     """
-    return _map_bands(data, _band_unpack)
+
+    def scale(variable: xr.DataArray) -> xr.DataArray:
+        if variable.gs.packing is None:
+            return variable
+        # A class code names a class, so scaling it yields a number naming none.
+        if variable.gs.is_categorical:
+            raise ValueError(
+                f"{str(variable.name)!r} holds class codes and declares packing, "
+                f"which cannot both be true; drop its Legend or its Packing, "
+                f"whichever does not describe the pixels"
+            )
+        fill = variable.gs.nodata
+        if fill is not None:
+            raise ValueError(
+                f"{str(variable.name)!r} marks its nodata pixels with {fill!r}, "
+                f"which scaling turns into an ordinary reading nothing can tell "
+                f"from data; blank them with nodata.to_nan first, then unpack"
+            )
+        # Copy so decoding never writes into the caller's attrs.
+        coded = variable.variable.copy(deep=False)
+        # CF reads these out as float32 only where the packing is float32 too.
+        is_small_int = variable.dtype.kind in "iu" and variable.dtype.itemsize <= 2
+        if is_small_int or variable.dtype == np.float32:
+            for key in attrs.Packing.KEYS:
+                if key in coded.attrs:
+                    coded.attrs[key] = np.float32(coded.attrs[key])
+        physical = CFScaleOffsetCoder().decode(coded, name=variable.name)
+        return xr.DataArray(
+            physical, coords=variable.coords, name=variable.name, attrs=physical.attrs
+        )
+
+    return _map_variables(data, scale)
 
 
-def _map_bands[T: xr.DataArray | xr.Dataset | xr.DataTree](
+def _map_variables[T: xr.DataArray | xr.Dataset | xr.DataTree](
     data: T, change: Callable[[xr.DataArray], xr.DataArray]
 ) -> T:
-    """Apply one per-variable change to a band, raster, or stack.
+    """Apply one per-variable change to a variable, raster, or tree.
 
     Args:
         data: DataArray, Dataset, or DataTree to change.
@@ -210,72 +248,17 @@ def _map_bands[T: xr.DataArray | xr.Dataset | xr.DataTree](
         New object of the same kind, every data variable changed. A Dataset's
         encoding no longer names the file it was read from.
     """
+    # No pixel moves, so a tree keeps its root and its coordinates.
     if isinstance(data, xr.DataTree):
-        changed = data.map_over_datasets(lambda raster: _map_bands(raster, change))
-    elif isinstance(data, xr.DataArray):
-        changed = change(data)
-    else:
-        bands = {name: change(band) for name, band in data.data_vars.items()}
-        changed = data.assign(bands)
-        # Its pixels are no longer the file's.
-        changed.encoding.pop("source", None)
-    return cast("T", changed)
+        tree = data.map_over_datasets(lambda raster: _map_variables(raster, change))
+        return cast("T", tree)
+    if isinstance(data, xr.DataArray):
+        return cast("T", change(data))
 
-
-def _band_to_nan(band: xr.DataArray) -> xr.DataArray:
-    """Replace one variable's fill value with NaN."""
-    blanked = band
-    nodata = attrs.parse(band, attrs.Nodata)
-    if nodata is not None:
-        # Normalize supported spellings before the native CF codec reads the fill.
-        variable = attrs.stamp(band, attrs.Nodata, nodata).variable
-
-        # Packing read off disk would widen 16-bit bands to float64; mask without it.
-        packing = {}
-        for key in attrs.Packing.KEYS:
-            if key in variable.attrs:
-                packing[key] = variable.attrs.pop(key)
-
-        decoded = CFMaskCoder().decode(variable, name=band.name)
-        blanked = xr.DataArray(
-            decoded, coords=band.coords, name=band.name, attrs=decoded.attrs | packing
-        )
-    return blanked
-
-
-def _band_unpack(band: xr.DataArray) -> xr.DataArray:
-    """Read physical values out of one variable's stored digital numbers."""
-    packed = band.gs.packing is not None
-
-    # A class code names a class, so scaling it yields a number naming none.
-    if packed and attrs.is_flag(band):
-        raise ValueError(
-            f"{str(band.name)!r} holds class codes and declares packing, which "
-            f"cannot both be true; drop its Legend or its Packing, whichever "
-            f"does not describe the pixels"
-        )
-    fill = band.gs.nodata
-    if packed and fill is not None:
-        raise ValueError(
-            f"{str(band.name)!r} marks its nodata pixels with {fill!r}, which "
-            f"scaling turns into an ordinary reading nothing can tell from data; "
-            f"blank them with nodata.to_nan first, then unpack"
-        )
-
-    physical = band
-    if packed:
-        # Copy so decoding never writes into the caller's attrs.
-        stored = band.variable.copy(deep=False)
-
-        # CF reads these out as float32 only where the packing is float32 too.
-        small_int = band.dtype.kind in "iu" and band.dtype.itemsize <= 2
-        if small_int or band.dtype == np.float32:
-            for key in attrs.Packing.KEYS:
-                if key in stored.attrs:
-                    stored.attrs[key] = np.float32(stored.attrs[key])
-
-        decoded = CFScaleOffsetCoder().decode(stored, name=band.name)
-        physical = xr.DataArray(
-            decoded, coords=band.coords, name=band.name, attrs=decoded.attrs
-        )
-    return physical
+    variables = {}
+    for name, variable in data.data_vars.items():
+        variables[name] = change(variable)
+    raster = data.assign(variables)
+    # Its pixels are no longer the file's.
+    raster.encoding.pop("source", None)
+    return cast("T", raster)

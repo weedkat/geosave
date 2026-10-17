@@ -13,6 +13,7 @@ from geosave.model.registry import build_model
 
 from .data import Sample
 
+
 def patch_mask(
     batch: int,
     shape: tuple[int, int],
@@ -44,9 +45,9 @@ def patch_mask(
     columns = -(-width // patch_size)
     count = rows * columns
     # The lowest random scores pick the masked patches.
-    chosen = torch.rand(batch, count, device=device, generator=generator).argsort(dim=1)[
-        :, : round(ratio * count)
-    ]
+    chosen = torch.rand(batch, count, device=device, generator=generator).argsort(
+        dim=1
+    )[:, : round(ratio * count)]
     grid = torch.zeros(batch, count, dtype=torch.bool, device=device)
     grid.scatter_(1, chosen, True)
     grid = grid.reshape(batch, rows, columns)
@@ -57,7 +58,7 @@ def patch_mask(
 class Module(LightningModule):
     """Pretrain a model chain by reconstructing masked patches of its input.
 
-    Hidden valid pixels are scored by mean absolute error. The last stage
+    Hidden pixels are scored by mean absolute error. The last stage
     predicts one value per band and instant, as a regression head naming them.
 
     Args:
@@ -115,6 +116,12 @@ class Module(LightningModule):
         self.model = build_model(deepcopy(self.model_chain))
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Build optimization for the configured chain's trainable parameters.
+
+        Returns:
+            The optimizer alone when scheduling is disabled, otherwise a
+            Lightning dictionary with `optimizer` and `lr_scheduler` entries.
+        """
         optimizer = build_optimizer(self.optimizer_spec, self.model)
         if self.scheduler_spec is None:
             return optimizer
@@ -129,6 +136,15 @@ class Module(LightningModule):
     def forward(self, **model_inputs: Any) -> torch.Tensor:
         """Return the chain's per-pixel reconstruction of prepared inputs.
 
+        Args:
+            **model_inputs: Batched, prepared pixels and context under the
+                configured chain's argument names.
+
+        Returns:
+            `(batch, channels, y, x)` reconstruction. `channels` covers every
+            band and instant of the reconstructed pixel input, flattened in
+            their input order.
+
         Raises:
             TypeError: The model does not return one tensor.
         """
@@ -138,7 +154,7 @@ class Module(LightningModule):
         return reconstruction
 
     def _loss(self, batch: Sample, seed: int | None = None) -> torch.Tensor:
-        """Mask the input, reconstruct it, and score the hidden valid pixels.
+        """Mask the input, reconstruct it, and score the hidden pixels.
 
         Args:
             batch: A finished `Sample` batch.
@@ -148,7 +164,7 @@ class Module(LightningModule):
             ValueError: The reconstruction does not hold one channel per band
                 and instant of the input.
         """
-        inputs, valid = batch["inputs"], batch["valid"]
+        inputs = batch["inputs"]
         image = inputs[self.reconstruct]
         height, width = image.shape[-2:]
         generator = None
@@ -175,11 +191,22 @@ class Module(LightningModule):
                 f"{tuple(target.shape)}; the last stage predicts one value per "
                 f"band and instant"
             )
-        scored = (mask & valid).float()
+        scored = mask.float()
         error = (reconstruction - target).abs().mean(dim=1)
         return (error * scored).sum() / scored.sum().clamp(min=1)
 
     def training_step(self, batch: Sample, batch_idx: int) -> torch.Tensor:
+        """Draw a fresh patch mask and log reconstruction loss on hidden pixels.
+
+        Args:
+            batch: Prepared `Sample` holding named pixel/context inputs and
+                without class targets.
+            batch_idx: Lightning's batch position; unused for the random mask.
+
+        Returns:
+            Scalar mean absolute error over hidden pixels, averaged
+            across reconstructed channels. No scored pixels yields zero.
+        """
         loss = self._loss(batch)
         self.log(
             "train_loss",
@@ -187,16 +214,23 @@ class Module(LightningModule):
             on_step=True,
             on_epoch=True,
             prog_bar=True,
-            batch_size=len(batch["valid"]),
+            batch_size=len(batch["inputs"][self.reconstruct]),
         )
         return loss
 
     def validation_step(self, batch: Sample, batch_idx: int) -> None:
+        """Log reconstruction loss using a reproducible mask for this batch.
+
+        Args:
+            batch: Prepared `Sample` with named inputs.
+            batch_idx: Seed for the validation mask, keeping the mask fixed
+                for the same batch position across epochs.
+        """
         # A mask seeded by batch keeps val_loss comparable across epochs.
         self.log(
             "val_loss",
             self._loss(batch, seed=batch_idx),
             on_epoch=True,
             prog_bar=True,
-            batch_size=len(batch["valid"]),
+            batch_size=len(batch["inputs"][self.reconstruct]),
         )

@@ -25,8 +25,3 @@ def test_text_spelled_packing_reads_as_numbers() -> None:
 def test_a_zero_scale_is_refused() -> None:
     with pytest.raises(ValueError):
         attrs.Packing(scale_factor=0)
-
-
-def test_the_keys_cover_what_it_writes() -> None:
-    written = attrs.Packing(scale_factor=2, add_offset=1).model_dump(by_alias=True)
-    assert set(written) <= set(attrs.Packing.KEYS)

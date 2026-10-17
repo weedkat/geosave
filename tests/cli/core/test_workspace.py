@@ -3,22 +3,24 @@
 import runpy
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import torch
 import yaml
 
-from geosave.cli.core.workspace import create_workspace
-from geosave.model.spec import ModelSpec
+from geosave.cli.core.templates import get_tasks
+from geosave.cli.core.workspace import add_task, create_workspace
 from geosave.ml.cli import GeosaveCLI
 from geosave.ml.tasks.segmentation import supervised
-from geosave.cli.core.templates import get_workspaces
+from geosave.model.spec import ModelSpec, Ref
 
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    create_workspace(tmp_path, "segmentation")
-    assert (tmp_path / "configs/train.yaml").is_file()
+    create_workspace(tmp_path)
+    add_task(tmp_path, "segmentation-supervised")
+    assert (tmp_path / "configs/segmentation-supervised.yaml").is_file()
     assert not (tmp_path / "configs/model.yaml").exists()
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -27,7 +29,9 @@ def workspace(tmp_path, monkeypatch):
 
 def test_segmentation_configs_agree_on_model_inputs(workspace):
     spec = ModelSpec.load(workspace / "configs/model_spec.yaml")
-    config = yaml.safe_load((workspace / "configs/train.yaml").read_text())
+    config = yaml.safe_load(
+        (workspace / "configs/segmentation-supervised.yaml").read_text()
+    )
     requirement = spec.rasters["sentinel_2_l2a"]
     assert requirement.stac is not None
     assert requirement.stac.collection == "sentinel-2-l2a"
@@ -43,7 +47,7 @@ def test_segmentation_configs_agree_on_model_inputs(workspace):
     head = config["model"]["init_args"]["model_chain"]["head"]
     assert head == {
         "name": "segmentation",
-        "init_args": {"classes": ["background", "target"]},
+        "init_args": {"num_classes": 2},
     }
     assert config["data"]["class_path"] == (
         "geosave.ml.tasks.segmentation.supervised.DataModule"
@@ -63,7 +67,9 @@ def test_segmentation_configs_agree_on_model_inputs(workspace):
 
 
 def test_model_config_uses_current_task_constructor(workspace):
-    config = yaml.safe_load((workspace / "configs/train.yaml").read_text())
+    config = yaml.safe_load(
+        (workspace / "configs/segmentation-supervised.yaml").read_text()
+    )
     model = supervised.Module(**config["model"]["init_args"])
     assert isinstance(model.criterion, torch.nn.CrossEntropyLoss)
     assert model.optimizer_spec["name"] == "adamw"
@@ -84,11 +90,6 @@ def test_generated_entrypoint_keeps_task_optimizer_ownership(workspace, monkeypa
     assert options["subclass_mode_data"] is True
 
 
-@pytest.mark.xfail(
-    reason="starters name a placeholder datasets.MyDataset until a per-source "
-    "Dataset exists (planning/open-decisions.md)",
-    strict=True,
-)
 def test_generated_entrypoint_parses_library_lightning_pair(
     workspace, monkeypatch, capsys
 ):
@@ -99,7 +100,7 @@ def test_generated_entrypoint_parses_library_lightning_pair(
             "main.py",
             "fit",
             "--config",
-            str(workspace / "configs/train.yaml"),
+            str(workspace / "configs/segmentation-supervised.yaml"),
             "--print_config",
         ],
     )
@@ -116,10 +117,11 @@ def test_generated_entrypoint_parses_library_lightning_pair(
 
 
 @pytest.mark.slow
-def test_custom_lightning_workspace_runs_one_train_and_validation_batch(tmp_path):
-    assert "custom_lightning" in get_workspaces()
-    create_workspace(tmp_path, "custom_lightning")
-    assert (tmp_path / "configs/train.yaml").is_file()
+def test_lightning_boilerplate_runs_one_train_and_validation_batch(tmp_path):
+    assert "lightning-boilerplate" in get_tasks()
+    create_workspace(tmp_path)
+    add_task(tmp_path, "lightning-boilerplate")
+    assert (tmp_path / "configs/lightning-boilerplate.yaml").is_file()
     assert not (tmp_path / "configs/model.yaml").exists()
     script = """
 from modules.data import CustomDataModule
@@ -128,7 +130,7 @@ from geosave.ml.cli import GeosaveCLI
 
 cli = GeosaveCLI(
     run=False,
-    args=["--config", "configs/train.yaml"],
+    args=["--config", "configs/lightning-boilerplate.yaml"],
     save_config_callback=None,
     auto_configure_optimizers=False,
     subclass_mode_model=True,
@@ -155,7 +157,8 @@ assert cli.model.validation_step(validation_batch, 0).ndim == 0
 
 @pytest.fixture
 def regression_workspace(tmp_path, monkeypatch):
-    create_workspace(tmp_path, "regression")
+    create_workspace(tmp_path)
+    add_task(tmp_path, "regression-supervised")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -166,7 +169,9 @@ def test_regression_swaps_only_the_head_loss_metrics_and_target(
 ):
     from geosave.ml.tasks.regression import supervised as regression
 
-    config = yaml.safe_load((regression_workspace / "configs/train.yaml").read_text())
+    config = yaml.safe_load(
+        (regression_workspace / "configs/regression-supervised.yaml").read_text()
+    )
     chain = config["model"]["init_args"]["model_chain"]
     assert chain["head"] == {
         "name": "regression",
@@ -179,3 +184,40 @@ def test_regression_swaps_only_the_head_loss_metrics_and_target(
     assert data["class_path"] == "geosave.ml.tasks.regression.supervised.DataModule"
     assert data["init_args"]["spec"] == "configs/model_spec.yaml"
     assert set(data["init_args"]["train"]) == {"class_path", "init_args"}
+
+
+def test_shipped_model_spec_round_trips_as_inert_declarations(tmp_path):
+    path = (
+        Path(__file__).parents[3]
+        / "src/geosave/templates/tasks/segmentation-supervised/configs/model_spec.yaml"
+    )
+
+    spec = ModelSpec.load(path)
+    restored = ModelSpec.load(spec.save(tmp_path / "model_spec.yaml"))
+
+    assert restored == spec
+    assert spec.rasters["sentinel_2_l2a"].variables == (
+        "B02",
+        "B03",
+        "B04",
+        "B08",
+    )
+    assert spec.preprocessing["image"].call == Ref("sentinel_2_l2a.gs.mask_and_scale")
+    assert spec.preprocessing["image"].kwargs == {}
+
+
+def test_walkthrough_runs_without_model_or_external_service(tmp_path):
+    create_workspace(tmp_path)
+    add_task(tmp_path, "segmentation-supervised")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/prepare_example.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "B08" in result.stdout
+    assert "0.6" in result.stdout

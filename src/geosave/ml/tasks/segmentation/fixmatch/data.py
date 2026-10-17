@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import torch
 from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.tasks.segmentation import supervised
-from geosave.ml.transforms import ImageAugmenter
+from geosave.ml.transforms import DataKey, ImageAugmenter
+from geosave.model.spec import ModelSpec
 
 type Inputs = dict[str, torch.Tensor]
 
@@ -16,33 +17,53 @@ class Unlabeled(TypedDict):
     """One unlabeled chip, as the `unlabeled` dataset returns it.
 
     Attributes:
-        inputs: Model inputs by name; pixel inputs end in ``(band, y, x)``.
-        valid: ``(y, x)`` pixels whose inputs are finite in every band and instant.
+        inputs: Named model tensor inputs for one sample, without a batch
+            axis. Pixels end in `(band, y, x)`; leading temporal axes and
+            separate context tensors follow the selected model's contract.
     """
 
     inputs: Inputs
-    valid: torch.Tensor
 
 
 class Views(TypedDict):
     """An unlabeled batch finished as two views of the same pixels.
 
     Attributes:
-        weak: Inputs under the labeled augmentations.
-        strong: The weak view perturbed further, pixels in place.
-        valid: ``(B, y, x)`` weak-view pixels no augmentation invented.
+        weak: Batched named tensors after the labeled augmentations and spec
+            transforms. Pixel inputs end in `(band, y, x)` with a batch axis.
+        strong: Batched named tensors with additional photometric perturbations
+            of the same pixel geometry. Context tensors pass through unchanged.
     """
 
     weak: Inputs
     strong: Inputs
-    valid: torch.Tensor
 
 
 class TrainingBatch(TypedDict):
-    """One training step's batch, as the FixMatch DataModule finishes it."""
+    """One training step's batch, as the FixMatch DataModule finishes it.
+
+    Attributes:
+        labeled: Collated, prepared segmentation `Sample`, with named inputs,
+            int64 `(batch, y, x)` targets.
+        unlabeled: `Views` with weak/strong named tensor inputs on matching
+            pixel geometry.
+    """
 
     labeled: supervised.Sample
     unlabeled: Views
+
+
+@runtime_checkable
+class UnlabeledDataset(Protocol):
+    """A map-style dataset returning model-ready unlabeled inputs."""
+
+    def __len__(self) -> int:
+        """Return the number of samples."""
+        ...
+
+    def __getitem__(self, index: int) -> Unlabeled:
+        """Return named tensors satisfying the selected model's contract."""
+        ...
 
 
 class DataModule(supervised.DataModule):
@@ -52,13 +73,14 @@ class DataModule(supervised.DataModule):
     strong augmentations must keep geometry, so weak-view pseudo-labels fit.
 
     Args:
-        spec: Model spec file declaring `chips`, `inputs`, and `transforms`.
+        spec: Model spec, or its file, declaring `chips`, `inputs`, and
+            `transforms`.
         train: Labeled training dataset returning a `supervised.Sample`.
         val: Validation dataset returning a `supervised.Sample`.
         unlabeled: Unlabeled dataset returning an `Unlabeled` chip.
         test: Test dataset. None leaves the test split unavailable.
         augmentations: Kornia augmentations run on labeled batches with their
-            target and on unlabeled batches with their valid pixels.
+            target and on unlabeled pixel inputs.
         strong_augmentations: Kornia photometric augmentations drawn anew for
             the strong view, such as ``RandomGaussianNoise``.
         cutmix: Probability a labeled sample gets a box of its batch neighbour.
@@ -81,12 +103,12 @@ class DataModule(supervised.DataModule):
 
     def __init__(
         self,
-        spec: str | Path,
-        train: Dataset,
-        val: Dataset,
-        unlabeled: Dataset,
+        spec: str | Path | ModelSpec,
+        train: supervised.SampleDataset,
+        val: supervised.SampleDataset,
+        unlabeled: UnlabeledDataset,
         *,
-        test: Dataset | None = None,
+        test: supervised.SampleDataset | None = None,
         augmentations: list[dict[str, Any]] | None = None,
         strong_augmentations: list[dict[str, Any]] | None = None,
         cutmix: float = 0.0,
@@ -107,13 +129,27 @@ class DataModule(supervised.DataModule):
         )
         self.unlabeled_dataset = unlabeled
         assert self.spec.chips is not None
-        self._strong = ImageAugmenter(strong_augmentations or [], self.spec.chips.shape)
+        self.strong_augmenter = ImageAugmenter(
+            strong_augmentations or [], self.spec.chips.shape, photometric=True
+        )
 
     def train_dataloader(self) -> dict[str, DataLoader]:
-        """Return shuffled labeled and unlabeled batches, read side by side."""
+        """Return shuffled labeled and unlabeled batches, read side by side.
+
+        Returns:
+            DataLoaders keyed by `labeled` and `unlabeled`. Lightning combines
+            their collated samples under those keys for the training hook.
+        """
         return {
             "labeled": super().train_dataloader(),
-            "unlabeled": self._loader(self.unlabeled_dataset, shuffle=True),
+            "unlabeled": DataLoader(
+                cast(Dataset[Unlabeled], self.unlabeled_dataset),
+                batch_size=self.batch_size,
+                shuffle=True,
+                num_workers=self.num_workers,
+                multiprocessing_context="forkserver" if self.num_workers else None,
+                persistent_workers=bool(self.num_workers),
+            ),
         }
 
     def on_after_batch_transfer(self, batch: Any, dataloader_idx: int) -> Any:
@@ -132,19 +168,20 @@ class DataModule(supervised.DataModule):
             return super().on_after_batch_transfer(batch, dataloader_idx)
         labeled = super().on_after_batch_transfer(batch["labeled"], dataloader_idx)
 
-        # Weak view: the labeled augmentations, valid pixels moving with the image.
-        inputs, valid = batch["unlabeled"]["inputs"], batch["unlabeled"]["valid"]
-        images = [inputs[name] for name in self.spec.pixel_inputs]
-        images, moved = self._augment(images, valid.float())
-        weak, valid = self._finish(inputs, images, moved > 0.5)
+        inputs = dict(batch["unlabeled"]["inputs"])
+        names = self.spec.pixel_inputs
+        keys: list[DataKey] = ["input"] * len(names)
 
-        # Strong view: photometric augmentations on top; every instant alike.
-        perturbed = [
-            self._strong(image.flatten(1, -3)).unflatten(1, image.shape[1:-2])
-            for image in images
-        ]
-        strong, _ = self._finish(inputs, perturbed, valid)
-        return {
-            "labeled": labeled,
-            "unlabeled": {"weak": weak, "strong": strong, "valid": valid},
-        }
+        # Draw shared spatial augmentation once before splitting the views.
+        images = self.augmenter(*(inputs[name] for name in names), data_keys=keys)
+        tensors = (images,) if isinstance(images, torch.Tensor) else images
+        inputs.update(zip(names, tensors, strict=True))
+        weak = self.input_transform(inputs)
+
+        images = self.strong_augmenter(
+            *(inputs[name] for name in names), data_keys=keys
+        )
+        tensors = (images,) if isinstance(images, torch.Tensor) else images
+        inputs.update(zip(names, tensors, strict=True))
+        strong = self.input_transform(inputs)
+        return {"labeled": labeled, "unlabeled": {"weak": weak, "strong": strong}}

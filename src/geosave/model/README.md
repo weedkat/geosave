@@ -1,9 +1,8 @@
 # Model composition
 
 `model` owns the native model graph, input specification, and release artifacts.
-Lightning training and development prediction live in `ml`; the examples using
-Trainer below are consumers of model APIs. See the
-[architecture guide](../../../docs/architecture.md) for package ownership.
+Lightning training lives in `ml`. See the
+[architecture guide](../../../docs/contributing/architecture.md) for package ownership.
 
 ```python
 class Encoder(nn.Module):
@@ -98,8 +97,10 @@ context:
 ```
 
 ```python
-rasters = windows.iloc[position].gs.to_stack().gs.rasters
-inputs = {name: value.gs.to_tensor() for name, value in spec.model_inputs(rasters).items()}
+rasters = windows.iloc[position].gs.to_xarray().gs.rasters
+inputs = spec.model_inputs(rasters)
+for name in spec.pixel_inputs:
+    inputs[name] = inputs[name].gs.to_tensor()
 ```
 
 `inputs` binds prepared raster pixels; `context` references rasters the same
@@ -120,8 +121,8 @@ remains separate from context encoding.
 Explicit caching uses the same recipe and native Python arrays or numbers:
 
 ```python
-cached = spec.model_context(row)
-inputs = model_inputs(spec, tile.gs.rasters, row, context=cached)
+cached = spec.model_context(rasters)
+inputs = spec.model_inputs(rasters, context=cached)
 ```
 
 Keep cached context associated with the same sample metadata and encoding recipe.
@@ -203,43 +204,10 @@ model = build_model(
     {
         "encoder": encoder,
         "decoder": {"name": "unet"},
-        "head": {"name": "segmentation", "init_args": {"classes": classes}},
+        "head": {"name": "segmentation", "init_args": {"num_classes": len(classes)}},
     }
 )
 ```
 
 A chain built from a module carries no construction recipe for that stage, so
 it cannot be published until the stage is given as a specification.
-
-## Predicting geospatial tiles with Lightning
-
-```python
-from lightning import Trainer
-from torch.utils.data import DataLoader, Dataset
-
-# frames lists the windows to predict; each chip row reads its own pixels.
-windows = spec.chips.cut(frames)
-
-class PredictionDataset(Dataset):
-    def __len__(self):
-        return len(windows)
-
-    def __getitem__(self, position):
-        rasters = windows.iloc[position].gs.to_stack().gs.rasters
-        values = spec.model_inputs(rasters)
-        return {name: value.gs.to_tensor() for name, value in values.items()}, position
-
-predictions = trainer.predict(task, dataloaders=DataLoader(PredictionDataset(), batch_size=8))
-```
-
-How predictions are saved is not settled; `ChipWriter` raises
-`NotImplementedError`. Chip outputs saved as COGs on their chips' grids, in an
-item table with a `chip` column, merge back with
-`cuts.merge(frames, windows, predictions, taper=spec.chips.window)`.
-
-The PyTorch Dataset belongs to the consuming method. Reads remain lazy until
-tensor conversion.
-
-Training modules have no prediction step yet. Supervised training and
-evaluation batches are the `Sample` dictionaries each DataModule declares;
-validation and test score chips one by one over their valid pixels.

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import ast
 import json
+import subprocess
+import sys
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -255,7 +258,7 @@ def test_registered_encoders_chain_into_a_decoder_and_head(
             "decoder": {"name": "dpt"},
             "head": {
                 "name": "segmentation",
-                "init_args": {"classes": ["background", "target"]},
+                "init_args": {"num_classes": 2},
             },
         }
     )
@@ -314,3 +317,145 @@ def test_a_chain_holding_a_built_stage_has_no_recipe_to_export() -> None:
 
     with pytest.raises(ValueError, match="'encoder'"):
         model.stage_specs
+
+
+class Decoder(nn.Module):
+    def __init__(self, feature_channels: int, depth: int) -> None:
+        super().__init__()
+
+    @chain_step()
+    def decode(self, features: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
+        decoded = features * scale
+        return decoded
+
+
+@pytest.fixture
+def listed_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    list_models()
+    monkeypatch.setattr("geosave.model.registry.MODEL_REGISTRY", {})
+    from geosave.model.registry import MODEL_REGISTRY as empty
+
+    empty["head"] = {"LOGITS": Head}
+    empty["encoder"] = {"TINY": Encoder}
+    empty["decoder"] = {"DECODE": Decoder}
+
+
+def test_list_models_shows_each_models_forward_publishing_and_needs(
+    listed_stages: None,
+) -> None:
+    table = list_models()
+
+    # Stages read in chain order, whatever order they registered in.
+    assert list(table.index) == [
+        ("encoder", "tiny"),
+        ("decoder", "decode"),
+        ("head", "logits"),
+    ]
+    assert list(table.columns) == ["forward", "publishes", "requires"]
+    assert table.loc[("encoder", "tiny"), "forward"] == "encode(image)"
+    assert table.loc[("encoder", "tiny"), "publishes"] == "feature_channels"
+    # feature_channels comes from the encoder; depth only the caller can give.
+    assert table.loc[("decoder", "decode"), "forward"] == "decode(features, scale=1.0)"
+    assert table.loc[("decoder", "decode"), "requires"] == "depth"
+    assert table.loc[("head", "logits"), "requires"] == ""
+
+
+def test_list_models_of_one_model_shows_what_connects_before_and_after(
+    listed_stages: None,
+) -> None:
+    connections = list_models("tiny")
+
+    assert connections.to_dict(orient="index") == {
+        "decoder": {"before": "", "after": "decode"},
+        "head": {"before": "", "after": "logits"},
+    }
+
+
+def test_a_stage_may_take_what_a_stage_further_back_publishes(
+    listed_stages: None,
+) -> None:
+    from geosave.model.registry import MODEL_REGISTRY as registry
+
+    class DeepHead(nn.Module):
+        def __init__(self, feature_channels: int) -> None:
+            super().__init__()
+
+        @chain_step(head=True)
+        def logits(self, decoded: torch.Tensor) -> torch.Tensor:
+            return decoded
+
+    registry["head"]["DEEP"] = DeepHead
+
+    # The decoder publishes nothing; the encoder before it supplies the width.
+    assert list_models("decode").loc["head", "after"] == "deep"
+
+
+def test_list_models_finds_built_in_connections() -> None:
+    connections = list_models("unet")
+
+    assert connections.loc["encoder", "before"] == (
+        "clay, dinov3, prithvi, prithvi_tl, small_cnn"
+    )
+    # Other test modules may register heads of their own.
+    assert {"regression", "segmentation"} <= set(
+        connections.loc["head", "after"].split(", ")
+    )
+
+
+def test_list_models_refuses_an_unknown_name() -> None:
+    with pytest.raises(KeyError, match="no model named 'nope'"):
+        list_models("nope")
+
+
+def test_redefining_a_registered_class_replaces_it(monkeypatch) -> None:
+    # A notebook cell run twice defines a new class of the same name and module.
+    monkeypatch.setitem(MODEL_REGISTRY, "rerun", {})
+
+    def define() -> type[nn.Module]:
+        class Encoder(nn.Module):
+            pass
+
+        return register_model("rerun", "tiny")(Encoder)
+
+    define()
+    second = define()
+
+    assert MODEL_REGISTRY["rerun"]["TINY"] is second
+
+
+def test_another_class_under_a_taken_name_is_refused(monkeypatch) -> None:
+    monkeypatch.setitem(MODEL_REGISTRY, "rerun", {})
+    register_model("rerun", "tiny")(Encoder)
+
+    with pytest.raises(ValueError, match="already identifies"):
+        register_model("rerun", "tiny")(Head)
+
+
+@pytest.mark.slow
+def test_every_stage_package_registers_its_models():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "ignore",
+            "-c",
+            "from geosave.model.registry import list_models; print(list_models().index.tolist())",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+
+    assert set(ast.literal_eval(result.stdout.strip().splitlines()[-1])) == {
+        ("decoder", "dpt"),
+        ("decoder", "unet"),
+        ("encoder", "clay"),
+        ("encoder", "dinov3"),
+        ("encoder", "prithvi"),
+        ("encoder", "prithvi_tl"),
+        ("head", "classification"),
+        ("head", "regression"),
+        ("head", "segmentation"),
+        ("model", "ibm_granite_biomass"),
+    }

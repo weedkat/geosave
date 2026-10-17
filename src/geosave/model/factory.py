@@ -10,7 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BuildSpec(BaseModel):
-    """Select a registered factory or importable class for construction."""
+    """Select a registered factory or importable class for construction.
+
+    Attributes:
+        name: Case-insensitive factory name in the caller's registry.
+        class_path: Importable module and class name. Supply exactly one of
+            `name` and `class_path`.
+        init_args: Keyword arguments passed to the selected constructor.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -20,7 +27,16 @@ class BuildSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_selector(self) -> Self:
-        """Require exactly one valid construction selector."""
+        """Require exactly one valid construction selector.
+
+        Returns:
+            This specification after selector validation, without importing
+            or constructing the selected factory.
+
+        Raises:
+            ValueError: Both selectors are given, neither is given, or a
+                class path does not include a module name.
+        """
         if (self.name is None) == (self.class_path is None):
             raise ValueError("Specify exactly one of name or class_path")
         if self.class_path is not None and "." not in self.class_path:

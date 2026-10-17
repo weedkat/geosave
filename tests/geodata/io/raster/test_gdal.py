@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from geosave.geodata.io.raster.gdal import configure_gdal, hf_to_s3
+from tests.geodata.conftest import flat
 
 
 def test_gdal_configuration_sets_supplied_values(monkeypatch) -> None:
@@ -65,14 +66,15 @@ def test_gdal_configuration_can_skip_sidecar_probes(monkeypatch) -> None:
     assert os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
 
 
-
 def test_band_slots_and_tags_read_as_one_variables_attrs() -> None:
     from rasterio.io import MemoryFile
 
     from geosave.geodata.io.raster.gdal import _attrs
 
     with MemoryFile() as memory:
-        with memory.open(driver="GTiff", width=1, height=1, count=1, dtype="uint8") as dst:
+        with memory.open(
+            driver="GTiff", width=1, height=1, count=1, dtype="uint8"
+        ) as dst:
             dst.write(np.array([[[1]]], dtype="uint8"))
             dst.set_band_description(1, "Red reflectance")
             dst.update_tags(1, variable_name="red", units="1")
@@ -112,7 +114,9 @@ def test_band_packing_and_fill_read_as_their_cf_attrs(
             _, bands = _attrs(src)
 
     keys = ("scale_factor", "add_offset", "_FillValue")
-    assert {key: bands["band_1"][key] for key in keys if key in bands["band_1"]} == expected
+    assert {
+        key: bands["band_1"][key] for key in keys if key in bands["band_1"]
+    } == expected
 
 
 def _tiff(path, *, tiled: bool) -> str:
@@ -121,8 +125,15 @@ def _tiff(path, *, tiled: bool) -> str:
 
     options = {"tiled": True, "blockxsize": 256, "blockysize": 256} if tiled else {}
     with rasterio.open(
-        path, "w", driver="GTiff", width=1024, height=1024, count=1, dtype="uint16",
-        crs="EPSG:32749", transform=from_origin(500_000.0, 9_010_240.0, 10, 10),
+        path,
+        "w",
+        driver="GTiff",
+        width=1024,
+        height=1024,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32749",
+        transform=from_origin(500_000.0, 9_010_240.0, 10, 10),
         **options,
     ) as tiff:
         tiff.write(np.zeros((1, 1024, 1024), "uint16"))
@@ -131,17 +142,17 @@ def _tiff(path, *, tiled: bool) -> str:
 
 def test_lazy_chunks_follow_the_files_own_tiles(tmp_path) -> None:
     # A window then reads only the tiles it overlaps, not the whole band.
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
-    band = read(_tiff(tmp_path / "tiled.tif", tiled=True), chunks={}).band_1
+    band = open_raster(_tiff(tmp_path / "tiled.tif", tiled=True), chunks={}).band_1
 
     assert band.data.chunksize == (256, 256)
 
 
 def test_a_striped_file_stays_one_chunk(tmp_path) -> None:
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
-    band = read(_tiff(tmp_path / "striped.tif", tiled=False), chunks={}).band_1
+    band = open_raster(_tiff(tmp_path / "striped.tif", tiled=False), chunks={}).band_1
 
     assert band.data.chunksize == (1024, 1024)
 
@@ -152,7 +163,9 @@ def _tiff_bytes(tmp_path) -> bytes:
 
     anchor = GeoAnchor.from_coordinates(52, 13, 4, 10)
     band = (("y", "x"), np.full((4, 4), 7, "uint16"))
-    (file,) = gs.raster({"red": band}, anchor.geobox).gs.to_cog(tmp_path / "a.tif")
+    (file,) = flat(
+        gs.raster({"red": band}, anchor.geobox).gs.to_cog(tmp_path / "a.tif")
+    )
     return Path(file).read_bytes()
 
 
@@ -193,7 +206,7 @@ def clean_aws(monkeypatch):
 def test_s3_storage_options_reach_gdal_as_its_config(monkeypatch, clean_aws) -> None:
     import rasterio
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     opened = _refuse_to_open(monkeypatch)
     options = {
@@ -203,7 +216,7 @@ def test_s3_storage_options_reach_gdal_as_its_config(monkeypatch, clean_aws) -> 
     }
 
     with pytest.raises(rasterio.errors.RasterioIOError):
-        read("s3://bucket/a.tif", storage_options=options)
+        open_raster("s3://bucket/a.tif", storage_options=options)
 
     assert opened == ["s3://bucket/a.tif"]
     assert os.environ["AWS_ACCESS_KEY_ID"] == "minio"
@@ -216,12 +229,12 @@ def test_s3_storage_options_reach_gdal_as_its_config(monkeypatch, clean_aws) -> 
 def test_an_anonymous_s3_read_skips_signing(monkeypatch, clean_aws) -> None:
     import rasterio
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     _refuse_to_open(monkeypatch)
 
     with pytest.raises(rasterio.errors.RasterioIOError):
-        read("s3://bucket/a.tif", storage_options={"anon": True})
+        open_raster("s3://bucket/a.tif", storage_options={"anon": True})
 
     assert os.environ["AWS_NO_SIGN_REQUEST"] == "TRUE"
 
@@ -229,7 +242,7 @@ def test_an_anonymous_s3_read_skips_signing(monkeypatch, clean_aws) -> None:
 def test_a_second_s3_read_replaces_what_the_first_set(monkeypatch, clean_aws) -> None:
     import rasterio
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     _refuse_to_open(monkeypatch)
     minio = {"anon": True, "client_kwargs": {"endpoint_url": "http://localhost:9000"}}
@@ -237,7 +250,7 @@ def test_a_second_s3_read_replaces_what_the_first_set(monkeypatch, clean_aws) ->
 
     for options in (minio, aws):
         with pytest.raises(rasterio.errors.RasterioIOError):
-            read("s3://bucket/a.tif", storage_options=options)
+            open_raster("s3://bucket/a.tif", storage_options=options)
 
     assert os.environ["AWS_ACCESS_KEY_ID"] == "id"
     for stale in ("AWS_NO_SIGN_REQUEST", "AWS_S3_ENDPOINT", "AWS_HTTPS"):
@@ -249,12 +262,12 @@ def test_storage_options_for_another_service_are_left_to_its_reader(
 ) -> None:
     import rasterio
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     opened = _refuse_to_open(monkeypatch)
 
     with pytest.raises(rasterio.errors.RasterioIOError):
-        read("gs://bucket/a.tif", storage_options={"token": "anon"})
+        open_raster("gs://bucket/a.tif", storage_options={"token": "anon"})
 
     assert opened == ["gs://bucket/a.tif"]
     assert not any(name in os.environ for name in AWS_KEYS)
@@ -264,33 +277,51 @@ def test_a_upath_carries_its_options_to_the_read(monkeypatch, clean_aws) -> None
     import rasterio
     from upath import UPath
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     _refuse_to_open(monkeypatch)
 
     with pytest.raises(rasterio.errors.RasterioIOError):
-        read(UPath("s3://bucket/a.tif", key="id", secret="secret"))
+        open_raster(UPath("s3://bucket/a.tif", key="id", secret="secret"))
 
     assert os.environ["AWS_ACCESS_KEY_ID"] == "id"
 
 
 def test_a_local_file_ignores_no_options(tmp_path) -> None:
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     path = tmp_path / "b.tif"
     path.write_bytes(_tiff_bytes(tmp_path))
 
-    assert int(read(path, storage_options={}).red.max()) == 7
+    assert int(open_raster(path, storage_options={}).red.max()) == 7
 
 
 def test_an_hf_bucket_without_options_keeps_its_s3_gateway(monkeypatch) -> None:
     import rasterio
 
-    from geosave.geodata.io.raster.gdal import read
+    from geosave.geodata.io.raster.gdal import open_raster
 
     opened = _refuse_to_open(monkeypatch)
 
     with pytest.raises(rasterio.errors.RasterioIOError):
-        read("hf://buckets/me/samples/a.tif")
+        open_raster("hf://buckets/me/samples/a.tif")
 
     assert opened == ["s3://me/samples/a.tif"]
+
+
+def test_each_band_records_its_number_in_the_file(tmp_path: Path) -> None:
+    import xarray as xr
+
+    from geosave.geodata.io.raster.gdal import open_raster
+
+    values = np.stack([np.full((4, 4), k, "uint16") for k in (10, 20, 30)])
+    cube = xr.DataArray(
+        values,
+        dims=("band", "y", "x"),
+        coords={"band": [1, 2, 3], "y": 9_000_000 - 10 * np.arange(4), "x": 500_000 + 10 * np.arange(4)},
+    ).rio.write_crs("EPSG:32749")
+    cube.rio.to_raster(tmp_path / "three.tif")
+
+    opened = open_raster(tmp_path / "three.tif")
+
+    assert [variable.encoding["band"] for variable in opened.data_vars.values()] == [1, 2, 3]

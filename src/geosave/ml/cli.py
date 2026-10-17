@@ -20,6 +20,12 @@ class GeosaveCLI(LightningCLI):
     """
 
     def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
+        """Add the model identity option to the Lightning parser in place.
+
+        Args:
+            parser: Parser receiving `--model_name`, used for default logger
+                folders and experiment names.
+        """
         parser.add_argument(
             "--model_name",
             type=str,
@@ -29,6 +35,11 @@ class GeosaveCLI(LightningCLI):
         )
 
     def before_instantiate_classes(self) -> None:
+        """Apply default logger configuration before constructing run classes.
+
+        Updates the active configuration in place, respecting an explicit
+        logger or `logger=False`. Adds MLflow only when its tracking URI is set.
+        """
         self._apply_default_loggers()
 
     def _apply_default_loggers(self) -> None:

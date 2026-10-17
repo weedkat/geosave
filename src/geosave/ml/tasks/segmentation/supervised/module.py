@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Any, cast
 
 import torch
+from torchmetrics import MetricCollection
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
@@ -16,8 +17,7 @@ from .data import Sample
 class Module(LightningModule):
     """Train and evaluate a segmentation model chain on chip batches.
 
-    Every split scores chips one by one; validation and test score only
-    pixels whose inputs are valid.
+    Every split scores supplied class targets, excluding `ignore_index`.
 
     Args:
         model_chain: Ordered stage construction specifications. Each selects a
@@ -25,7 +25,7 @@ class Module(LightningModule):
             stage states the class count as `num_classes`.
         ignore_index: Class index excluded from loss and metrics.
         criterion: Loss class and arguments. Defaults to CrossEntropyLoss with
-            ignore_index; an explicit criterion ignore_index takes precedence.
+            ignore_index; an explicit criterion ignore_index must match the task.
         optimizer: Optimizer class, arguments, and groups by stage. Defaults to AdamW with a learning rate of 1e-3.
         lr_scheduler: Scheduler class, arguments, and Lightning metadata.
             None disables scheduling.
@@ -46,7 +46,7 @@ class Module(LightningModule):
               head:
                 name: segmentation
                 init_args:
-                  classes: [background, oil_palm]
+                  num_classes: 2
     """
 
     model: ModelChain
@@ -83,6 +83,11 @@ class Module(LightningModule):
         self._initial_class_thresholds = class_thresholds
 
         criterion_spec = deepcopy(criterion)
+        configured_ignore = criterion_spec.get("init_args", {}).get(
+            "ignore_index", ignore_index
+        )
+        if configured_ignore != ignore_index:
+            raise ValueError("criterion ignore_index must match the task ignore_index")
         criterion_spec["init_args"] = {
             "ignore_index": ignore_index,
             **criterion_spec.get("init_args", {}),
@@ -91,6 +96,10 @@ class Module(LightningModule):
 
     def configure_model(self):
         """Construct the model, then the thresholds and metrics its classes size.
+
+        Returns:
+            (None): Initializes module state in place, or leaves an already
+                constructed model unchanged.
 
         Raises:
             TypeError: The last stage states no integer `num_classes`.
@@ -134,6 +143,12 @@ class Module(LightningModule):
         self.test_metrics = metrics.clone(prefix="test_")
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Build optimization for the configured chain's trainable parameters.
+
+        Returns:
+            The optimizer alone when scheduling is disabled, otherwise a
+            Lightning dictionary with `optimizer` and `lr_scheduler` entries.
+        """
         optimizer = build_optimizer(self.optimizer_spec, self.model)
         if self.scheduler_spec is None:
             return optimizer
@@ -167,11 +182,21 @@ class Module(LightningModule):
         return logits
 
     def training_step(self, batch: Sample, batch_idx: int) -> torch.Tensor:
+        """Score segmentation targets and log training loss and class metrics.
+
+        Args:
+            batch: Prepared `Sample` with named inputs and `(batch, y, x)`
+                int64 targets. Unknown targets hold the loss's ignore value.
+            batch_idx: Lightning's batch position; unused by this task.
+
+        Returns:
+            Criterion loss on the class logits and supplied targets, used
+            by Lightning for backpropagation.
+        """
         target = batch["target"]
         logits = self(**batch["inputs"])
-        loss = self.criterion(logits, target)
+        loss = self._loss(logits, target)
 
-        self.train_metrics.update(logits, target)
         self.log(
             "train_loss",
             loss,
@@ -180,60 +205,97 @@ class Module(LightningModule):
             prog_bar=True,
             batch_size=target.shape[0],
         )
-        self.log_dict(
+        if target.ne(self.ignore_index).any():
+            self.train_metrics.update(logits, target)
+        self._log_metrics(
             self.train_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
+            target.ne(self.ignore_index).sum(),
             batch_size=target.shape[0],
         )
 
         return loss
 
     def validation_step(self, batch: Sample, batch_idx: int) -> dict[str, torch.Tensor]:
-        """Score validation chips over their valid pixels.
+        """Score validation chips over their known labels.
+
+        Args:
+            batch: Prepared `Sample` with named inputs and int64 targets
+                shaped `(batch, y, x)`.
+            batch_idx: Lightning's batch position; unused by this task.
 
         Returns:
-            Chip logits and the labels scored, for validation callbacks.
+            `logits` shaped `(batch, num_classes, y, x)` and `label` shaped
+            `(batch, y, x)`, retaining ignored labels, for
+            validation callbacks. Loss and metrics are logged separately.
         """
         logits, target = self._evaluate(batch)
         self.log(
             "val_loss",
-            self.criterion(logits, target),
+            self._loss(logits, target),
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             batch_size=len(target),
         )
-        self.val_metrics.update(logits, target)
-        self.log_dict(
-            self.val_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
-            batch_size=len(target),
+        if target.ne(self.ignore_index).any():
+            self.val_metrics.update(logits, target)
+        self._log_metrics(
+            self.val_metrics, target.ne(self.ignore_index).sum(), batch_size=len(target)
         )
         return {"logits": logits, "label": target}
 
     def test_step(self, batch: Sample, batch_idx: int) -> dict[str, torch.Tensor]:
-        """Score test chips over their valid pixels.
+        """Score test chips over their known labels.
+
+        Args:
+            batch: Prepared `Sample` with named inputs and int64 targets
+                shaped `(batch, y, x)`.
+            batch_idx: Lightning's batch position; unused by this task.
 
         Returns:
-            Chip logits and the labels scored, for test callbacks.
+            `logits` shaped `(batch, num_classes, y, x)` and `label` shaped
+            `(batch, y, x)`, retaining ignored labels, for
+            test callbacks. Metrics are logged separately.
         """
         logits, target = self._evaluate(batch)
-        self.test_metrics.update(logits, target)
-        self.log_dict(
+        if target.ne(self.ignore_index).any():
+            self.test_metrics.update(logits, target)
+        self._log_metrics(
             self.test_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
+            target.ne(self.ignore_index).sum(),
             batch_size=len(target),
         )
         return {"logits": logits, "label": target}
 
+    def predict_step(self, batch: Sample, batch_idx: int) -> torch.Tensor:
+        """Return the logits of chips that may carry no label.
+
+        Args:
+            batch: Prepared `Sample`; a `target`, when present, is ignored.
+            batch_idx: Lightning's batch position; unused by this task.
+
+        Returns:
+            Raw per-pixel logits shaped `(batch, num_classes, y, x)`.
+        """
+        return self(**batch["inputs"])
+
     def _evaluate(self, batch: Sample) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return chip logits and labels ignoring pixels without valid inputs."""
+        """Return chip logits and the supplied class targets."""
         logits = self(**batch["inputs"])
-        target = batch["target"].masked_fill(~batch["valid"], self.ignore_index)
+        target = batch["target"]
         return logits, target
+
+    def _loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Score known labels; an entirely ignored target gives zero gradient."""
+        if not target.ne(self.ignore_index).any():
+            return logits.sum() * 0
+        return self.criterion(logits, target)
+
+    def _log_metrics(
+        self, metrics: MetricCollection, count: torch.Tensor, *, batch_size: int
+    ) -> None:
+        """Log on every rank when any rank has target entries to score."""
+        if self._trainer is not None:
+            count = self.trainer.strategy.reduce(count, reduce_op="sum")
+        if count:
+            self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=batch_size)

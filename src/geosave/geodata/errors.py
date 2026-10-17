@@ -1,6 +1,9 @@
 """Exceptions for geodata conditions callers can handle separately."""
 
-__all__ = ["AnchorFetchError", "CollectionNotFoundError"]
+__all__ = [
+    "AnchorFetchError",
+    "CollectionNotFoundError",
+]
 
 
 class AnchorFetchError(RuntimeError):

@@ -61,6 +61,8 @@ class DINOv3(nn.Module):
                 order. timm repeats those three slices over further channels
                 and scales every slice by `3 / in_channels`.
             input_size: input spatial size; tuple for non-square.
+            out_indices: Transformer blocks to return as pyramid levels.
+                None or an empty list uses this model's four depth samples.
             drop_path_rate: stochastic depth rate.
             proj_drop_rate: dropout on attention output projection.
             attn_drop_rate: dropout on attention weights.

@@ -1,14 +1,11 @@
-> Status 2026-10-11: ModelSpec acquisition, selection, preprocessing, input
-> binding and COG preparation are implemented. Normalization statistics,
-> catalog folders and Prefect preparation orchestration remain future work.
-> Unused Clay sensor metadata and pure-raise dense tasks were removed.
-> The details below retain the original proposal; current APIs are documented
-> in `docs/guides/model-spec-and-release.md`.
-
 # Prepare: raw catalog to model-ready catalog
 
-Status: Implemented. The catalog layout (one `catalog.parquet`) is superseded by
-[catalog per collection](2026-10-09-catalog-per-collection-design.md).
+> Historical proposal, partially implemented. Current `ModelSpec.prepare`
+> writes COGs and one `catalog.parquet`, and takes an explicit `on` collection.
+> Catalog folders, normalization statistics, and Prefect preparation remain
+> deferred. The source-specific Dataset interfaces below were replaced by
+> user-supplied torch Datasets. See [Model inputs](../../guides/model-spec.md)
+> for the current preparation workflow.
 
 First of three specs for the end-to-end slice (ingest → prepare → train →
 predict → release → serve). This one covers ingest, prepare, the dataset that

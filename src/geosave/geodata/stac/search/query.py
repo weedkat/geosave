@@ -26,7 +26,8 @@ class StacQuery:
         filter: CQL2-JSON filter. Build it with `set_filter`.
         sortby: Sort keys in STAC POST form, each
             `{"field": <path>, "direction": "asc" | "desc"}`. Build it with
-            `sort_by`.
+            `sort_by`. The API orders the items; the Planetary Computer does
+            not do so reliably, so sort the item table where order matters.
         max_items: Client-side cap on items returned.
         limit: Server page-size hint.
 

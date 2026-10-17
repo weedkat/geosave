@@ -22,7 +22,7 @@ class FieldRequirement(SpecModel):
     Both sides compare after the text decoding attr groups use, so a
     GeoTIFF's `"0"` meets a requirement of `0`, and `"[0, 1]"` one of `[0, 1]`.
 
-    Args:
+    Attributes:
         required: Keys that must have non-null values.
         equals: Keys that must equal the supplied values.
         one_of: Keys whose values must belong to the supplied alternatives.
@@ -82,7 +82,7 @@ class FieldRequirement(SpecModel):
 class AttrsRequirement(SpecModel):
     """Requirements on the root, data-variable, and coordinate attrs.
 
-    Args:
+    Attributes:
         root: Attrs required on the Dataset itself.
         data_vars: Per-variable requirements; `*` applies to selected variables.
         coords: Per-coordinate requirements; `*` applies to all coordinates.
@@ -96,7 +96,7 @@ class AttrsRequirement(SpecModel):
 class RasterRequirement(SpecModel):
     """Select and validate a raster using native variables or positional channels.
 
-    Args:
+    Attributes:
         type: Requirement kind, always raster.
         variables: Required data variables in their selected order.
         channels: First N channels; mutually exclusive with variables.

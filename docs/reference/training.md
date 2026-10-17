@@ -27,6 +27,12 @@ and read [Training behavior](../concepts/training.md) before adapting a method.
 
 ::: geosave.ml.tasks.segmentation.fixmatch.Unlabeled
 
+::: geosave.ml.tasks.segmentation.fixmatch.UnlabeledDataset
+
+::: geosave.ml.tasks.segmentation.fixmatch.Views
+
+::: geosave.ml.tasks.segmentation.fixmatch.TrainingBatch
+
 ::: geosave.ml.tasks.segmentation.fixmatch.pseudo_label_loss
 
 ## Supervised regression
@@ -52,10 +58,21 @@ and read [Training behavior](../concepts/training.md) before adapting a method.
 
 ::: geosave.ml.tasks.regression.mean_teacher.Unlabeled
 
+::: geosave.ml.tasks.regression.mean_teacher.UnlabeledDataset
+
+::: geosave.ml.tasks.regression.mean_teacher.Views
+
+::: geosave.ml.tasks.regression.mean_teacher.TrainingBatch
+
 ## Supervised classification
 
 ::: geosave.ml.tasks.classification.supervised
 
 ## Masked image modeling
+
+This is experimental method scaffolding. Small tests cover masking, loss, and
+Lightning wiring; downstream pretraining and transfer results are not yet
+validated. Read the [training contract](../concepts/training.md#experimental-masked-image-modeling)
+before using it for a research experiment.
 
 ::: geosave.ml.tasks.pretraining.mim

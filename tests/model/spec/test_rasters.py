@@ -7,7 +7,7 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from pydantic import ValidationError
 
-from geosave.geodata.core.create import raster
+from geosave.geodata.core.raster.create import raster
 from geosave.model.spec import FieldRequirement, RasterRequirement
 
 
@@ -126,7 +126,7 @@ def test_a_raster_without_a_grid_is_refused_when_a_crs_is_required():
         RasterRequirement(variables=("red",), require_crs=True).select_raster(plain)
 
 
-def test_a_stack_is_not_a_raster():
+def test_a_tree_is_not_a_raster():
     with pytest.raises(TypeError, match="Dataset"):
         RasterRequirement(channels=1).select_raster(xr.DataTree())
 

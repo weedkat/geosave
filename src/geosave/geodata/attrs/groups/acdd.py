@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from collections.abc import Sequence
+from typing import Self
 
-from .base import AttrsGroup, Join
+from .base import AttrsGroup
 
 
 class ACDD(AttrsGroup):
@@ -13,7 +14,7 @@ class ACDD(AttrsGroup):
     It lives on a Dataset's root attrs, where a STAC Collection's fields land
     when a source loads it.
 
-    Args:
+    Attributes:
         id: Identifier of the dataset, a STAC Collection's id.
         title: Short human-readable name.
         summary: Paragraph describing the data, a Collection's description.
@@ -26,12 +27,32 @@ class ACDD(AttrsGroup):
         'Sentinel-2 Level-2A'
     """
 
-    # Each key is a fact on its own: a shared license outlives differing titles.
-    JOIN: ClassVar[Join] = "each"
-
     id: str | None = None
     title: str | None = None
     summary: str | None = None
     keywords: str | None = None
     institution: str | None = None
     license: str | None = None
+
+    @classmethod
+    def intersect_values(cls, values: Sequence[Self | None]) -> Self | None:  # pyright: ignore[reportIncompatibleMethodOverride]  # Self narrows in a classmethod
+        """Keep each field every object states alike.
+
+        Each field is a fact on its own, so a shared license outlives
+        differing titles.
+
+        Args:
+            values: Each object's ACDD, None where it states none.
+
+        Returns:
+            The fields all objects share, or None where any object states none.
+        """
+        if None in values:
+            return None
+        first, *others = values
+        alike = {
+            name: getattr(first, name)
+            for name in cls.model_fields
+            if all(getattr(other, name) == getattr(first, name) for other in others)
+        }
+        return cls(**alike)

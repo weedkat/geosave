@@ -6,7 +6,6 @@ import numpy as np
 import orjson
 import pytest
 import xarray as xr
-from dask.delayed import Delayed
 from upath import UPath
 from zarr import open_group
 
@@ -23,8 +22,8 @@ def test_zarr_round_trip_preserves_the_profile(
 ) -> None:
     written = build_raster(crs=crs, times=times, packed=True)
 
-    destination = zarr.write(written, tmp_path / "scene.zarr")
-    restored = zarr.read(destination)
+    destination = zarr.write(written, tmp_path / "scene.zarr").path
+    restored = zarr.open_raster(destination)
 
     assert restored.gs.geobox == written.gs.geobox
     assert restored.red.dtype == np.dtype("uint16")
@@ -55,11 +54,11 @@ def test_zarr_reads_its_variables_in_the_order_they_were_written(
     # Six names scramble on every read; two happen to come back written order.
     names = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"]
 
-    destination = zarr.write(build_shuffled(names), tmp_path / "ordered.zarr")
+    destination = zarr.write(build_shuffled(names), tmp_path / "ordered.zarr").path
 
     # A Zarr group lists its members in no order, so every read must agree.
     for _ in range(3):
-        assert list(zarr.read(destination).data_vars) == names
+        assert list(zarr.open_raster(destination).data_vars) == names
 
 
 def test_order_metadata_is_owned_by_storage_without_changing_source_attrs(
@@ -69,10 +68,10 @@ def test_order_metadata_is_owned_by_storage_without_changing_source_attrs(
     source = build_shuffled(names)
     source.attrs = {"title": "scene"}
 
-    destination = zarr.write(source, tmp_path / "ordered.zarr")
+    destination = zarr.write(source, tmp_path / "ordered.zarr").path
 
     assert source.attrs == {"title": "scene"}
-    with zarr.read(destination) as restored:
+    with zarr.open_raster(destination) as restored:
         assert list(restored.data_vars) == names
         assert restored.attrs["title"] == "scene"
         # The order is restored, so the bookkeeping attr is spent.
@@ -83,23 +82,23 @@ def test_a_zarr_variable_written_elsewhere_trails_the_written_order(
     tmp_path: Path,
 ) -> None:
     names = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"]
-    destination = zarr.write(build_shuffled(names), tmp_path / "ordered.zarr")
+    destination = zarr.write(build_shuffled(names), tmp_path / "ordered.zarr").path
     # Another tool appends a variable to the store, leaving the order attr as it was.
     group = open_group(destination, mode="a")
     group.create_array(
         "swir", data=build_raster().red.values, dimension_names=("y", "x")
     )
 
-    restored = zarr.read(destination)
+    restored = zarr.open_raster(destination)
 
     assert list(restored.data_vars) == [*names, "swir"]
 
 
 def test_digital_numbers_stay_stored_and_decode_on_request(tmp_path: Path) -> None:
-    destination = zarr.write(build_raster(packed=True), tmp_path / "packed.zarr")
+    destination = zarr.write(build_raster(packed=True), tmp_path / "packed.zarr").path
 
-    stored = zarr.read(destination)
-    decoded = zarr.read(destination, mask_and_scale=True)
+    stored = zarr.open_raster(destination)
+    decoded = zarr.open_raster(destination, mask_and_scale=True)
 
     assert stored.red.dtype == np.dtype("uint16")
     assert stored.red.attrs["scale_factor"] == pytest.approx(1e-4)
@@ -114,7 +113,7 @@ def test_digital_numbers_stay_stored_and_decode_on_request(tmp_path: Path) -> No
 def test_grid_mapping_keeps_spatial_ref_a_coordinate(tmp_path: Path) -> None:
     written = build_raster()
 
-    restored = zarr.read(zarr.write(written, tmp_path / "gm.zarr"))
+    restored = zarr.open_raster(zarr.write(written, tmp_path / "gm.zarr").path)
 
     assert "spatial_ref" in restored.coords
     assert "spatial_ref" not in restored.data_vars
@@ -127,7 +126,7 @@ def test_external_store_without_order_metadata_reads_every_variable(
     destination = tmp_path / "external.zarr"
     written.to_zarr(destination, zarr_format=3, consolidated=False)
 
-    with zarr.read(destination) as restored:
+    with zarr.open_raster(destination) as restored:
         assert "zarr_variable_order" not in restored.attrs
         assert set(restored.data_vars) == {"nir", "red"}
 
@@ -145,23 +144,25 @@ def test_overwrite_guards_an_existing_store(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError, match="overwrite=True"):
         zarr.write(raster, destination)
 
-    assert zarr.write(raster, destination, overwrite=True) == destination
+    assert zarr.write(raster, destination, overwrite=True).path == destination
 
 
 def test_the_zarr_suffix_is_matched_without_case(tmp_path: Path) -> None:
-    destination = zarr.write(build_raster(), tmp_path / "SCENE.ZARR")
+    destination = zarr.write(build_raster(), tmp_path / "SCENE.ZARR").path
 
-    assert list(zarr.read(destination).data_vars) == ["red", "nir"]
+    assert list(zarr.open_raster(destination).data_vars) == ["red", "nir"]
 
 
-def test_zarr_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:
+def test_a_deferred_store_is_written_only_once_computed(tmp_path: Path) -> None:
     destination = tmp_path / "deferred.zarr"
 
-    deferred = zarr.write(build_raster(), destination, compute=False)
+    pending = build_raster().gs.to_zarr(destination, compute=False)
 
-    assert isinstance(deferred, Delayed)
-    assert deferred.compute() == destination
-    assert zarr.read(destination).gs.geobox == build_raster().gs.geobox
+    assert pending.files is None
+    assert not destination.exists()
+    (file,) = pending.compute().written.values()
+    assert file.path == destination
+    assert file.header.gs.geobox == build_raster().gs.geobox
 
 
 def test_a_zarr_array_holds_the_fill_value_a_gdal_reader_masks_on(
@@ -169,18 +170,18 @@ def test_a_zarr_array_holds_the_fill_value_a_gdal_reader_masks_on(
 ) -> None:
     written = build_raster().gs.write_nodata(255)
 
-    destination = zarr.write(written, tmp_path / "scene.zarr")
+    destination = zarr.write(written, tmp_path / "scene.zarr").path
 
     # A CF attr is not the array's own fill value, and GDAL masks on the latter.
     stored = orjson.loads((destination / "red" / "zarr.json").read_bytes())
     assert stored["fill_value"] == 255
-    assert zarr.read(destination).red.attrs["_FillValue"] == 255
+    assert zarr.open_raster(destination).red.attrs["_FillValue"] == 255
 
 
 def test_a_variable_declaring_no_fill_leaves_zarr_its_own_default(
     tmp_path: Path,
 ) -> None:
-    destination = zarr.write(build_raster(), tmp_path / "scene.zarr")
+    destination = zarr.write(build_raster(), tmp_path / "scene.zarr").path
 
     stored = orjson.loads((destination / "red" / "zarr.json").read_bytes())
     assert stored["fill_value"] == 0
@@ -194,12 +195,12 @@ def test_a_raster_round_trips_through_a_remote_store(
     destination = f"{bucket}/scene.zarr"
 
     # zarr maps `memory://` to its own store and refuses unused storage_options.
-    saved = written.gs.to_zarr(destination)
+    (saved,) = written.gs.to_zarr(destination).written.values()
 
-    assert saved == UPath(destination)
+    assert saved.path == UPath(destination)
     assert list(tmp_path.iterdir()) == []
-    local = written.gs.to_zarr(tmp_path / "local.zarr")
-    with open_raster(saved) as restored, open_raster(local) as expected:
+    (local,) = written.gs.to_zarr(tmp_path / "local.zarr").written.values()
+    with open_raster(saved.path) as restored, open_raster(local.path) as expected:
         xr.testing.assert_identical(restored, expected)
 
 
@@ -210,9 +211,12 @@ def test_a_raster_round_trips_through_a_upath(
     written = build_raster(times=2)
     root = UPath(bucket) if remote else UPath(tmp_path.as_uri())
 
-    saved = zarr.write(written, root / "scene.zarr")
+    saved = zarr.write(written, root / "scene.zarr").path
 
-    with zarr.read(root / "scene.zarr") as restored, zarr.read(saved) as again:
+    with (
+        zarr.open_raster(root / "scene.zarr") as restored,
+        zarr.open_raster(saved) as again,
+    ):
         xr.testing.assert_identical(restored, again)
         np.testing.assert_array_equal(restored["red"], written["red"])
 
@@ -224,7 +228,8 @@ def test_a_remote_store_refuses_to_be_replaced_silently(bucket: str) -> None:
 
     with pytest.raises(FileExistsError):
         written.gs.to_zarr(destination)
-    assert written.gs.to_zarr(destination, overwrite=True) == UPath(destination)
+    (file,) = written.gs.to_zarr(destination, overwrite=True).written.values()
+    assert file.path == UPath(destination)
 
 
 def test_a_remote_store_needs_the_zarr_suffix(bucket: str) -> None:
@@ -245,7 +250,7 @@ def test_zarr_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
     foreign.red.encoding["grid_mapping"] = "spatial_ref"
     foreign.to_zarr(tmp_path / "foreign.zarr")
 
-    restored = zarr.read(tmp_path / "foreign.zarr", chunks={})
+    restored = zarr.open_raster(tmp_path / "foreign.zarr", chunks={})
 
     assert restored.red.dims == ("y", "x")
     assert restored.gs.geobox == grid

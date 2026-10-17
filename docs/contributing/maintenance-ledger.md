@@ -1,5 +1,11 @@
 # Maintenance closure — 2026-10-11
 
+> Historical snapshot of the 2026-10-11 cleanup. Paths, APIs, test counts, and
+> validation results below describe that run; later changes supersede some of
+> them. Current behavior is documented in [Architecture](architecture.md) and
+> the [guides](../activities.md).
+
+
 The previous run started at `d2e81f7` and left its fixes in the shared working
 tree. This follow-up finishes structural cleanup only, as the user confirmed.
 Existing fixes, generated workspace content, and notebook files are preserved.
@@ -12,11 +18,11 @@ Existing fixes, generated workspace content, and notebook files are preserved.
 | G2-6 | `stac._item` became public `stac.item`; `cog_files` and `instant` are exported from stac. File records read native PySTAC assets and EO extensions. `instant` reads serialized source snapshots. |
 | G3-2 | Spatial Dask mapping moved to features; geometry, variables, statistics and geocoding moved to core. Tests and imports follow their owners. |
 | G3-1 | Unused Clay-specific sensors package and its isolated tests removed. |
-| G3-4 | `crop.window` accepts constant, edge and reflect, matching chips; wrap is rejected even when no padding is needed. |
+| G3-4 | `extent.pad` accepts constant, edge and reflect, matching chips. |
 | G2 SAFE | Unimplemented SAFE reader removed from advertised format exports; internal dispatch still reports its explicit NotImplementedError. |
 | WC-1/2 | Pure-raise dense tasks removed. The pending dense flow is no longer registered as a CLI command; the implementation of label indexing is retained. |
-| ML-2 | `ml/data.py`, `inputs.py`, `merge.py`, `predict.py` and `apply_thresholds` removed. Validation scores chips over valid pixels. |
-| ML-3 | Task datasets removed. Each DataModule declares a `Sample` TypedDict and takes one Dataset per split; FixMatch and Mean Teacher add an `unlabeled` Dataset. |
+| ML-2 | Old `ml/data.py`, `inputs.py`, `merge.py`, `predict.py` and `apply_thresholds` removed. Dense tasks score supplied targets consistently across splits. |
+| ML-3 | Source datasets stay with their source. Each method declares a `Sample` and output protocol and takes one Dataset per split; FixMatch and Mean Teacher add an `unlabeled` Dataset. No input-validity field or implicit input repair. |
 | Dependency extra | Duplicate viz extra removed; visualization dependencies remain core dependencies. Lockfile regenerated. |
 | Internal documents | Active proposals, open decisions and this ledger moved to `planning/`, outside the published docs tree. Completed ML plan removed; architecture and guides describe the implemented behavior. |
 | Root artifacts | Generated segmentation/regression smoke workspaces moved under ignored `workspace/`, preserving their changed train configs. Templates remain under `src/geosave/templates`. |

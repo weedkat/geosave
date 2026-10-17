@@ -227,24 +227,6 @@ def test_mutually_dependent_modules_are_refused_as_a_cycle():
         for step in raised.value.args[1]
     }
     assert named == {"Forward.step", "Backward.step"}
-
-
-def test_a_cycle_names_the_key_joining_each_pair_of_steps():
-    class Forward(nn.Module):
-        @chain_step()
-        def step(self, left: torch.Tensor) -> torch.Tensor:
-            right = left
-            return right
-
-    class Backward(nn.Module):
-        @chain_step()
-        def step(self, right: torch.Tensor) -> torch.Tensor:
-            left = right
-            return left
-
-    with pytest.raises(CycleError) as raised:
-        ModelChain(Forward(), Backward())
-
     message = raised.value.args[0]
     assert "-(right)-> Backward.step" in message
     assert "-(left)-> Forward.step" in message

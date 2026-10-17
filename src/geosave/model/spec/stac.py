@@ -28,14 +28,30 @@ from .base import SpecModel, Text
 
 
 class SortConfig(SpecModel):
-    """Declare one STAC sort field and direction."""
+    """Declare one STAC sort field and direction.
+
+    Attributes:
+        field: Item property used for sorting, such as `datetime`.
+        direction: Ascending (`asc`) or descending (`desc`) order.
+    """
 
     field: Text
     direction: Literal["asc", "desc"]
 
 
 class QueryConfig(SpecModel):
-    """Declare the STAC item search owned by a model raster."""
+    """Declare the STAC item search owned by a model raster.
+
+    Attributes:
+        bbox: Search bounds `(west, south, east, north)` in longitude/latitude.
+        intersects: GeoJSON geometry the items must intersect.
+        datetime: Acquisition instant or interval accepted by the STAC query.
+        filter: CQL2 JSON filter expression.
+        max_items: Maximum items collected across response pages.
+        limit: Requested items per response page.
+        ids: Item identifiers to select.
+        sortby: Ordered property/direction declarations.
+    """
 
     bbox: tuple[float, float, float, float] | None = None
     intersects: dict[str, JsonValue] | None = None
@@ -47,7 +63,15 @@ class QueryConfig(SpecModel):
     sortby: tuple[SortConfig, ...] | None = None
 
     def to_query(self, collection: str) -> StacQuery:
-        """Build the native query with its collection identity."""
+        """Build the native query with its collection identity.
+
+        Args:
+            collection: Collection identifier to search.
+
+        Returns:
+            Validated `StacQuery` containing the declared non-null settings.
+            This does not connect to a catalog or retrieve items.
+        """
         values = self.model_dump(exclude_none=True)
         if "sortby" in values:
             values["sortby"] = [dict(item) for item in values["sortby"]]
@@ -63,7 +87,7 @@ class QueryConfig(SpecModel):
 class StacRecipe(SpecModel):
     """Describe how to find and load one raster from STAC.
 
-    Args:
+    Attributes:
         collection: STAC collection identifier.
         endpoints: Built-in provider names or HTTP(S) catalog endpoints in
             fallback order.

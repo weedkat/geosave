@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar
+from typing import Annotated
 
 from pydantic import Field, field_validator
 from rasterio.enums import ColorInterp
 
-from .base import AttrsGroup, Join
+from .base import AttrsGroup
 
 # GDAL's names for the three display channels, in the order a composite draws them.
 RGB = (ColorInterp.red.name, ColorInterp.green.name, ColorInterp.blue.name)
@@ -20,7 +20,7 @@ class GDALBand(AttrsGroup):
     pixels rather than identifying them, so a band carries its variable name
     as its own metadata item.
 
-    Args:
+    Attributes:
         variable_name: Name of the variable this band holds.
         colorinterp: How a reader should draw the band, named as GDAL names
             it, such as `"red"` or `"palette"`. GDAL's `"undefined"` reads as
@@ -30,11 +30,9 @@ class GDALBand(AttrsGroup):
         ValueError: `colorinterp` names no interpretation GDAL knows.
 
     Examples:
-        >>> attrs.parse(ds["B04"], attrs.GDALBand).colorinterp
+        >>> attrs.GDALBand.from_attrs(ds["B04"].attrs).colorinterp
         'red'
     """
-
-    JOIN: ClassVar[Join] = "drop"
 
     variable_name: Annotated[str, Field(min_length=1)] | None = None
     colorinterp: str | None = None

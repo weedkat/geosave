@@ -3,8 +3,8 @@
 import json
 
 import pytest
-from upath import UPath
 from shapely.geometry import box, mapping
+from upath import UPath
 
 from geosave.geodata import GeoVector, io
 
@@ -31,17 +31,9 @@ def test_plain_geojson_nested_assets_remain_mappings(tmp_path):
             }
         )
     )
-    source = io.geojson.read(path)
+    source = io.geojson.open_vector(path)
     assert isinstance(source.loc[0, "assets"], dict)
     assert source.loc[0, "assets"]["image"]["roles"] == ["data"]
-
-
-def test_nullable_assets_on_an_ordinary_vector_survive_geoparquet(tmp_path):
-    source = GeoVector.from_geometry(box(0, 0, 1, 1), properties={"assets": None})
-    path = source.gs.to_geoparquet(tmp_path / "plain.parquet")
-    restored = io.open_vector(path)
-    assert sorted(restored.columns) == ["assets", "geometry"]
-    assert len(restored) == 1
 
 
 def test_geojson_writes_to_a_remote_url(bucket: str) -> None:
@@ -77,7 +69,7 @@ def test_an_option_given_twice_refuses(tmp_path) -> None:
     )
 
     with pytest.raises(TypeError, match="rows"):
-        io.geojson.read(path, rows=1, driver_options={"rows": 2})
+        io.geojson.open_vector(path, rows=1, driver_options={"rows": 2})
 
 
 def test_a_file_url_reads_as_its_local_path(tmp_path) -> None:
@@ -85,4 +77,4 @@ def test_a_file_url_reads_as_its_local_path(tmp_path) -> None:
         tmp_path / "plots.geojson"
     )
 
-    assert len(io.geojson.read(UPath(path.as_uri()))) == 1
+    assert len(io.geojson.open_vector(UPath(path.as_uri()))) == 1

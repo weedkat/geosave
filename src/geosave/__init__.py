@@ -1,10 +1,10 @@
-"""GeoSave's geodata surface, reached as `gs.open_raster`, `gs.raster`, `gs.stack`.
+"""GeoSave's geodata surface, reached as `gs.open_raster`, `gs.raster`, `gs.tree`.
 
 Importing the package imports `geodata`, which registers the `gs` accessor on
-xarray objects, GeoDataFrames and cuts rows, so `.gs` works right after
+xarray objects and GeoDataFrames, so `.gs` works right after
 `import geosave as gs`. torch and the viz stack stay unloaded until a
-member that needs them is called; `cuts`, `features` and `stac` load on
-first use.
+member that needs them is called; `features` and `stac` load on first
+use.
 
 Examples:
     >>> import geosave as gs
@@ -20,19 +20,23 @@ from geosave.geodata import (
     Dataset,
     GeoDataFrame,
     GeoAnchor,
-    GeoArray,
-    GeoRaster,
-    GeoStack,
+    GeoDataArray,
+    GeoDataset,
+    GeoDataTree,
     GeoVector,
+    GeoCatalog,
+    GeoSamples,
     array,
     attrs,
     configure_gdal,
     io,
     raster,
     open_raster,
-    open_stack,
+    open_tree,
     open_vector,
-    stack,
+    tree,
+    class_percent,
+    statistics,
     transform,
 )
 
@@ -42,34 +46,39 @@ __all__ = [
     "Dataset",
     "GeoDataFrame",
     "GeoAnchor",
-    "GeoArray",
-    "GeoRaster",
-    "GeoStack",
+    "GeoDataArray",
+    "GeoDataset",
+    "GeoDataTree",
     "GeoVector",
+    "GeoCatalog",
+    "GeoSamples",
+    "StacClient",
+    "StacQuery",
     "array",
     "attrs",
     "configure_gdal",
-    "cuts",
     "features",
     "io",
     "raster",
     "open_raster",
-    "open_stack",
+    "open_tree",
     "open_vector",
     "stac",
-    "stack",
+    "tree",
+    "class_percent",
+    "statistics",
     "transform",
 ]
 
 # These bring their own heavy dependencies, so they load on first use.
-_LAZY = ("cuts", "features", "stac")
+_LAZY = ("StacClient", "StacQuery", "features", "stac")
 
 if TYPE_CHECKING:
-    from geosave.geodata import cuts, features, stac
+    from geosave.geodata import StacClient, StacQuery, features, stac
 
 
 def __getattr__(name: str) -> object:
-    """Fetch `cuts`, `features` or `stac` from `geodata` on first use.
+    """Fetch `StacClient`, `StacQuery`, `features` or `stac` from `geodata` on first use.
 
     Raises:
         AttributeError: `name` is not part of the public surface.

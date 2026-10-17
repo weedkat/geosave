@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from geosave.geodata.stac.translate import table as stac_table
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -13,14 +15,16 @@ from pystac_client.stac_api_io import StacApiIO
 from urllib3.util import Retry
 
 from geosave.geodata.errors import CollectionNotFoundError
-from geosave.geodata.io.vector import stac_geoparquet
 
 from geosave.geodata.stac.source import StacSource
 
 from .query import StacQuery
 
 if TYPE_CHECKING:
+    import rustac
+
     from geosave.geodata import GeoDataFrame
+    from geosave.geodata.io.storage import Location
 
 CDSE_URL = "https://stac.dataspace.copernicus.eu/v1/"
 PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/"
@@ -31,6 +35,9 @@ type StacProvider = Literal["planetary_computer", "cdse", "element84"]
 
 class StacClient:
     """Search one STAC catalog and build sources on it.
+
+    Open it with `open`: a built-in provider, a STAC API URL, or a STAC
+    GeoParquet table. All three search and build sources the same way.
 
     Args:
         client: Open pystac-client session.
@@ -57,26 +64,45 @@ class StacClient:
         self._collections: dict[str, pystac.Collection] = {}
 
     @classmethod
-    def open(cls, endpoint: StacProvider | str) -> StacClient:
-        """Open a built-in provider or a STAC API by URL.
+    def open(
+        cls,
+        endpoint: StacProvider | Location,
+        *,
+        duckdb: rustac.DuckdbClient | None = None,
+    ) -> StacClient:
+        """Open a built-in provider, a STAC API by URL, or a GeoParquet table.
 
         Args:
-            endpoint: Built-in provider name or STAC API URL. A STAC
-                GeoParquet table opens with `StacTable` instead.
+            endpoint: Built-in provider name, STAC API URL, or the path or URL
+                of a `.parquet` item table as `to_geoparquet` stores it.
+            duckdb: Configured rustac session for a table in a bucket behind
+                credentials or a custom endpoint. Only a table takes it.
 
         Returns:
             Client for the catalog.
 
+        Raises:
+            ValueError: `duckdb` is given for an API.
+
         Examples:
             >>> StacClient.open("element84").source("sentinel-2-l2a")
+            >>> StacClient.open("data/catalog.parquet").collections()
+            {'forest'}
         """
+        url = str(endpoint)
+        if url.split("?")[0].endswith((".parquet", ".geoparquet")):
+            from .table import StacTable
+
+            return StacTable(endpoint, duckdb=duckdb)
+        if duckdb is not None:
+            raise ValueError("duckdb applies to a GeoParquet table, not a STAC API")
         if endpoint == "planetary_computer":
             return cls.planetary_computer()
         if endpoint == "cdse":
             return cls.cdse()
         if endpoint == "element84":
             return cls.element84()
-        return cls(Client.open(endpoint, stac_io=_default_io()))
+        return cls(Client.open(url, stac_io=_default_io()))
 
     @classmethod
     def cdse(cls) -> StacClient:
@@ -119,13 +145,20 @@ class StacClient:
 
         Returns:
             One row per matching Item, read through `gs` as a catalog. Empty
-            where nothing matches.
+            where nothing matches. Referenced Collection definitions are attached
+            for publication; their metadata is fetched through `collection`.
 
         Examples:
             >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
             ['forest_20250601', 'forest_20250611']
         """
-        return stac_geoparquet.from_item(self.search_items(query))
+        items = self.search_items(query)
+        names = dict.fromkeys(
+            item.collection_id for item in items if item.collection_id
+        )
+        collections = [self.collection(name) for name in names]
+
+        return stac_table.from_items(items, collections=collections)
 
     def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
         """Run one search to completion as pystac Items, for loaders.
@@ -134,7 +167,8 @@ class StacClient:
             query: Query object, or raw pystac-client search parameters.
 
         Returns:
-            Every matching item.
+            Every matching item, in the order the API returns them, capped at
+            the query's `max_items`.
         """
         params = query.to_search_params() if isinstance(query, StacQuery) else query
         return list(self._client.search(**params).items())
@@ -197,7 +231,7 @@ class StacClient:
         self.collection(collection)
         source = StacSource(self, collection=collection)
         if self._patch_url is not None:
-            source.set_config(patch_url=self._patch_url)
+            return source.set_config(patch_url=self._patch_url)
         return source
 
 

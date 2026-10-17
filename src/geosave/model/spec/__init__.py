@@ -2,7 +2,7 @@
 
 from .base import Name, SpecModel, Text
 from .call import CallSpec, CallValue, Ref
-from .cuts import FramesSpec, ChipsSpec
+from .windows import FramesSpec, ChipsSpec
 from .model import ModelSpec, TransformSpec
 from .stage import StageSpec
 from .rasters import (

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 
-from pydantic import ValidationError
 import pytest
+from pydantic import ValidationError
 
 from geosave.model.spec import CallSpec, Ref
 
@@ -82,7 +82,20 @@ def test_call_binds_none_as_the_complete_result() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["", "a..b", ".a", "a.", "a[0]", "a()", 'a["x"', 'a[""]', 'a["x"]b', '["x"]'],
+    [
+        "",
+        "a..b",
+        ".a",
+        "a.",
+        "a[0]",
+        "a()",
+        "two names",
+        "3a",
+        'a["x"',
+        'a[""]',
+        'a["x"]b',
+        '["x"]',
+    ],
 )
 def test_reference_rejects_non_attribute_paths(path: str) -> None:
     with pytest.raises(ValueError):

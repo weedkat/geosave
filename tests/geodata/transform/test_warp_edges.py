@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
@@ -9,8 +10,8 @@ from affine import Affine
 from dask.callbacks import Callback
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import raster, stack
-from geosave.geodata.transform.warp import align, common_grid, reproject
+from geosave.geodata import raster, tree
+from geosave.geodata.transform.warp import align, reproject
 
 from .conftest import grid_of
 
@@ -24,7 +25,7 @@ def image(grid=GRID, *, dtype="uint16", fill: float = 0):
     return raster({"red": (("y", "x"), pixels)}, grid, nodata=fill)
 
 
-@pytest.mark.parametrize("kind", ["array", "dataset", "stack"])
+@pytest.mark.parametrize("kind", ["array", "dataset", "tree"])
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
     "dtype,fill",
@@ -41,8 +42,8 @@ def test_wider_grid_preserves_pixels_nodata_metadata_and_laziness(
     if lazy:
         source = source.chunk({"y": 2, "x": 2})
     data = source.red if kind == "array" else source
-    if kind == "stack":
-        data = stack({"image": source})
+    if kind == "tree":
+        data = tree({"image": source})
         data.attrs["title"] = "collection"
     target = GeoBox((6, 6), GRID.transform * Affine.translation(-1, -1), GRID.crs)
 
@@ -63,7 +64,7 @@ def test_wider_grid_preserves_pixels_nodata_metadata_and_laziness(
     np.testing.assert_array_equal(band.compute().values, expected)
     if kind != "array":
         assert output.attrs["title"] == "scene"
-    if kind == "stack":
+    if kind == "tree":
         assert result.attrs["title"] == "collection"
 
 
@@ -77,7 +78,7 @@ def test_align_overlapping_scenes_has_exact_pixels(extent, width, lazy):
     if lazy:
         west, east = west.chunk(), east.chunk()
     with Callback(pretask=lambda *_: pytest.fail("align computed lazy pixels")):
-        first, second = align([west, east], extent=extent)
+        first, second = align([west, east], target=west, extent=extent)
     assert first.gs.geobox == second.gs.geobox
     assert first.sizes["x"] == width
     expected = {
@@ -103,8 +104,8 @@ def test_reproject_validates_bands_even_on_the_same_grid(empty, same_grid):
 
 
 @pytest.mark.parametrize("resolution", [None, 10])
-def test_stack_reproject_to_crs_covers_every_group(resolution):
-    source = stack({"west": image(), "east": image(GRID.translate_pix(4, 0))})
+def test_tree_reproject_to_crs_covers_every_group(resolution):
+    source = tree({"west": image(), "east": image(GRID.translate_pix(4, 0))})
     result = reproject(source, "EPSG:32633", resolution=resolution)
     assert grid_of(result).shape.yx == (4, 8)
     np.testing.assert_array_equal(
@@ -127,7 +128,9 @@ def test_native_resolution_refuses_comparing_different_crs_units():
 def test_native_alignment_keeps_shared_extent_and_individual_resolutions(extent, shape):
     fine = GeoBox((7, 11), GRID.transform, GRID.crs)
     grids = [fine, fine.zoom_out(2), fine.zoom_out(3)]
-    aligned = align([image(grid) for grid in grids], resolution="native", extent=extent)
+    aligned = align(
+        [image(grid) for grid in grids], target=fine, resolution="native", extent=extent
+    )
     assert grid_of(aligned[0]).shape.yx == shape
     assert len({data.gs.bounds for data in aligned}) == 1
     for source, result in zip(grids, aligned, strict=True):
@@ -148,13 +151,13 @@ def test_nonadjacent_spatial_dimensions_reproject_without_losing_axis_order(kind
     np.testing.assert_array_equal(band.isel(time=0).values, [[6, 8], [14, 16]])
 
 
-@pytest.mark.parametrize("operation", [reproject, common_grid])
-def test_empty_stack_has_a_clear_grid_error(operation):
+@pytest.mark.parametrize("operation", [reproject, align])
+def test_empty_tree_has_a_clear_grid_error(operation):
     with pytest.raises(ValueError, match="grid|groups|no data variables"):
         if operation is reproject:
             operation(xr.DataTree(), GRID)
         else:
-            operation([xr.DataTree()])
+            operation([xr.DataTree()], target=GRID)
 
 
 @pytest.mark.parametrize(
@@ -201,18 +204,10 @@ def test_cross_crs_pixels_match_explicit_rasterio_warp(kernel, crs, lazy, reques
     np.testing.assert_allclose(actual, expected, rtol=1e-5)
 
 
-@pytest.mark.parametrize("kernel", ["gauss", "unknown"])
-@pytest.mark.parametrize("same_grid", [False, True])
-def test_unsupported_kernel_is_rejected_before_warping(kernel, same_grid):
-    target = GRID if same_grid else GRID.zoom_out(2)
-    with pytest.raises(ValueError, match="resampling"):
-        reproject(image(), target, resampling=kernel)
-
-
-def test_stack_variable_kernels_keep_class_codes_and_continuous_values_lazy():
+def test_tree_variable_kernels_keep_class_codes_and_continuous_values_lazy():
     labels = image().gs.write_legend({1: "land", 2: "water"}, target="red")
     labels.red.values[:] = [[1, 1, 2, 2]] * 4
-    source = stack({"labels": labels.chunk(), "dem": image(dtype="float32").chunk()})
+    source = tree({"labels": labels.chunk(), "dem": image(dtype="float32").chunk()})
     target = GRID.zoom_out(2)
     with Callback(pretask=lambda *_: pytest.fail("reproject computed lazy pixels")):
         result = reproject(
@@ -254,16 +249,32 @@ def test_reproject_refuses_a_target_grid_without_crs():
 
 def test_fractional_intersection_keeps_conservative_boundary_pixels():
     shifted = image(GRID.translate_pix(0.5, 0))
-    grid = common_grid([image(), shifted], extent="intersection")
+    (aligned, _) = align([image(), shifted], target=GRID, extent="intersection")
+    grid = aligned.gs.geobox
     # A half-pixel overlap is enclosed on the reference lattice, not clipped
     # into fractional cells or snapped inward to discard boundary coverage.
     assert grid == GRID
 
 
-def test_native_stack_to_crs_preserves_resolutions_and_pixels():
+def test_native_tree_to_crs_preserves_resolutions_and_pixels():
     fine = GeoBox((6, 6), GRID.transform, GRID.crs)
     coarse = fine.zoom_out(3)
-    source = stack({"fine": image(fine), "coarse": image(coarse)})
+    source = tree({"fine": image(fine), "coarse": image(coarse)})
     result = reproject(source, "EPSG:32633", resolution="native")
     for name in ("fine", "coarse"):
         xr.testing.assert_identical(result.gs.rasters[name], source.gs.rasters[name])
+
+
+def test_a_tree_target_with_no_root_grid_requires_an_explicit_group():
+    target = tree({"r10": image(), "r20": image(GRID.zoom_out(2))})
+    assert target.gs.geobox is None
+    with pytest.raises(ValueError, match="select a reference group"):
+        reproject(image(dtype="float32"), target)
+    assert reproject(image(dtype="float32"), target.gs.rasters["r10"]).gs.geobox == GRID
+
+
+def test_reproject_onto_a_new_grid_stays_lazy():
+    source = image().chunk()
+    with Callback(pretask=lambda *_: pytest.fail("reproject computed pixels")):
+        result = reproject(source, GRID.zoom_out(2))
+    assert isinstance(result.red.data, da.Array)

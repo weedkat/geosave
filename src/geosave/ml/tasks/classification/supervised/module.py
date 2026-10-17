@@ -41,7 +41,7 @@ class Module(LightningModule):
           init_args:
             model_chain:
               encoder: {name: dinov3, init_args: {in_channels: 4}}
-              head: {name: classification, init_args: {classes: [crop, forest, urban]}}
+              head: {name: classification, init_args: {num_classes: 3}}
             metrics: [accuracy.macro, f1.macro]
     """
 
@@ -98,6 +98,12 @@ class Module(LightningModule):
         self.test_metrics = metrics.clone(prefix="test_")
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Build optimization for the configured chain's trainable parameters.
+
+        Returns:
+            The optimizer alone when scheduling is disabled, otherwise a
+            Lightning dictionary with `optimizer` and `lr_scheduler` entries.
+        """
         optimizer = build_optimizer(self.optimizer_spec, self.model)
         if self.scheduler_spec is None:
             return optimizer
@@ -111,6 +117,13 @@ class Module(LightningModule):
 
     def forward(self, **model_inputs: Any) -> torch.Tensor:
         """Return raw ``(B, classes)`` logits for prepared model inputs.
+
+        Args:
+            **model_inputs: Named, batched tensors and context required by the
+                configured chain. Pixel preparation is the caller's job.
+
+        Returns:
+            `(batch, num_classes)` raw class scores in the head's class order.
 
         Raises:
             TypeError: The model does not return one tensor.
@@ -139,10 +152,32 @@ class Module(LightningModule):
         return loss
 
     def training_step(self, batch: Sample, batch_idx: int) -> torch.Tensor:
+        """Score one classification batch and log training loss and metrics.
+
+        Args:
+            batch: Collated `Sample` with named inputs and `(batch,)` int64
+                class targets, already prepared by the DataModule.
+            batch_idx: Lightning's batch position; unused by this task.
+
+        Returns:
+            Scalar criterion loss used by Lightning for backpropagation.
+        """
         return self._score(batch, "train")
 
     def validation_step(self, batch: Sample, batch_idx: int) -> None:
+        """Update and log classification validation loss and metrics.
+
+        Args:
+            batch: Prepared, collated `Sample` with one class target per chip.
+            batch_idx: Lightning's batch position; unused by this task.
+        """
         self._score(batch, "val")
 
     def test_step(self, batch: Sample, batch_idx: int) -> None:
+        """Update and log classification test loss and metrics.
+
+        Args:
+            batch: Prepared, collated `Sample` with one class target per chip.
+            batch_idx: Lightning's batch position; unused by this task.
+        """
         self._score(batch, "test")

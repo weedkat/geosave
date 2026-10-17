@@ -34,7 +34,14 @@ def _runtime_type(expected: type) -> type | tuple[type, ...]:
 
 
 def type_name(kind: object) -> str:
-    """Return an annotation as written, such as `Tensor` or `list[int]`."""
+    """Return a concise display name for an annotation.
+
+    Args:
+        kind: Type, parameterized annotation, or object to display.
+
+    Returns:
+        Type name or string representation, such as `Tensor` or `list[int]`.
+    """
     return str(kind) if get_origin(kind) else getattr(kind, "__name__", str(kind))
 
 

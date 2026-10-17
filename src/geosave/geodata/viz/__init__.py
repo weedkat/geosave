@@ -1,3 +1,1 @@
-from .plot import classes, continuous, explore, plot, rgb
-
-__all__ = ["classes", "continuous", "explore", "plot", "rgb"]
+"""Static figures and native Panel exploration of geospatial data."""

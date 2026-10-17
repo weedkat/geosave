@@ -1,29 +1,36 @@
 [project]
-site_name = "Geosave Engine"
+site_name = "GeoSave"
 site_description = "Native geospatial data, model composition, and Lightning-based model development"
 site_author = "Fatah Muria"
 docs_dir = "docs"
 site_dir = "site"
 site_url = "https://weedkat.github.io/geosave-engine"
 
-copyright = "Copyright © 2026 GeoMoka contributors"
+copyright = "Copyright © 2026 GeoSave contributors"
 
 nav = [
     { "Home" = "index.md" },
     { "Getting started" = [
         { "Installation" = "install.md" },
+        { "Learn geospatial AI by example" = "examples.md" },
         { "Your first raster" = "first-raster.md" },
         { "From images to training chips" = "quickstart.md" },
     ] },
-    { "Practical guides" = [
+    { "Basics" = [
+        { "Overview" = "basics/index.md" },
         { "Raster data" = "basics/rasters.md" },
         { "Vector data" = "basics/vectors.md" },
         { "Describe raster values" = "basics/attrs.md" },
         { "Read and save data" = "basics/io.md" },
+    ] },
+    { "Activities" = [
+        { "Find your task" = "activities.md" },
+        { "Ingest existing files" = "guides/ingest-files.md" },
         { "Search and load STAC data" = "guides/stac.md" },
         { "Build catalogs and read windows" = "guides/catalogs-and-cuts.md" },
         { "Lazy raster processing" = "guides/large-data.md" },
         { "Build a model" = "guides/models.md" },
+        { "Build from pretrained" = "guides/pretrained.md" },
         { "Declare model inputs" = "guides/model-spec.md" },
         { "Train a segmentation model" = "guides/training.md" },
         { "Save and publish a model" = "guides/release.md" },
@@ -31,8 +38,9 @@ nav = [
         { "Optional ingestion flows" = "guides/workflows.md" },
         { "Download benchmark files" = "guides/benchmarks.md" },
     ] },
-    { "Concepts and behavior" = [
+    { "Advanced" = [
         { "Overview" = "concepts/index.md" },
+        { "How the library works" = "concepts/data-flow.md" },
         { "Raster grids" = "concepts/raster-grids.md" },
         { "Metadata and pixel values" = "concepts/metadata.md" },
         { "Lazy execution" = "concepts/lazy-data.md" },
@@ -40,14 +48,23 @@ nav = [
         { "Model input contracts" = "concepts/model-inputs.md" },
         { "Training contracts" = "concepts/training.md" },
     ] },
+    { "Common questions" = "faq.md" },
     { "API reference" = [
         { "Overview" = "reference/index.md" },
+        { "Command-line inputs and outputs" = "reference/cli.md" },
+        { "Every public input and output" = [
+            { "Symbol index" = "reference/public-api.md" },
+            { "Data contracts" = "reference/generated/data.md" },
+            { "Model contracts" = "reference/generated/models.md" },
+            { "Training contracts" = "reference/generated/training.md" },
+            { "Flow contracts" = "reference/generated/flows.md" },
+        ] },
         { "Data" = [
             { "Overview" = "reference/geodata.md" },
             { "Raster constructors" = "reference/rasters.md" },
-            { "Dataset accessor" = "reference/raster-accessor.md" },
-            { "DataArray accessor" = "reference/array-accessor.md" },
-            { "DataTree accessor" = "reference/stack-accessor.md" },
+            { "Dataset accessor" = "reference/dataset-accessor.md" },
+            { "DataArray accessor" = "reference/dataarray-accessor.md" },
+            { "DataTree accessor" = "reference/datatree-accessor.md" },
             { "Spatial and temporal targets" = "reference/anchor.md" },
             { "Vector accessor" = "reference/vectors.md" },
             { "Readers, writers, and options" = "reference/io.md" },
@@ -55,7 +72,7 @@ nav = [
             { "Features and masks" = "reference/features.md" },
             { "Metadata groups" = "reference/attrs.md" },
             { "STAC" = "reference/stac.md" },
-            { "Window tables" = "reference/cuts.md" },
+            { "Catalog operations" = "reference/catalog.md" },
             { "Benchmark downloads" = "reference/benchmarks.md" },
             { "Errors and warnings" = "reference/errors.md" },
         ] },
@@ -76,6 +93,7 @@ nav = [
     ] },
     { "Contributing" = [
         { "Architecture" = "contributing/architecture.md" },
+        { "Maintain the documentation" = "contributing/documentation.md" },
         { "Open decisions" = "contributing/open-decisions.md" },
         { "Maintenance ledger" = "contributing/maintenance-ledger.md" },
         { "Design specs" = "contributing/specs/index.md" },
@@ -112,6 +130,11 @@ show_source = false
 show_root_heading = true
 show_root_full_path = false
 show_signature_annotations = true
+separate_signature = true
+docstring_style = "google"
+show_docstring_parameters = true
+show_docstring_returns = true
+show_docstring_attributes = true
 show_if_no_docstring = true
 merge_init_into_class = true
 members_order = "source"

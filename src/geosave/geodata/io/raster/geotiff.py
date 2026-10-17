@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from upath import UPath
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
 
@@ -32,13 +31,14 @@ from geosave.geodata.conventions import TIME_COORDINATE
 from geosave.geodata.utils.color import parse_color
 
 from .. import storage
-from ..storage import StorageOptions
-from .tags import GeoTIFFTags
+from ..storage import Location
+from . import gdal
+from .file import RasterFile
+from geosave.geodata.attrs.groups.tiff import GeoTIFFTags
 
 if TYPE_CHECKING:
     from rasterio.io import DatasetWriter
     from collections.abc import Mapping, Sequence
-    from os import PathLike
 
     from geosave.geodata import Dataset
 
@@ -64,7 +64,7 @@ def _repack(ds: Dataset) -> Dataset:
     """
     packed = ds.copy()
     for name, variable in ds.data_vars.items():
-        if not attrs.Packing.stated_in(variable.encoding):
+        if not attrs.Packing.is_stated_in(variable.encoding):
             continue
         encoded = encode_cf_variable(variable.variable)
         # The CF encoder names the grid mapping, which rioxarray writes itself.
@@ -85,7 +85,27 @@ def _repack(ds: Dataset) -> Dataset:
 
 
 class GeoTIFFWriteOptions(TypedDict, total=False):
-    """GDAL creation options both TIFF drivers support."""
+    """Declared creation options passed to GDAL's TIFF drivers.
+
+    Omitted keys use the selected driver's defaults. Driver and GDAL build
+    determine which codecs and settings are available.
+
+    Attributes:
+        compress: Compression codec name, such as `"DEFLATE"` or `"LZW"`.
+        predictor: Compression predictor: 1 disables prediction, 2 differences
+            adjacent samples, and 3 predicts floating-point samples.
+        zlevel: GTiff's DEFLATE compression effort. The COG driver calls its
+            corresponding setting `LEVEL`; GeoSave does not translate this key.
+        num_threads: GDAL worker-thread count or `"ALL_CPUS"`.
+        bigtiff: `"YES"` forces BigTIFF, `"NO"` forces classic TIFF;
+            `"IF_NEEDED"` and `"IF_SAFER"` delegate size heuristics to GDAL.
+        interleave: `"PIXEL"` stores bands together per pixel;
+            `"BAND"` stores band planes separately.
+        sparse_ok: Omit all-zero or all-nodata blocks from the TIFF allocation.
+        creation_options: Mapping of additional driver settings. Currently
+            forwarded as one keyword rather than unpacked; its entries do not
+            configure the driver. Use the explicit fields for supported controls.
+    """
 
     compress: str
     predictor: int
@@ -98,7 +118,30 @@ class GeoTIFFWriteOptions(TypedDict, total=False):
 
 
 class COGWriteOptions(GeoTIFFWriteOptions, total=False):
-    """Creation options GDAL's COG driver supports."""
+    """Creation options passed to GDAL's COG driver.
+
+    Omitted keys use GDAL defaults. This includes the inherited TIFF options;
+    the writer does not change pixel resolution when creating overviews.
+
+    Attributes:
+        compress: Compression codec name, such as `"DEFLATE"` or `"LZW"`.
+        predictor: Compression predictor: 1 disables prediction, 2 differences
+            adjacent samples, and 3 predicts floating-point samples.
+        zlevel: Inherited GTiff effort option, passed unchanged. COG names its
+            compression-effort setting `LEVEL` rather than `ZLEVEL`.
+        num_threads: GDAL worker-thread count or `"ALL_CPUS"`.
+        bigtiff: Force or prohibit BigTIFF with `"YES"` or `"NO"`, or ask
+            GDAL's `"IF_NEEDED"`/`"IF_SAFER"` size heuristics.
+        interleave: `"PIXEL"` stores bands together per pixel;
+            `"BAND"` stores band planes separately.
+        sparse_ok: Omit all-zero or all-nodata blocks from the TIFF allocation.
+        creation_options: Mapping currently forwarded without unpacking its
+            entries; use explicit option fields instead.
+        blocksize: Square tile side in pixels; GDAL requires a multiple of 16.
+        overview_resampling: GDAL kernel used to build reduced-resolution
+            overviews, such as `"NEAREST"`, `"AVERAGE"`, or `"BILINEAR"`.
+        overview_count: Number of overview levels to include; 0 omits them.
+    """
 
     blocksize: int
     overview_resampling: str
@@ -106,7 +149,34 @@ class COGWriteOptions(GeoTIFFWriteOptions, total=False):
 
 
 class GTiffWriteOptions(GeoTIFFWriteOptions, total=False):
-    """Creation options GDAL's GTiff driver supports."""
+    """Creation options passed to GDAL's GTiff driver.
+
+    Omitted keys use GDAL defaults. These include the inherited TIFF options
+    and GTiff-specific strip, tile, and sample-layout settings.
+
+    Attributes:
+        compress: Compression codec name, such as `"DEFLATE"` or `"LZW"`.
+        predictor: Compression predictor: 1 disables prediction, 2 differences
+            adjacent samples, and 3 predicts floating-point samples.
+        zlevel: DEFLATE compression effort, validated against GDAL's supported
+            level range for its compression library.
+        num_threads: GDAL worker-thread count or `"ALL_CPUS"`.
+        bigtiff: Force or prohibit BigTIFF with `"YES"` or `"NO"`, or ask
+            GDAL's `"IF_NEEDED"`/`"IF_SAFER"` size heuristics.
+        interleave: `"PIXEL"` stores bands together per pixel;
+            `"BAND"` stores band planes separately.
+        sparse_ok: Omit all-zero or all-nodata blocks from the TIFF allocation.
+        creation_options: Mapping currently forwarded without unpacking its
+            entries; use explicit option fields instead.
+        tiled: Write tiled blocks when True; False uses strips.
+        blockxsize: Tile width in pixels when tiled; must be a multiple of 16.
+        blockysize: Block height in pixels; tiled blocks need a multiple of 16.
+        copy_src_overviews: Ask GDAL to copy existing source overviews. GeoSave
+            creates this file from xarray pixels and supplies no source overviews.
+        photometric: GDAL color interpretation, such as `"RGB"` or `"MINISBLACK"`.
+        nbits: Stored bits per sample, subject to the pixel dtype and GDAL's
+            supported bit depths; values must fit that storage representation.
+    """
 
     tiled: bool
     blockxsize: int
@@ -118,13 +188,12 @@ class GTiffWriteOptions(GeoTIFFWriteOptions, total=False):
 
 def write_cog(
     ds: Dataset,
-    path: str | PathLike[str],
+    path: Location,
     *,
     map_scale: float | None = None,
     overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> UPath:
+) -> RasterFile:
     """Write one Dataset as a Cloud Optimized GeoTIFF, a band per variable.
 
     Each variable names itself in its band's metadata. A scalar `time`
@@ -132,25 +201,26 @@ def write_cog(
     ``GEOSAVE_DATETIME`` metadata.
 
     Args:
-        ds: Cube of `(y, x)` variables sharing one grid.
-        path: Output path or fsspec URL ending in ``.tif`` or ``.tiff``.
+        ds: Cube of `(y, x)` variables sharing one grid, optionally with one
+            singleton time axis or a scalar time coordinate.
+        path: Output path, fsspec URL, or UPath carrying its
+            `storage_options`, ending in ``.tif`` or ``.tiff``.
         map_scale: Map denominator used to write pixels per centimetre.
         overwrite: Replace an existing file when true.
-        storage_options: Options for the filesystem a URL names.
         **options: COG creation options.
 
     Returns:
-        The written path.
+        The written file with the header it states, read back from the file
+        before it leaves its staging folder.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
-        ValueError: The suffix is wrong, the cube carries a `time` dimension
-            rather than a scalar coordinate, or the variables declare more
-            than one fill value.
+        ValueError: The suffix is wrong, the cube holds several time steps,
+            or the variables declare more than one fill value.
 
     Examples:
         >>> write_cog(ds, "scene.tif", compress="DEFLATE")
-        PosixUPath('scene.tif')
+        RasterFile(/abs/scene.tif, ['red', 'nir'], 2025-06-01)
     """
     return _write(
         ds,
@@ -158,45 +228,44 @@ def write_cog(
         "COG",
         map_scale=map_scale,
         overwrite=overwrite,
-        storage_options=storage_options,
         options=options,
     )
 
 
 def write_gtiff(
     ds: Dataset,
-    path: str | PathLike[str],
+    path: Location,
     *,
     map_scale: float | None = None,
     overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
     **options: Unpack[GTiffWriteOptions],
-) -> UPath:
+) -> RasterFile:
     """Write one Dataset as a plain GeoTIFF, a band per variable.
 
     Reach for `write_cog` unless a consumer needs a striped or otherwise
     non-COG file. Coordinates map to tags exactly as `write_cog` maps them.
 
     Args:
-        ds: Cube of `(y, x)` variables sharing one grid.
-        path: Output path or fsspec URL ending in ``.tif`` or ``.tiff``.
+        ds: Cube of `(y, x)` variables sharing one grid, optionally with one
+            singleton time axis or a scalar time coordinate.
+        path: Output path, fsspec URL, or UPath carrying its
+            `storage_options`, ending in ``.tif`` or ``.tiff``.
         map_scale: Map denominator used to write pixels per centimetre.
         overwrite: Replace an existing file when true.
-        storage_options: Options for the filesystem a URL names.
         **options: GTiff creation options.
 
     Returns:
-        The written path.
+        The written file with the header it states, read back from the file
+        before it leaves its staging folder.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
-        ValueError: The suffix is wrong, the cube carries a `time` dimension
-            rather than a scalar coordinate, or the variables declare more
-            than one fill value.
+        ValueError: The suffix is wrong, the cube holds several time steps,
+            or the variables declare more than one fill value.
 
     Examples:
         >>> write_gtiff(ds, "scene.tif", tiled=True, blockxsize=512)
-        PosixUPath('scene.tif')
+        RasterFile(/abs/scene.tif, ['red', 'nir'], 2025-06-01)
     """
     return _write(
         ds,
@@ -204,34 +273,31 @@ def write_gtiff(
         "GTiff",
         map_scale=map_scale,
         overwrite=overwrite,
-        storage_options=storage_options,
         options=options,
     )
 
 
 def _write(
     ds: Dataset,
-    path: str | PathLike[str],
+    path: Location,
     driver: Literal["COG", "GTiff"],
     *,
     map_scale: float | None,
     overwrite: bool,
-    storage_options: StorageOptions | None,
     options: Mapping[str, Any],
-) -> UPath:
+) -> RasterFile:
     """Encode one cube through the GDAL driver `driver` names.
 
     Args:
         ds: Cube of `(y, x)` variables sharing one grid.
-        path: Output path or fsspec URL ending in ``.tif`` or ``.tiff``.
+        path: Output path, fsspec URL, or UPath ending in ``.tif`` or ``.tiff``.
         driver: GDAL driver creating the file.
         map_scale: Map denominator used to write pixels per centimetre.
         overwrite: Replace an existing file when true.
-        storage_options: Options for the filesystem a URL names.
         options: Creation options the driver supports.
 
     Returns:
-        The written file, as a UPath.
+        The written file with the header it states.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -285,6 +351,8 @@ def _write(
     for name in names:
         cube[name].attrs = {}
 
+    stated: list[xr.Dataset] = []
+
     def save(target: Path) -> None:
         with TemporaryDirectory(dir=target.parent) as workspace:
             # A COG is copied from a source raster, which its own options create.
@@ -309,13 +377,12 @@ def _write(
             if driver == "COG":
                 copy(source, target, driver="COG", **options)
 
-    return storage.write(
-        path,
-        save,
-        suffixes=_FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
-    )
+        # GDAL infers some of what a file states, so the header is read back
+        # from the file itself while it is still local.
+        stated.append(gdal.open_raster(target))
+
+    written = storage.write(path, save, suffixes=_FILE_SUFFIXES, overwrite=overwrite)
+    return RasterFile.from_xarray(written, stated[0])
 
 
 def write_header(
@@ -354,7 +421,7 @@ def write_header(
     for index, band in enumerate(bands, start=1):
         packing = band.gs.packing
         legend = band.gs.legend
-        identity = attrs.parse(band, attrs.GDALBand)
+        identity = attrs.GDALBand.from_attrs(band.attrs)
         tags = {key: value for key, value in band.attrs.items() if key not in owned}
 
         # Each of these leaves the tags for a band property GDAL keeps it in.
@@ -402,9 +469,8 @@ def write_header(
 
 def _named(band: xr.DataArray, name: str) -> xr.DataArray:
     """Return the band stating its variable name, its interpretation kept."""
-    known = attrs.parse(band, attrs.GDALBand) or attrs.GDALBand()
-    return attrs.stamp(
-        band, attrs.GDALBand, known.model_copy(update={"variable_name": name})
+    return attrs.stamp_attrs(
+        band, attrs.GDALBand.replace(band.attrs, variable_name=name)
     )
 
 

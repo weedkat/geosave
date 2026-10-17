@@ -90,6 +90,11 @@ To burn a column's values, use
 The fill value is used outside the features; choose it separately from the
 valid class codes.
 
+`rasterize` accepts a GeoAnchor or georeferenced xarray object as its target.
+It transforms the geometries into the target CRS and uses that exact pixel
+grid. The output is an eager DataArray; supplying a lazy raster as the
+reference does not read that raster's pixel values.
+
 ## Turn pixels into polygons
 
 ```python
@@ -131,6 +136,10 @@ If the target has a time range and the table has `datetime`, `start_datetime`,
 or `end_datetime` columns, it also filters by time. Missing dates leave those
 rows selectable.
 
+Selection returns matching original rows in source order and leaves their
+geometry in the table's CRS. It does not clip feature boundaries to the target.
+Use GeoPandas `.clip(...)` when you want the geometries cut too.
+
 ## Save and reopen the table
 
 ```python
@@ -155,6 +164,11 @@ GeoParquet preserves geometry, CRS, and ordinary table columns.
 formats. Use normal GeoPandas operations to edit a table; use
 `gs.GeoVector.concat([first, second])` to concatenate frames. The frames must
 already share a CRS; convert explicitly with `.to_crs(...)` when needed.
+
+GeoJSON writes transform geometries to WGS84; GeoPackage retains the table's
+CRS. These writers return a destination `UPath` and refuse an existing file
+unless `overwrite=True`. Vector reads return an in-memory table; raster
+chunking and `.compute()` do not apply to a GeoDataFrame.
 
 [Catalogs and windows](../guides/catalogs-and-cuts.md) use the same native table
 type to describe raster files and selections. See the

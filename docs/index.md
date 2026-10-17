@@ -1,53 +1,58 @@
 # GeoSave
 
-GeoSave connects geospatial data preparation to PyTorch Lightning training.
-Images stay in xarray, vectors stay in GeoDataFrames, and model graphs stay in
-PyTorch. You can use each part from ordinary Python without creating a workspace
-or installing the optional Prefect integration.
+GeoSave makes geospatial data feel like normal Python. Open an image, work
+with its bands, and save results that still know where they belong on Earth.
+When you're ready, use that same data to build and train a model.
 
-GeoSave adds geospatial accessors, metadata-aware raster operations, STAC
-catalogs and readable training windows. It also provides model composition,
-input specifications, Lightning tasks, and native model releases.
+Its strength is keeping the meaning of your data attached: pixel locations,
+band information, and missing values. You work with familiar Python objects,
+and large images can stay lazy so you can process the part you need.
 
-## Start here
+## A first look
+
+For a georeferenced image with bands named `red` and `nir`:
+
+```python
+import geosave as gs
+
+image = gs.open_raster("scene.tif")
+ndvi = gs.features.ndvi(image, nir="nir", red="red").rename("ndvi")
+ndvi.gs.to_cog("ndvi.tif")
+```
+
+This calculates a vegetation index and saves a new image on the same grid.
+`image` is a normal xarray Dataset. GeoSave adds geospatial
+operations through `.gs`, so your data stays usable with the wider Python
+ecosystem.
+
+## Start small
+
+For a complete research learning path, follow
+[Learn geospatial AI by example](examples.md): train on satellite image/label
+pairs, swap model stages, improve the inputs, and put predictions back on a map.
+The notebooks use ordinary PyTorch and Lightning.
 
 1. [Install GeoSave](install.md).
-2. [Build your first raster](first-raster.md): create an image, compute NDVI,
-   save it, and inspect the reopened result.
-3. [Prepare training chips](quickstart.md): put imagery and labels in a catalog,
-   cut windows, and read a chip as tensors.
-4. [Train a model](guides/training.md): supply a torch Dataset to a Lightning
-   Module and DataModule.
-
-Examples show their output so you can follow the results without executing the
-code. Python snippets use notebook or interactive displays: the final expression
-produces the shown result. Training scripts show their log output. Snippets
-within a page share their setup; remote examples state when they need network
-access or credentials.
+2. [Try your first raster](first-raster.md): make a tiny image, calculate an
+   index, and save it. No downloads or data files needed.
+3. [Explore the basics](basics/index.md): images, polygons, missing values,
+   and file operations.
 
 ## Find your task
 
-| I want to… | Read |
+| I want to… | Start here |
 | --- | --- |
-| Open, process, or save imagery | [Raster data](basics/rasters.md), [I/O](basics/io.md) |
-| Work with polygons or rasterize labels | [Vector data](basics/vectors.md) |
-| Describe class labels, nodata, or reflectance scaling | [Raster metadata](basics/attrs.md) |
-| Search imagery in a STAC catalog | [STAC data](guides/stac.md) |
-| Build a catalog and select training windows | [Catalogs and windows](guides/catalogs-and-cuts.md) |
-| Process data larger than memory | [Lazy raster processing](guides/large-data.md) |
-| Compose a model or describe its input data | [Models](guides/models.md), [model inputs](guides/model-spec.md) |
-| Save or publish a trained model | [Model releases](guides/release.md) |
-| Create a project or run an ingestion job | [Workspaces](guides/workspaces.md), [workflows](guides/workflows.md) |
+| Open and prepare my files | [Ingest files](guides/ingest-files.md) |
+| Find satellite imagery | [Search and load imagery](guides/stac.md) |
+| Learn geospatial model development through a complete project | [Notebook learning path](examples.md) |
+| Turn imagery and labels into training chips | [Images to training chips](quickstart.md) |
+| Build a model using pretrained weights | [Pretrained models](guides/pretrained.md) |
+| Train a model on my data | [Training](guides/training.md) |
+| Save and reuse a trained model | [Model releases](guides/release.md) |
 
-## Understand the behavior
+See [all activities](activities.md) for more tasks. Read
+[Advanced](concepts/index.md) when you need to understand the data flow,
+grids, or training behavior. Use [Common questions](faq.md) and the
+[API reference](reference/index.md) to look up details.
 
-The practical guides cover the rules needed for each example. Read
-[Concepts](concepts/index.md) when you need details about grids, metadata,
-computation, window selection, model inputs, or training behavior.
-
-Use the [API reference](reference/index.md) to look up a function's arguments,
-return value, errors, and supported shapes. Contributor details live in
-[Architecture](contributing/architecture.md).
-
-GeoSave is in Alpha. The docs describe the current implementation; examples of
-features that remain unimplemented are labeled explicitly.
+GeoSave is in Alpha; these docs follow the current implementation.

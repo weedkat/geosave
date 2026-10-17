@@ -8,9 +8,13 @@ Follow these guides in order:
 
 1. [Build and use a model](models.md): ordinary `nn.Module`, named stages, and
    registered model construction.
-2. [Declare and prepare model inputs](model-spec.md): choose bands, prepare
+2. [Build from pretrained weights](pretrained.md): reuse an encoder, match its
+   band/context requirements, and choose what to fine-tune.
+3. [Declare and prepare model inputs](model-spec.md): choose bands, prepare
    physical values, and bind prepared rasters to model arguments.
-3. [Save and load a release](release.md): preserve the construction recipe and
+4. [Train a segmentation model](training.md): feed a Dataset to the library's
+   Lightning task and inspect predictions.
+5. [Save and load a release](release.md): preserve the construction recipe and
    weights, then optionally publish to Hugging Face.
 
 `ModelChain` owns the tensor computation. `model_spec.yaml` owns the raster

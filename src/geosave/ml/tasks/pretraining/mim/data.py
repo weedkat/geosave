@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
-from geosave.ml.transforms import DataKey, ImageAugmenter
+from geosave.ml.transforms import DataKey, ImageAugmenter, InputTransform
 from geosave.model.spec import ModelSpec
 
 
@@ -17,26 +17,41 @@ class Sample(TypedDict):
     A collated batch holds the same keys with a leading batch axis.
 
     Attributes:
-        inputs: Model inputs by name; pixel inputs end in ``(band, y, x)``.
-        valid: ``(y, x)`` pixels whose inputs are finite in every band and instant.
+        inputs: Named model tensors without a batch axis. Pixel inputs end in
+            `(band, y, x)`; temporal axes and separate context tensors follow
+            the selected model's contract. Reconstruction targets are derived
+            from the selected pixel input by the Module.
     """
 
     inputs: dict[str, torch.Tensor]
-    valid: torch.Tensor
+
+
+@runtime_checkable
+class SampleDataset(Protocol):
+    """A map-style dataset returning this method's model-ready Sample."""
+
+    def __len__(self) -> int:
+        """Return the number of samples."""
+        ...
+
+    def __getitem__(self, index: int) -> Sample:
+        """Return one sample satisfying the selected model's input contract."""
+        ...
 
 
 class DataModule(LightningDataModule):
     """Feed masked image modelling from unlabeled datasets returning a `Sample`.
 
     Batches are finished on the device: augmentations while training, the
-    spec's transforms in every split, and NaN pixels set to zero.
+    spec's transforms in every split, without changing input availability.
 
     Args:
-        spec: Model spec file declaring `chips`, `inputs`, and `transforms`.
+        spec: Model spec, or its file, declaring `chips`, `inputs`, and
+            `transforms`.
         train: Training dataset.
         val: Validation dataset.
         augmentations: Kornia augmentations by ``name`` and ``init_args``,
-            run on the pixel inputs and their valid pixels together while
+            run jointly on pixel inputs while
             training.
         batch_size: Samples per batch.
         num_workers: DataLoader worker processes.
@@ -53,32 +68,30 @@ class DataModule(LightningDataModule):
 
     def __init__(
         self,
-        spec: str | Path,
-        train: Dataset,
-        val: Dataset,
+        spec: str | Path | ModelSpec,
+        train: SampleDataset,
+        val: SampleDataset,
         *,
         augmentations: list[dict[str, Any]] | None = None,
         batch_size: int = 8,
         num_workers: int = 4,
     ) -> None:
         super().__init__()
-        self.spec = ModelSpec.load(spec)
+        self.spec = spec if isinstance(spec, ModelSpec) else ModelSpec.load(spec)
         self.train_dataset = train
         self.val_dataset = val
         self.batch_size = batch_size
         self.num_workers = num_workers
-        assert self.spec.chips is not None, "the model spec declares no chips"
+        if self.spec.chips is None:
+            raise ValueError("the model spec declares no chips")
         size = self.spec.chips.shape
-        self._augmenter = ImageAugmenter(augmentations or [], size)
-        self._transforms = {
-            name: ImageAugmenter([step.model_dump() for step in steps], size)
-            for name, steps in self.spec.transforms.items()
-        }
+        self.augmenter = ImageAugmenter(augmentations or [], size)
+        self.input_transform = InputTransform(self.spec.transforms, size)
 
-    def _loader(self, dataset: Dataset, *, shuffle: bool) -> DataLoader:
+    def _loader(self, dataset: SampleDataset, *, shuffle: bool) -> DataLoader[Sample]:
         # A forked worker inherits open rasters and reader threads it cannot use.
         return DataLoader(
-            dataset,
+            cast(Dataset[Sample], dataset),
             batch_size=self.batch_size,
             shuffle=shuffle,
             num_workers=self.num_workers,
@@ -87,56 +100,39 @@ class DataModule(LightningDataModule):
         )
 
     def train_dataloader(self) -> Any:
-        """Return shuffled training batches."""
+        """Return shuffled training batches.
+
+        Returns:
+            DataLoader collating unlabeled `Sample` dictionaries with a
+            leading batch axis on inputs.
+        """
         return self._loader(self.train_dataset, shuffle=True)
 
-    def val_dataloader(self) -> Any:
-        """Return validation batches in chip order."""
+    def val_dataloader(self) -> DataLoader[Sample]:
+        """Return validation batches in chip order.
+
+        Returns:
+            DataLoader collating unlabeled `Sample` dictionaries without
+            shuffling.
+        """
         return self._loader(self.val_dataset, shuffle=False)
 
     def on_after_batch_transfer(self, batch: Sample, dataloader_idx: int) -> Sample:
-        """Finish a batch on its device.
+        """Apply training augmentation, then configured input transforms.
 
         Args:
-            batch: A collated `Sample`.
+            batch: Collated model-ready samples.
             dataloader_idx: Lightning loader number.
 
         Returns:
-            The batch with its pixel inputs augmented while training,
-            transformed, and free of NaN; `valid` moves with the pixels and
-            drops pixels an augmentation invented or a transform left
-            non-finite.
+            Prepared samples with context inputs preserved. Input availability
+            remains the Dataset/model contract; values are not repaired.
         """
-        inputs, valid = batch["inputs"], batch["valid"]
+        inputs = dict(batch["inputs"])
         names = self.spec.pixel_inputs
-        images = [inputs[name] for name in names]
-
         if self.trainer is not None and self.trainer.training:
-            # Time joins the bands, so every instant of a sample moves the same way.
-            shapes = [image.shape[1:-2] for image in images]
-            keys: list[DataKey] = ["input" for _ in images]
-            keys.append("mask")
-            *images, moved = self._augmenter(
-                *(image.flatten(1, -3) for image in images),
-                valid.unsqueeze(1).float(),
-                data_keys=keys,
-            )
-            images = [
-                image.unflatten(1, shape)
-                for image, shape in zip(images, shapes, strict=True)
-            ]
-            valid = moved.squeeze(1) > 0.5
-
-        finished = dict(inputs)
-        for name, image in zip(names, images, strict=True):
-            if name in self._transforms:
-                # Per-band statistics apply to each instant, so time joins the batch.
-                leading = image.shape[:-3]
-                image = self._transforms[name](image.flatten(0, -4)).unflatten(
-                    0, leading
-                )
-            valid = valid & torch.isfinite(image).reshape(
-                image.shape[0], -1, *image.shape[-2:]
-            ).all(dim=1)
-            finished[name] = torch.nan_to_num(image, nan=0.0)
-        return {"inputs": finished, "valid": valid}
+            keys: list[DataKey] = ["input"] * len(names)
+            images = self.augmenter(*(inputs[name] for name in names), data_keys=keys)
+            tensors = (images,) if isinstance(images, torch.Tensor) else images
+            inputs.update(zip(names, tensors, strict=True))
+        return {"inputs": self.input_transform(inputs)}

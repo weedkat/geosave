@@ -2,19 +2,19 @@
 
 Construct native xarray objects. Start with [Your first raster](../first-raster.md),
 then see [Raster data](../basics/rasters.md). Accessor methods are listed separately
-for [Dataset](raster-accessor.md), [DataArray](array-accessor.md), and [DataTree](stack-accessor.md).
+for [Dataset](dataset-accessor.md), [DataArray](dataarray-accessor.md), and [DataTree](datatree-accessor.md).
 
 ## Arrays and rasters
 
-::: geosave.geodata.core.create
+::: geosave.geodata.core.raster.create
     options:
       members:
         - array
         - raster
         - RasterVariable
 
-## Stacks
+## Trees
 
-::: geosave.geodata.core.stack.stack
+::: geosave.geodata.core.raster.datatree.tree
     options:
       members: false

@@ -1,5 +1,12 @@
 # Catalog per collection: one item table file for each STAC collection
 
+> Proposal status as of 2026-10-13: approved but deferred, not implemented.
+> Current catalogs are single GeoParquet files; `ModelSpec.prepare` returns
+> `catalog.parquet`, and `open_vector` does not read catalog directories.
+> The proposed DataModule and Dataset interfaces below are also historical;
+> current DataModules accept source-specific torch Datasets per split.
+
+
 Status: Approved
 
 ## Problem
@@ -24,7 +31,7 @@ data/prepared/
 ```
 
 Hrefs are stored relative to the file, so the folder moves whole. In memory a
-catalog is still one item table (a GeoDataFrame): `gs.to_stack()`, `cuts` and
+catalog is still one item table (a GeoDataFrame): `gs.to_tree()`, `cuts` and
 `supervised.Dataset` are unchanged.
 
 A smoke test confirmed this on `examples/data/dw_raw`: written per

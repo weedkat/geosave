@@ -7,10 +7,10 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.create import raster as build_raster
-from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.core.raster.create import raster as build_raster
+from geosave.geodata.core.raster.create import tree as build_tree
 from geosave.geodata.transform.nodata import mask, to_nan, unpack
-from tests.geodata.conftest import titled
+from tests.geodata.conftest import geobox, titled
 
 UTM = "EPSG:32633"
 
@@ -85,8 +85,8 @@ def test_masking_a_band_returns_a_band() -> None:
     assert list(masked.values[0]) == [7, 7, 0, 0]
 
 
-def test_masking_a_stack_masks_every_group() -> None:
-    source = build_stack({"optical": scene(), "other": scene()})
+def test_masking_a_tree_masks_every_group() -> None:
+    source = build_tree({"optical": scene(), "other": scene()})
 
     masked = mask(source, classification().isin(CLEAR))
 
@@ -239,7 +239,7 @@ def test_preparation_preserves_coordinates_on_independent_dimensions():
 
 
 def test_tree_mask_preserves_root_metadata_and_coordinates():
-    source = build_stack({"optical": scene()})
+    source = build_tree({"optical": scene()})
     source.attrs = {"title": "my training scene"}
     source.coords["site"] = "field-1"
     masked = mask(source, classification().isin(CLEAR))
@@ -248,10 +248,10 @@ def test_tree_mask_preserves_root_metadata_and_coordinates():
     assert list(masked["optical"].red.values[0]) == [7, 7, 0, 0]
 
 
-def test_masking_a_stack_keeps_its_root_attrs_and_stays_lazy(
-    stack: xr.DataTree,
+def test_masking_a_tree_keeps_its_root_attrs_and_stays_lazy(
+    tree: xr.DataTree,
 ) -> None:
-    chunked = titled(stack.chunk())
+    chunked = titled(tree.chunk())
     valid = np.array([[True, False], [True, True]])
 
     masked = mask(chunked, valid, fill=0)
@@ -277,11 +277,6 @@ def test_a_packed_16_bit_band_blanks_to_float32_as_read_from_disk() -> None:
     assert blanked.attrs["scale_factor"] == 1e-4
 
 
-def packed_box() -> GeoBox:
-    """Build a small projected grid."""
-    return GeoBox.from_bbox((300000, 5000000, 300020, 5000020), crs=UTM, resolution=10)
-
-
 def stored(
     value: int = 1000,
     *,
@@ -291,7 +286,7 @@ def stored(
     dtype: str = "uint16",
 ) -> xr.Dataset:
     """Build a raster whose `red` holds `value` as a stored digital number."""
-    box = packed_box()
+    box = geobox(shape=(2, 2))
     raster = build_raster(
         {"red": (("y", "x"), np.full(box.shape, value, dtype))}, box, nodata=nodata
     )
@@ -366,7 +361,7 @@ def test_other_attrs_and_coordinates_ride_through() -> None:
 
 def test_a_variable_that_is_not_packed_rides_alongside_one_that_is() -> None:
     source = stored(1000, scale=1e-4)
-    source["dem"] = (("y", "x"), np.full(packed_box().shape, 5.0, "float32"))
+    source["dem"] = (("y", "x"), np.full(geobox(shape=(2, 2)).shape, 5.0, "float32"))
 
     physical = unpack(source)
 
@@ -438,8 +433,8 @@ def test_unpacking_refuses_a_variable_whose_values_are_class_codes() -> None:
         unpack(labelled)
 
 
-def test_a_stack_unpacks_group_by_group_and_stays_lazy() -> None:
-    tree = build_stack(
+def test_a_tree_unpacks_group_by_group_and_stays_lazy() -> None:
+    tree = build_tree(
         {
             "optical": stored(1000, scale=1e-4).chunk(),
             "dem": stored(7, scale=None).chunk(),
@@ -459,8 +454,8 @@ def test_a_stack_unpacks_group_by_group_and_stays_lazy() -> None:
     assert physical.coords["site"].item() == "field-1"
 
 
-def test_a_stack_blanks_nodata_group_by_group_and_stays_lazy() -> None:
-    tree = build_stack(
+def test_a_tree_blanks_nodata_group_by_group_and_stays_lazy() -> None:
+    tree = build_tree(
         {
             "optical": stored(0, scale=None, nodata=0).chunk(),
             "dem": stored(7, scale=None).chunk(),

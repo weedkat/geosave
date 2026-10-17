@@ -1,306 +1,392 @@
-"""A STAC Item as the scene its raster files hold.
+"""A STAC Item as the `Scene` it lists: one collection at one instant.
 
-A scene is what remote sensing calls one acquisition: one collection, at one
-instant, on one grid. Files written from one scene are one Item, one Asset
-each.
+This module dates an Item from its scene's files, and reads that time back,
+for every caller.
 """
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+import warnings
+from collections.abc import Mapping
 from datetime import UTC
 from datetime import datetime as DateTime
-from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import pystac
-import xarray as xr
+from odc.geo.geobox import GeoBox
 from shapely import union_all
+from shapely.geometry.base import BaseGeometry
 from shapely.geometry import mapping
 
-from geosave.geodata.io.raster.cogs import CogFile
+from geosave import __path__ as _package_paths
+from geosave.geodata.io.raster.file import AssetKey, Scene
+from geosave.geodata.stac.extensions import eo
+from geosave.geodata.utils.template import fields_named
+from geosave.geodata.utils.scalar import coordinate_value
+import xarray as xr
+from geosave.geodata import attrs
+from geosave.geodata.stac.extensions import projection
+from geosave.geodata.warnings import MissingGridWarning, TimelessItemWarning
 
-from . import asset
+from . import asset, band
 
-if TYPE_CHECKING:
-    from odc.geo.geobox import GeoBox
-
+# An Item's time: one instant, or a start and an end.
 type ItemTime = DateTime | tuple[DateTime, DateTime]
 
-# A grid spelled as a hashable key, as `("EPSG:32633", (10.0, 0.0, ...), (512, 512))`.
-type GridKey = tuple[str, tuple[float, ...], tuple[int, ...]]
+# The time of an Item whose files state none. STAC dates every Item, so a
+# timeless one, as an elevation model, spans all of time and so overlaps every
+# window; `read_timespan` and `read_instant` read it back as None.
+TIMELESS = (
+    DateTime(1, 1, 1, tzinfo=UTC),
+    DateTime(9999, 12, 31, 23, 59, 59, tzinfo=UTC),
+)
 
 
-# An Asset's key within its Item, as "label", "B04" or "image".
-type AssetKey = str
-# Absolute path or URL of a saved file, as `absolute_location` spells it.
-type Href = str
-
-
-@dataclass(frozen=True)
-class Scene:
-    """The saved files of one collection, at one instant, on one grid: one Item.
-
-    Args:
-        collection: Collection id the files belong to, or None.
-        datetime: Instant the files hold, or None for timeless files.
-        grid: Grid the files share, or None where it is not locatable.
-        assets: Each Asset's key mapped to the file it is, as
-            {
-                "image": "/data/s0/optical_20250601.tif",
-                "label": "/data/s0/label.tif",
-            }
-
-    Examples:
-        >>> [scene.stem for scene in scenes(headers)]
-        ['forest_20250601', 'forest_20250611']
-    """
-
-    collection: str | None
-    datetime: pd.Timestamp | None
-    grid: GeoBox | None
-    assets: dict[AssetKey, Href]
-
-    @property
-    def stem(self) -> str:
-        """Name the scene after its file, or the stem its files share.
-
-        `forest_20250601_red` and `forest_20250601_nir` share
-        `forest_20250601`; files sharing none take their folder's name.
-        """
-        hrefs = list(self.assets.values())
-        stems = [PurePosixPath(href).stem for href in hrefs]
-        if len(stems) == 1:
-            return stems[0]
-        shared = os.path.commonprefix(stems).rstrip("_-.")
-        return shared or PurePosixPath(hrefs[0]).parent.name
-
-
-def scenes(
-    headers: Mapping[Href, xr.Dataset], *, collection: str | None = None
-) -> list[Scene]:
-    """Group saved files into the scenes they make: one per collection, instant and grid.
+def from_scene(
+    scene: Scene,
+    *,
+    id_format: str,
+    collection: str | None = None,
+    datetime: ItemTime | None = None,
+) -> pystac.Item:
+    """Build the Item listing a scene's files.
 
     Args:
-        headers: Each file's href mapped to its raster as `open_raster` opens
-            it. No pixel is read.
-        collection: Collection of every file. None takes each file's ACDD `id`.
+        scene: Written scene.
+        id_format: `GeoAnchor.format` template the Item's id is filled from,
+            its fields taken from the Item's own grid and time.
+        collection: Collection id; None takes the scene's.
+        datetime: Time for a scene whose files state none, as one instant or
+            a start and end.
 
     Returns:
-        One scene per collection, instant and grid, in the order the files
-        first name them. A file is the asset of its one variable, or
-        `"image"` for several.
+        Item with one data Asset per file over their joined footprint, dated
+        by its files' one shared time label as `datetime`, or the span their
+        labels cover as `start_datetime` and `end_datetime`.
 
     Raises:
-        ValueError: A file holds several dates, or two files of one scene
-            would be the same asset.
+        RuntimeError: The scene is still pending.
+        ValueError: A file has no locatable grid.
 
-    Examples:
-        >>> [list(scene.assets) for scene in scenes(headers)]
-        [['red', 'nir'], ['red', 'nir']]
+    Warns:
+        TimelessItemWarning: No file is dated and `datetime` is None, so the
+            Item spans `TIMELESS`.
     """
-    grouped: dict[tuple[str | None, pd.Timestamp | None, GridKey | None], Scene] = {}
-    for href, header in headers.items():
-        times = header.gs.times
-        if times is not None and len(times) != 1:
-            raise ValueError(f"{href} holds {len(times)} dates; an Item is one date")
-        when = None if times is None else times[0]
+    grids = [f.header.gs.geobox for f in scene.written.values()]
+    if not grids or any(grid is None for grid in grids):
+        raise ValueError("a scene needs files with locatable grids")
 
-        acdd = header.gs.acdd
-        stated = collection or (None if acdd is None else acdd.id)
-        grid = header.gs.geobox
-        found = grouped.setdefault(
-            (stated, when, None if grid is None else _grid_key(grid)),
-            Scene(stated, when, grid, {}),
-        )
+    nominal, start, end = _read_scene_time(scene, datetime)
+    footprint = union_all([grid.geographic_extent.geom for grid in grids])
+    ranged = start != end
+    item = pystac.Item(
+        _format_id(id_format, grids, footprint, start, end),
+        mapping(footprint),
+        list(footprint.bounds),
+        nominal,
+        {},
+        start_datetime=start if ranged else None,
+        end_datetime=end if ranged else None,
+        collection=collection or scene.collection,
+    )
 
-        variables = header.gs.variables
-        key = variables[0] if len(variables) == 1 else "image"
-        if key in found.assets:
-            raise ValueError(
-                f"{href} and {found.assets[key]} would both be the asset {key!r} "
-                f"of one Item; split them with {{band}} or {{time}}"
-            )
-        found.assets[key] = href
-    return list(grouped.values())
+    for key, file in scene.written.items():
+        item.add_asset(key, asset.from_file(file, owner=item))
 
-
-def span(headers: Iterable[xr.Dataset]) -> tuple[DateTime, DateTime] | None:
-    """Return the first and last instant dated rasters cover, None where none is dated."""
-    spans = [raster.gs.timespan for raster in headers if raster.gs.timespan is not None]
-    if not spans:
-        return None
-    return min(start for start, _ in spans), max(end for _, end in spans)
+    coords = (
+        scene.coords
+        if scene.coords is not None
+        else next(iter(scene.written.values())).header.coords
+    )
+    _write_properties(item, coords)
+    return item
 
 
-def instant(item: Mapping[str, Any]) -> pd.Timestamp | None:
-    """Return an Item dict's instant: its `datetime`, else `start_datetime`.
+def read_timespan(
+    item: pystac.Item | Mapping[str, Any],
+) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    """Return the first and last instant an Item covers.
 
     Args:
-        item: One Item as a dict, as a window's `sources` holds it.
+        item: Item, or its dict as a window's `sources` holds it.
 
     Returns:
-        The instant, naive UTC, or None when the Item states neither.
+        (start, end), naive UTC: its `start_datetime` and `end_datetime`,
+        else its `datetime` twice. None for a timeless Item, which spans
+        `TIMELESS` or states no time.
 
     Examples:
-        >>> instant({"properties": {"datetime": "2025-06-01T00:00:00Z"}})
+        >>> read_timespan({"properties": {"datetime": "2025-06-01T00:00:00Z"}})
+        (Timestamp('2025-06-01 00:00:00'), Timestamp('2025-06-01 00:00:00'))
+    """
+    properties = (
+        item.properties if isinstance(item, pystac.Item) else item.get("properties", {})
+    )
+    start = properties.get("start_datetime") or properties.get("datetime")
+    end = properties.get("end_datetime") or properties.get("datetime")
+    if start is None or end is None:
+        return None
+    # Compared as Timestamps first, since TIMELESS lies past pandas' nanosecond range.
+    if (pd.Timestamp(start), pd.Timestamp(end)) == TIMELESS:
+        return None
+    return (
+        pd.to_datetime(start, utc=True).tz_convert(None),
+        pd.to_datetime(end, utc=True).tz_convert(None),
+    )
+
+
+def read_instant(item: pystac.Item | Mapping[str, Any]) -> pd.Timestamp | None:
+    """Return the instant an Item is dated by: its `datetime`, else its start.
+
+    Args:
+        item: Item, or its dict as a window's `sources` holds it.
+
+    Returns:
+        The instant, naive UTC, or None for a timeless Item.
+
+    Examples:
+        >>> read_instant({"properties": {"datetime": "2025-06-01T00:00:00Z"}})
         Timestamp('2025-06-01 00:00:00')
     """
-    properties = item.get("properties", {})
-    stamp = properties.get("datetime") or properties.get("start_datetime")
-    if stamp is None:
+    covered = read_timespan(item)
+    if covered is None:
         return None
-    return pd.to_datetime(stamp, utc=True).tz_convert(None)
+    properties = (
+        item.properties if isinstance(item, pystac.Item) else item.get("properties", {})
+    )
+    nominal = properties.get("datetime")
+    return pd.to_datetime(nominal, utc=True).tz_convert(None) if nominal else covered[0]
 
 
-def files(item: pystac.Item) -> list[CogFile]:
-    """Return the data assets of an Item as named raster file records.
+def select_data_assets(item: pystac.Item) -> dict[AssetKey, pystac.Asset]:
+    """Select data assets in published order, including assets without stated roles.
 
-    A variable is named by its asset key, unique within an Item: a one-band
-    asset is its key, and band `i` of a several-band asset is `key.i`, as
-    odc-stac names them. Band names are metadata, not names.
-
-    Args:
-        item: Native STAC Item with absolute asset hrefs.
-
-    Returns:
-        One record per data asset, dated by the Item's datetime or interval
-        start.
-
-    Examples:
-        >>> [file.bands for file in files(item)]
-        [('B04',), ('visual.1', 'visual.2', 'visual.3')]
+    Explicit roles without `data` exclude an asset from native raster reading,
+    grid selection, and variable naming. The Item and its assets are not changed.
     """
-    stamp = item.datetime or item.common_metadata.start_datetime
-    when = None if stamp is None else pd.to_datetime(stamp, utc=True).tz_convert(None)
-    return [
-        CogFile(
-            href=entry.href,
-            bands=asset.names(key, entry),
-            datetime=when,
-            collection=item.collection_id,
-        )
+    return {
+        key: entry
         for key, entry in item.assets.items()
         if entry.roles is None or "data" in entry.roles
-    ]
+    }
 
 
-def attrs(item: pystac.Item) -> dict[str, dict[str, Any]]:
-    """Return the CF attrs each variable of an Item takes from its bands.
+def read_grid(item: pystac.Item) -> GeoBox | None:
+    """Return the grid of the first eligible data asset that states one.
+
+    Returns:
+        Stated grid, or None when no data asset supplies a grid and CRS.
+        This metadata lookup does not open the raster files.
+
+    Warns:
+        MissingGridWarning: No stated grid; native image reading remains available.
+
+    Examples:
+        >>> read_grid(item).shape
+        Shape2d(x=64, y=64)
+    """
+    for entry in select_data_assets(item).values():
+        found = projection.to_geobox(entry)
+        if found is not None and found.crs is not None:
+            return found
+
+    warnings.warn(
+        f"{item.id} states no georeferenced grid on any data asset; it cannot "
+        "define a spatial sampling window. Read its images with row.gs.to_xarray().",
+        MissingGridWarning,
+        skip_file_prefixes=tuple(_package_paths),
+    )
+    return None
+
+
+def read_variable_names(item: pystac.Item) -> dict[AssetKey, tuple[str, ...]]:
+    """Name eligible data assets for native raster reading.
+
+    These rules are independent of ODC loader configuration and aliases.
+    A one-band asset is its key. Band `i` of a several-band asset takes the
+    first name it states, `name` then `common_name`, that no asset key spells
+    and no asset of fewer bands, or of an earlier key, claims first; a band
+    claiming none is `key.i`.
 
     Args:
         item: Native STAC Item.
 
     Returns:
-        Variable name, as `files` names it, mapped to the packing, units,
-        spectral facts and legend its band states. Variables stating none are
-        absent.
+        Asset key mapped to its variable names, in band order.
 
     Examples:
-        >>> attrs(item)["B04"]
-        {'scale_factor': 0.0001, 'add_offset': 0.0, 'common_name': 'red'}
+        >>> read_variable_names(item)
+        {'B04': ('B04',), 'visual': ('visual.1', 'visual.2', 'visual.3')}
     """
+    assets = select_data_assets(item)
+    listed = {key: band.read_aliases(entry) for key, entry in assets.items()}
+
+    # Each name goes to the band of the asset with the fewest bands, then the
+    # first key; names spelling an asset key stay with that asset.
+    claims: dict[str, list[tuple[int, AssetKey, int]]] = {}
+    for key, bands in listed.items():
+        for index, aliases in enumerate(bands, start=1):
+            for alias in aliases:
+                if alias not in assets:
+                    claims.setdefault(alias, []).append((len(bands), key, index))
+    owner = {alias: min(claimants)[1:] for alias, claimants in claims.items()}
+
     found = {}
-    for key, entry in item.assets.items():
-        found |= asset.attrs(key, entry)
+    for key, bands in listed.items():
+        count = len(bands)
+        if count <= 1:
+            found[key] = (key,)
+            continue
+        variables = []
+        for index in range(1, count + 1):
+            # Prefer the published band name before its common name.
+            taken = [alias for alias, band in owner.items() if band == (key, index)]
+            variables.append(taken[0] if taken else f"{key}.{index}")
+        found[key] = tuple(variables)
     return found
 
 
-def write(
-    scene: Scene,
-    headers: Mapping[str, xr.Dataset],
-    *,
-    id: str,
-    when: ItemTime | None = None,
-) -> pystac.Item:
-    """Build the Item describing one scene.
+def assign_time(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
+    """Apply Item dates without replacing time coordinates already in the file.
 
-    Args:
-        scene: Files of the scene, keyed by asset.
-        headers: Each file's href mapped to its raster as `open_raster`
-            opens it. No pixel is read.
-        id: Item identity.
-        when: Time for a timeless scene, as one instant or a start and end.
-            None takes what the rasters' `time` coordinates cover.
-
-    Returns:
-        Item with one asset per file, over their joined footprint.
-
-    Raises:
-        ValueError: A raster has no locatable grid, or none is dated and
-            `when` is None.
+    Composite bounds are taken from the Item; timeless Items add no dates.
     """
-    rasters = [headers[href] for href in scene.assets.values()]
-    if isinstance(when, tuple):
-        start, end = when
-    elif when is not None:
-        start, end = when, when
-    else:
-        start, end = covered(rasters, list(scene.assets))
+    when = read_instant(item)
+    if when is None:
+        return raster
 
-    grids = [raster.gs.geobox for raster in rasters]
-    if any(grid is None or grid.crs is None for grid in grids):
-        footprint = None
-    else:
-        footprint = union_all([grid.geographic_extent.geom for grid in grids])
+    if raster.gs.times is None:
+        raster = raster.assign_coords(time=when)
 
-    # STAC dates an Item by one instant, or by a start and an end, never both.
-    ranged = start != end
-    item = pystac.Item(
-        id,
-        None if footprint is None else mapping(footprint),
-        None if footprint is None else list(footprint.bounds),
-        None if ranged else start,
-        {},
-        start_datetime=start if ranged else None,
-        end_datetime=end if ranged else None,
-        collection=scene.collection,
-    )
-    for key, href in scene.assets.items():
-        asset.write(item, key, href, headers[href])
-    return item
+    if "start_datetime" in item.properties and "end_datetime" in item.properties:
+        coords = {}
+        for key in ("start_datetime", "end_datetime"):
+            coords[key] = (
+                pd.to_datetime(item.properties[key], utc=True)
+                .tz_convert(None)
+                .to_datetime64()
+            )
+        raster = raster.assign_coords(coords)
+
+    return raster
 
 
-def covered(
-    rasters: Sequence[xr.Dataset], keys: Sequence[str]
-) -> tuple[DateTime, DateTime]:
-    """Return the first and last instant the rasters of one Item cover.
-
-    Args:
-        rasters: Rasters of one Item, as opened from their files.
-        keys: Their asset keys, for the error.
-
-    Returns:
-        (first, last) in UTC. Rasters holding one time label between them
-        cover that instant; rasters holding several cover what `gs.timespan`
-        says, so a monthly label covers its month.
-
-    Raises:
-        ValueError: No raster is dated.
-    """
-    labels = [raster.gs.times for raster in rasters if raster.gs.times is not None]
-    spans = [raster.gs.timespan for raster in rasters if raster.gs.timespan is not None]
-    if not spans:
-        raise ValueError(
-            f"none of the assets {list(keys)} is dated, and a STAC Item needs a "
-            f"time; pass datetime="
+def _format_id(
+    template: str,
+    grids: list[GeoBox],
+    footprint: BaseGeometry,
+    start: DateTime,
+    end: DateTime,
+) -> str:
+    """Name the union footprint; grid fields require one shared grid."""
+    fields = {
+        "lat": footprint.centroid.y,
+        "lon": footprint.centroid.x,
+        "start": start,
+        "end": end,
+    }
+    if set(fields_named(template)) & {"res", "width", "height", "epsg"}:
+        grid = grids[0]
+        if any(other != grid for other in grids[1:]):
+            raise ValueError("grid-specific Item id fields require a common grid")
+        if grid.crs is None:
+            raise ValueError("grid carries no CRS")
+        fields.update(
+            res=abs(grid.resolution.x),
+            width=grid.boundingbox.span_x,
+            height=grid.boundingbox.span_y,
+            epsg=grid.crs.epsg,
         )
-    instants = cast(
-        pd.DatetimeIndex,
-        pd.DatetimeIndex(np.concatenate([each.values for each in labels])).unique(),
+
+    return template.format(**fields)
+
+
+def _write_properties(item: pystac.Item, coords: xr.Coordinates) -> None:
+    """Translate scalar observation properties and their extensions."""
+    eo.write_item(item, coords)
+    for name in ("platform", "constellation", "gsd"):
+        value = coordinate_value(coords, name)
+        if value is not None:
+            if name == "gsd":
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value <= 0
+                ):
+                    raise ValueError("gsd must be a positive finite number")
+            elif not isinstance(value, str):
+                raise ValueError(f"{name} must be a string")
+            item.properties[name] = value
+
+
+def _read_scene_time(
+    scene: Scene, datetime: ItemTime | None
+) -> tuple[DateTime | None, DateTime, DateTime]:
+    """Prefer observation coordinates, then caller dates, then timeless coverage."""
+    coords = [file.header.coords for file in scene.written.values()]
+    if scene.coords is not None and "time" in scene.coords:
+        coords = [scene.coords]
+    dated = [entry for entry in coords if "time" in entry]
+    if dated:
+        return _read_observation_time(dated)
+
+    if datetime is not None:
+        if isinstance(datetime, tuple):
+            start, end = datetime
+            return (start if start == end else None), start, end
+        return datetime, datetime, datetime
+
+    warnings.warn(
+        "scene states no time; pass datetime= to date it",
+        TimelessItemWarning,
+        skip_file_prefixes=tuple(_package_paths),
     )
-    if len(instants) == 1:
-        stamp = cast(pd.Timestamp, instants[0]).tz_localize("UTC").to_pydatetime()
+    return None, *TIMELESS
+
+
+def _read_observation_time(
+    coords: list[xr.Coordinates],
+) -> tuple[DateTime, DateTime, DateTime]:
+    """Keep one nominal label separate from explicit or resampled coverage."""
+    labels = []
+    for entry in coords:
+        labels.extend(np.atleast_1d(entry["time"].values))
+    times = pd.DatetimeIndex(labels).unique()
+    if len(times) != 1:
+        raise ValueError(
+            "one Item represents one observation or composite; split multiple dates with a {time} path template"
+        )
+    label = cast(pd.Timestamp, times[0])
+    if label is pd.NaT:
+        raise ValueError("an observation time must not be NaT")
+    stamp = pd.to_datetime(label, utc=True).to_pydatetime()
+
+    spans = [_read_coverage(entry, stamp) for entry in coords]
+    return stamp, min(start for start, _ in spans), max(end for _, end in spans)
+
+
+def _read_coverage(
+    coords: xr.Coordinates, stamp: DateTime
+) -> tuple[DateTime, DateTime]:
+    """Read explicit composite bounds, calendar coverage, or a point observation."""
+    if "start_datetime" in coords or "end_datetime" in coords:
+        start = coordinate_value(coords, "start_datetime")
+        end = coordinate_value(coords, "end_datetime")
+        if start is None or end is None:
+            raise ValueError(
+                "composite coordinates need both start_datetime and end_datetime"
+            )
+        first = pd.to_datetime(start, utc=True).to_pydatetime()
+        last = pd.to_datetime(end, utc=True).to_pydatetime()
+        if first > last:
+            raise ValueError("start_datetime must not follow end_datetime")
+        return first, last
+
+    spec = attrs.TimeSpec.from_attrs(coords["time"].attrs)
+    if spec is None:
         return stamp, stamp
-    start = min(start for start, _ in spans).replace(tzinfo=UTC)
-    end = max(end for _, end in spans).replace(tzinfo=UTC)
-    return start, end
 
-
-def _grid_key(grid: GeoBox) -> GridKey:
-    """Spell a grid as a hashable key: CRS, transform and shape."""
-    return (str(grid.crs), tuple(grid.transform)[:6], tuple(grid.shape))
+    start, end = spec.timespan(coords["time"].values)
+    return start.replace(tzinfo=UTC), end.replace(tzinfo=UTC)

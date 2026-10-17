@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+from geosave.geodata.stac.translate import table as stac_table
+
 import shutil
 
 import dask
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
-from pystac.extensions.raster import RasterExtension
 
-from geosave.geodata import GeoVector, cuts, open_vector, stac, stack
-from geosave.geodata.core.catalog import GeoCatalog
+from geosave.geodata import GeoVector, open_vector, stac, tree
 from geosave.geodata.io.vector import stac_geoparquet as table
-from tests.geodata.conftest import cog_template, read_items, stack_templates
+from tests.geodata.conftest import cog_template, read_items, tree_templates, item_table
 
 
 def _refuse(*args, **kwargs):
@@ -26,19 +26,29 @@ def _per_band(template: str) -> str:
 
 
 def _cog_items(scene, root, name="forest", **options):
-    template = _per_band(cog_template(root, name, dated="time" in scene.dims))
-    return table.to_item(stac.create_item(scene.gs.to_cog(template), **options))
+    dated = "time" in scene.dims
+    template = _per_band(cog_template(root, name, dated=dated))
+    id = f"{name}_{{start:%Y%m%dT%H%M%S}}" if dated else name
+    return stac_table.to_items(item_table(scene.gs.to_cog(template), id=id, **options))
 
 
 def _stack_items(scene, label, root, name="s0"):
-    sample = stack({"optical": scene, "label": label})
-    templates = stack_templates(sample, root / name)
+    sample = tree({"optical": scene, "label": label})
+    templates = tree_templates(sample, root / name)
     saved = sample.gs.to_cog({group: _per_band(t) for group, t in templates.items()})
-    return table.to_item(stac.create_item(saved, id=name))
+    return stac_table.to_items(item_table(saved, prefix=name))
 
 
 def _save(items, path, **options):
-    return table.from_item(items).gs.to_geoparquet(path, **options)
+    options.setdefault(
+        "collections",
+        [
+            stac.create_collection(key, description=key)
+            for key in dict.fromkeys(item.collection_id for item in items)
+            if key is not None
+        ],
+    )
+    return stac_table.from_items(items).gs.to_geoparquet(path, **options)
 
 
 def _collections():
@@ -46,22 +56,6 @@ def _collections():
         stac.create_collection(name, description=f"{name} rows", license="CC-BY-4.0")
         for name in ("optical", "label")
     ]
-
-
-def test_items_become_rows_in_wgs84(scene, tmp_path) -> None:
-    rows = table.from_item(_cog_items(scene, tmp_path))
-
-    assert rows["id"].tolist() == ["forest_20250601T000000", "forest_20250611T000000"]
-    assert rows.crs.to_epsg() == 4326
-    assert "bbox" not in rows
-
-
-def test_one_item_becomes_one_row(scene, tmp_path) -> None:
-    first, _ = _cog_items(scene, tmp_path)
-
-    rows = table.from_item(first)
-
-    assert rows["id"].tolist() == [first.id]
 
 
 def test_items_linking_to_an_api_root_convert_without_reading_it(
@@ -75,37 +69,10 @@ def test_items_linking_to_an_api_root_convert_without_reading_it(
     for item in items:
         item.add_link(pystac.Link(pystac.RelType.ROOT, unreachable))
 
-    rows = table.from_item(items)
+    rows = stac_table.from_items(items)
     path = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
     assert len(open_vector(path)) == len(items)
-
-
-def test_no_items_give_an_empty_catalog() -> None:
-    rows = table.from_item([])
-
-    assert rows.empty
-    assert rows.crs.to_epsg() == 4326
-    assert type(rows.gs) is GeoCatalog
-
-
-def test_rows_become_the_items_they_came_from(scene, tmp_path) -> None:
-    items = _cog_items(scene, tmp_path)
-
-    restored = table.to_item(table.from_item(items))
-
-    assert [item.id for item in restored] == [item.id for item in items]
-    assert restored[0].bbox == pytest.approx(items[0].bbox)
-    assert restored[0].assets["red"].href == items[0].assets["red"].href
-    assert RasterExtension.ext(restored[0].assets["red"]).bands[0].nodata == 0
-
-
-def test_filtered_rows_keep_only_the_assets_they_have(scene, label, tmp_path) -> None:
-    rows = table.from_item(_stack_items(scene, label, tmp_path))
-
-    labels = table.to_item(rows[rows["collection"] == "label"])
-
-    assert [list(item.assets) for item in labels] == [["label"]]
 
 
 def test_a_written_table_is_stac_geoparquet(scene, tmp_path) -> None:
@@ -148,7 +115,7 @@ def test_a_table_follows_its_assets_when_moved(scene, tmp_path) -> None:
     restored.close()
 
 
-def test_each_group_of_a_stack_loads_alone(scene, label, tmp_path) -> None:
+def test_each_group_of_a_tree_loads_alone(scene, label, tmp_path) -> None:
     path = _save(_stack_items(scene, label, tmp_path), tmp_path / "items.parquet")
     rows = open_vector(path)
 
@@ -168,7 +135,7 @@ def test_only_data_assets_load(scene, tmp_path) -> None:
     (item, *_) = _cog_items(scene, tmp_path)
     item.add_asset("thumbnail", pystac.Asset("preview.png", roles=["thumbnail"]))
 
-    restored = read_items(table.from_item([item]))
+    restored = read_items(stac_table.from_items([item]))
 
     assert set(restored.gs.variables) == {"red", "nir"}
     restored.close()
@@ -192,7 +159,7 @@ def test_collections_ride_in_the_table_with_the_extent_of_their_rows(
         collections=given,
     )
 
-    stored = table.get_collections(path)
+    stored = table.read_collections(path)
 
     assert sorted(stored) == ["label", "optical"]
     assert stored["optical"].license == "CC-BY-4.0"
@@ -221,7 +188,7 @@ def test_a_collection_a_stac_api_returned_is_stored(scene, label, tmp_path) -> N
         collections=remote,
     )
 
-    assert table.get_collections(path)["optical"].description == "optical rows"
+    assert table.read_collections(path)["optical"].description == "optical rows"
 
 
 def test_items_of_a_stored_collection_link_to_it(scene, label, tmp_path) -> None:
@@ -231,27 +198,24 @@ def test_items_of_a_stored_collection_link_to_it(scene, label, tmp_path) -> None
         collections=_collections(),
     )
 
-    (item, *_) = table.to_item(open_vector(path))
+    (item, *_) = stac_table.to_items(open_vector(path))
 
     assert [link.rel for link in item.links] == ["collection"]
 
 
-def test_a_row_naming_an_absent_collection_is_described(scene, label, tmp_path) -> None:
-    path = _save(
-        _stack_items(scene, label, tmp_path),
-        tmp_path / "items.parquet",
-        collections=_collections()[:1],
-    )
-
-    stored = table.get_collections(path)
-    assert sorted(stored) == ["label", "optical"]
-    assert stored["label"].description == "label"
+def test_a_row_naming_an_absent_collection_is_rejected(scene, label, tmp_path) -> None:
+    with pytest.raises(ValueError, match="missing.*label"):
+        _save(
+            _stack_items(scene, label, tmp_path),
+            tmp_path / "items.parquet",
+            collections=_collections()[:1],
+        )
 
 
 def test_a_table_without_collections_reads_none(scene, tmp_path) -> None:
     path = _save(_cog_items(scene, tmp_path), tmp_path / "items.parquet")
 
-    assert table.get_collections(path) == {}
+    assert table.read_collections(path) == {}
 
 
 def test_a_batch_concatenated_onto_a_table_reads_back_whole(
@@ -262,18 +226,18 @@ def test_a_batch_concatenated_onto_a_table_reads_back_whole(
         tmp_path / "items.parquet",
         collections=_collections(),
     )
-    more = table.from_item(_stack_items(scene, label, tmp_path, "s1"))
+    more = stac_table.from_items(_stack_items(scene, label, tmp_path, "s1"))
 
     grown = GeoVector.concat([open_vector(path), more])
     grown.gs.to_geoparquet(
         path,
-        collections=table.get_collections(path).values(),
+        collections=table.read_collections(path).values(),
         overwrite=True,
     )
 
     rows = open_vector(path)
     assert sorted({id.split("/")[0] for id in rows["id"]}) == ["s0", "s1"]
-    assert sorted(table.get_collections(path)) == ["label", "optical"]
+    assert sorted(table.read_collections(path)) == ["label", "optical"]
     restored = read_items(
         rows[rows["id"].str.startswith("s1/") & (rows["collection"] == "optical")]
     )
@@ -281,9 +245,7 @@ def test_a_batch_concatenated_onto_a_table_reads_back_whole(
     restored.close()
 
 
-def test_a_rewrite_without_collections_describes_them_minimally(
-    scene, label, tmp_path
-) -> None:
+def test_a_rewrite_preserves_attached_collections(scene, label, tmp_path) -> None:
     path = _save(
         _stack_items(scene, label, tmp_path),
         tmp_path / "items.parquet",
@@ -292,9 +254,9 @@ def test_a_rewrite_without_collections_describes_them_minimally(
 
     open_vector(path).gs.to_geoparquet(path, overwrite=True)
 
-    stored = table.get_collections(path)
+    stored = table.read_collections(path)
     assert sorted(stored) == ["label", "optical"]
-    assert stored["optical"].description == "optical"
+    assert stored["optical"].description == "optical rows"
 
 
 def test_a_bbox_filter_reads_only_matching_rows(scene, tmp_path) -> None:
@@ -321,13 +283,15 @@ def test_a_table_that_is_not_stac_is_returned_as_read(tmp_path) -> None:
 def test_an_item_table_writes_through_the_vector_accessor(
     scene, label, tmp_path
 ) -> None:
-    rows = table.from_item(_stack_items(scene, label, tmp_path))
+    rows = stac.create_catalog(
+        _stack_items(scene, label, tmp_path), collections=_collections()
+    )
 
     path = rows.gs.to_geoparquet(
         tmp_path / "catalog.parquet", collections=_collections()
     )
 
-    assert sorted(table.get_collections(path)) == ["label", "optical"]
+    assert sorted(table.read_collections(path)) == ["label", "optical"]
     assert open_vector(path)["id"].tolist() == rows["id"].tolist()
     with pytest.raises(FileExistsError):
         rows.gs.to_geoparquet(path)
@@ -341,7 +305,7 @@ def test_a_vector_that_is_not_an_item_table_does_not_write_as_one(tmp_path) -> N
     with pytest.raises(ValueError, match="item table"):
         table.write(plain, tmp_path / "plain.parquet")
     written = plain.gs.to_geoparquet(tmp_path / "plain.parquet")
-    assert table.get_collections(written) == {}
+    assert table.read_collections(written) == {}
 
 
 def test_open_vector_reads_an_item_table_with_hrefs_that_open(
@@ -353,10 +317,11 @@ def test_open_vector_reads_an_item_table_with_hrefs_that_open(
 
     rows = open_vector(moved)
 
-    sample = cuts.stacks(rows, on="label").iloc[0].gs.to_stack()
-    np.testing.assert_array_equal(
-        sample.gs.rasters["optical"].red.values, scene.red.values
-    )
+    samples = rows.gs.sample()
+
+    assert len(samples) == 1
+    sample = samples.iloc[0].gs.to_xarray()
+    np.testing.assert_array_equal(sample.gs.rasters["optical"].red.values, scene.red.values)
 
 
 def test_a_stored_table_names_no_absolute_location(scene, label, tmp_path) -> None:
@@ -378,9 +343,11 @@ def test_a_stored_table_names_no_absolute_location(scene, label, tmp_path) -> No
 def test_filtered_rows_do_not_gain_their_index_as_a_property(
     scene, label, tmp_path
 ) -> None:
-    rows = table.from_item(_stack_items(scene, label, tmp_path))
+    rows = stac.create_catalog(
+        _stack_items(scene, label, tmp_path), collections=_collections()
+    )
 
-    (item,) = table.to_item(rows[rows["collection"] == "label"])
+    (item,) = stac_table.to_items(rows[rows["collection"] == "label"])
 
     assert "__index_level_0__" not in item.properties
 
@@ -444,29 +411,30 @@ def test_reading_a_plain_table_does_not_import_stac(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_a_given_collection_without_rows_refuses(scene, tmp_path) -> None:
-    rows = table.from_item(_cog_items(scene, tmp_path))
-
-    with pytest.raises(ValueError, match=r"\['optical'\]"):
-        rows.gs.to_geoparquet(
-            tmp_path / "items.parquet", collections=_collections()[:1]
-        )
+def test_unused_collection_definitions_are_not_written(scene, tmp_path) -> None:
+    rows = stac_table.from_items(_cog_items(scene, tmp_path))
+    path = rows.gs.to_geoparquet(
+        tmp_path / "filtered.parquet", collections=_collections()
+    )
+    assert table.read_collections(path) == {}
 
 
 def test_writing_leaves_the_rows_and_collections_unchanged(
     scene, label, tmp_path
 ) -> None:
-    rows = table.from_item(_stack_items(scene, label, tmp_path))
+    rows = stac.create_catalog(
+        _stack_items(scene, label, tmp_path), collections=_collections()
+    )
     given = _collections()
     before = (
-        [item.to_dict() for item in table.to_item(rows)],
+        [item.to_dict() for item in stac_table.to_items(rows)],
         [each.to_dict() for each in given],
     )
 
     rows.gs.to_geoparquet(tmp_path / "items.parquet", collections=given)
 
     assert (
-        [item.to_dict() for item in table.to_item(rows)],
+        [item.to_dict() for item in stac_table.to_items(rows)],
         [each.to_dict() for each in given],
     ) == before
 
@@ -474,7 +442,7 @@ def test_writing_leaves_the_rows_and_collections_unchanged(
 def test_a_table_writes_to_a_upath(scene, tmp_path) -> None:
     from upath import UPath
 
-    rows = table.from_item(_cog_items(scene, tmp_path))
+    rows = stac_table.from_items(_cog_items(scene, tmp_path))
 
     path = rows.gs.to_geoparquet(UPath(tmp_path) / "items.parquet")
 
@@ -482,7 +450,7 @@ def test_a_table_writes_to_a_upath(scene, tmp_path) -> None:
 
 
 def test_a_path_without_a_suffix_refuses(scene, tmp_path) -> None:
-    rows = table.from_item(_cog_items(scene, tmp_path))
+    rows = stac_table.from_items(_cog_items(scene, tmp_path))
 
     with pytest.raises(ValueError):
         rows.gs.to_geoparquet(tmp_path / "catalog")

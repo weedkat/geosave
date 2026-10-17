@@ -21,6 +21,17 @@ endpoints and assets in those recipes. Create that spec first using
 [Model spec](model-spec.md); the small tensor-only
 training example has no acquisition recipes and cannot be ingested this way.
 
+If you already have raster or vector files, start with
+[file ingestion](ingest-files.md). Opening those files does not require a
+model spec or Prefect. This flow uses STAC recipes to acquire rasters that a
+model declares.
+
+| Input | Used for | Output |
+| --- | --- | --- |
+| Anchor configuration | Target grid and time range | GeoAnchor opened by the flow. |
+| Model spec YAML with STAC recipes | Collection search and required raster validation | One Dataset per declared raster. |
+| New local output directory and format | Computing and writing the acquired rasters | Completed directory path as a string. |
+
 The command runs a Prefect flow locally and waits for completion. Prefect may
 start a temporary server; a Prefect account is not required. On success, the
 final command output is the directory path:
@@ -37,7 +48,7 @@ external data download is separate from the offline training examples.
 ```python
 import geosave as gs
 
-scene = gs.open_stack("data/scenes/s1")
+scene = gs.open_tree("data/scenes/s1")
 scene
 ```
 

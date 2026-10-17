@@ -6,6 +6,11 @@ on:
     paths:
       - "docs/**"
       - "zensical.toml"
+      - "src/geosave/**/*.py"
+      - "src/geosave_flows/**/*.py"
+      - "scripts/api_reference.py"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/docs.yml"
   workflow_dispatch: {}
 
@@ -31,8 +36,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      - name: Check public API reference freshness
+        run: uv run python scripts/api_reference.py --check
+
       - name: Build site
         run: uv run zensical build
+
+      - name: Check rendered public API coverage
+        run: uv run python scripts/api_reference.py --check --site site
 
       - uses: actions/upload-pages-artifact@v3
         with:

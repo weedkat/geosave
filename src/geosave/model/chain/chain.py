@@ -63,7 +63,23 @@ class ModelChain(nn.Module):
         return dict(self._inputs)
 
     def forward(self, *args: object, **kwargs: object) -> object:
-        """Return one native terminal result, several by stage, or named features."""
+        """Evaluate stages with the supplied named values, preserving gradients.
+
+        Args:
+            *args: Required external inputs in the order listed by `inputs`.
+            **kwargs: Inputs by the selected methods' parameter names. Optional
+                parameters can be omitted to use their method defaults.
+
+        Returns:
+            One terminal stage's result unchanged; several terminal results
+            as a dictionary keyed by stage; or, without terminal stages, all
+            produced intermediates keyed by their output names.
+
+        Raises:
+            TypeError: Too many positional inputs, the same input is supplied
+                twice, or a stage's value has the wrong declared outer type.
+            KeyError: A stage's required input is absent.
+        """
         if len(args) > len(self._inputs):
             raise TypeError(
                 f"ModelChain takes at most {len(self._inputs)} positional arguments"
@@ -90,7 +106,12 @@ class ModelChain(nn.Module):
         return heads if heads else produced
 
     def __repr__(self) -> str:
-        """Return external inputs, execution order, and registered modules."""
+        """Describe the chain's inputs, routed methods, and PyTorch module tree.
+
+        Returns:
+            Text showing required input types, stage execution order, and
+            outputs. Optional stage parameters are marked with `?`.
+        """
 
         def describe(values: dict[str, type], mark: str = "") -> list[str]:
             return [f"{name}{mark}: {type_name(kind)}" for name, kind in values.items()]

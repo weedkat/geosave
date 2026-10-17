@@ -80,11 +80,14 @@ its result still needs checking for the selected resampling method.
 
 ## Schedule a write explicitly
 
-For Zarr, `write = scene.gs.to_zarr(path, compute=False)` returns a delayed
-pixel write. Run it with `write.compute()` or your Dask scheduler. The call
-can prepare destination metadata before the delayed work runs.
+Every `to_cog`, `to_zarr` and `to_netcdf` takes `compute=False` and returns
+what it would have returned, with each `Scene` pending:
+`scene.gs.to_zarr(path, compute=False).compute()` writes the store and returns
+the scene written. A pending scene is a Dask collection, so
+`dask.compute(scene.gs.to_cog(template, compute=False))` writes every file in
+one parallel run. Nothing reaches the destination before that.
 
-Keep file-backed rasters and stacks open until the work that depends on them
+Keep file-backed rasters and trees open until the work that depends on them
 finishes. Close them afterward to release handles. Select the region and
 variables before converting to NumPy or tensors so you only materialize the
 input you need. See [large rasters](../guides/large-data.md) for a complete

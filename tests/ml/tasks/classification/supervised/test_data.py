@@ -3,25 +3,34 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import torch
+from torch.utils.data import Dataset
 
 from geosave.ml.tasks.classification import supervised
-from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
+from tests.ml.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
 
 
-def test_training_batches_move_pixels_and_validity_together(tmp_path) -> None:
-    path = _spec().save(tmp_path / "model_spec.yaml")
-    data = supervised.DataModule(
-        spec=path, train=Chips(), val=Chips(), augmentations=FLIP
-    )
-    data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
+class Chips(Dataset[supervised.Sample]):
+    """Source yielding this method's Sample contract."""
+
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int) -> supervised.Sample:
+        return {
+            "inputs": {"image": torch.full((2, 8, 8), float(index))},
+            "target": torch.tensor(index % 2),
+        }
+
+
+def test_training_batches_move_pixels_and_preserve_class_targets(tmp_path) -> None:
+    data = supervised.DataModule(_spec(), Chips(), Chips(), augmentations=FLIP)
+    data.trainer = SimpleNamespace(training=True)
     batch = _batch()
-    batch["valid"][:, :, 0] = False
     image = batch["inputs"]["image"].clone()
     target = torch.tensor([1, 2])
 
-    finished = data.on_after_batch_transfer({**batch, "target": target}, 0)
+    result = data.on_after_batch_transfer({**batch, "target": target}, 0)
 
-    torch.testing.assert_close(finished["inputs"]["image"], image.flip(-1))
-    assert torch.equal(finished["target"], target)
-    moved = finished["valid"]
-    assert not moved[:, :, -1].any() and moved[:, :, :-1].all()
+    torch.testing.assert_close(result["inputs"]["image"], image.flip(-1))
+    assert torch.equal(result["target"], target)
+    assert set(result) == {"inputs", "target"}

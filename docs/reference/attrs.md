@@ -6,6 +6,14 @@ See [Describe raster values](../basics/attrs.md) and [Metadata behavior](../conc
 
 ::: geosave.geodata.attrs
 
+## Stamp groups
+
+::: geosave.geodata.attrs.stamp.stamp_attrs
+
+::: geosave.geodata.attrs.stamp.clear_attrs
+
 ## Combine metadata
 
-::: geosave.geodata.attrs.combine.combine
+::: geosave.geodata.attrs.combine.combine_attrs
+
+::: geosave.geodata.attrs.combine.intersect

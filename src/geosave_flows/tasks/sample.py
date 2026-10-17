@@ -9,7 +9,7 @@ from pydantic import JsonValue
 import xarray as xr
 
 from geosave.geodata import Dataset
-from geosave.geodata.core.stack import stack
+from geosave.geodata.core.raster.create import tree
 from geosave.geodata import io
 
 type SampleFormat = Literal["geotiff", "zarr"]
@@ -56,7 +56,7 @@ def write_sample(
         )
     if destination.exists():
         raise FileExistsError(f"Output already exists: {destination}")
-    if stack(rasters).gs.geobox is None:
+    if tree(rasters).gs.geobox is None:
         raise ValueError(f"Sample rasters do not share a grid: {list(rasters)}")
 
     if format == "geotiff":

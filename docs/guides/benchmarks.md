@@ -1,5 +1,11 @@
 # Download benchmark labels
 
+Benchmark experiments are planned for a separate repository so their data
+splits, model configurations, protocols, and results can be reviewed together.
+This library guide covers acquisition of the publisher's original label files.
+The [notebooks](../examples.md) use a prepared teaching subset to demonstrate
+training and prediction; their short runs are not benchmark results.
+
 Download the original Dynamic World expert labels:
 
 <!-- NETWORK: original publisher download -->

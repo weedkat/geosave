@@ -49,11 +49,11 @@ def x() -> torch.Tensor:
     return torch.ones(3)
 
 
-def test_inputs_come_from_parameters(x):
+def test_inputs_come_from_parameters():
     assert contract(Encode().encode).inputs == {"image": torch.Tensor}
 
 
-def test_outputs_pair_return_names_with_types(x):
+def test_outputs_pair_return_names_with_types():
     assert contract(Encode().encode).outputs == {"feature_map": torch.Tensor}
 
 
@@ -75,7 +75,7 @@ def test_a_step_is_called_with_the_context_and_returns_its_outputs(x):
     assert result["feature_map"].tolist() == [2.0, 2.0, 2.0]
 
 
-def test_a_parameter_with_a_default_is_not_required(x):
+def test_a_parameter_with_a_default_is_not_required():
     assert contract(Optional().run).inputs == {"image": torch.Tensor}
 
 
@@ -116,7 +116,7 @@ def test_a_head_has_no_context_outputs():
     assert contract(Head().logits).outputs == {}
 
 
-def test_a_missing_context_key_names_the_key(x):
+def test_a_missing_context_key_names_the_key():
     with pytest.raises(KeyError, match="missing input 'image'"):
         invoke(Encode(), "encode", {})
 

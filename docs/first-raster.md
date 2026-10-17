@@ -1,8 +1,9 @@
 # Your first raster
 
-Build a small two-band image, compute NDVI, then save and reopen it. This example
-uses synthetic reflectance values and needs no downloads. Install GeoSave first
-using the [installation guide](install.md).
+Create a tiny image with two measurements at each location, calculate a useful
+feature, then save and reopen it. The example makes its own data, so you can
+run it without downloads or accounts. Install GeoSave first using the
+[installation guide](install.md).
 
 ## Create an image
 
@@ -35,9 +36,15 @@ Data variables:
     nir          (y, x) float32 64B 0.75 0.75 0.75 0.75 ... 0.75 0.75 0.75 0.75
 ```
 
-`scene` is an xarray Dataset. Each variable is a band, and `y, x` describe its
-pixel layout. The anchor supplies a 4 × 4 grid with 10 m pixels around the given
-location. `spatial_ref` carries the coordinate reference system (CRS).
+A raster is an image whose pixels correspond to locations on the ground.
+`scene` is a normal xarray Dataset with two named arrays: `red` and `nir`.
+They represent reflected light in red and near-infrared wavelengths. Real
+satellite images supply these values; here we filled them with simple numbers.
+
+The anchor places the 4 × 4 image around the given latitude and longitude.
+Each pixel covers 10 × 10 metres. The `y` and `x` coordinates locate the pixel
+centres, and `spatial_ref` records the map coordinate system, called the CRS.
+GeoSave keeps that location information alongside the values.
 
 ## Compute a feature
 
@@ -60,8 +67,10 @@ Coordinates:
     spatial_ref  int32 4B 32633
 ```
 
-NDVI is `(nir - red) / (nir + red)`. Here every pixel is `0.5`. Assignment adds
-it as a named variable on the existing grid.
+NDVI, the normalized difference vegetation index, compares near-infrared and
+red reflectance: `(nir - red) / (nir + red)`. Here every pixel is `0.5`.
+Assignment adds it as a named variable at the same pixel locations. The original
+bands remain in the Dataset, so normal xarray selection and arithmetic still work.
 
 ## Save and reopen
 
@@ -92,8 +101,10 @@ Attributes:
     AREA_OR_POINT:  Area
 ```
 
-`to_cog` writes a Cloud Optimized GeoTIFF and returns a tuple of destination
-`UPath` objects. `open_raster` accepts those paths or a single file path. The reopened bands are Dask
+`to_cog` writes a Cloud Optimized GeoTIFF and returns a list of `Scene`s, one per
+date, each mapping an asset key to its `RasterFile`. `open_raster` accepts those
+or a single file path.
+The reopened bands are Dask
 arrays: their pixel data loads when you compute, plot, or convert it to tensors.
 Close the dataset with `opened.close()` when finished.
 

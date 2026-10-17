@@ -1,8 +1,10 @@
 import math
 
-from pydantic import ValidationError
 import pytest
+from pydantic import ValidationError
+from pystac_client.exceptions import APIError
 
+from geosave.geodata.errors import CollectionNotFoundError
 from geosave.model.spec import RasterRequirement, StacRecipe
 
 
@@ -140,3 +142,57 @@ def test_positional_channels_accept_explicit_stac_bands():
 
     assert requirement.stac is not None
     assert requirement.stac.load.bands == ["B04", "B08"]
+
+
+def test_a_recipe_loads_with_its_own_query_and_load_settings(
+    serve, red, coordinate_anchor
+):
+    serve({"https://primary.test/stac": red})
+    recipe = StacRecipe.model_validate(
+        {
+            "collection": "optical",
+            "endpoints": ["https://primary.test/stac"],
+            "query": {"max_items": 3},
+            "load": {"bands": ["red"]},
+        }
+    )
+
+    loaded = recipe.load_raster(coordinate_anchor)
+
+    assert loaded.attrs["config"].bands == ["red"]
+    assert loaded.attrs["query"].collections == ["optical"]
+    assert loaded.attrs["query"].max_items == 3
+
+
+def test_an_unavailable_endpoint_falls_back_to_the_next(serve, red, coordinate_anchor):
+    opened = serve(
+        {
+            "https://primary.test/stac": APIError("unreachable"),
+            "https://backup.test/stac": CollectionNotFoundError("absent"),
+            "planetary_computer": red,
+        },
+    )
+    recipe = StacRecipe.model_validate(
+        {
+            "collection": "optical",
+            "endpoints": [
+                "https://primary.test/stac",
+                "https://backup.test/stac",
+                "planetary_computer",
+            ],
+        }
+    )
+
+    assert "red" in recipe.load_raster(coordinate_anchor)
+    assert opened == [
+        "https://primary.test/stac",
+        "https://backup.test/stac",
+        "planetary_computer",
+    ]
+
+
+def test_no_serving_endpoint_names_every_failure(serve, coordinate_anchor, stac_recipe):
+    serve({"https://primary.test/stac": APIError("unreachable")})
+
+    with pytest.raises(ConnectionError, match="primary.test.*unreachable"):
+        stac_recipe.load_raster(coordinate_anchor)

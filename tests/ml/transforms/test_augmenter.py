@@ -167,3 +167,20 @@ def test_keys_must_match_the_number_of_inputs(keys):
 
     with pytest.raises(ValueError, match="data_keys.*number of inputs"):
         augmentation(image, image.clone(), data_keys=keys)
+
+
+def test_temporal_inputs_and_labels_keep_their_axes_after_a_joint_crop():
+    augmentation = ImageAugmenter(
+        [{"name": "CenterCrop", "init_args": {"size": (4, 4)}}], size=8
+    )
+    image = torch.arange(2 * 3 * 2 * 8 * 8, dtype=torch.float32).reshape(2, 3, 2, 8, 8)
+    dem = torch.arange(2 * 8 * 8, dtype=torch.float32).reshape(2, 1, 8, 8)
+    labels = dem[:, 0].long()
+
+    pixels, elevation, target = augmentation(
+        image, dem, labels, data_keys=["input", "input", "mask"]
+    )
+
+    torch.testing.assert_close(pixels, image[..., 2:6, 2:6])
+    torch.testing.assert_close(elevation, dem[..., 2:6, 2:6])
+    torch.testing.assert_close(target, labels[..., 2:6, 2:6])

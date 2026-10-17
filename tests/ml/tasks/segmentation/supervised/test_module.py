@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-import runpy
 
 import pytest
 import torch
+import yaml
 from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
-import yaml
 
 from geosave.ml.cli import GeosaveCLI
 from geosave.ml.tasks.segmentation import supervised
@@ -72,6 +71,31 @@ def test_task_defaults(stages):
     assert optimizer.param_groups[0]["lr"] == 1e-3
 
 
+def test_ignored_targets_produce_zero_loss_and_no_metric_update(stages):
+    task = supervised.Module(model_chain=stages)
+    task.configure_model()
+    batch = {
+        "inputs": {"image": torch.ones(1, 2, 2, 2)},
+        "target": torch.full((1, 2, 2), 255, dtype=torch.long),
+    }
+
+    loss = task.training_step(batch, 0)
+    loss.backward()
+
+    assert loss.item() == 0.0
+    assert task.model.get_submodule("model").factor.grad.item() == 0.0
+    assert all(metric.update_count == 0 for metric in task.train_metrics.values())
+
+
+def test_criterion_cannot_override_the_task_ignore_value(stages):
+    with pytest.raises(ValueError, match="ignore_index"):
+        supervised.Module(
+            model_chain=stages,
+            ignore_index=255,
+            criterion={"name": "cross_entropy", "init_args": {"ignore_index": -1}},
+        )
+
+
 def test_the_module_takes_no_data_shaped_arguments(stages):
     for argument in ("in_channels", "input_size"):
         with pytest.raises(TypeError, match=argument):
@@ -125,6 +149,7 @@ def test_thresholds_must_number_the_classes(stages) -> None:
 def test_task_uses_registered_training_builders(stages) -> None:
     task = supervised.Module(
         model_chain=stages,
+        ignore_index=-1,
         criterion={"name": "cross_entropy", "init_args": {"ignore_index": -1}},
         optimizer={"name": "sgd", "init_args": {"lr": 0.1}},
         lr_scheduler={
@@ -159,7 +184,7 @@ def test_task_uses_registered_training_builders(stages) -> None:
 def test_criterion_ignore_index(stages, criterion, expected):
     task = supervised.Module(
         model_chain=stages,
-        ignore_index=7,
+        ignore_index=expected,
         criterion=criterion,
     )
     assert task.criterion.ignore_index == expected
@@ -322,17 +347,6 @@ def test_training_constructor_errors_remain_native(stages, field, path):
     assert error.value.__cause__ is None
 
 
-def test_template_preserves_task_optimizer_configuration(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "geosave.ml.cli.GeosaveCLI",
-        lambda **kwargs: calls.append(kwargs),
-    )
-    template = Path(__file__).parents[5] / "src/geosave/templates/common/main.py"
-    runpy.run_path(str(template), run_name="__main__")
-    assert calls[0]["auto_configure_optimizers"] is False
-
-
 def test_forward_preserves_prepared_inputs_and_routes_context(
     stages: dict[str, dict[str, object]],
 ) -> None:
@@ -385,7 +399,6 @@ def test_steps_accept_sample_batches(
         {
             "inputs": {"image": image},
             "target": target,
-            "valid": torch.ones_like(target, dtype=torch.bool),
         },
         0,
     )
@@ -418,6 +431,7 @@ def test_training_and_checkpoint_reload_preserve_construction(
 ) -> None:
     task = supervised.Module(
         model_chain=stages,
+        ignore_index=-1,
         optimizer={"class_path": "torch.optim.SGD", "init_args": {"lr": 0.1}},
         criterion={
             "class_path": "torch.nn.CrossEntropyLoss",
@@ -436,7 +450,6 @@ def test_training_and_checkpoint_reload_preserve_construction(
                 {
                     "inputs": {"image": image, "offset": torch.tensor(0.0)},
                     "target": torch.tensor([[0, 1], [1, 0]]),
-                    "valid": torch.ones(2, 2, dtype=torch.bool),
                 }
             ]
         ),
@@ -486,6 +499,7 @@ def test_lightning_cli_parses_nested_construction_specs(
         args={
             "model": {
                 "model_chain": stages,
+                "ignore_index": -1,
                 "criterion": {
                     "class_path": "torch.nn.CrossEntropyLoss",
                     "init_args": {"ignore_index": -1},
@@ -529,14 +543,12 @@ def _evaluation(stages, tmp_path):
     """Return a module, two chips whose second band leads by 1.0, and a trainer."""
     task = supervised.Module(model_chain=stages)
     image = torch.stack([torch.zeros(2, 2), torch.ones(2, 2)])
-    valid = torch.tensor([[True, True], [True, False]])
     loader = DataLoader(
         Samples(
             [
                 {
                     "inputs": {"image": image},
-                    "target": torch.full((2, 2), label),
-                    "valid": valid,
+                    "target": torch.tensor([[label, label], [label, 255]]),
                 }
                 for label in (0, 1)
             ]
@@ -554,13 +566,13 @@ def _evaluation(stages, tmp_path):
     return task, loader, trainer
 
 
-def test_validation_scores_chips_over_their_valid_pixels(stages, tmp_path):
+def test_validation_scores_chips_over_their_known_labels(stages, tmp_path):
     task, loader, trainer = _evaluation(stages, tmp_path)
 
     validation = trainer.validate(task, dataloaders=loader, verbose=False)
 
     # Class 1 is predicted everywhere: wrong on the chip labelled 0, right on
-    # the one labelled 1; the invalid pixel of each is left out.
+    # the one labelled 1; the ignored label of each is left out.
     expected = (
         torch.log1p(torch.tensor(1.0).exp()) + torch.log1p(torch.tensor(-1.0).exp())
     ) / 2
@@ -568,7 +580,7 @@ def test_validation_scores_chips_over_their_valid_pixels(stages, tmp_path):
     assert validation[0]["val_iou_macro"] == pytest.approx(0.25)
 
 
-def test_test_scores_chips_over_their_valid_pixels(stages, tmp_path):
+def test_test_scores_chips_over_their_known_labels(stages, tmp_path):
     task, loader, trainer = _evaluation(stages, tmp_path)
 
     result = trainer.test(task, dataloaders=loader, verbose=False)
@@ -576,15 +588,24 @@ def test_test_scores_chips_over_their_valid_pixels(stages, tmp_path):
     assert result[0]["test_iou_macro"] == pytest.approx(0.25)
 
 
-def test_evaluation_ignores_pixels_without_valid_inputs(stages) -> None:
+def test_evaluation_preserves_supplied_targets_without_input_validity(stages) -> None:
     task = supervised.Module(model_chain=stages, ignore_index=9)
     task.configure_model()
     batch: supervised.Sample = {
         "inputs": {"image": torch.zeros(1, 2, 2, 2)},
-        "target": torch.zeros(1, 2, 2, dtype=torch.int64),
-        "valid": torch.tensor([[[True, False], [True, True]]]),
+        "target": torch.tensor([[[0, 9], [0, 0]]]),
     }
 
     _, target = task._evaluate(batch)
 
-    assert target.tolist() == [[[0, 9], [0, 0]]]
+    assert target is batch["target"]
+
+
+def test_predict_returns_logits_for_chips_without_labels(stages, tmp_path):
+    task, _, trainer = _evaluation(stages, tmp_path)
+    image = torch.stack([torch.zeros(2, 2), torch.ones(2, 2)])
+    loader = DataLoader(Samples([{"inputs": {"image": image}}] * 3), batch_size=2)
+
+    batches = trainer.predict(task, dataloaders=loader)
+
+    assert [tuple(logits.shape) for logits in batches] == [(2, 2, 2, 2), (1, 2, 2, 2)]

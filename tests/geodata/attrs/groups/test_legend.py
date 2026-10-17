@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
-import xarray as xr
 
 from geosave.geodata import attrs
+from tests.geodata.conftest import flat
 
 
 def test_classes_are_spelled_as_cf_flags() -> None:
@@ -65,34 +66,6 @@ def test_a_listing_that_does_not_line_up_is_refused(given, match) -> None:
         attrs.Legend.model_validate(given)
 
 
-def test_codes_must_fit_the_bands_dtype() -> None:
-    import numpy as np
-
-    band = xr.DataArray(
-        np.zeros(2, "uint8"),
-        dims="x",
-        attrs={"flag_values": [0, 300], "flag_meanings": "bg palm"},
-    )
-
-    with pytest.raises(ValueError, match="uint8"):
-        attrs.parse(band, attrs.Legend)
-
-
-def test_the_keys_cover_what_it_writes() -> None:
-    written = attrs.Legend(classes={0: "bg"}, color_map={0: "#000000"}).model_dump(
-        by_alias=True
-    )
-    assert set(written) <= set(attrs.Legend.KEYS)
-
-
-def test_a_float_band_holds_class_codes_exactly() -> None:
-    import numpy as np
-
-    band = xr.DataArray(np.zeros(2, "float32"), dims="x")
-    legend = attrs.Legend(classes={0: "bg", 1: "palm"}).held_by(band)
-    assert legend.classes == {0: "bg", 1: "palm"}
-
-
 def test_a_palette_reads_alike_however_its_colours_are_spelled() -> None:
     hexed = attrs.Legend(
         classes={0: "bg", 1: "palm"}, color_map={0: "#000000", 1: "#00ff00"}
@@ -114,7 +87,6 @@ def test_a_palette_is_written_as_json_text() -> None:
 
 
 def _labelled():
-    import numpy as np
     from odc.geo.geobox import GeoBox
 
     from geosave.geodata import raster
@@ -130,10 +102,10 @@ def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
     from geosave.geodata import open_raster
 
     labelled = _labelled()
-    (file,) = labelled.gs.to_cog(str(tmp_path / "label.tif"))
+    (file,) = flat(labelled.gs.to_cog(str(tmp_path / "label.tif")))
     restored = open_raster(file)
 
-    joined = attrs.combine([restored.label.attrs, labelled.label.attrs])
+    joined = attrs.combine_attrs([restored.label.attrs, labelled.label.attrs])
 
     assert attrs.Legend.from_attrs(joined) == labelled.label.gs.legend
 
@@ -149,7 +121,7 @@ def test_a_legend_survives_each_raster_format(tmp_path, suffix) -> None:
     elif suffix == "nc":
         written = labelled.gs.to_netcdf(path)
     else:
-        (file,) = labelled.gs.to_cog(str(path))
+        (file,) = flat(labelled.gs.to_cog(str(path)))
         written = str(file)
 
     assert open_raster(written).label.gs.legend == labelled.label.gs.legend

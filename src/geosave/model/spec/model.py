@@ -13,18 +13,19 @@ from yaml.nodes import ScalarNode
 
 from .base import Name, SpecModel, Text
 from .call import CallSpec, Ref
-from .cuts import FramesSpec, ChipsSpec
+from .windows import FramesSpec, ChipsSpec
 from .rasters import RasterRequirement
 from .stage import StageSpec
-from geosave.geodata import GeoVector, cuts, stac, stack
+from geosave.geodata import stac, tree
 from geosave.geodata.core import GeoAnchor
 from geosave.geodata.io import storage
 from geosave.geodata.io.storage import Location
+from geosave.geodata.transform.warp import Target
 
 if TYPE_CHECKING:
     import geopandas as gpd
 
-    from geosave.geodata.core.catalog import GeoCatalog
+    from geosave.geodata.core import GeoCatalog
 
 
 class _Loader(yaml.SafeLoader):
@@ -62,7 +63,7 @@ _Loader.add_constructor("!ref", _construct_ref)
 class TransformSpec(SpecModel):
     """Declare one tensor transform by its Kornia class name.
 
-    Args:
+    Attributes:
         name: Class in `kornia.augmentation`, such as `Normalize`.
         init_args: Its constructor arguments.
     """
@@ -74,7 +75,7 @@ class TransformSpec(SpecModel):
 class ModelSpec(SpecModel):
     """Describe model raster requirements and inert processing declarations.
 
-    Args:
+    Attributes:
         schema_version: Document format version.
         rasters: Rasters the model reads, by name.
         preprocessing: Named raster calls run on each sample.
@@ -211,20 +212,20 @@ class ModelSpec(SpecModel):
         raw: gpd.GeoDataFrame,
         output: Location,
         *,
-        on: str,
+        target: Target | None = None,
         keep: Sequence[str] = (),
     ) -> UPath:
         """Preprocess every window of a raw catalog and save what the model reads.
 
-        Each window `cuts.stacks(raw, on=on)` lists is read and preprocessed;
-        the rasters the inputs read, the `keep` collections, and `on` unless
-        it is a declared raster are written as COGs under `output/<anchor>/`.
+        Equal-footprint samples are framed as declared by this spec, read on
+        native grids unless target is given, and preprocessed. Model inputs
+        and explicitly kept collections are written under output/<sample>/.
         The item table goes to `output/catalog.parquet`, this spec beside it.
 
         Args:
             raw: Item table of the raw rasters and the collections kept.
             output: New folder, as a path, URL, or UPath.
-            on: Collection whose items are the windows, as labels are.
+            target: Explicit alignment target; None keeps native grids.
             keep: Collections copied through unchanged.
 
         Returns:
@@ -236,26 +237,23 @@ class ModelSpec(SpecModel):
             KeyError: A window lacks a declared raster or a kept collection.
 
         Examples:
-            >>> path = spec.prepare(raw, "data/prepared", on="label")
-            >>> cuts.stacks(open_vector(path), on="label").iloc[0].gs.to_stack().gs.groups
+            >>> path = spec.prepare(raw, "data/prepared", keep=["label"])
+            >>> open_vector(path).gs.sample().iloc[0].gs.to_xarray().gs.groups
             ('image', 'label')
         """
         if isinstance(keep, str):
             raise TypeError(f"keep takes a list of collections, as keep=[{keep!r}]")
-        target = storage.location(output)
-        if target.exists():
-            raise FileExistsError(f"{target} exists; prepare writes a new folder")
-        kept: list[str] = list(
-            dict.fromkeys([*keep, *([] if on in self.rasters else [on])])
-        )
-        # A window drops its anchor's own time, which an undated group needs.
-        anchors = raw[raw["collection"] == on]
-        instants = dict(zip(anchors["id"], anchors["datetime"], strict=True))
-
-        tables = []
-        for _, row in cuts.stacks(raw, on=on).iterrows():
-            anchor = str(row["anchor"])
-            rasters = row.gs.to_stack().gs.rasters
+        folder = storage.location(output)
+        if folder.exists():
+            raise FileExistsError(f"{folder} exists; prepare writes a new folder")
+        kept = list(dict.fromkeys(keep))
+        items = []
+        windows = raw.gs.sample()
+        if self.frames is not None:
+            windows = self.frames.cut(windows)
+        for _, row in windows.iterrows():
+            anchor = str(row["id"])
+            rasters = row.gs.to_xarray(target=target).gs.rasters
             if missing := [name for name in kept if name not in rasters]:
                 raise KeyError(f"Window {anchor!r} lacks {missing}")
             results = self.preprocess(rasters)
@@ -264,16 +262,29 @@ class ModelSpec(SpecModel):
             }
             groups |= {name: rasters[name] for name in kept}
             templates = {
-                name: _template(target / anchor, name, group)
+                name: _template(folder / anchor, name, group)
                 for name, group in groups.items()
             }
-            files = stack(groups).gs.to_cog(templates)
-            tables.append(
-                stac.create_item(files, id=anchor, datetime=instants[anchor])
+            # Windows share grids and dates, so the anchor keeps their ids apart.
+            escaped = anchor.replace("{", "{{").replace("}", "}}")
+            items += stac.create_items(
+                tree(groups).gs.to_cog(templates),
+                id_format=f"{escaped}_{{start:%Y%m%dT%H%M%S}}",
+                datetime=row.gs.timespan,
             )
-        self.save(target / self.filename)
-        catalog = cast("GeoCatalog", GeoVector.concat(tables).gs)
-        return catalog.to_geoparquet(target / "catalog.parquet")
+        self.save(folder / self.filename)
+        definitions = raw.gs.collections
+        collections = [
+            definitions[name]
+            if name in definitions
+            else stac.create_collection(name, description=f"Prepared raster {name}")
+            for name in dict.fromkeys(item.collection_id for item in items)
+            if name is not None
+        ]
+        catalog = cast(
+            "GeoCatalog", stac.create_catalog(items, collections=collections).gs
+        )
+        return catalog.to_geoparquet(folder / "catalog.parquet")
 
     def model_context(self, rasters: Mapping[str, Any]) -> dict[str, Any]:
         """Encode a sample's rasters with the declared context recipe.
@@ -306,7 +317,7 @@ class ModelSpec(SpecModel):
         """Bind each input to its prepared raster and add their context.
 
         Args:
-            rasters: Prepared rasters, as `row.gs.to_stack().gs.rasters`
+            rasters: Prepared rasters, as `row.gs.to_xarray().gs.rasters`
                 reads them.
             context: Cached encoding of these rasters. None encodes them.
 
@@ -330,6 +341,8 @@ class ModelSpec(SpecModel):
     def save(self, path: Location) -> UPath:
         """Write this spec as YAML, with references as `!ref` tags.
 
+        Only declared values are written; defaults are left to loading.
+
         Args:
             path: YAML file to write, as a path, URL, or UPath.
 
@@ -342,7 +355,9 @@ class ModelSpec(SpecModel):
         """
         target = storage.location(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = yaml.dump(self.model_dump(), Dumper=_Dumper, sort_keys=False)
+        # Defaults are left out, so the file reads as the spec was written.
+        declared = self.model_dump(exclude_defaults=True)
+        payload = yaml.dump(declared, Dumper=_Dumper, sort_keys=False)
         target.write_text(payload, encoding="utf-8")
         return target
 

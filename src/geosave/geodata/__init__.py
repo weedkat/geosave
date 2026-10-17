@@ -9,21 +9,31 @@ import xarray as xr
 from . import attrs, transform
 from .core import (
     GeoAnchor,
-    GeoArray,
-    GeoRaster,
-    GeoStack,
+    GeoDataArray,
+    GeoDataset,
+    GeoDataTree,
     GeoVector,
+    GeoCatalog,
+    GeoItem,
+    GeoSample,
+    GeoSamples,
     array,
     raster,
-    stack,
+    tree,
 )
 from . import io
+from .utils.summary import class_percent, statistics
 from .io.raster.gdal import configure_gdal
-from .io import open_raster, open_stack, open_vector
+from .io import open_raster, open_tree, open_vector
+from .io.raster.file import RasterFile, Scene
 
 
 if TYPE_CHECKING:
-    from . import cuts, features, stac
+    from typing import Generic
+    from typing_extensions import TypeVar
+
+    from . import features, stac
+    from .stac import StacClient, StacQuery
 
     class DataArray(xr.DataArray):
         """Xarray DataArray carrying GeoSave's `gs` accessor.
@@ -32,7 +42,7 @@ if TYPE_CHECKING:
         only so type checkers can resolve `.gs`.
         """
 
-        gs: GeoArray
+        gs: GeoDataArray
 
     class Dataset(xr.Dataset):
         """Xarray Dataset carrying GeoSave's `gs` accessor.
@@ -41,7 +51,7 @@ if TYPE_CHECKING:
         only so type checkers can resolve `.gs`.
         """
 
-        gs: GeoRaster
+        gs: GeoDataset
 
     class DataTree(xr.DataTree):
         """Xarray DataTree carrying GeoSave's `gs` accessor.
@@ -50,16 +60,20 @@ if TYPE_CHECKING:
         only so type checkers can resolve `.gs`.
         """
 
-        gs: GeoStack
+        gs: GeoDataTree
 
-    class GeoDataFrame(gpd.GeoDataFrame):
+    _Vector = TypeVar("_Vector", bound=GeoVector, default=Any)
+
+    class GeoDataFrame(gpd.GeoDataFrame, Generic[_Vector]):
         """GeoPandas GeoDataFrame carrying GeoSave's `gs` accessor.
 
         The runtime value is a `geopandas.GeoDataFrame`; this declaration
-        exists only so type checkers can resolve `.gs`.
+        exists only so type checkers can resolve `.gs`. Known schemas specify
+        the accessor type; file readers leave it dynamic until the columns
+        are read at runtime.
         """
 
-        gs: GeoVector
+        gs: _Vector
 
 else:
     DataArray = xr.DataArray
@@ -69,40 +83,52 @@ else:
 
 
 # STAC brings its own heavy dependencies, so these load on first use.
-_LAZY = ("cuts", "features", "stac")
+_LAZY = ("features", "stac")
+_LAZY_MEMBERS = {"StacClient": "stac", "StacQuery": "stac"}
 
 
 def __getattr__(name: str) -> Any:
     if name in _LAZY:
         return import_module(f"{__name__}.{name}")
+    if name in _LAZY_MEMBERS:
+        return getattr(import_module(f"{__name__}.{_LAZY_MEMBERS[name]}"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *_LAZY})
+    return sorted({*globals(), *_LAZY, *_LAZY_MEMBERS})
 
 
 __all__ = [
     "attrs",
     "GeoAnchor",
-    "GeoArray",
+    "GeoDataArray",
     "DataArray",
     "DataTree",
     "Dataset",
     "GeoDataFrame",
-    "GeoRaster",
-    "GeoStack",
+    "GeoDataset",
+    "GeoDataTree",
     "GeoVector",
+    "GeoCatalog",
+    "GeoItem",
+    "GeoSample",
+    "GeoSamples",
+    "RasterFile",
+    "Scene",
+    "StacClient",
+    "StacQuery",
     "array",
     "configure_gdal",
-    "cuts",
     "features",
     "io",
     "raster",
     "open_raster",
-    "open_stack",
+    "open_tree",
     "open_vector",
     "stac",
-    "stack",
+    "tree",
+    "class_percent",
+    "statistics",
     "transform",
 ]

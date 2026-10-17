@@ -48,15 +48,13 @@ def _module(**options) -> mim.Module:
     return module
 
 
-@pytest.mark.parametrize(("valid", "expected"), [(True, 1.0), (False, 0.0)])
-def test_only_hidden_valid_pixels_are_scored(valid: bool, expected: float) -> None:
-    module = _module(patch_size=2, mask_ratio=0.5)
+@pytest.mark.parametrize(("ratio", "expected"), [(0.5, 1.0), (0.0, 0.0)])
+def test_only_hidden_pixels_are_scored(ratio: float, expected: float) -> None:
+    module = _module(patch_size=2, mask_ratio=ratio)
     image = torch.ones(2, 3, 2, 8, 8)
-    mask = torch.full((2, 8, 8), valid)
 
-    loss = module.training_step({"inputs": {"image": image}, "valid": mask}, 0)
+    loss = module.training_step({"inputs": {"image": image}}, 0)
 
-    # Hidden pixels read zero and are reconstructed as zero, one away from one.
     assert loss.item() == pytest.approx(expected)
 
 
@@ -68,7 +66,6 @@ def test_a_reconstruction_must_cover_every_band_and_instant() -> None:
         module.training_step(
             {
                 "inputs": {"image": torch.ones(1, 2, 16, 16)},
-                "valid": torch.ones(1, 16, 16, dtype=torch.bool),
             },
             0,
         )
@@ -81,7 +78,6 @@ class _Chips(Dataset):
     def __getitem__(self, index: int):
         return {
             "inputs": {"image": torch.randn(2, 8, 8)},
-            "valid": torch.ones(8, 8, dtype=torch.bool),
         }
 
 
@@ -108,7 +104,6 @@ def test_a_validation_batch_hides_the_same_patches_every_epoch() -> None:
     image = torch.rand(2, 2, 8, 8)
     batch: mim.Sample = {
         "inputs": {"image": image},
-        "valid": torch.ones(2, 8, 8, dtype=torch.bool),
     }
 
     first = [module._loss(batch, seed=index) for index in (0, 1)]

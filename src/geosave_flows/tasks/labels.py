@@ -1,15 +1,28 @@
 """Read a label set as a table of STAC items."""
 
-from geosave.geodata.stac import create_item
 from pathlib import Path, PurePosixPath
 
-from geosave.geodata import GeoDataFrame, GeoVector, open_raster, open_vector
+from geosave.geodata import GeoDataFrame, open_raster, open_vector
+from geosave.geodata.io.raster.file import Scene
+from geosave.geodata.stac import create_catalog, create_items
 
 _TABLE_SUFFIXES = (".parquet", ".geoparquet")
 
 
 def find_labels(root: Path, pattern: str) -> dict[str, Path]:
-    """Return label paths in path order, keyed by sample ID."""
+    """Return label paths in path order, keyed by sample ID.
+
+    Args:
+        root: Local directory containing the label files.
+        pattern: Glob passed to `root.glob`, such as `**/*.tif`.
+
+    Returns:
+        Sample IDs mapped to matching file paths. IDs are paths relative to
+        `root`, without the final suffix, using forward slashes.
+
+    Raises:
+        ValueError: No file matches, or different files produce the same ID.
+    """
     paths = sorted(path for path in root.glob(pattern) if path.is_file())
     if not paths:
         raise ValueError(f"No labels found for {pattern!r} under {root}")
@@ -42,13 +55,17 @@ def read_labels(source: str | Path, pattern: str = "**/*.tif") -> GeoDataFrame:
     """
     path = Path(source)
     if path.suffix.lower() not in _TABLE_SUFFIXES:
-        rows = []
+        scenes = {}
         for sample_id, label_path in find_labels(path, pattern).items():
             with open_raster(label_path) as label:
                 if label.gs.timespan is None:
                     raise ValueError(f"Label raster has no time: {label_path}")
-            rows.append(create_item({"label": label_path}, id=sample_id))
-        return GeoVector.concat(rows)
+            scenes[sample_id] = Scene.open({"label": label_path})
+        return create_catalog(
+            item
+            for sample_id, scene in scenes.items()
+            for item in create_items(scene, id_format=sample_id)
+        )
 
     labels = open_vector(path)
     absent = [name for name in ("id", "assets") if name not in labels]

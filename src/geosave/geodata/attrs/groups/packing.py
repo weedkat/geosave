@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
 
 from pydantic import field_validator
 
-from .base import AttrsGroup, Decoded, Join
+from .base import AttrsGroup, Decoded
 
 
 class Packing(AttrsGroup):
@@ -15,7 +14,7 @@ class Packing(AttrsGroup):
     Rasters stay in their stored digital numbers in memory; decoding is the
     explicit `unpack`.
 
-    Args:
+    Attributes:
         scale_factor: Multiplier applied to each stored value, never 0.
         add_offset: Value added after scaling.
 
@@ -24,7 +23,7 @@ class Packing(AttrsGroup):
         Packing(scale_factor=0.0001, add_offset=-0.1)
     """
 
-    JOIN: ClassVar[Join] = "agree"
+    REFUSE_CONFLICT = True
 
     scale_factor: Decoded[float] = 1.0
     add_offset: Decoded[float] = 0.0

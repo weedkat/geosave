@@ -31,7 +31,7 @@ def test_a_repeated_variable_is_refused() -> None:
 
 
 def test_the_head_ends_a_chain_under_its_registered_name() -> None:
-    assert "REGRESSION" in list_models("head")["head"]
+    assert ("head", "regression") in list_models().index
 
     chain = ModelChain(head=RegressionHead(variables=["biomass"], feature_channels=4))
 

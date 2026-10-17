@@ -75,14 +75,20 @@ def local_source(tmp_path):
             },
         ),
     )
-    path = stac.from_item([item]).gs.to_geoparquet(
+    path = stac.create_catalog([item]).gs.to_geoparquet(
         tmp_path / "local.parquet", collections=[collection]
     )
-    source = stac.StacTable(path).source("local").set_config(
-        bands=["red", "nir"],
-        groupby="time",
-        stac_cfg={
-            "local": {"aliases": {"red": ("reflectance", 1), "nir": ("reflectance", 2)}}
-        },
+    source = (
+        stac.StacClient.open(path)
+        .source("local")
+        .set_config(
+            bands=["red", "nir"],
+            groupby="time",
+            stac_cfg={
+                "local": {
+                    "aliases": {"red": ("reflectance", 1), "nir": ("reflectance", 2)}
+                }
+            },
+        )
     )
     return source, anchor

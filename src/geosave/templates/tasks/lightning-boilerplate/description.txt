@@ -1,0 +1,1 @@
+A plain PyTorch Lightning task and DataModule you edit, on generated in-memory data.

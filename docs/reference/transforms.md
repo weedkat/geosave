@@ -11,42 +11,38 @@ and [Metadata and pixel values](../concepts/metadata.md) for the behavior behind
       members:
         - reproject
         - align
-        - common_grid
         - Resampling
         - Target
         - Extent
         - Native
 
-## Crop and pad
+## Extent: crop and pad
 
-::: geosave.geodata.transform.crop
+::: geosave.geodata.transform.extent
     options:
       members:
         - crop
-        - window
+        - pad
         - Region
-        - PaddingMode
+        - Padding
 
 ## Combine rasters
 
 ::: geosave.geodata.transform.combine
     options:
       members:
-        - merge_bands
-        - concat_time
-        - mosaic
-        - Join
-        - Compat
-        - MosaicMethod
+        - merge
 
 ## Time
 
 ::: geosave.geodata.transform.temporal
     options:
       members:
+        - concat
         - resample
         - reduce
         - interpolate
+        - Join
         - Interpolation
         - Gap
         - Reducer

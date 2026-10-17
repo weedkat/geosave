@@ -3,8 +3,8 @@ from dask.delayed import delayed
 import numpy as np
 import pytest
 
-from geosave.geodata import open_stack
-from geosave.geodata.core.create import raster
+from geosave.geodata import open_tree
+from geosave.geodata.core.raster.create import raster
 from geosave.geodata import io
 import geosave_flows.tasks.sample as save_module
 
@@ -31,7 +31,7 @@ def test_write_sample_publishes_flat_geotiff_assets(raw, tmp_path) -> None:
 
     assert result == str(output)
     assert {path.name for path in output.iterdir()} == {"label.tif", "optical.tif"}
-    with open_stack(output) as restored:
+    with open_tree(output) as restored:
         assert restored.gs.groups == ("label", "optical")
         assert restored.gs.geobox == rasters["label"].gs.geobox
         assert tuple(restored["label"].data_vars) == ("class",)
@@ -79,16 +79,17 @@ def test_write_sample_does_not_depend_on_raster_order(raw, tmp_path) -> None:
     assert result == str(tmp_path / "sample")
 
 
-def test_write_sample_keeps_a_singleton_time_as_an_axis(raw, tmp_path) -> None:
+def test_write_sample_reads_a_singleton_time_back_as_its_date(raw, tmp_path) -> None:
     rasters = _sample_rasters(raw)
     instant = np.datetime64("2025-01-15T12:00:00")
     rasters["optical"] = rasters["optical"].expand_dims(time=[instant])
 
     save_module.write_sample(rasters, tmp_path / "sample")
 
-    with open_stack(tmp_path / "sample") as restored:
-        assert restored["optical"].time.dims == ("time",)
-        assert restored["optical"].time.values.tolist() == [instant]
+    with open_tree(tmp_path / "sample") as restored:
+        # A GeoTIFF holds one instant, which reads back as a scalar date.
+        assert restored["optical"].time.dims == ()
+        assert restored["optical"].time.values == instant
 
 
 def test_write_sample_refuses_a_multitemporal_geotiff(raw, tmp_path) -> None:
@@ -158,7 +159,7 @@ def test_write_sample_zarr_round_trip(raw, tmp_path) -> None:
     assert save_module.write_sample(rasters, output, format="zarr") == str(output)
 
     assert {path.name for path in output.iterdir()} == {"label.zarr", "optical.zarr"}
-    with open_stack(output) as restored:
+    with open_tree(output) as restored:
         assert restored.gs.groups == ("label", "optical")
         np.testing.assert_array_equal(
             restored["label"]["class"], rasters["label"]["class"]
@@ -172,7 +173,7 @@ def test_a_zarr_sample_keeps_a_time_series(raw, tmp_path) -> None:
 
     save_module.write_sample(rasters, tmp_path / "sample", format="zarr")
 
-    with open_stack(tmp_path / "sample") as restored:
+    with open_tree(tmp_path / "sample") as restored:
         assert restored["optical"].sizes["time"] == 2
 
 

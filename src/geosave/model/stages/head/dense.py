@@ -58,7 +58,15 @@ class DenseHead(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Map ``(B, in_channels, H, W)`` -> ``(B, num_classes, H, W)``."""
+        """Project decoded features without changing their spatial dimensions.
+
+        Args:
+            x: `(batch, feature_channels, y, x)` decoded feature tensor.
+
+        Returns:
+            `(batch, num_classes, y, x)` raw outputs. For a chain call that
+            also resizes to `input_size`, use `forward_logits`.
+        """
         return self.layers(x)
 
     @chain_step(head=True)

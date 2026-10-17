@@ -1,21 +1,19 @@
-"""Bake the colours a band's legend names into display channels."""
+"""Bake the colours a variable's legend names into display channels."""
 
 from __future__ import annotations
 
 import numpy as np
-import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import xarray as xr
 
-import geosave.geodata.attrs as attrs
 from geosave.geodata.conventions import BAND_DIMENSION, SPATIAL_DIMENSIONS
 from geosave.geodata.utils.color import parse_color
 
 
-def colorize(band: xr.DataArray) -> xr.DataArray:
+def colorize(variable: xr.DataArray) -> xr.DataArray:
     """Colour each pixel by the class its code names.
 
     Args:
-        band: Class codes carrying a `Legend`.
+        variable: Class codes carrying a `Legend`.
 
     Returns:
         Lazy georeferenced array shaped `(*axes, band, y, x)` valued in `[0, 1]`,
@@ -23,41 +21,32 @@ def colorize(band: xr.DataArray) -> xr.DataArray:
         class names is absent on every channel.
 
     Raises:
-        ValueError: The band lists no classes, or names a class carrying no
-            colour.
+        ValueError: The variable lists no classes, or a class carries no colour.
 
     Examples:
         >>> colorize(ds["landcover"]).sizes["band"]
         3
     """
-    legend = attrs.parse(band, attrs.Legend)
-    class_map = None if legend is None else legend.classes
-    if legend is None or class_map is None:
+    legend = variable.gs.legend
+    if legend is None:
         raise ValueError(
-            "band lists no classes, so its values name none to colour; write "
-            "a Legend, or compose channels with GeoRaster.to_array"
+            "the variable lists no classes, so its values name none to colour; "
+            "write a Legend, or compose channels with GeoDataset.to_array"
         )
-
-    colors = legend.color_map or {}
-    codes = sorted(class_map)
-    missing_colors = [code for code in codes if code not in colors]
-    if missing_colors:
-        raise ValueError(
-            f"classes {missing_colors} carry no colour; give Legend.color_map an "
-            f"entry for every class the band lists"
-        )
-
+    colors = legend.colors
+    codes = np.array(sorted(colors))
+    # One row per class, its red, green and blue in [0, 1].
     palette = np.array([parse_color(colors[code]) for code in codes], dtype="float32")
-    palette /= 255.0  # (class, 3)
+    palette /= 255.0
 
-    def lookup(pixels: np.ndarray) -> np.ndarray:
-        valid = np.isin(pixels, codes)
-        indices = np.where(valid, np.searchsorted(codes, pixels), 0)
-        return np.where(valid[..., None], palette[indices], np.float32(np.nan))
+    def look_up(pixels: np.ndarray) -> np.ndarray:
+        named = np.isin(pixels, codes)
+        rows = np.where(named, np.searchsorted(codes, pixels), 0)
+        return np.where(named[..., None], palette[rows], np.float32(np.nan))
 
-    colored = xr.apply_ufunc(
-        lookup,
-        band,
+    channels = xr.apply_ufunc(
+        look_up,
+        variable,
         output_core_dims=[[BAND_DIMENSION]],
         dask="parallelized",
         output_dtypes=[np.float32],
@@ -65,8 +54,8 @@ def colorize(band: xr.DataArray) -> xr.DataArray:
         keep_attrs=False,
     )
     return (
-        colored.assign_coords(band.coords)
+        channels.assign_coords(variable.coords)
         .assign_coords({BAND_DIMENSION: ["red", "green", "blue"]})
-        .transpose(*band.gs.axes, BAND_DIMENSION, *SPATIAL_DIMENSIONS)
+        .transpose(*variable.gs.axes, BAND_DIMENSION, *SPATIAL_DIMENSIONS)
         .rename(None)
     )

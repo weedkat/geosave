@@ -187,6 +187,22 @@ class DensePredictionLogger(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
+        """Log the first validation sample of an eligible loader and epoch.
+
+        Args:
+            trainer: Trainer providing epoch, rank, sanity-check state, and
+                TensorBoard/MLflow loggers. Other logger types are skipped.
+            pl_module: Validated module; panels use the supplied outputs.
+            outputs: Mapping with `(batch, classes, y, x)` tensor `logits` and
+                `(batch, y, x)` or `(batch, 1, y, x)` tensor `label`.
+            batch: Original validation batch, unused for the panels.
+            batch_idx: Only batch zero is logged.
+            dataloader_idx: Loader number included in the logged image name.
+
+        Raises:
+            TypeError: Eligible outputs lack tensor logits or labels.
+            ValueError: Eligible logits are not four-dimensional.
+        """
         self._log(trainer, outputs, batch_idx, "val", dataloader_idx)
 
     def on_test_batch_end(
@@ -198,4 +214,20 @@ class DensePredictionLogger(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
+        """Log the first test sample of an eligible loader and epoch.
+
+        Args:
+            trainer: Trainer providing epoch, rank, sanity-check state, and
+                TensorBoard/MLflow loggers. Other logger types are skipped.
+            pl_module: Tested module; panels use the supplied outputs.
+            outputs: Mapping with `(batch, classes, y, x)` tensor `logits` and
+                `(batch, y, x)` or `(batch, 1, y, x)` tensor `label`.
+            batch: Original test batch, unused for the panels.
+            batch_idx: Only batch zero is logged.
+            dataloader_idx: Loader number included in the logged image name.
+
+        Raises:
+            TypeError: Eligible outputs lack tensor logits or labels.
+            ValueError: Eligible logits are not four-dimensional.
+        """
         self._log(trainer, outputs, batch_idx, "test", dataloader_idx)

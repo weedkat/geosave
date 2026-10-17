@@ -16,19 +16,10 @@ def _timestep(**attributes) -> xr.DataArray:
     )
 
 
-def _band(dtype="uint8", **attributes) -> xr.DataArray:
-    return xr.DataArray(
-        np.zeros((2, 2), dtype),
-        dims=("y", "x"),
-        coords={"x": xr.DataArray([0, 1], dims="x", attrs={"axis": "X"})},
-        attrs={"units": "1", **attributes},
-    )
-
-
 def test_agreeing_groups_and_keys_are_kept() -> None:
     a = _timestep(_FillValue=0, units="1", long_name="red")
 
-    joined = xr.concat([a, a.copy()], "time", combine_attrs=attrs.combine)
+    joined = xr.concat([a, a.copy()], "time", combine_attrs=attrs.combine_attrs)
 
     assert joined.attrs == {"_FillValue": 0, "units": "1", "long_name": "red"}
 
@@ -38,7 +29,9 @@ def test_one_nodata_spelled_two_ways_agrees() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        joined = attrs.combine([{"_FillValue": "0"}, {"_FillValue": 0}, {"nodata": 0}])
+        joined = attrs.combine_attrs(
+            [{"_FillValue": "0"}, {"_FillValue": 0}, {"nodata": 0}]
+        )
 
     assert joined == {"_FillValue": 0}
 
@@ -48,12 +41,12 @@ def test_an_agree_group_that_differs_refuses_the_join() -> None:
         xr.concat(
             [_timestep(_FillValue=0), _timestep(_FillValue=1)],
             "time",
-            combine_attrs=attrs.combine,
+            combine_attrs=attrs.combine_attrs,
         )
 
 
 def test_a_drop_group_that_differs_leaves_the_join() -> None:
-    joined = attrs.combine(
+    joined = attrs.combine_attrs(
         [{"common_name": "red", "units": "1"}, {"common_name": "nir", "units": "1"}]
     )
 
@@ -61,29 +54,40 @@ def test_a_drop_group_that_differs_leaves_the_join() -> None:
 
 
 def test_a_group_one_object_lacks_is_left_out() -> None:
-    assert attrs.combine([{"_FillValue": 0}, {}]) == {}
+    assert attrs.combine_attrs([{"_FillValue": 0}, {}]) == {}
 
 
 def test_a_key_one_object_lacks_is_left_out() -> None:
     with pytest.warns(Warning, match="note"):
-        assert attrs.combine([{"note": "a", "units": "1"}, {"units": "1"}]) == {
+        assert attrs.combine_attrs([{"note": "a", "units": "1"}, {"units": "1"}]) == {
             "units": "1"
         }
 
 
 def test_units_that_differ_refuse_the_join() -> None:
-    with pytest.raises(ValueError, match="'units'"):
-        attrs.combine([{"units": "m"}, {"units": "ft"}])
+    with pytest.raises(ValueError, match="Quantity"):
+        attrs.combine_attrs([{"units": "m"}, {"units": "ft"}])
+
+
+def test_a_quantity_one_object_leaves_unstated_drops() -> None:
+    with pytest.warns(DroppedAttrsWarning, match="units"):
+        assert attrs.combine_attrs([{"units": "m"}, {}]) == {}
+
+
+def test_a_quantity_stated_alike_is_kept_whole() -> None:
+    quantity = {"standard_name": "surface_reflectance", "units": "1"}
+
+    assert attrs.combine_attrs([quantity, dict(quantity)]) == quantity
 
 
 def test_plain_keys_that_differ_drop() -> None:
-    assert attrs.combine(
+    assert attrs.combine_attrs(
         [{"title": "a", "units": "1"}, {"title": "b", "units": "1"}]
     ) == {"units": "1"}
 
 
 def test_nan_fills_agree() -> None:
-    joined = attrs.combine(
+    joined = attrs.combine_attrs(
         [{"_FillValue": float("nan")}, {"_FillValue": np.float32("nan")}]
     )
 
@@ -95,6 +99,6 @@ def test_an_each_group_joins_its_keys_one_by_one() -> None:
     second = {"title": "other", "license": "CC0"}
 
     with pytest.warns(DroppedAttrsWarning, match="title"):
-        joined = attrs.combine([first, second])
+        joined = attrs.combine_attrs([first, second])
 
     assert joined == {"license": "CC0"}

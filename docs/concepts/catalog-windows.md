@@ -1,104 +1,76 @@
-# Catalog and window rules
-
-Use the [catalogs and windows guide](../guides/catalogs-and-cuts.md) for the
-runnable path from files to a model input. These rules explain what its tables
-represent and how selections behave.
-
-## Items describe observations; windows describe inputs
-
-| Object | One row represents | Stores pixels? |
-| --- | --- | --- |
-| Item table | One observation with a footprint, date, and assets. | No; assets point to files. |
-| Window table | A target grid and the source Items needed on it. | No; `sources` records the Items. |
-| Opened stack | Named raster groups read onto the window grid. | Arrays; typically lazy until computed. |
-
-Both tables are GeoDataFrames. Item footprints and generated window footprints
-use EPSG:4326. The `proj:*` fields describe the actual pixel grid, which can be
-in a projected CRS. A geographic footprint alone does not determine that grid.
-
-## Select complete spatial coverage
-
-`gs.cuts.stacks(items, on="label")` uses one Item from the named collection as
-each anchor. Other collections contribute Items only when they cover that
-anchor's whole footprint. Partial intersections warn and are omitted; the
-function does not mosaic partial scenes to make coverage complete.
-
-Every Item must name its collection. Duplicate instants within another
-collection keep the first covering Item in table order and warn. An anchor's
-assets must state its grid, because a footprint cannot supply exact pixel
-coordinates.
-
-## Match observations over time
-
-`gs.cuts.frames(windows, length, tolerance=...)` constructs a joint sequence
-from collections with more than one Item. These collections need dated
-observations and a shared time interval. Collections with one Item are treated
-as static and join every frame, including a single dated label.
-
-At each joint instant, the nearest observation from each dynamic collection
-is selected. The tolerance bounds how far it can be from that instant; equality
-with the tolerance is allowed. A tie chooses the later observation. One source
-observation can therefore be selected more than once. Selection retains the
-source acquisition dates; it does not interpolate values onto the joint axis.
-
-`length` counts joint instants. The default stride equals length; a smaller
-stride makes overlapping frames. A trailing sequence too short to fill a frame
-is dropped with a warning. The default `mode="strict"` raises if a frame contains
-an instant with missing observations. `mode="drop"` omits such frames and warns.
-
-## Cut chips and pad edges
+# Spatial samples and temporal frames
 
 ```python
-import geosave as gs
-
-tiler, halo = gs.cuts.layout((128, 128), (64, 64), overlap=16)
-halo
+samples = items.gs.sample()
+frames = samples.gs.frame(
+    windows={
+        "image": {
+            "slots": ["-3W", "-2W", "-1W"],
+            "reduce": "first",
+            "fill": "interpolate",
+        },
+    },
+    reference="label",
+    stride=1,
+)
+chips = frames.gs.chip(128, target=grid)
+image = chips.iloc[0].gs.to_xarray()["image"].dataset
 ```
 
-Output:
+`sample()` groups equal spatial footprints, retaining every acquisition and
+native grid. It does not select a reference collection or align pixels.
+Containing or overlapping footprints are separate groups.
 
-```text
-[(24, 24), (24, 24)]
-```
+## Slots define model time steps
 
-`gs.cuts.chips` uses this layout to cut windows into fixed pixel shapes. With
-overlap, a halo puts the original border away from chip edges so tapered
-predictions can cover it. This can produce more chips than a simple division
-of the unpadded width and height suggests.
+Each collection's `slots` list describes ordered, non-overlapping bins. The
+integer gives the relative position; the unit gives the bin width. At a
+January 15 reference, `-2W` covers January 1–8 and `-1W` January 8–15.
+Starts are included and ends excluded. `0D` covers the day starting at the
+reference instant. An acquisition exactly at the reference is excluded from
+`-1D` and included in `0D`; the clock is not rounded to midnight.
 
-Parts of a chip outside its parent are padded using `reflect`, `edge`, or
-`constant`, according to `mode`. The default is `reflect`. Padding extends the
-input layout; it does not discover new observations beyond the parent window.
-The merge reconstructs the layout using the recorded shape, overlap, and mode.
+Supported units are `s`, `min`, `h`, `D`, `W`, `M` and `Y`. Weeks are seven days;
+months and years are relative calendar offsets. `-1W` is a week-long bin,
+whereas `-7D` is a one-day bin seven days before the reference.
 
-## Interpret row fields
+A reference collection supplies candidate timestamps and the matching
+observation directly; it needs no `windows` entry. With `reference=None`,
+timestamps are the sorted unique union of the requested collections, newest
+first. `stride` counts these candidates before checking completeness. Its
+default is the largest slot count, which does not guarantee non-overlapping
+calendar windows. Timeless collections cannot supply the clock.
 
-| Field | Meaning |
-| --- | --- |
-| `anchor` | Item ID that supplied the original window grid. |
-| `parent` | Position of the row in the table passed to this cut. |
-| `sources` | JSON text mapping collection names to member Items. |
-| `start_datetime`, `end_datetime` | Span of the selected source observations. |
-| `proj:code`, `proj:transform`, `proj:shape` | Target CRS, transform, and pixel shape. |
-| `chip`, `halo`, `overlap`, `mode`, `pad` | Chip placement, layout, and padding. |
+## Multiple acquisitions, gaps and composites
 
-`parent` is a position, not a pandas index label or a global ID. Reordering a
-parent table after cutting breaks that positional relationship. Preserve the
-tables used to construct predictions and pass the matching tables to merge.
+Each populated bin produces one raster time step. Multiple acquisitions
+require an explicit `reduce` method. `first` and `last` select whole scenes
+in acquisition-time order, preserving their nodata pixels. Other reducers
+use the existing temporal operations, including their categorical-data checks.
 
-## Read and persist windows
+`fill="interpolate"` linearly fills absent interior bins using only populated
+bins in the same collection's requested window. It does not extrapolate,
+fill clouded pixels in existing bins, or read observations outside the window.
+Two slots cannot interpolate a missing endpoint. Remaining structurally
+incomplete frames are omitted with a count warning. Pixel-level missing
+values can remain; framing does not eagerly inspect pixels.
 
-`row.gs.to_stack()` opens the member files, selects a same-grid region, and
-reprojects a different grid onto the window's grid. The output is a file-backed
-DataTree with lazy arrays. Two sources providing the same variable at one
-instant raise rather than being silently fused. Close the stack when finished.
+Composite start/end coverage must fit wholly inside a bin. A matching weekly
+composite works directly; a monthly composite crossing a weekly boundary does
+not become weekly data. No implicit temporal clipping or nearest-time matching
+is performed. Persist composite coverage when writing TIFFs and rebuilding
+catalogs from their paths.
 
-Item-table writes make asset hrefs relative to their catalog; reads resolve
-them back to absolute addresses. Window sources contain absolute addresses
-inside JSON text. Saving and reopening a window table preserves those
-addresses, so it works in another process only while the sources remain
-accessible there. Remote source files require the reader's credentials as
-well as access to the table.
+## Lazy reads and persistence
 
-See the [cuts reference](../reference/cuts.md) for layout, reading, and merging
-options.
+Frames remain GeoDataFrame rows. `reference_time` and the row's temporal bounds
+identify the prediction/reference instant. A JSON `frame` column records bin
+bounds, selected Item positions and operations. It survives GeoParquet and
+chipping. Reads execute these operations lazily using the existing temporal
+implementation, returning one Dataset per collection in a DataTree.
+
+Output `time` labels are bin starts, with explicit inclusive
+`start_datetime`/`end_datetime` coordinates. Original acquisitions and coverage
+remain in the row's Items. Reference observations retain their own metadata.
+Spatial alignment is explicit: supply `target` when reading. Chips require an
+explicit target GeoBox; their pixel grid is independent of the temporal clock.

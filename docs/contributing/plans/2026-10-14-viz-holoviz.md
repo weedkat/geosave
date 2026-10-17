@@ -1768,7 +1768,7 @@ type Section = dict[str, str] | pd.DataFrame
         sections: dict[str, Section] = {}
 
         # What it is, as its ACDD attrs describe it
-        acdd = attrs.parse(data, attrs.ACDD)
+        acdd = attrs.ACDD.from_attrs(data.attrs)
         described = {} if acdd is None else acdd.model_dump(exclude_none=True)
         if described:
             sections["Overview"] = {k.capitalize(): str(v) for k, v in described.items()}
@@ -1787,7 +1787,7 @@ type Section = dict[str, str] | pd.DataFrame
         if self.dates:
             first, last = pd.Timestamp(self.dates[0]), pd.Timestamp(self.dates[-1])
             time = {"Dates": str(len(self.dates)), "First": f"{first:%Y-%m-%d}", "Last": f"{last:%Y-%m-%d}"}
-            spec = attrs.parse(data[TIME_COORDINATE], attrs.TimeSpec)
+            spec = attrs.TimeSpec.from_attrs(data[TIME_COORDINATE].attrs)
             if spec is not None:
                 time["Step"] = str(spec.time_freq)
             sections["Time"] = time
@@ -1807,7 +1807,7 @@ def _bands(data: xr.Dataset) -> pd.DataFrame:
     """Table each variable's dtype, fill, units, spectral band and packing; empty columns left out."""
     rows = []
     for name, band in data.data_vars.items():
-        quantity = attrs.parse(band, attrs.Quantity)
+        quantity = attrs.Quantity.from_attrs(band.attrs)
         spectral, packing = band.gs.spectral, band.gs.packing
         rows.append({
             "variable": str(name),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime as dt, timedelta
-from typing import ClassVar, Literal
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ from geosave.geodata.utils.datetime import (
     freq_offset,
 )
 
-from .base import AttrsGroup, Join
+from .base import AttrsGroup
 
 
 class TimeSpec(AttrsGroup):
@@ -25,8 +25,9 @@ class TimeSpec(AttrsGroup):
     It lives on the `time` coordinate: `resample` stamps it before xarray
     groups, so the reduced axis carries it. An axis of instants carries none.
     What values were collapsed with is CF `cell_methods`, on the variables.
+    Axes cut on different cadences join as instants, without it.
 
-    Args:
+    Attributes:
         time_freq: Cadence, any pandas offset alias such as `"5D"` or `"MS"`.
         time_closed: Which bucket edge pandas treated as inclusive.
         time_label: Which bucket edge names the bucket.
@@ -35,14 +36,13 @@ class TimeSpec(AttrsGroup):
         time_offset: Shift added on top of `time_origin`.
 
     Examples:
-        >>> attrs.parse(monthly.time, attrs.TimeSpec).time_freq
+        >>> attrs.TimeSpec.from_attrs(monthly.time.attrs).time_freq
         'MS'
         >>> monthly.gs.timespan
         (datetime.datetime(2024, 1, 1, 0, 0), datetime.datetime(2024, 3, 31, 23, 59, 59, 999999))
     """
 
     # Axes cut on different cadences join as instants.
-    JOIN: ClassVar[Join] = "drop"
 
     time_freq: Freq
     time_closed: Literal["left", "right"]

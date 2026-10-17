@@ -6,9 +6,7 @@ __all__ = [
     "AssumedFillWarning",
     "DroppedAttrsWarning",
     "DroppedInstantsWarning",
-    "UncoveredInstantsWarning",
-    "DroppedFramesWarning",
-    "DuplicateInstantsWarning",
+    "DroppedRowsWarning",
     "PartialCoverWarning",
 ]
 
@@ -33,20 +31,20 @@ class DroppedAttrsWarning(GeoSaveWarning):
 
 
 class DroppedInstantsWarning(GeoSaveWarning):
-    """Trailing instants did not fill a frame and were left out."""
+    """Incomplete or trailing sampling positions were left out."""
 
 
-class UncoveredInstantsWarning(GeoSaveWarning):
-    """Instants outside the interval shared by every group name no slot."""
-
-
-class DroppedFramesWarning(GeoSaveWarning):
-    """Frames lacking a scene for some group were not emitted."""
-
-
-class DuplicateInstantsWarning(GeoSaveWarning):
-    """Two items of one collection cover a window at one instant; one is kept."""
+class DroppedRowsWarning(GeoSaveWarning):
+    """Malformed or ambiguous catalog rows were skipped."""
 
 
 class PartialCoverWarning(GeoSaveWarning):
     """Items intersect a window without covering it, so they do not join it."""
+
+
+class TimelessItemWarning(GeoSaveWarning):
+    """An Item's files state no time, so it spans all of time."""
+
+
+class MissingGridWarning(GeoSaveWarning):
+    """An Item cannot define a spatial window because it states no grid."""

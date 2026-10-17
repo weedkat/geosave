@@ -1,29 +1,13 @@
 # STAC package structure
 
-Status: implemented, with these changes from the text below:
-
-- `ACDD` is an `AttrsGroup` with `JOIN = "each"`: its keys are independent
-  facts, so a join keeps or drops each one, and a shared `license` outlives
-  differing titles. `attrs.parse` and `attrs.stamp` take a Dataset as well as
-  a variable, so `gs.acdd` reads the root through them.
-- `create_collection` takes `geosave.geodata.attrs.ACDD`; there is no `gs.ACDD`.
-- Higher levels compose lower ones: `band.py` has only `read`; per-asset attrs
-  are `asset.attrs`, per-Item attrs `item.attrs` (the former `band.item_attrs`).
-- `create_item`/`create_items` pass `storage_options` through `**options` to
-  `open_raster`, which already takes it.
-- `StacTable` keeps reading stored Collections with `parse_collections` over
-  its DuckDB session, so one credential path reaches a remote table.
-- `create_item` is merged into `create_items`, which takes `to_cog` records
-  (grouped into scenes) or asset keys mapped to paths (one Item, `id`
-  required). `translate.item.Scene` is one collection, instant and grid;
-  `translate.item.scenes` groups records into them and `asset.key` names each
-  file's asset. Headers are read with the file closed again at once, so no
-  `ExitStack` holds files open.
-- `SearchClient` is removed; `StacSource` takes `StacClient | StacTable`.
-- `StorageOptions` also includes upath's `FileStorageOptions` and
-  `MemoryStorageOptions`.
-- `stac/search/__init__.py` re-exports nothing: `source` imports
-  `search.query`, and `search.api` imports `source`.
+> Historical proposal. The extension/translation/search structure is implemented,
+> with later API changes: `create_collection(id, description=...)` builds a
+> Collection; singular `create_item` takes paths or `RasterFile` records;
+> `StacClient.open` accepts providers, API endpoints, and table paths. ACDD
+> combines fields separately. `StacTable` retains its DuckDB credential path.
+> The signatures and breaking changes below describe the original proposal,
+> not current APIs. See [STAC](../../guides/stac.md) and the
+> [reference](../../reference/stac.md).
 
 ## Goal
 
@@ -39,7 +23,7 @@ import geosave as gs
 scene = gs.open_raster("s3://bucket/s2.zarr", storage_options={"anon": True})
 forest = gs.stac.create_collection(scene.gs.acdd)            # ACDD -> Collection
 rows = gs.stac.create_items(scene.gs.to_cog("s3://bucket/cogs/{time:%Y%m%d}.tif"), collection=forest)
-rows.gs.to_stac("s3://bucket/stac", collections=[forest])     # remote static catalog
+rows.gs.to_stac_json("s3://bucket/stac", collections=[forest])     # remote static catalog
 rows.gs.to_geoparquet("s3://bucket/stac.parquet", collections=[forest])
 
 table = gs.stac.StacTable("s3://bucket/stac.parquet")
@@ -183,7 +167,7 @@ def item_attrs(item: pystac.Item) -> dict[str, dict[str, Any]]: ...
 
 `load_attrs(items, collection, loaded, *, stac_cfg)` moves here from
 `_bands.py` unchanged in behavior, except that the root attrs come from
-`attrs.stamp(..., collection.read(collection))` instead of a literal dict.
+`attrs.stamp_attrs(..., collection.read(collection))` instead of a literal dict.
 `_bands.py` is deleted.
 
 ## ACDD attrs group
@@ -192,7 +176,7 @@ def item_attrs(item: pystac.Item) -> dict[str, dict[str, Any]]: ...
 class ACDD(AttrsGroup):
     """Describe a whole dataset as ACDD discovery attributes."""
 
-    JOIN: ClassVar[Join] = "drop"
+    # joins by dropping a conflict: REFUSE_CONFLICT stays False
 
     id: str | None = None
     title: str | None = None
@@ -286,7 +270,7 @@ imports them from `translate`.
   `stac.search.query`, `stac.item` -> `stac.create` / `stac.translate.*`,
   `stac._bands` -> `stac.translate`.
 - `stac.cog_files`, `stac.instant` are no longer exported.
-- `to_stac` returns a UPath.
+- `to_stac_json` returns a UPath.
 - Callers to update: `cuts/sample.py`, `cuts/frames.py`, `cuts/stacks.py`,
   `model/spec/stac.py`, `geosave_flows/tasks/labels.py`, `workspace/modules/*`,
   templates' READMEs, `docs/guides/stac.md`, `docs/reference/stac.md`,

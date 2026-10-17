@@ -13,7 +13,7 @@ def _sliced_geographic_scene():
     """Build a raster whose sliced coordinates drift from its geobox's own."""
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.create import raster
+    from geosave.geodata.core.raster.create import raster
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(
@@ -61,7 +61,7 @@ def test_a_presence_mask_refuses_a_truthy_fill() -> None:
 def _flags(values, dtype):
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.create import array
+    from geosave.geodata.core.raster.create import array
 
     pixels = np.asarray(values, dtype=dtype)
     side = pixels.shape[0] * 10
@@ -114,3 +114,49 @@ def test_geographic_polygonization_and_rasterization_round_trip():
     assert restored.dims == dims
     assert restored.gs.geobox == grid
     np.testing.assert_array_equal(restored, pixels)
+
+
+def test_rasterizing_onto_a_dated_anchor_dates_the_result() -> None:
+    import shapely
+
+    from geosave.geodata.core.anchor import GeoAnchor
+
+    anchor = GeoAnchor.from_coordinates(
+        latitude=45,
+        longitude=12,
+        shape=4,
+        resolution=10,
+        crs="EPSG:32633",
+        timespan="2024-07",
+    )
+    left, bottom, right, top = anchor.geobox.boundingbox.bbox
+    plot = gpd.GeoDataFrame(
+        {"label": [1]},
+        geometry=[shapely.box(left, bottom, right, top)],
+        crs=anchor.geobox.crs,
+    )
+
+    burned = plot.gs.rasterize(anchor, column="label", dtype="uint8")
+
+    assert burned.dims == ("y", "x")
+    assert burned.time.values == np.datetime64("2024-07-01")
+
+
+def test_rasterizing_onto_a_timeless_anchor_leaves_the_result_undated() -> None:
+    import shapely
+
+    from geosave.geodata.core.anchor import GeoAnchor
+
+    anchor = GeoAnchor.from_coordinates(
+        latitude=45,
+        longitude=12,
+        shape=4,
+        resolution=10,
+        crs="EPSG:32633",
+    )
+    left, bottom, right, top = anchor.geobox.boundingbox.bbox
+    plot = gpd.GeoDataFrame(
+        geometry=[shapely.box(left, bottom, right, top)], crs=anchor.geobox.crs
+    )
+
+    assert "time" not in plot.gs.rasterize(anchor).coords

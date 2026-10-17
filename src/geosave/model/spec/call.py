@@ -57,6 +57,14 @@ class Ref:
     def resolve(self, inputs: Mapping[str, object]) -> object:
         """Retrieve the value, following attributes and keys without calling methods.
 
+        Args:
+            inputs: Runtime roots by name; this reference selects its root
+                and then follows the declared attribute and key steps.
+
+        Returns:
+            The referenced object unchanged. Attribute lookups retain their
+            native behavior, including properties that can compute values.
+
         Raises:
             KeyError: A value or key is absent; the note names this path.
             AttributeError: An attribute is absent; the note names this path.
@@ -74,12 +82,30 @@ class Ref:
         return result
 
     def __repr__(self) -> str:
+        """Show the reference as constructor-like text.
+
+        Returns:
+            `Ref('path')` text containing the stored reference path.
+        """
         return f"Ref({self.path!r})"
 
     def __eq__(self, other: object) -> bool:
+        """Compare references by their stored paths without resolving values.
+
+        Args:
+            other: Reference or other object to compare with this one.
+
+        Returns:
+            True for a `Ref` with the same path; False for other objects.
+        """
         return isinstance(other, Ref) and self.path == other.path
 
     def __hash__(self) -> int:
+        """Hash the stored path for dictionary and set membership.
+
+        Returns:
+            Integer hash of the reference path.
+        """
         return hash(self.path)
 
 
@@ -89,7 +115,14 @@ type CallValue = (
 
 
 class CallSpec(SpecModel):
-    """Declare one inert call and its literal or referenced keyword arguments."""
+    """Declare one inert call and its literal or referenced keyword arguments.
+
+    Attributes:
+        call: Importable module-level callable path, or a reference to a
+            callable on the supplied runtime values.
+        kwargs: Named arguments containing finite YAML literals, references,
+            or nested lists/mappings of those values. Empty by default.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -99,7 +132,17 @@ class CallSpec(SpecModel):
     @field_validator("call")
     @classmethod
     def validate_call(cls, value: str | Ref) -> str | Ref:
-        """Require a reference or an importable module-level call path."""
+        """Require a reference or a module-level call path without importing it.
+
+        Args:
+            value: Callable path or runtime reference to validate.
+
+        Returns:
+            The original path or reference.
+
+        Raises:
+            ValueError: A string is not a dotted callable path.
+        """
         if isinstance(value, Ref):
             return value
         if not _CALL_PATH.fullmatch(value):
@@ -111,7 +154,18 @@ class CallSpec(SpecModel):
     @field_validator("kwargs", mode="before")
     @classmethod
     def validate_kwargs(cls, value: object) -> object:
-        """Accept finite YAML literals and inert references without cycles."""
+        """Accept finite YAML literals and inert references without cycles.
+
+        Args:
+            value: Keyword-argument structure to validate recursively.
+
+        Returns:
+            Validated literals/references, copying nested lists and mappings.
+
+        Raises:
+            ValueError: A value is unsupported or non-finite, a mapping key
+                is not text, or containers contain a cycle.
+        """
         return cls._validate_value(value)
 
     @classmethod
@@ -167,7 +221,18 @@ class CallSpec(SpecModel):
         return frozenset(reference.root for reference in self.references)
 
     def select_inputs(self, state: Mapping[str, object]) -> dict[str, object]:
-        """Select referenced roots, raising KeyError for missing inputs."""
+        """Select only the runtime roots this call references.
+
+        Args:
+            state: Available runtime values by root name.
+
+        Returns:
+            A new mapping of referenced names to their existing objects,
+            without resolving nested attributes or reading pixels.
+
+        Raises:
+            KeyError: A referenced root is absent from `state`.
+        """
         if missing := self.inputs - state.keys():
             raise KeyError(f"Missing call inputs: {sorted(missing)}")
         return {reference.root: state[reference.root] for reference in self.references}
@@ -195,7 +260,19 @@ class CallSpec(SpecModel):
         return target
 
     def invoke(self, inputs: Mapping[str, object], /) -> object:
-        """Resolve and invoke this declaration exactly once."""
+        """Resolve the target and arguments, then invoke this declaration once.
+
+        Args:
+            inputs: Runtime roots used by the callable and argument references.
+
+        Returns:
+            The callable's result unchanged. Its own contract determines
+            whether execution reads pixels, computes, or has side effects.
+
+        Raises:
+            TypeError: The selected target is not callable. Exceptions from
+                resolution or execution propagate with this call's context.
+        """
         try:
             target = self._resolve_target(inputs)
             kwargs = {

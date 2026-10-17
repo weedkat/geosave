@@ -14,9 +14,8 @@ def pseudo_label_loss(
     logits: torch.Tensor,
     pseudo: torch.Tensor,
     confident: torch.Tensor,
-    valid: torch.Tensor,
 ) -> torch.Tensor:
-    """Score logits against confident pseudo-labels, averaged over valid pixels.
+    """Score logits against confident pseudo-labels, averaged over all pixels.
 
     Unconfident pixels count in the average with zero loss, so the weight of
     the unlabeled term grows as the model grows confident.
@@ -25,13 +24,12 @@ def pseudo_label_loss(
         logits: ``(B, classes, y, x)`` logits of a strong view.
         pseudo: ``(B, y, x)`` pseudo-labels.
         confident: ``(B, y, x)`` pixels whose pseudo-label is kept.
-        valid: ``(B, y, x)`` pixels with real inputs.
 
     Returns:
         Scalar loss.
     """
     loss = F.cross_entropy(logits, pseudo, reduction="none")
-    return (loss * confident).sum() / valid.sum().clamp(min=1)
+    return (loss * confident).mean()
 
 
 class Module(supervised.Module):
@@ -61,7 +59,7 @@ class Module(supervised.Module):
             model_chain:
               encoder: {name: dinov3, init_args: {in_channels: 4}}
               decoder: {name: dpt}
-              head: {name: segmentation, init_args: {classes: [background, palm]}}
+              head: {name: segmentation, init_args: {num_classes: 2}}
     """
 
     def __init__(
@@ -106,22 +104,20 @@ class Module(supervised.Module):
         target = batch["labeled"]["target"]
         weak = batch["unlabeled"]["weak"]
         strong = batch["unlabeled"]["strong"]
-        valid = batch["unlabeled"]["valid"]
 
         # Labeled loss.
         logits = self(**batch["labeled"]["inputs"])
-        labeled_loss = self.criterion(logits, target)
+        labeled_loss = self._loss(logits, target)
 
         # Confident weak-view classes become the strong view's labels.
         with torch.no_grad():
             confidence, pseudo = self(**weak).softmax(dim=1).max(dim=1)
-        confident = (confidence >= self.confidence) & valid
-        unlabeled_loss = pseudo_label_loss(self(**strong), pseudo, confident, valid)
+        confident = confidence >= self.confidence
+        unlabeled_loss = pseudo_label_loss(self(**strong), pseudo, confident)
 
         loss = labeled_loss + self.unlabeled_weight * unlabeled_loss
 
         batch_size = target.shape[0]
-        self.train_metrics.update(logits, target)
         self.log(
             "train_loss",
             loss,
@@ -139,12 +135,16 @@ class Module(supervised.Module):
         )
         self.log(
             "train_confident",
-            confident.sum() / valid.sum().clamp(min=1),
+            confident.float().mean(),
             on_step=True,
             on_epoch=True,
             batch_size=batch_size,
         )
-        self.log_dict(
-            self.train_metrics, on_step=False, on_epoch=True, batch_size=batch_size
+        if target.ne(self.ignore_index).any():
+            self.train_metrics.update(logits, target)
+        self._log_metrics(
+            self.train_metrics,
+            target.ne(self.ignore_index).sum(),
+            batch_size=batch_size,
         )
         return loss

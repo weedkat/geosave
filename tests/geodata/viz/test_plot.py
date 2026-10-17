@@ -1,17 +1,17 @@
+import geopandas as gpd
+import holoviews as hv
 import matplotlib
 import numpy as np
 import pytest
 import xarray as xr
+from matplotlib.axes import Axes
 from odc.geo.geobox import GeoBox
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, Polygon
 
 from geosave.geodata.core.anchor import GeoAnchor
-from geosave.geodata.core.create import raster as build_raster
-from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.core.raster.create import raster as build_raster
+from geosave.geodata.core.raster.create import tree as build_tree
 from geosave.geodata.utils.geocode import Place
-
-pytest.importorskip("hvplot", reason="viz extra not installed")
-
-import holoviews as hv  # noqa: E402
 
 matplotlib.use("agg")
 hv.extension("matplotlib")
@@ -70,7 +70,7 @@ def drawn_values(element) -> np.ndarray:
     return element.dimension_values(2)
 
 
-def panel_axes(element) -> list[matplotlib.axes.Axes]:
+def panel_axes(element) -> list[Axes]:
     return [axis for axis in hv.render(element).axes if axis.get_xlabel()]
 
 
@@ -86,27 +86,82 @@ class TestPacking:
         assert packed.gs.plot("landcover") is not None
 
 
+def map_of(drawn) -> hv.RGB:
+    """Return the map under a figure's legend."""
+    return next(x for x in drawn if isinstance(x, hv.RGB))
+
+
 class TestClassMap:
-    def test_draws_classes_on_position(self, labels: xr.Dataset) -> None:
-        assert sorted(set(drawn_values(labels.gs.plot("landcover")))) == [0, 1, 2]
+    def test_composed_maps_share_one_legend_on_the_figure_right(self, labels):
+        drawn = labels.gs.plot("landcover") + labels.gs.plot("landcover")
 
-    def test_colours_follow_class_order(self, labels: xr.Dataset) -> None:
-        style = (
-            labels.gs.plot("landcover").opts.get("style", backend="matplotlib").kwargs
+        figure = hv.render(drawn)
+        figure.canvas.draw()
+
+        assert len(figure.legends) == 1
+        legend = figure.legends[0]
+        assert [text.get_text() for text in legend.get_texts()] == [
+            "water",
+            "trees",
+            "snow",
+        ]
+        bounds = legend.get_window_extent()
+        for axis in figure.axes:
+            assert axis.get_legend() is None
+            assert bounds.x0 > axis.get_window_extent().x1
+
+    def test_dated_maps_share_one_legend(self, labels):
+        dated = labels.expand_dims(
+            time=np.array(["2025-01-01", "2025-02-01"], "datetime64[D]")
         )
-        assert list(style["cmap"].colors) == ["#419bdf", "#397d49", "#b39fe1"]
 
-    def test_names_every_class_on_the_colorbar(self, labels: xr.Dataset) -> None:
-        drawn = labels.gs.plot("landcover")
-        assert drawn.opts.get("plot", backend="matplotlib").kwargs["cbar_ticks"] == [
-            (0, "water"),
-            (1, "trees"),
-            (2, "snow"),
+        figure = hv.render(dated.gs.plot("landcover", cols=2))
+
+        assert len(figure.legends) == 1
+        assert len(figure.legends[0].get_texts()) == 3
+
+    def test_shared_legend_keeps_caller_styling(self, labels):
+        drawn = labels.gs.plot("landcover").opts(
+            legend_opts={"fontsize": 18, "frameon": False}
+        )
+
+        figure = hv.render(drawn)
+
+        assert not figure.legends[0].get_frame_on()
+        assert figure.legends[0].get_texts()[0].get_fontsize() == 18
+
+    def test_same_name_with_different_colour_remains_in_the_legend(self, labels):
+        changed = labels.gs.write_legend(
+            {0: "water", 1: "trees", 8: "snow"},
+            {0: "#0000ff", 1: "#397d49", 8: "#b39fe1"},
+            target="landcover",
+        )
+
+        figure = hv.render(labels.gs.plot("landcover") + changed.gs.plot("landcover"))
+
+        assert len(figure.legends) == 1
+        assert [text.get_text() for text in figure.legends[0].get_texts()] == [
+            "water",
+            "trees",
+            "snow",
+            "water",
         ]
 
-    def test_titles_no_colorbar_its_ticks_already_name(self, labels: xr.Dataset) -> None:
+    def test_draws_each_class_in_its_colour(self, labels: xr.Dataset) -> None:
+        red = map_of(labels.gs.plot("landcover")).dimension_values("R", flat=False)
+
+        # The fixture's top-left pixel is water, #419bdf.
+        assert red[0, 0] == pytest.approx(0x41 / 255)
+
+    def test_names_every_class_in_a_legend(self, labels: xr.Dataset) -> None:
         drawn = labels.gs.plot("landcover")
-        assert drawn.opts.get("plot", backend="matplotlib").kwargs["clabel"] == ""
+
+        assert [x.label for x in drawn if isinstance(x, hv.Points)] == [
+            "water",
+            "trees",
+            "snow",
+        ]
+        hv.render(drawn)
 
     def test_accepts_an_rgb_tuple_palette(self, labels: xr.Dataset) -> None:
         recoloured = labels.gs.write_legend(
@@ -114,12 +169,10 @@ class TestClassMap:
             {0: (65, 155, 223), 1: (57, 125, 73), 8: (179, 159, 225)},
             target="landcover",
         )
-        style = (
-            recoloured.gs.plot("landcover")
-            .opts.get("style", backend="matplotlib")
-            .kwargs
-        )
-        assert style["cmap"].colors[0] == "#419bdf"
+
+        red = map_of(recoloured.gs.plot("landcover")).dimension_values("R", flat=False)
+
+        assert red[0, 0] == pytest.approx(0x41 / 255)
 
     def test_absent_pixels_draw_as_no_class(self) -> None:
         codes = np.array(
@@ -129,9 +182,16 @@ class TestClassMap:
         raster = raster.gs.write_legend(
             {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target="cover"
         )
-        drawn = drawn_values(raster.gs.plot("cover"))
-        assert np.isnan(drawn).any()
-        assert set(np.unique(drawn[~np.isnan(drawn)])) == {0.0, 1.0}
+
+        drawn = map_of(raster.gs.plot("cover"))
+
+        assert np.isnan(drawn.dimension_values("R")).any()
+
+    def test_refuses_a_colormap_or_limits(self, labels: xr.Dataset) -> None:
+        with pytest.raises(ValueError, match="drop cmap"):
+            labels.gs.plot("landcover", cmap="gray")
+        with pytest.raises(ValueError, match="clim cannot apply"):
+            labels.gs.plot("landcover", clim=(0, 1))
 
     def test_uncoloured_class_refuses(self) -> None:
         raster = build_raster(
@@ -159,11 +219,13 @@ class TestConstraints:
         self, rgb: xr.Dataset
     ) -> None:
         # Reflectance sits well inside [0, 1]; drawn as-is it would be near black.
-        reflectance = (rgb.astype("float32") / 16 * 0.3).gs.write_rgb("B04", "B03", "B02")
+        reflectance = (rgb.astype("float32") / 16 * 0.3).gs.write_rgb(
+            "B04", "B03", "B02"
+        )
 
         drawn = reflectance.gs.plot()
 
-        assert float(drawn.data["R"].max()) == 1.0
+        assert float(np.nanmax(drawn.dimension_values("R"))) == 1.0
 
 
 class TestOutput:
@@ -211,10 +273,10 @@ class TestOutput:
         assert axis.get_title() == "Optical"
         assert axis.get_xlabel().startswith("Test City")
 
-    def test_stack_group_names_join_the_caption(
+    def test_tree_group_names_join_the_caption(
         self, optical: xr.Dataset, labels: xr.Dataset
     ) -> None:
-        scene = build_stack({"optical": optical, "labels": labels})
+        scene = build_tree({"optical": optical, "labels": labels})
 
         axes = panel_axes(scene.gs.plot(cols=2))
 
@@ -225,43 +287,62 @@ class TestOutput:
         }
 
 
-class TestExplore:
-    def test_draws_over_web_map_tiles_with_bokeh(self, labels: xr.Dataset) -> None:
-        pane = labels.gs.explore()
+class TestVariables:
+    def test_rgb_draws_a_composite(self, rgb: xr.Dataset) -> None:
+        assert isinstance(rgb.gs.plot(rgb=("B04", "B03", "B02")), hv.RGB)
 
-        assert pane.backend == "bokeh"
-        assert [type(layer).__name__ for layer in pane.object] == ["Tiles", "Image"]
+    def test_names_a_band_or_a_composite_not_both(self, rgb: xr.Dataset) -> None:
+        with pytest.raises(ValueError, match="not both"):
+            rgb.gs.plot("B04", rgb=("B04", "B03", "B02"))
 
-    def test_draws_a_copy_on_the_web_map_grid(self, labels: xr.Dataset) -> None:
-        image = labels.gs.explore().object.get(1)
+    def test_a_composite_refuses_a_colormap(self, rgb: xr.Dataset) -> None:
+        with pytest.raises(ValueError, match="drop cmap"):
+            rgb.gs.plot(cmap="gray")
 
-        assert labels.gs.crs_name == "EPSG:32749"
-        assert image.range("x")[0] > 1e7  # Web Mercator metres, not UTM
+    def test_several_variables_need_a_name_or_a_recorded_composite(
+        self, rgb: xr.Dataset
+    ) -> None:
+        # Dropping the attrs drops the colour interpretation write_rgb recorded.
+        with pytest.raises(ValueError, match="records no composite"):
+            rgb.drop_attrs().gs.plot()
 
-    def test_names_classes_on_the_colorbar(self, labels: xr.Dataset) -> None:
-        image = labels.gs.explore().object.get(1)
+    def test_rgb_names_the_composite(self, rgb: xr.Dataset) -> None:
+        assert rgb.gs.rgb == ("B04", "B03", "B02")
+        assert rgb[["B04"]].gs.rgb is None
 
-        ticks = hv.Store.lookup_options("bokeh", image, "plot").kwargs["cticks"]
-        assert [name for _, name in ticks] == ["water", "trees", "snow"]
 
-    def test_draws_a_band(self, labels: xr.Dataset) -> None:
-        assert labels["landcover"].gs.explore().backend == "bokeh"
+RING = [(0, 0), (10, 0), (10, 10), (0, 10)]
+HOLE = [(2, 2), (4, 2), (4, 4), (2, 4)]
 
-    def test_draws_the_one_date_of_a_dated_raster(self, rgb: xr.Dataset) -> None:
-        dated = rgb.expand_dims(time=[np.datetime64("2024-03-05")])
 
-        assert type(dated.gs.explore().object.get(1)).__name__ == "RGB"
+def frame(*shapes, crs="EPSG:32749") -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(geometry=list(shapes), crs=crs)
 
-    def test_refuses_several_dates(self, rgb: xr.Dataset) -> None:
-        dated = rgb.expand_dims(
-            time=[np.datetime64("2024-03-05"), np.datetime64("2024-03-06")]
-        )
 
-        with pytest.raises(ValueError, match="isel"):
-            dated.gs.explore()
+class TestOutline:
+    def test_draws_polygons_with_holes(self) -> None:
+        drawn = frame(Polygon(RING, [HOLE])).gs.plot()
 
-    def test_leaves_static_plots_on_matplotlib(self, labels: xr.Dataset) -> None:
-        labels.gs.explore()
+        (polygons,) = drawn
+        assert isinstance(polygons, hv.Polygons)
+        assert [len(holes) for holes in polygons.holes()] == [1]
+        assert polygons.range("x") == (0, 10)
+        hv.render(drawn)
 
-        assert hv.Store.current_backend == "matplotlib"
-        assert panel_axes(labels.gs.plot())
+    def test_draws_lines_and_points(self) -> None:
+        (lines,) = frame(LineString(RING)).gs.plot()
+        (points,) = frame(MultiPoint([(1, 1), (2, 2)])).gs.plot()
+
+        assert isinstance(lines, hv.Path) and isinstance(points, hv.Points)
+
+    def test_overlays_mixed_geometry(self) -> None:
+        drawn = frame(Polygon(RING), Point(20, 20)).gs.plot()
+
+        assert [type(layer).__name__ for layer in drawn] == ["Polygons", "Points"]
+        hv.render(drawn)
+
+    def test_refuses_nothing_to_draw_and_collections(self) -> None:
+        with pytest.raises(ValueError, match="no geometry"):
+            frame().gs.plot()
+        with pytest.raises(ValueError, match="explode"):
+            frame(GeometryCollection([Point(0, 0)])).gs.plot()

@@ -1,10 +1,18 @@
 # The File Describes Itself — Implementation Plan
 
+> Historical implementation plan, superseded in part. Current `to_cog` returns
+> `tuple[RasterFile, ...]`, each carrying a path and pixel-free header, rather
+> than the plain paths proposed below. `create_item` accepts those records or
+> paths. Remote GDAL reads translate S3 options into GDAL configuration rather
+> than using the proposed fsspec opener. See [I/O](../../reference/io.md) and
+> [STAC](../../guides/stac.md) for the implemented contracts.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A saved COG states everything an Item needs, so `to_cog` returns plain paths, `stac.create_item` takes paths, and every GDAL read honours `storage_options`.
 
-**Architecture:** `to_cog` writes a stack layer's name into each file as its ACDD `id` (bands and time are already tags) and returns `tuple[UPath, ...]`. STAC Items are built from each file's header, the lazy Dataset `open_raster` returns, so any future format with a reader can describe itself the same way; `CogFile` stays only inside `cogs.read` for reading a catalog's files under their asset-key names, and leaves the public API. The GDAL reader opens a remote path through its UPath's fsspec filesystem (`rasterio.open(..., opener=fs)`) when storage options are given, so lazy chunk reads carry the credentials.
+**Architecture:** `to_cog` writes a stack layer's name into each file as its ACDD `id` (bands and time are already tags) and returns `tuple[UPath, ...]`. STAC Items are built from each file's header, the lazy Dataset `open_raster` returns, so any future format with a reader can describe itself the same way; `CogFile` stays only inside `cogs.open_raster` for reading a catalog's files under their asset-key names, and leaves the public API. The GDAL reader opens a remote path through its UPath's fsspec filesystem (`rasterio.open(..., opener=fs)`) when storage options are given, so lazy chunk reads carry the credentials.
 
 **Tech Stack:** xarray, rioxarray 0.22, rasterio 1.5 (`opener=`), universal-pathlib, pystac, pytest.
 
@@ -38,7 +46,7 @@
 
 **Interfaces:**
 
-- Produces: `gdal.read(source: Location, *, chunks=None, mask_and_scale=False, storage_options: StorageOptions | None = None, **open_options) -> Dataset`, now opening a remote source with options through `opener=<its fsspec filesystem>`.
+- Produces: `gdal.open_raster(source: Location, *, chunks=None, mask_and_scale=False, storage_options: StorageOptions | None = None, **open_options) -> Dataset`, now opening a remote source with options through `opener=<its fsspec filesystem>`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -141,12 +149,12 @@ git commit -m "feat(io): read a remote GeoTIFF through the filesystem its option
 **Files:**
 
 - Modify: `src/geosave/geodata/io/raster/cogs.py` (`layout`, `write`, `write_files`)
-- Modify: `src/geosave/geodata/core/raster.py:662-733`, `core/array.py:264-300`, `core/stack.py:507-593` (return type and docstrings of `to_cog`)
+- Modify: `src/geosave/geodata/core/raster.py:662-733`, `core/array.py:264-300`, `core/datatree.py:507-593` (return type and docstrings of `to_cog`)
 - Test: `tests/geodata/io/raster/test_cogs.py`
 
 **Interfaces:**
 
-- Consumes: `gdal.read(..., storage_options=...)` from Task 1.
+- Consumes: `gdal.open_raster(..., storage_options=...)` from Task 1.
 - Produces:
   - `cogs.write(...) -> tuple[UPath, ...]`, `cogs.write_files(...) -> tuple[UPath, ...]`; each UPath carries `storage_options`.
   - `ds.gs.to_cog(...)`, `da.gs.to_cog(...)`, `tree.gs.to_cog(...)` return `tuple[UPath, ...]`.
@@ -168,7 +176,7 @@ def test_a_stack_layer_states_its_name_as_the_files_acdd_id(scene, label, tmp_pa
     import geosave as gs
 
     titled = label.gs.write_acdd(gs.attrs.ACDD(id="old", title="Classes"))
-    paths = gs.stack({"optical": scene, "label": titled}).gs.to_cog(
+    paths = gs.tree({"optical": scene, "label": titled}).gs.to_cog(
         f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif"
     )
 
@@ -251,15 +259,15 @@ git commit -m "feat(io): to_cog returns paths; each COG states its layer as ACDD
 **Files:**
 
 - Modify: `src/geosave/geodata/io/raster/cogs.py` (`read` takes paths beside its internal records)
-- Modify: `src/geosave/geodata/io/readers.py:38-145` (`open_raster`, `open_stack`)
+- Modify: `src/geosave/geodata/io/openers.py:38-145` (`open_raster`, `open_tree`)
 - Test: `tests/geodata/io/test_readers.py`, `tests/geodata/core/test_stack.py`
 
 **Interfaces:**
 
 - Consumes: Task 2's paths.
 - Produces:
-  - `cogs.read(files: Sequence[Location | CogFile], *, geobox=None, resampling="nearest", **options) -> Dataset`. A path is read as itself: its own variable names, its own date. A `CogFile` (internal, built by `stac.translate.item.files` for `cuts`) renames bands to asset keys as today.
-  - `open_raster(source: Location | Sequence[Location], **options)` and `open_stack(source: Location | Mapping[str, Location] | Sequence[Location], **options)`; `open_stack` groups paths by the ACDD `id` each file states.
+  - `cogs.open_raster(files: Sequence[Location | CogFile], *, geobox=None, resampling="nearest", **options) -> Dataset`. A path is read as itself: its own variable names, its own date. A `CogFile` (internal, built by `stac.translate.item.files` for `cuts`) renames bands to asset keys as today.
+  - `open_raster(source: Location | Sequence[Location], **options)` and `open_tree(source: Location | Mapping[str, Location] | Sequence[Location], **options)`; `open_tree` groups paths by the ACDD `id` each file states.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -273,19 +281,19 @@ def test_open_raster_reads_back_what_to_cog_wrote(scene, tmp_path) -> None:
     np.testing.assert_array_equal(restored.red.values, scene.red.values)
 
 
-def test_open_stack_groups_files_by_the_layer_each_states(scene, label, tmp_path):
+def test_open_tree_groups_files_by_the_layer_each_states(scene, label, tmp_path):
     paths = stack({"optical": scene, "label": label}).gs.to_cog(
         f"{tmp_path}/{{collection}}_{{time:%Y%m%d}}.tif"
     )
 
-    assert open_stack(paths).gs.groups == ("optical", "label")
+    assert open_tree(paths).gs.groups == ("optical", "label")
 
 
-def test_open_stack_refuses_files_stating_no_layer(scene, tmp_path) -> None:
+def test_open_tree_refuses_files_stating_no_layer(scene, tmp_path) -> None:
     paths = scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
 
     with pytest.raises(ValueError, match="name no layer"):
-        open_stack(paths)
+        open_tree(paths)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -295,7 +303,7 @@ Expected: FAIL with `TypeError` (the sequence holds no `CogFile`).
 
 - [ ] **Step 3: Implement**
 
-In `cogs.read`, open each entry once and take its instant from what it is:
+In `cogs.open_raster`, open each entry once and take its instant from what it is:
 
 ```python
     instants: dict[pd.Timestamp | None, list[xr.Dataset]] = {}
@@ -319,10 +327,10 @@ and place, merge and concatenate the opened rasters as the loop below already do
 
 ```python
     if not isinstance(source, (str, PathLike, UPath)):
-        return cogs.read(list(source), **options)
+        return cogs.open_raster(list(source), **options)
 ```
 
-`open_stack`, sequence branch:
+`open_tree`, sequence branch:
 
 ```python
     if not isinstance(source, (str, PathLike, UPath, Mapping)):
@@ -336,7 +344,7 @@ and place, merge and concatenate the opened rasters as the loop below already do
                     f"{path} and its siblings name no layer; open_raster reads a lone raster"
                 )
             layers.setdefault(acdd.id, []).append(path)
-        return stack({name: cogs.read(paths, **options) for name, paths in layers.items()})
+        return stack({name: cogs.open_raster(paths, **options) for name, paths in layers.items()})
 ```
 
 Update both docstrings: "the paths a `to_cog` returned".
@@ -349,8 +357,8 @@ Expected: pass, except stac callers handled in Task 4.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/geosave/geodata/io/raster/cogs.py src/geosave/geodata/io/readers.py tests/geodata/io/test_readers.py tests/geodata/core/test_stack.py
-git commit -m "feat(io): open_raster and open_stack read the paths to_cog returns"
+git add src/geosave/geodata/io/raster/cogs.py src/geosave/geodata/io/openers.py tests/geodata/io/test_readers.py tests/geodata/core/test_stack.py
+git commit -m "feat(io): open_raster and open_tree read the paths to_cog returns"
 ```
 
 ---
@@ -595,7 +603,7 @@ Run:
 ```bash
 … pytest -q
 uv run ruff check <changed files>
-uv run python scripts/check_docstrings.py src/geosave/geodata/io/raster/cogs.py src/geosave/geodata/io/raster/gdal.py src/geosave/geodata/io/readers.py src/geosave/geodata/stac/create.py
+uv run python scripts/check_docstrings.py src/geosave/geodata/io/raster/cogs.py src/geosave/geodata/io/raster/gdal.py src/geosave/geodata/io/openers.py src/geosave/geodata/stac/create.py
 grep -rn "create_items\|from geosave.geodata.io import CogFile" src tests docs examples
 ```
 

@@ -1,9 +1,18 @@
 # Train a segmentation model
 
+For real satellite files, prediction maps, and GeoTIFF export, start with the
+[notebook learning path](../examples.md). Those notebooks define ordinary
+Lightning training code. This guide shows GeoSave's supervised
+Module/DataModule pair and the sample dictionaries it consumes.
+
 Train the library's supervised segmentation task on small, generated images.
 This example runs on CPU with no data downloads or pretrained weights. Each
 pixel has two input bands and a label: class `1` where the second band exceeds
 the first, class `0` everywhere else.
+
+```bash
+pip install 'geosave[ml]'
+```
 
 ## Describe the inputs
 
@@ -36,10 +45,9 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from geosave.ml.tasks.segmentation.supervised import DataModule, Module, Sample
-from geosave.model.registry import register_model
 
 
-class Chips(Dataset):
+class Chips(Dataset[Sample]):
     def __init__(self, size, start=0):
         self.size = size
         self.start = start
@@ -50,37 +58,32 @@ class Chips(Dataset):
     def __getitem__(self, index) -> Sample:
         generator = torch.Generator().manual_seed(self.start + index)
         image = torch.rand(2, 16, 16, generator=generator)
-        valid = torch.isfinite(image).all(dim=0)
         target = (image[1] > image[0]).long()
-        target[~valid] = 255
-        return {"inputs": {"image": image}, "target": target, "valid": valid}
+        return {"inputs": {"image": image}, "target": target}
 ```
 
 `Sample` is a dictionary type. `inputs` contains the named model tensors;
-`target` holds the class codes; `valid` is a boolean mask of pixels with usable
-inputs. A sample has no batch dimension. The DataLoader adds one when it
+`target` holds the class codes. The Dataset supplies inputs suitable for the
+model. A sample has no batch dimension. The DataLoader adds one when it
 combines samples:
 
 | Tensor | One sample | Batch of four |
 | --- | --- | --- |
 | `inputs["image"]` | `(2, 16, 16)` | `(4, 2, 16, 16)` |
 | `target` | `(16, 16)` | `(4, 16, 16)` |
-| `valid` | `(16, 16)` | `(4, 16, 16)` |
 
-Use integer class codes from `0` to `num_classes - 1`, with `torch.int64`
-targets. Set unknown labels to `ignore_index`, here `255`. In **training**, the
-Module ignores that label value; it does not apply `valid` to the target. Your
-Dataset must also set labels to `255` wherever inputs are unusable. In
-**validation and testing**, the Module additionally excludes pixels where
-`valid` is false. Keep the Dataset, DataModule, Module, and loss aligned on the
-same ignore value.
+Use `torch.int64` class codes from `0` to `num_classes - 1`. Set unknown labels
+to `ignore_index`, here `255`, which loss and metrics exclude in every split.
+Keep the Dataset, DataModule, Module and criterion aligned on that value.
+`SampleDataset` describes the required `__getitem__` output; your source can
+remain an ordinary torch Dataset. Input availability and acceptable values
+belong to the source/model contract, with no task-level input-validity field.
 
 ## Add a small model and fit
 
 Append to `train.py`:
 
 ```python
-@register_model("model", "tiny_segmentation")
 class TinySegmentation(nn.Module):
     def __init__(self, in_channels=2, num_classes=2):
         super().__init__()
@@ -91,33 +94,34 @@ class TinySegmentation(nn.Module):
         return self.classifier(image)
 
 
-seed_everything(7, workers=True)
-data = DataModule(
-    spec="model_spec.yaml",
-    train=Chips(16),
-    val=Chips(8, start=100),
-    batch_size=4,
-    num_workers=0,
-    ignore_index=255,
-)
-module = Module(
-    model_chain={"model": {"name": "tiny_segmentation"}},
-    ignore_index=255,
-    metrics=["iou.macro", "f1.macro"],
-)
-trainer = Trainer(
-    accelerator="cpu",
-    devices=1,
-    max_epochs=1,
-    limit_train_batches=2,
-    limit_val_batches=1,
-    logger=False,
-    enable_checkpointing=False,
-    enable_progress_bar=False,
-    enable_model_summary=False,
-)
-trainer.fit(module, datamodule=data)
-trainer.validate(module, datamodule=data)
+if __name__ == "__main__":
+    seed_everything(7, workers=True)
+    data = DataModule(
+        spec="model_spec.yaml",
+        train=Chips(16),
+        val=Chips(8, start=100),
+        batch_size=4,
+        num_workers=0,
+        ignore_index=255,
+    )
+    module = Module(
+        model_chain={"model": {"class_path": "train.TinySegmentation"}},
+        ignore_index=255,
+        metrics=["iou.macro", "f1.macro"],
+    )
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        limit_train_batches=2,
+        limit_val_batches=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.fit(module, datamodule=data)
+    trainer.validate(module, datamodule=data)
 ```
 
 Run it from the directory holding both files:
@@ -145,7 +149,9 @@ and train longer when you move to a real task.
 
 The model is ordinary PyTorch. Its named input `image` matches the Dataset,
 and its `num_classes` tells the Module how many class scores it produces.
-The registered name lets the Module construct it from `model_chain`.
+`class_path` names its module and class, `train.TinySegmentation`, so the
+Module imports it to construct the model, in this run and whenever a checkpoint
+loads.
 A single model can serve as the whole chain; an encoder, decoder, and head
 become useful when you need to reuse or swap stages. See
 [Model composition](models.md).
@@ -155,6 +161,12 @@ device. The Module owns loss, optimizer, and metrics; it defaults to cross
 entropy and AdamW with learning rate `0.001`. Lightning's `Trainer` runs the
 training and validation loops. Validation accumulates metrics over the chip
 batches; it does not reconstruct a full scene before scoring it.
+
+Lightning constructs the chain through the Module's `configure_model` hook
+before fitting. If you construct a Module and call it outside a Trainer before
+that hook has run, call `module.configure_model()` first. The DataModule defaults
+to batch size `8` and `4` worker processes; this example chooses `4` and `0` for
+a small local CPU run.
 
 ## Inspect predictions
 
@@ -188,6 +200,38 @@ that unpacks `Sample`. Use the named-input call above for model development.
 To use `Trainer.predict`, supply a prediction loader and a `predict_step` that
 accepts its batches and applies the required input preparation.
 
+## Save a checkpoint
+
+With the fitted Trainer and Module from above:
+
+```python
+trainer.save_checkpoint("last.ckpt")
+restored = Module.load_from_checkpoint("last.ckpt", map_location="cpu").eval()
+with torch.inference_mode():
+    restored_logits = restored(**batch["inputs"])
+restored_logits.shape
+```
+
+```text
+torch.Size([4, 2, 16, 16])
+```
+
+This explicit save works even though automatic checkpointing was disabled in
+the short example. Loading restores the task's model and hyperparameters; in
+a new process, the Module imports `train` to rebuild `TinySegmentation`, so
+run from the folder holding `train.py`. The main guard keeps that import from
+starting another fit.
+Resume optimization by passing `ckpt_path="last.ckpt"` to `Trainer.fit` with
+a larger `max_epochs`. Loading a Module alone does not resume the Trainer's
+optimizer and scheduler state.
+
+For reuse through Transformers, construct each stage with a registered `name`
+as shown in [Model composition](models.md), then save its chain and input spec
+as a [model release](release.md). This example uses `class_path`, which native
+releases reject; keep its Lightning checkpoint for reuse. A release preserves
+the chain's computation and weights, while a checkpoint also preserves the task
+and training state.
+
 ## Connect real data and configure runs
 
 Replace `Chips` with a Dataset for your source while retaining its sample
@@ -197,10 +241,19 @@ band order, target codes, and nodata handling explicitly. The
 chips and read their rasters; [the raster basics](../basics/rasters.md) covers
 native xarray objects and conversion to tensors.
 
+Notebook 0 supplies a real-file Dataset, notebook 2 acquires imagery and builds
+a catalog, and notebook 3 prepares features and exports a prediction map. Follow the [examples guide](../examples.md) to run
+them. Notebooks 0 and 1 return image/label tuples for their own LightningModules;
+notebook 3 supplies `inputs` and `target` to the library task pair.
+
 Use [a workspace](workspaces.md) when you want an editable project and YAML
 run configuration. The segmentation and regression starters provide
 configurations for library task pairs; you still supply the Dataset classes.
 They select larger encoders that may download pretrained weights.
+
+To replace the tiny classifier with a published encoder, decoder, and head,
+follow [Build from pretrained weights](pretrained.md). That guide shows matching
+band/context inputs, different learning rates for stages, and encoder freezing.
 
 Continue with [training contracts](../concepts/training.md) for augmentation,
 other tasks, semi-supervised methods, and confidence calibration. See

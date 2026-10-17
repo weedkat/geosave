@@ -1,13 +1,13 @@
 """What an attr group is: a few attr keys that mean one value together.
 
-Each group is a pydantic model over its keys; `attrs.parse` reads one off a
-band and `attrs.stamp` writes it.
+Each group is a pydantic model over its keys; `from_attrs` reads one off an
+object's attrs and `attrs.stamp_attrs` writes it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self
 
 import numpy as np
 import orjson
@@ -20,13 +20,19 @@ from pydantic import (
 from xarray.core.utils import equivalent
 
 if TYPE_CHECKING:
-    import xarray as xr
-
-type Join = Literal["agree", "drop", "each"]
+    pass
 
 
 def decode(value: object) -> object:
-    """Read GDAL's text spelling and NumPy scalars as the native values they spell."""
+    """Read GDAL text and NumPy scalars as native Python values.
+
+    Args:
+        value: Attribute value, optionally JSON text or a NumPy scalar.
+
+    Returns:
+        Parsed JSON value, a NumPy scalar's Python value, or the original
+        value when neither conversion applies. Non-JSON strings stay strings.
+    """
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, str):
@@ -44,22 +50,22 @@ type Decoded[T] = Annotated[T, BeforeValidator(decode)]
 class AttrsGroup(BaseModel):
     """A set of attr keys read and written as one validated value.
 
-    A subclass is joined by `combine` as soon as it is defined. Its keys are
-    its fields' names, aliases, or alias choices.
+    Every subclass joins its parsed values through `combine_values`. Its keys
+    are its fields' names, aliases, or alias choices.
 
     Attributes:
         KEYS: Every key the group reads; stamping replaces all of them.
-        JOIN: What a join does when objects state different values:
-            `"agree"` refuses it, `"drop"` leaves the group out, `"each"`
-            joins every key on its own, as for facts that do not depend on
-            each other.
+        REFUSE_CONFLICT: Whether `combine_attrs` raises when every input
+            states the group but not alike, as pixels with two nodata values
+            mean different things. Otherwise it leaves the group out and warns.
+            `intersect` never refuses.
     """
 
     # Groups are values; the other keys of an attrs mapping are none of theirs.
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     KEYS: ClassVar[tuple[str, ...]] = ()
-    JOIN: ClassVar[Join]
+    REFUSE_CONFLICT: ClassVar[bool] = False
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -73,38 +79,116 @@ class AttrsGroup(BaseModel):
         cls.KEYS = tuple(keys)
 
     @classmethod
-    def stated_in(cls, attrs: Mapping[Any, Any]) -> bool:
-        """Say whether the attrs state any key of the group."""
+    def is_stated_in(cls, attrs: Mapping[Any, Any]) -> bool:
+        """Say whether the attrs state any key of the group.
+
+        Args:
+            attrs: Attribute mapping to inspect, including accepted aliases.
+
+        Returns:
+            True when at least one group key is present, even if its value
+            would fail validation. No values are parsed.
+        """
         return any(key in attrs for key in cls.KEYS)
 
     @classmethod
     def from_attrs(cls, attrs: Mapping[Any, Any]) -> Self | None:
         """Read the group from attrs, None where they state none of its keys.
 
+        Args:
+            attrs: Attribute mapping containing group fields or their aliases.
+                Unrelated keys are ignored.
+
+        Returns:
+            Validated group, or None when no group key is present.
+
         Raises:
             ValueError: The attrs state the group invalidly.
         """
-        return cls.model_validate(dict(attrs)) if cls.stated_in(attrs) else None
+        return cls.model_validate(dict(attrs)) if cls.is_stated_in(attrs) else None
 
-    def held_by(self, band: xr.DataArray) -> Self:
-        """Return the value as `band` stores it; most groups name no pixel value.
+    @classmethod
+    def replace(cls, attrs: Mapping[Any, Any], **fields: Any) -> Self:
+        """Read the group from attrs with some fields changed.
+
+        Args:
+            attrs: Attribute mapping stating the group, or none of it.
+            **fields: Field names mapped to their new values; None clears one.
+
+        Returns:
+            The changed group; one whose fields are all unset writes no attrs.
 
         Raises:
-            ValueError: The band's dtype cannot hold the value.
+            ValueError: The changed group is invalid.
+
+        Examples:
+            >>> attrs.stamp_attrs(band, GDALBand.replace(band.attrs, colorinterp="red"))
         """
-        return self
+        stated = cls.from_attrs(attrs)
+        current = {} if stated is None else stated.model_dump()
+        return cls.model_validate(current | fields)
+
+    @classmethod
+    def intersect_values(cls, values: Sequence[Self | None]) -> Self | None:
+        """Keep the value every object states alike.
+
+        Override it where a group's parts are independent facts.
+
+        Args:
+            values: Each object's value for the group, None where it states none.
+
+        Returns:
+            The shared value, or None where any object states none or they differ.
+        """
+        first = values[0]
+        return first if all(value == first for value in values) else None
+
+    @classmethod
+    def combine_values(cls, values: Sequence[Self | None]) -> Self | None:
+        """Join parsed values, refusing conflicts according to the group's policy.
+
+        Args:
+            values: Each input's group, None where it states none.
+
+        Returns:
+            Shared value, or None when absent or different across inputs.
+
+        Raises:
+            ValueError: `REFUSE_CONFLICT` is set and every input states a different value.
+        """
+        joined = cls.intersect_values(values)
+        if cls.REFUSE_CONFLICT and None not in values and joined is None:
+            stated = sorted({repr(value) for value in values})
+            raise ValueError(
+                f"the inputs joined state {cls.__name__} differently: {stated}; "
+                f"align it before joining them"
+            )
+        return joined
 
     def to_attrs(self) -> dict[str, Any]:
         """Return the attrs this value writes; a field at its default or None writes none.
 
         netCDF refuses a None attr, so an unset field leaves its key out.
+
+        Returns:
+            New mapping using serialization aliases and JSON-compatible
+            values, omitting fields at their defaults or set to None.
         """
         return self.model_dump(
             by_alias=True, mode="json", exclude_defaults=True, exclude_none=True
         )
 
     def __eq__(self, other: object) -> bool:
-        """Compare by the attrs each writes, as xarray compares attrs: NaN equals NaN."""
+        """Compare the attrs each group writes, treating NaN as equal to NaN.
+
+        Args:
+            other: Value to compare with this group.
+
+        Returns:
+            True when both groups have the same concrete type and serialize
+            equivalent attrs; False when those attrs differ. Returns
+            NotImplemented for another type so Python can try its comparison.
+        """
         if type(other) is not type(self):
             return NotImplemented
         mine, theirs = self.to_attrs(), other.to_attrs()

@@ -3,9 +3,23 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import torch
+from torch.utils.data import Dataset
 
 from geosave.ml.tasks.regression import supervised
-from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
+from tests.ml.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
+
+
+class Chips(Dataset[supervised.Sample]):
+    """Source yielding this method's Sample contract."""
+
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int) -> supervised.Sample:
+        return {
+            "inputs": {"image": torch.full((2, 8, 8), float(index))},
+            "target": torch.full((1, 8, 8), float(index)),
+        }
 
 
 def _training(tmp_path, **options: object) -> supervised.DataModule:

@@ -1,5 +1,11 @@
 # Dependency Cleanup and Extras Implementation Plan
 
+> Historical implementation plan. The extras now declared in `pyproject.toml`
+> are documented in [Installation](../../install.md). The dependency list and
+> unchecked steps below record the proposed implementation, including packages
+> subsequently changed; they are not a current install recipe.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `pip install geosave` installs data, STAC, I/O, plotting, `model.spec`

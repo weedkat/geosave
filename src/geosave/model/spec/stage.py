@@ -10,17 +10,44 @@ from .call import CallSpec
 
 
 class StageSpec(RootModel[dict[Name, CallSpec]], Mapping[str, CallSpec]):
-    """Validate and expose an ordered mapping of named calls."""
+    """Validate and expose an ordered mapping of named calls.
+
+    Attributes:
+        root: Output names mapped to call declarations in execution order.
+            Each result is available to later calls under its output name.
+            An empty mapping declares no processing.
+    """
 
     root: dict[Name, CallSpec] = Field(default_factory=dict)
 
     def __getitem__(self, name: str) -> CallSpec:
+        """Look up a call declaration without executing it.
+
+        Args:
+            name: Declared output name used as the mapping key.
+
+        Returns:
+            The stored `CallSpec` for that output.
+
+        Raises:
+            KeyError: The output name is not declared.
+        """
         return self.root[name]
 
     def __iter__(self) -> Any:
+        """Iterate declared output names in execution order.
+
+        Returns:
+            Iterator over mapping keys, without executing their calls.
+        """
         return iter(self.root)
 
     def __len__(self) -> int:
+        """Count declared calls without executing them.
+
+        Returns:
+            Number of output names in the stage mapping.
+        """
         return len(self.root)
 
     @property
@@ -36,7 +63,19 @@ class StageSpec(RootModel[dict[Name, CallSpec]], Mapping[str, CallSpec]):
         return tuple(external)
 
     def validate_inputs(self, names: Collection[str]) -> frozenset[str]:
-        """Validate external and ordered references before execution."""
+        """Validate external and ordered references before execution.
+
+        Args:
+            names: Runtime root names available before the first call.
+
+        Returns:
+            External roots required by the stage, without importing or
+            executing any call.
+
+        Raises:
+            ValueError: A call reads an unavailable external root or a stage
+                result that has not been assigned yet.
+        """
         supplied = set(names)
         declared = set(self.root)
         assigned: set[str] = set()
@@ -57,7 +96,20 @@ class StageSpec(RootModel[dict[Name, CallSpec]], Mapping[str, CallSpec]):
         return frozenset(required)
 
     def run(self, inputs: Mapping[str, Any], /) -> dict[str, Any]:
-        """Execute declarations in order without mutating supplied inputs."""
+        """Execute declarations in order without changing the input mapping.
+
+        Args:
+            inputs: Available runtime roots by name. Their objects are shared
+                with the declared calls, which can mutate them if written to.
+
+        Returns:
+            Only declared outputs, in execution order. Each call determines
+            its result type, laziness, and side effects.
+
+        Raises:
+            ValueError: A required root is missing or a reference points
+                forward to a result not yet assigned.
+        """
         self.validate_inputs(inputs.keys())
         state = dict(inputs)
         results = {}

@@ -5,7 +5,7 @@ import numpy as np
 from prefect import Flow
 import pytest
 
-from geosave.geodata.core.create import raster
+from geosave.geodata.core.raster.create import raster
 from geosave.geodata import io
 from geosave.model.spec import ModelSpec, RasterRequirement, StacRecipe
 from geosave_flows.configs import CoordinateAnchorConfig, RasterAnchorConfig
@@ -52,9 +52,9 @@ def test_ingest_writes_one_sample_folder_from_a_raster_anchor(tmp_path, stac_ser
     assert result == str(output)
     assert requests == [["optical"]]
     assert sorted(path.name for path in output.iterdir()) == ["optical.zarr"]
-    with io.open_stack(output, chunks="auto") as stack:
-        assert stack.gs.groups == ("optical",)
-        assert stack.gs.geobox == anchor.geobox
+    with io.open_tree(output, chunks="auto") as opened:
+        assert opened.gs.groups == ("optical",)
+        assert opened.gs.geobox == anchor.geobox
 
 
 def test_ingest_loads_every_model_raster_recipe(tmp_path, monkeypatch) -> None:

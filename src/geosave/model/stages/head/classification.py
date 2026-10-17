@@ -15,40 +15,35 @@ class ClassificationHead(nn.Module):
     linearly.
 
     Args:
-        classes: Class names. A class's code is its position in the list.
+        num_classes: Number of classes. Class names belong to the labels,
+            not to the model.
         pyramid_channels: Channel width of each pyramid level. Wired from the
             encoder during stage construction.
         dropout: Dropout probability before the projection.
 
     Raises:
-        ValueError: `classes` is empty or names a class twice.
+        ValueError: `num_classes` is below one.
 
     Examples:
-        >>> head = ClassificationHead(classes=["crop", "forest"], pyramid_channels=[768] * 4)
+        >>> head = ClassificationHead(num_classes=2, pyramid_channels=[768] * 4)
         >>> head.num_classes
         2
     """
 
     def __init__(
         self,
-        classes: list[str],
+        num_classes: int,
         pyramid_channels: list[int],
         dropout: float = 0.0,
     ) -> None:
         super().__init__()
-        if not classes:
-            raise ValueError("a classification head needs at least one class")
-        repeated = sorted({name for name in classes if classes.count(name) > 1})
-        if repeated:
-            raise ValueError(f"classes name {repeated} more than once")
-        self.classes = list(classes)
+        if num_classes < 1:
+            raise ValueError(
+                f"a classification head needs at least one class, got {num_classes}"
+            )
+        self.num_classes = num_classes
         self.dropout = nn.Dropout(dropout)
-        self.projection = nn.Linear(pyramid_channels[-1], len(classes))
-
-    @property
-    def num_classes(self) -> int:
-        """Return the number of classes."""
-        return len(self.classes)
+        self.projection = nn.Linear(pyramid_channels[-1], num_classes)
 
     @chain_step(head=True)
     def forward_logits(self, pyramid: list[torch.Tensor]) -> torch.Tensor:

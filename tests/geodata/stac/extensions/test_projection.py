@@ -1,52 +1,49 @@
-"""The Projection module writes a raster's grid."""
+"""A raster's grid as Projection fields, and back."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
-import pystac
 import numpy as np
+import pystac
 import pytest
-import xarray as xr
 from odc.geo.geobox import GeoBox
-from pystac.extensions.projection import ProjectionExtension
 
 from geosave.geodata import raster
 from geosave.geodata.stac.extensions import projection
 
 
-def _asset(href: str = "scene.tif") -> pystac.Asset:
-    item = pystac.Item("scene", None, None, datetime(2025, 1, 1, tzinfo=UTC), {})
-    item.add_asset("image", pystac.Asset(href, roles=["data"]))
-    return item.assets["image"]
+def test_a_grid_is_spelled_as_projection_fields(scene) -> None:
+    stated = projection.from_geobox(scene.gs.geobox)
 
-
-def test_a_grid_is_written_through_the_projection_class(scene) -> None:
-    asset = _asset()
-
-    projection.write(asset, scene)
-
-    grid = ProjectionExtension.ext(asset)
-    assert (grid.code, grid.shape) == ("EPSG:32633", [64, 64])
-    assert grid.transform == [10.0, 0.0, 300000.0, 0.0, -10.0, 5000640.0]
-    assert asset.owner.stac_extensions == [ProjectionExtension.get_schema_uri()]
+    assert stated == {
+        "proj:code": "EPSG:32633",
+        "proj:shape": [64, 64],
+        "proj:transform": [10.0, 0.0, 300000.0, 0.0, -10.0, 5000640.0],
+    }
 
 
 def test_a_grid_without_an_epsg_code_states_its_wkt() -> None:
     crs = "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
     grid = GeoBox.from_bbox((0, 0, 640, 640), crs, resolution=10)
     plain = raster({"height": (("y", "x"), np.zeros((64, 64), "float32"))}, grid)
-    asset = _asset()
 
-    projection.write(asset, plain)
+    stated = projection.from_geobox(plain.gs.geobox)
 
-    stated = ProjectionExtension.ext(asset)
-    assert stated.code is None
-    assert "Sinusoidal" in stated.wkt2
+    assert "proj:code" not in stated
+    assert "Sinusoidal" in stated["proj:wkt2"]
 
 
-def test_a_raster_without_a_grid_refuses() -> None:
-    bare = xr.Dataset({"height": (("y", "x"), np.zeros((2, 2), "float32"))})
-
+def test_a_missing_grid_refuses() -> None:
     with pytest.raises(ValueError, match="no locatable grid"):
-        projection.write(_asset(), bare)
+        projection.from_geobox(None)
+
+
+def test_a_grid_round_trips_through_an_asset(scene) -> None:
+    asset = pystac.Asset(
+        "scene.tif", extra_fields=projection.from_geobox(scene.gs.geobox)
+    )
+
+    assert projection.to_geobox(asset) == scene.gs.geobox
+
+
+def test_an_asset_stating_no_grid_has_none() -> None:
+    assert projection.to_geobox(pystac.Asset("scene.tif")) is None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from geosave.geodata.stac.translate import table as stac_table
+
 from datetime import datetime
 from pathlib import Path
 
@@ -10,19 +12,24 @@ import pytest
 
 from geosave.geodata import stac
 from geosave.geodata.errors import CollectionNotFoundError
-from geosave.geodata.stac import StacQuery, StacTable
+from geosave.geodata.stac import StacClient, StacQuery
+from geosave.geodata.stac.search.table import StacTable
 from geosave.geodata.io.vector import stac_geoparquet as table
 
 
 @pytest.fixture
 def catalog(scene, tmp_path: Path):
     """Write two dated scenes of one Collection as one table."""
-    forest = stac.create_collection("forest", description="Forest samples", license="CC-BY-4.0")
+    forest = stac.create_collection(
+        "forest", description="Forest samples", license="CC-BY-4.0"
+    )
     paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}/{{band}}.tif")
-    first, second = table.to_item(stac.create_item(paths, collection=forest))
+    first, second = stac.create_items(
+        paths, id_format="forest_{start:%Y%m%dT%H%M%S}", collection=forest
+    )
     first.properties["eo:cloud_cover"] = 5.0
     second.properties["eo:cloud_cover"] = 40.0
-    path = table.from_item([first, second]).gs.to_geoparquet(
+    path = stac_table.from_items([first, second]).gs.to_geoparquet(
         tmp_path / "catalog" / "items.parquet", collections=[forest]
     )
     return path, (first, second)
@@ -89,14 +96,16 @@ def test_a_table_states_its_collections(catalog) -> None:
         client.collection("missing")
 
 
-def test_a_table_without_stored_collections_derives_them(scene, tmp_path) -> None:
+def test_a_table_retains_attached_collection_definition(scene, tmp_path) -> None:
     forest = stac.create_collection("forest", description="Forest samples")
     paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}.tif")
-    rows = stac.create_item(paths, collection=forest)
+    rows = stac.create_catalog(
+        stac.create_items(paths, collection=forest), collections=[forest]
+    )
     path = rows.gs.to_geoparquet(tmp_path / "items.parquet")
     client = StacTable(path)
 
-    assert list(table.get_collections(path)) == ["forest"]
+    assert list(table.read_collections(path)) == ["forest"]
     assert client.collections() == {"forest"}
     assert client.collection("forest").id == "forest"
 
@@ -144,7 +153,7 @@ def test_table_client_reads_stored_collections_through_rustac(
         raise AssertionError("table client opened a second filesystem")
 
     # Search and Collection metadata must use the same configured DuckDB session.
-    monkeypatch.setattr(table, "get_collections", refuse)
+    monkeypatch.setattr(table, "read_collections", refuse)
 
     assert StacTable(folder).collection("forest").license == "CC-BY-4.0"
 
@@ -216,7 +225,9 @@ server.serve_forever()
 def test_search_returns_an_item_table(scene, tmp_path) -> None:
     forest = stac.create_collection("forest", description="Forest samples")
     paths = scene.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%dT%H%M%S}}.tif")
-    rows = stac.create_item(paths, collection=forest)
+    rows = stac.create_catalog(
+        stac.create_items(paths, collection=forest), collections=[forest]
+    )
     path = rows.gs.to_geoparquet(tmp_path / "catalog.parquet", collections=[forest])
     client = StacTable(path)
 
@@ -227,3 +238,32 @@ def test_search_returns_an_item_table(scene, tmp_path) -> None:
     assert type(found.gs).__name__ == "GeoCatalog"
     assert none.empty
     assert type(none.gs).__name__ == "GeoCatalog"
+
+
+def test_stac_client_opens_a_parquet_table_like_an_api(catalog) -> None:
+    folder, _ = catalog
+
+    client = StacClient.open(folder)
+
+    assert isinstance(client, StacTable)
+    assert client.collections() == {"forest"}
+    assert not client.search(StacQuery(collections=["forest"])).empty
+    with pytest.raises(ValueError, match="duckdb"):
+        StacClient.open("element84", duckdb=object())  # type: ignore[arg-type]
+
+
+def test_search_results_retain_definitions_for_publication(catalog, tmp_path):
+    from geosave.geodata import open_vector
+
+    path, (first, _) = catalog
+    client = StacTable(path)
+    found = client.search(StacQuery(collections=["forest"], ids=[first.id]))
+
+    assert found.gs.collections["forest"].license == "CC-BY-4.0"
+    saved = found.gs.to_geoparquet(tmp_path / "subset.parquet")
+    restored = open_vector(saved)
+    assert restored.id.tolist() == [first.id]
+    assert restored.gs.collections["forest"].description == "Forest samples"
+
+    found.attrs["stac:collections"]["forest"]["license"] = "other"
+    assert client.collection("forest").license == "CC-BY-4.0"

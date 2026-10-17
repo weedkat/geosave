@@ -10,9 +10,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from geosave.geodata import open_raster, open_stack, stack
+from geosave.geodata import open_raster, open_tree, tree
 
 from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import flat
 
 
 def _refuse(*args, **kwargs):
@@ -32,7 +33,7 @@ def test_the_engine_opens_what_read_raster_opens(tmp_path: Path, write: str) -> 
 
 def test_the_engine_joins_the_files_of_one_raster(tmp_path: Path) -> None:
     source = build_raster(times=2)
-    paths = source.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif")
+    paths = flat(source.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif"))
 
     with xr.open_dataset(list(paths), engine="geosave") as opened:
         assert dict(opened.sizes) == {"time": 2, "y": 2, "x": 2}
@@ -60,17 +61,18 @@ def test_the_engine_drops_named_variables(tmp_path: Path) -> None:
         assert list(opened.data_vars) == ["red"]
 
 
-def test_the_engine_opens_a_stack_as_a_tree(tmp_path: Path) -> None:
-    sample = stack({"optical": build_raster(times=2), "dem": build_raster()})
+def test_the_engine_opens_a_tree_as_a_tree(tmp_path: Path) -> None:
+    sample = tree({"optical": build_raster(times=2), "dem": build_raster()})
     sample.gs.to_zarr(tmp_path / "s0")
 
     with xr.open_datatree(tmp_path / "s0", engine="geosave") as opened:
-        assert opened.identical(open_stack(tmp_path / "s0"))
+        assert opened.identical(open_tree(tmp_path / "s0"))
         assert sorted(opened.children) == ["dem", "optical"]
 
 
 def test_the_engine_claims_no_file_unasked(tmp_path: Path) -> None:
-    path = build_raster().gs.to_netcdf(tmp_path / "scene.nc")
+    (file,) = build_raster().gs.to_netcdf(tmp_path / "scene.nc").written.values()
+    path = file.path
 
     with xr.open_dataset(path) as opened:
         assert "gs" not in opened.encoding.get("engine", "")

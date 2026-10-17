@@ -38,6 +38,18 @@ The `dask.array` shown in the Dataset means the values are described as work to
 do later. The 128 × 128 chunks in this example are blocks Dask can process
 separately; constructing the raster does not generate their pixels.
 
+| Call | Returns | Pixel execution |
+| --- | --- | --- |
+| `gs.open_raster(path, chunks=...)` | Dataset with Dask arrays | Reads headers; builds deferred reads. |
+| `.isel(...)` or `.gs.crop(...)` | Selected raster | Stays lazy for Dask-backed inputs. |
+| `.gs.statistics()` | pandas DataFrame | Computes reductions over selected pixels. |
+| `.compute()` | Computed xarray object | Materializes the selected data in memory. |
+| `.gs.to_zarr(path)` | Destination UPath | Computes and writes output pixels. |
+| `.gs.to_tensor()` | PyTorch tensor | Materializes pixels into a writable tensor. |
+
+Selecting first reduces the logical data required by later operations. File
+headers and small coordinate arrays are read independently of the pixel graph.
+
 ## Select the area you need
 
 ```python
@@ -105,6 +117,11 @@ An xarray mean of the raw integer band would include `0`; it does not interpret
 the GeoSave nodata attr by itself. `mask_and_scale()` makes those pixels NaN,
 which floating-point reductions skip by default.
 
+The statistics are over all selected axes of each variable, including time
+when present. An entirely missing variable raises `ValueError`; it does not
+return a row of invented statistics. The result's `valid_percent` is the
+fraction of selected pixels that are neither nodata nor NaN.
+
 ## Save the prepared subset
 
 ```python
@@ -134,16 +151,17 @@ Data variables:
 prepared.close()
 ```
 
-Writing computes the selected data and stores its chunks. To schedule a Zarr
-write yourself, assign `write = cropped.gs.to_zarr(path, compute=False)`, then
-call `write.compute()`. Creating the delayed write can prepare the destination
-and metadata; it delays the pixel write, not every filesystem action.
+Writing computes the selected data and stores its chunks. To schedule a write
+yourself, assign `pending = cropped.gs.to_zarr(path, compute=False)`, then call
+`file = pending.compute()`. Nothing reaches the destination until then.
+`to_cog` and `to_netcdf` take `compute=False` too, and `dask.compute(items)`
+writes every pending file a call returned in one parallel run.
 
 ## Read one model input at a time
 
 [Catalogs and windows](catalogs-and-cuts.md) show how to describe many source
 files in a table, cut them into model-sized windows, and open one window with
-`row.gs.to_stack()`. Cutting the table reads no pixels. Opening a window builds
+`row.gs.to_xarray()`. Cutting the table reads no pixels. Opening a window builds
 lazy rasters for the selected region.
 
 The logical window may be smaller than the storage chunks or TIFF blocks the

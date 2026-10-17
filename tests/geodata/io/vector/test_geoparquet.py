@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import Point, box
 
-from geosave.geodata import GeoVector, open_vector
+from geosave.geodata import GeoVector, io, open_vector
 
 
 def test_geoparquet_catalog_supports_bbox_and_column_filtering(
@@ -101,38 +101,32 @@ def test_invalid_remote_suffix_creates_nothing() -> None:
     assert not filesystem.exists(target)
 
 
-def test_failed_new_remote_write_uploads_nothing(monkeypatch) -> None:
+def test_nullable_assets_on_an_ordinary_vector_survive_geoparquet(tmp_path):
+    source = GeoVector.from_geometry(box(0, 0, 1, 1), properties={"assets": None})
+    path = source.gs.to_geoparquet(tmp_path / "plain.parquet")
+    restored = io.open_vector(path)
+    assert sorted(restored.columns) == ["assets", "geometry"]
+    assert len(restored) == 1
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["new", "overwrite"])
+def test_failed_remote_write_keeps_the_destination_unchanged(monkeypatch, existing):
     destination = memory_catalog()
     filesystem, target = fsspec.core.url_to_fs(destination)
+    if existing:
+        filesystem.pipe(target, b"existing")
 
     def fail(_self, path: Path, **options: object) -> None:
         Path(path).write_bytes(b"partial")
         raise RuntimeError("encode failed")
 
     monkeypatch.setattr(gpd.GeoDataFrame, "to_parquet", fail)
-
-    with pytest.raises(RuntimeError, match="encode failed"):
-        GeoVector.from_geometry(Point(0, 0)).gs.to_geoparquet(destination)
-
-    assert not filesystem.exists(target)
-
-
-def test_failed_remote_overwrite_does_not_delete_existing_object(
-    monkeypatch,
-) -> None:
-    destination = memory_catalog()
-    filesystem, target = fsspec.core.url_to_fs(destination)
-    filesystem.pipe(target, b"existing")
-
-    def fail(_self, path: Path, **options: object) -> None:
-        Path(path).write_bytes(b"partial")
-        raise RuntimeError("encode failed")
-
-    monkeypatch.setattr(gpd.GeoDataFrame, "to_parquet", fail)
-
     with pytest.raises(RuntimeError, match="encode failed"):
         GeoVector.from_geometry(Point(0, 0)).gs.to_geoparquet(
-            destination, overwrite=True
+            destination, overwrite=existing
         )
 
-    assert filesystem.cat(target) == b"existing"
+    if existing:
+        assert filesystem.cat(target) == b"existing"
+    else:
+        assert not filesystem.exists(target)

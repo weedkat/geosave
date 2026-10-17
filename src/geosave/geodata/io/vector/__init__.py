@@ -1,9 +1,9 @@
-"""Vector formats: GeoJSON, GeoPackage, GeoParquet, stac-geoparquet and STAC JSON."""
+"""Vector formats: GeoJSON, GeoPackage, GeoParquet, sample GeoParquet, stac-geoparquet and STAC JSON."""
 
 from importlib import import_module
 from typing import Any
 
-from . import geojson, geopackage, geoparquet
+from . import geojson, geopackage, geoparquet, sample_geoparquet
 
 # STAC brings its own heavy dependencies, so its formats load on first use.
 _LAZY = ("stac_geoparquet", "stac_json")
@@ -19,4 +19,11 @@ def __dir__() -> list[str]:
     return sorted({*globals(), *_LAZY})
 
 
-__all__ = ["geojson", "geopackage", "geoparquet", "stac_geoparquet", "stac_json"]
+__all__ = [
+    "geojson",
+    "geopackage",
+    "geoparquet",
+    "sample_geoparquet",
+    "stac_geoparquet",
+    "stac_json",
+]

@@ -31,7 +31,7 @@ def _spec(**changes: object) -> ModelSpec:
     )
 
 
-class Chips(Dataset):
+class Chips(Dataset[supervised.Sample]):
     """A dataset returning the segmentation `Sample` contract."""
 
     def __len__(self) -> int:
@@ -41,7 +41,6 @@ class Chips(Dataset):
         return {
             "inputs": {"image": torch.full((2, 8, 8), float(index))},
             "target": torch.full((8, 8), index % 2),
-            "valid": torch.ones(8, 8, dtype=torch.bool),
         }
 
 
@@ -54,13 +53,36 @@ def _data(
     )
 
 
+def test_a_datamodule_takes_a_spec_built_in_python() -> None:
+    spec = _spec()
+
+    data = supervised.DataModule(spec=spec, train=Chips(), val=Chips(), num_workers=0)
+
+    assert data.spec == spec
+
+
+def test_training_accepts_model_ready_inputs_without_validity():
+    data = supervised.DataModule(
+        _spec(), Chips(), Chips(), augmentations=FLIP, num_workers=0
+    )
+    _training(data, True)
+    batch = _batch(times=3)
+
+    result = data.on_after_batch_transfer(batch, 0)
+
+    assert set(result) == {"inputs", "target"}
+    torch.testing.assert_close(
+        result["inputs"]["image"], batch["inputs"]["image"].flip(-1)
+    )
+    torch.testing.assert_close(result["target"], batch["target"].flip(-1))
+
+
 def _batch(times: int = 0) -> supervised.Sample:
     shape = (2, times, 2, 8, 8) if times else (2, 2, 8, 8)
     image = torch.arange(float(np.prod(shape))).reshape(shape)
     return {
         "inputs": {"image": image, "location_coords": torch.ones(2, 2)},
         "target": torch.arange(2 * 8 * 8).reshape(2, 8, 8) % 3,
-        "valid": torch.ones((2, 8, 8), dtype=torch.bool),
     }
 
 
@@ -75,7 +97,7 @@ def test_loaders_collate_samples_into_batches(tmp_path: Path) -> None:
     batch = next(iter(data.val_dataloader()))
 
     assert batch["inputs"]["image"].shape == (4, 2, 8, 8)
-    assert batch["target"].shape == batch["valid"].shape == (4, 8, 8)
+    assert batch["target"].shape == (4, 8, 8)
     assert batch["inputs"]["image"][:, 0, 0, 0].tolist() == [0, 1, 2, 3]
 
 
@@ -157,15 +179,14 @@ def test_transforms_run_in_every_split_after_augmentation(
     torch.testing.assert_close(result, expected / std)
 
 
-def test_pixels_a_raster_lacks_become_zero_after_transforms(tmp_path: Path) -> None:
+def test_input_transforms_preserve_nan_values(tmp_path: Path) -> None:
     data = _training(_data(tmp_path, _spec(transforms=NORMALIZE)), False)
     batch = _batch()
     batch["inputs"]["image"][0, :, :2] = torch.nan
 
     result = data.on_after_batch_transfer(batch, 0)["inputs"]["image"]
 
-    assert not result.isnan().any()
-    assert (result[0, :, :2] == 0).all()
+    assert result[0, :, :2].isnan().all()
 
 
 def test_a_time_axis_survives_augmentation_and_transforms(tmp_path: Path) -> None:
@@ -197,36 +218,39 @@ def test_a_pixel_an_augmentation_invents_is_ignored(tmp_path: Path) -> None:
     assert set(moved.unique().tolist()) == {0, 9}
 
 
-def test_validity_survives_nan_conversion_without_changing_targets(
-    tmp_path: Path,
-) -> None:
+def test_nonfinite_input_values_are_preserved(tmp_path: Path) -> None:
     data = _training(_data(tmp_path), False)
     batch = _batch(times=2)
-    target = batch["target"].clone()
     batch["inputs"]["image"][0, 1, 0, 3, 4] = torch.nan
+    batch["inputs"]["image"][0, 1, 0, 3, 5] = torch.inf
+    target = batch["target"].clone()
 
-    finished = data.on_after_batch_transfer(batch, 0)
+    result = data.on_after_batch_transfer(batch, 0)
 
-    assert finished["inputs"]["image"][0, 1, 0, 3, 4] == 0
-    assert not finished["valid"][0, 3, 4]
-    assert finished["valid"][1].all()
-    torch.testing.assert_close(finished["target"], target)
+    assert result["inputs"]["image"][0, 1, 0, 3, 4].isnan()
+    assert result["inputs"]["image"][0, 1, 0, 3, 5] == torch.inf
+    torch.testing.assert_close(result["target"], target)
 
 
-def test_evaluation_validity_intersects_named_inputs_and_time_axes(
+def test_multiple_pixel_inputs_share_geometry_and_preserve_context(
     tmp_path: Path,
 ) -> None:
     spec = _spec(inputs={"image": Ref("optical"), "dem": Ref("optical")})
-    data = _training(_data(tmp_path, spec), False)
+    crop = [{"name": "CenterCrop", "init_args": {"size": (4, 4)}}]
+    data = _training(_data(tmp_path, spec, augmentations=crop), True)
     batch = _batch(times=2)
-    batch["inputs"]["dem"] = torch.ones((2, 1, 8, 8))
-    batch["inputs"]["image"][0, 1, 1, 3, 4] = torch.nan
-    batch["inputs"]["dem"][1, 0, 4, 5] = torch.inf
+    batch["inputs"]["dem"] = torch.arange(2 * 8 * 8, dtype=torch.float32).reshape(
+        2, 1, 8, 8
+    )
 
-    valid = data.on_after_batch_transfer(batch, 0)["valid"]
+    result = data.on_after_batch_transfer(batch, 0)
 
-    assert not valid[0, 3, 4] and not valid[1, 4, 5]
-    assert valid[0, 4, 5] and valid[1, 3, 4]
+    for name in ("image", "dem"):
+        torch.testing.assert_close(
+            result["inputs"][name], batch["inputs"][name][..., 2:6, 2:6]
+        )
+    torch.testing.assert_close(result["target"], batch["target"][..., 2:6, 2:6])
+    assert result["inputs"]["location_coords"] is batch["inputs"]["location_coords"]
 
 
 def test_lightning_cli_builds_each_split_dataset(tmp_path: Path) -> None:

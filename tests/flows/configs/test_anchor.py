@@ -3,7 +3,7 @@ import json
 import numpy as np
 from pydantic import TypeAdapter
 
-from geosave.geodata.core.create import raster
+from geosave.geodata.core.raster.create import raster
 from geosave.geodata import io
 from geosave_flows.configs import AnchorConfig
 
@@ -57,7 +57,7 @@ def test_raster_anchor_uses_the_file_grid_and_time(tmp_path, anchor):
         {"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
         anchor.geobox,
     ).assign_coords(time=instant)
-    path = io.geotiff.write_cog(label, tmp_path / "label.tif")
+    path = io.geotiff.write_cog(label, tmp_path / "label.tif").path
 
     result = (
         TypeAdapter(AnchorConfig)

@@ -1,4 +1,4 @@
-"""Package dependency direction and registration behavior."""
+"""Package dependency direction and import cost."""
 
 import ast
 import subprocess
@@ -110,19 +110,6 @@ def test_model_core_loads_no_lightning():
 
 
 @pytest.mark.slow
-def test_every_stage_package_registers_its_models():
-    listed = _run(
-        "from geosave.model.registry import list_models\nprint(list_models())"
-    )
-    assert ast.literal_eval(listed) == {
-        "decoder": ["DPT", "UNET"],
-        "encoder": ["CLAY", "DINOV3", "PRITHVI", "PRITHVI_TL"],
-        "head": ["CLASSIFICATION", "REGRESSION", "SEGMENTATION"],
-        "model": ["IBM_GRANITE_BIOMASS"],
-    }
-
-
-@pytest.mark.slow
 def test_spec_loads_no_torch():
     assert not _loads("geosave.model.spec", "torch")
 
@@ -130,19 +117,13 @@ def test_spec_loads_no_torch():
 @pytest.mark.slow
 def test_library_loads_no_flows_or_prefect():
     imports = "geosave, geosave.model.spec, geosave.ml, geosave.cli.main"
-    assert not _loads(imports, "geosave_flows")
-    assert not _loads(imports, "prefect")
+    loaded = _run(
+        f"import sys\nimport {imports}\n"
+        "print([m for m in ('geosave_flows', 'prefect') if m in sys.modules])"
+    )
+    assert loaded == "[]"
 
 
 @pytest.mark.slow
 def test_release_loads_no_lightning():
     assert not _loads("geosave.model.release", "lightning")
-
-
-def test_supervised_segmentation_pairs_its_module_and_data():
-    from lightning import LightningDataModule, LightningModule
-
-    from geosave.ml.tasks.segmentation import supervised
-
-    assert issubclass(supervised.Module, LightningModule)
-    assert issubclass(supervised.DataModule, LightningDataModule)

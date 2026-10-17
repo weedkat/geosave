@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
-from geosave.ml.transforms import DataKey, ImageAugmenter
+from geosave.ml.transforms import DataKey, ImageAugmenter, InputTransform
 from geosave.model.spec import ModelSpec
 
 
@@ -17,24 +17,38 @@ class Sample(TypedDict):
     A collated batch holds the same keys with a leading batch axis.
 
     Attributes:
-        inputs: Model inputs by name; pixel inputs end in ``(band, y, x)``.
+        inputs: Named model tensors without a batch axis. Pixel inputs end in
+            `(band, y, x)`; temporal axes and separate context tensors follow
+            the selected model's contract.
         target: ``(variable, y, x)`` float32 physical values, NaN where unknown.
-        valid: ``(y, x)`` pixels whose inputs are finite in every band and instant.
     """
 
     inputs: dict[str, torch.Tensor]
     target: torch.Tensor
-    valid: torch.Tensor
+
+
+@runtime_checkable
+class SampleDataset(Protocol):
+    """A map-style dataset returning this method's model-ready Sample."""
+
+    def __len__(self) -> int:
+        """Return the number of samples."""
+        ...
+
+    def __getitem__(self, index: int) -> Sample:
+        """Return one sample satisfying the selected model's input contract."""
+        ...
 
 
 class DataModule(LightningDataModule):
     """Feed supervised pixelwise regression from datasets returning a `Sample`.
 
     Batches are finished on the device: augmentations move pixels and values
-    together while training, then the spec's transforms, then NaN inputs to zero.
+    together while training, then the spec's configured input transforms.
 
     Args:
-        spec: Model spec file declaring `chips`, `inputs`, and `transforms`.
+        spec: Model spec, or its file, declaring `chips`, `inputs`, and
+            `transforms`.
         train: Training dataset.
         val: Validation dataset.
         test: Test dataset. None leaves the test split unavailable.
@@ -55,34 +69,32 @@ class DataModule(LightningDataModule):
 
     def __init__(
         self,
-        spec: str | Path,
-        train: Dataset,
-        val: Dataset,
+        spec: str | Path | ModelSpec,
+        train: SampleDataset,
+        val: SampleDataset,
         *,
-        test: Dataset | None = None,
+        test: SampleDataset | None = None,
         augmentations: list[dict[str, Any]] | None = None,
         batch_size: int = 8,
         num_workers: int = 4,
     ) -> None:
         super().__init__()
-        self.spec = ModelSpec.load(spec)
+        self.spec = spec if isinstance(spec, ModelSpec) else ModelSpec.load(spec)
         self.train_dataset = train
         self.val_dataset = val
         self.test_dataset = test
         self.batch_size = batch_size
         self.num_workers = num_workers
-        assert self.spec.chips is not None, "the model spec declares no chips"
+        if self.spec.chips is None:
+            raise ValueError("the model spec declares no chips")
         size = self.spec.chips.shape
-        self._augmenter = ImageAugmenter(augmentations or [], size)
-        self._transforms = {
-            name: ImageAugmenter([step.model_dump() for step in steps], size)
-            for name, steps in self.spec.transforms.items()
-        }
+        self.augmenter = ImageAugmenter(augmentations or [], size)
+        self.input_transform = InputTransform(self.spec.transforms, size)
 
-    def _loader(self, dataset: Dataset, *, shuffle: bool) -> DataLoader:
+    def _loader(self, dataset: SampleDataset, *, shuffle: bool) -> DataLoader[Sample]:
         # A forked worker inherits open rasters and reader threads it cannot use.
         return DataLoader(
-            dataset,
+            cast(Dataset[Sample], dataset),
             batch_size=self.batch_size,
             shuffle=shuffle,
             num_workers=self.num_workers,
@@ -91,15 +103,27 @@ class DataModule(LightningDataModule):
         )
 
     def train_dataloader(self) -> Any:
-        """Return shuffled training batches."""
+        """Return shuffled training batches.
+
+        Returns:
+            DataLoader collating `Sample` dictionaries with a leading batch
+            axis; targets become `(batch, variable, y, x)`.
+        """
         return self._loader(self.train_dataset, shuffle=True)
 
-    def val_dataloader(self) -> Any:
-        """Return validation batches in chip order."""
+    def val_dataloader(self) -> DataLoader[Sample]:
+        """Return validation batches in chip order.
+
+        Returns:
+            DataLoader collating `Sample` dictionaries without shuffling.
+        """
         return self._loader(self.val_dataset, shuffle=False)
 
-    def test_dataloader(self) -> Any:
+    def test_dataloader(self) -> DataLoader[Sample]:
         """Return test batches in chip order.
+
+        Returns:
+            DataLoader collating test `Sample` dictionaries without shuffling.
 
         Raises:
             ValueError: No test dataset was given.
@@ -109,83 +133,30 @@ class DataModule(LightningDataModule):
         return self._loader(self.test_dataset, shuffle=False)
 
     def on_after_batch_transfer(self, batch: Sample, dataloader_idx: int) -> Sample:
-        """Finish a batch on its device.
+        """Apply training augmentation, then configured input transforms.
 
         Args:
-            batch: A collated `Sample`.
+            batch: Collated model-ready samples.
             dataloader_idx: Lightning loader number.
 
         Returns:
-            The batch with its pixel inputs augmented while training,
-            transformed, and free of NaN. Target values move with the pixels
-            and read NaN where an augmentation invented them.
+            Prepared samples with context inputs preserved. Input availability
+            remains the Dataset/model contract; values are not repaired.
         """
-        inputs, target = batch["inputs"], batch["target"]
-        images = [inputs[name] for name in self.spec.pixel_inputs]
+        inputs = dict(batch["inputs"])
+        names = self.spec.pixel_inputs
+        target = batch["target"]
         if self.trainer is not None and self.trainer.training:
-            # A known-value channel tells invented pixels from real zeros.
+            # Availability belongs to target values, independently of inputs.
             known = torch.isfinite(target)
-            stacked = torch.cat([torch.nan_to_num(target), known.float()], dim=1)
-            images, moved = self._augment(images, stacked)
-            values, known = moved.tensor_split(2, dim=1)
+            keys: list[DataKey] = ["input" for _ in names]
+            keys.extend(["mask", "mask"])
+            *images, values, known = self.augmenter(
+                *(inputs[name] for name in names),
+                target.masked_fill(~known, 0),
+                known.float(),
+                data_keys=keys,
+            )
             target = torch.where(known > 0.5, values, torch.nan)
-        inputs, valid = self._finish(inputs, images, batch["valid"])
-        return {"inputs": inputs, "target": target, "valid": valid}
-
-    def _augment(
-        self, images: list[torch.Tensor], mask: torch.Tensor
-    ) -> tuple[list[torch.Tensor], torch.Tensor]:
-        """Run the augmentations on every pixel input and a mask together.
-
-        Args:
-            images: Pixel inputs, ``(B, ..., band, y, x)``.
-            mask: ``(B, channels, y, x)`` values that move with
-                nearest-neighbour sampling; pixels an augmentation invents
-                read zero.
-
-        Returns:
-            The moved images and mask, in the shapes given.
-        """
-        # Time joins the bands, so every instant of a sample moves the same way.
-        shapes = [image.shape[1:-2] for image in images]
-        keys: list[DataKey] = ["input" for _ in images]
-        keys.append("mask")
-        *images, mask = self._augmenter(
-            *(image.flatten(1, -3) for image in images), mask, data_keys=keys
-        )
-        unflattened = [
-            image.unflatten(1, shape)
-            for image, shape in zip(images, shapes, strict=True)
-        ]
-        return unflattened, mask
-
-    def _finish(
-        self,
-        model_inputs: dict[str, torch.Tensor],
-        images: list[torch.Tensor],
-        valid: torch.Tensor,
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-        """Transform the pixel inputs and set their NaN pixels to zero.
-
-        Args:
-            model_inputs: Batch inputs; context inputs pass through.
-            images: Pixel inputs in `spec.pixel_inputs` order, replacing theirs.
-            valid: ``(B, y, x)`` pixels with real inputs.
-
-        Returns:
-            The finished inputs, and `valid` without pixels a transform left
-            non-finite in any band or instant.
-        """
-        finished = dict(model_inputs)
-        for name, image in zip(self.spec.pixel_inputs, images, strict=True):
-            if name in self._transforms:
-                # Per-band statistics apply to each instant, so time joins the batch.
-                leading = image.shape[:-3]
-                image = self._transforms[name](image.flatten(0, -4)).unflatten(
-                    0, leading
-                )
-            valid = valid & torch.isfinite(image).reshape(
-                image.shape[0], -1, *image.shape[-2:]
-            ).all(dim=1)
-            finished[name] = torch.nan_to_num(image, nan=0.0)
-        return finished, valid
+            inputs.update(zip(names, images, strict=True))
+        return {"inputs": self.input_transform(inputs), "target": target}

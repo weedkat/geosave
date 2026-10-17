@@ -17,7 +17,7 @@ original = gs.raster(
     {"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)},
     anchor.geobox, nodata=0,
 )
-(source,) = original.gs.to_cog(root / "scene.tif")
+((source,),) = original.gs.to_cog(root / "scene.tif")
 
 scene = gs.open_raster(source, chunks={"y": 2, "x": 2})
 scene
@@ -55,7 +55,7 @@ acquisition recipes in a model spec as a Prefect job, use
 | Input | Public call | Result |
 | --- | --- | --- |
 | One TIFF, JPEG 2000, PNG, NetCDF file, or Zarr store | `gs.open_raster(path, **options)` | xarray `Dataset`, one variable per band or stored variable. |
-| Names mapped to raster locations, or a folder with one file/store per name | `gs.open_stack(source, **options)` | xarray `DataTree`, one raster group per name. |
+| Names mapped to raster locations, or a folder with one file/store per name | `gs.open_tree(source, **options)` | xarray `DataTree`, one raster group per name. |
 | GeoParquet, GeoJSON, or GeoPackage | `gs.open_vector(path, **options)` | GeoPandas `GeoDataFrame`, with the file's geometry and columns. |
 
 Readers select a backend by suffix. Plain PNG files often lack a CRS and grid;
@@ -104,7 +104,8 @@ boundaries in more detail.
 
 ```python
 prepared = gs.raster({"ndvi": ndvi}, patch).gs.write_nodata(np.nan)
-(destination,) = prepared.gs.to_cog(root / "prepared/ndvi.tif")
+(scene,) = prepared.gs.to_cog(root / "prepared/ndvi.tif")
+(destination,) = scene.written.values()
 destination.name
 ```
 
@@ -114,7 +115,8 @@ Output:
 'ndvi.tif'
 ```
 
-Writing computes the pixels and returns the destination `UPath`. Here NaN is
+Writing computes the pixels and returns the written file in a `Scene`, as a
+`RasterFile` whose `path` is the destination. Here NaN is
 the declared fill value for the floating-point output. `gs.raster` uses the
 patch as its grid reference; the result has one variable with new meaning.
 Reopen with `gs.open_raster(destination)` in another process. Choose
@@ -126,8 +128,10 @@ Writers refuse existing destinations unless you pass `overwrite=True`.
 ```python
 from datetime import UTC, datetime
 
-items = gs.stac.create_item(
-    [destination], collection="ndvi", datetime=datetime(2025, 1, 1, tzinfo=UTC)
+items = gs.stac.create_catalog(
+    gs.stac.create_items(
+        scene, id_format="ndvi", collection="ndvi", datetime=datetime(2025, 1, 1, tzinfo=UTC)
+    )
 )
 catalog = items.gs.to_geoparquet(root / "prepared/catalog.parquet")
 gs.open_vector(catalog)[["collection", "datetime"]]
@@ -140,9 +144,10 @@ Output:
 0       ndvi 2025-01-01 00:00:00+00:00
 ```
 
-`create_item` reads file headers and returns a GeoDataFrame of STAC Items;
-it does not read their pixels. This undated synthetic file needs an explicit
-date. For your own data, use its actual acquisition date or interval; files
+`create_items` reads file headers and yields one `pystac.Item` per scene;
+`create_catalog` lays Items out as a GeoDataFrame. No pixel is read. This undated synthetic
+file needs an explicit date; without one, the Item spans all of time and
+`create_items` warns. For your own data, use its actual acquisition date or interval; files
 with a `time` coordinate already supply that information.
 The catalog stores asset addresses and metadata. The TIFF still holds the
 pixels. Continue with [catalogs and windows](catalogs-and-cuts.md) to prepare

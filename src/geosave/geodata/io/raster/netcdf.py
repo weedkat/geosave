@@ -5,19 +5,17 @@ from __future__ import annotations
 from collections.abc import Hashable, Mapping, Sequence
 from pathlib import Path
 
-from upath import UPath
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import xarray as xr
-from dask.delayed import delayed
 
 from geosave.geodata.conventions import to_yx
 
 from .. import storage
 from ..storage import Location, StorageOptions, absolute_location
+from .file import RasterFile
 
 if TYPE_CHECKING:
-    from dask.delayed import Delayed
     from xarray.coding.times import CFDatetimeCoder, CFTimedeltaCoder
 
     from geosave.geodata import Dataset
@@ -34,7 +32,37 @@ type NetCDFFormat = Literal[
 
 
 class NetCDFOpenOptions(TypedDict, total=False):
-    """Optional xarray behavior supported when opening netCDF."""
+    """Optional `xarray.open_dataset` behavior when opening netCDF.
+
+    Omitted keys use xarray or the selected engine's defaults. GeoSave passes
+    `decode_coords="all"` to retain grid mappings and defaults `mask_and_scale`
+    to False in the reader's explicit arguments.
+
+    Attributes:
+        cache: Cache accessed pixels as NumPy arrays; None delegates the
+            choice to xarray based on whether chunking is enabled.
+        decode_cf: Decode CF conventions. False can leave time and grid
+            metadata encoded rather than usable as geospatial coordinates.
+        decode_times: Decode CF dates, use a CFDatetimeCoder, or choose a
+            policy per variable with a mapping. False retains numeric dates.
+        decode_timedelta: Decode CF durations using a boolean, CFTimedeltaCoder,
+            or per-variable mapping; None delegates the decoding policy.
+        use_cftime: Use cftime dates when True or NumPy dates when False,
+            optionally per variable. None lets xarray select a representation.
+            Xarray prefers configuring this on `decode_times`' coder.
+        concat_characters: Combine character-array axes into strings, as one
+            boolean or a per-variable mapping.
+        drop_variables: One variable name or a sequence to exclude while opening.
+        create_default_indexes: Create pandas indexes for dimension coordinates,
+            which reads those coordinate values into memory.
+        inline_array: Place backend arrays directly in Dask tasks instead of
+            separate graph nodes; applies when Dask chunking is used.
+        chunked_array_type: Registered xarray chunk manager, such as `"dask"`.
+        from_array_kwargs: Extra keywords for the chunk manager's `from_array`
+            operation, such as options for `dask.array.from_array`.
+        backend_kwargs: Extra keywords for the selected NetCDF engine's open
+            function. Supported keys depend on that engine.
+    """
 
     cache: bool | None
     decode_cf: bool | None
@@ -53,7 +81,24 @@ class NetCDFOpenOptions(TypedDict, total=False):
 
 
 class NetCDFWriteOptions(TypedDict, total=False):
-    """Optional xarray behavior supported when writing netCDF."""
+    """Optional `Dataset.to_netcdf` behavior when writing netCDF.
+
+    Omitted keys use xarray or engine defaults. GeoSave owns the destination,
+    engine, write mode, and computation arguments.
+
+    Attributes:
+        format: NetCDF file variant from NetCDFFormat. None delegates to the
+            engine; the selected engine must support the requested variant.
+        encoding: Variable names mapped to storage settings such as `dtype`,
+            `_FillValue`, `scale_factor`, compression, and chunk sizes.
+            If provided, xarray uses this mapping instead of existing encodings.
+        unlimited_dims: Dimensions stored as unlimited dimensions. This
+            declares file structure; GeoSave still writes a new complete file.
+        invalid_netcdf: Allow HDF5 features outside the NetCDF standard with
+            `engine="h5netcdf"`; other engines do not support this option.
+        auto_complex: Enable netCDF4-python's automatic complex-number storage
+            conventions with `engine="netcdf4"`. None uses the backend default.
+    """
 
     format: NetCDFFormat | None
     encoding: Mapping[Hashable, Mapping[str, Any]] | Mapping[str, Any]
@@ -62,7 +107,7 @@ class NetCDFWriteOptions(TypedDict, total=False):
     auto_complex: bool | None
 
 
-def read(
+def open_raster(
     source: Location,
     *,
     engine: NetCDFEngine = "netcdf4",
@@ -109,98 +154,56 @@ def read(
     return cast("Dataset", cube)
 
 
-@overload
 def write(
     raster: xr.Dataset,
     destination: Location,
     *,
-    compute: Literal[True] = True,
     engine: NetCDFEngine = "netcdf4",
     overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
     **write_options: Unpack[NetCDFWriteOptions],
-) -> UPath: ...
-
-
-@overload
-def write(
-    raster: xr.Dataset,
-    destination: Location,
-    *,
-    compute: Literal[False],
-    engine: NetCDFEngine = "netcdf4",
-    overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
-    **write_options: Unpack[NetCDFWriteOptions],
-) -> Delayed: ...
-
-
-def write(
-    raster: xr.Dataset,
-    destination: Location,
-    *,
-    compute: bool = True,
-    engine: NetCDFEngine = "netcdf4",
-    overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
-    **write_options: Unpack[NetCDFWriteOptions],
-) -> UPath | Delayed:
+) -> RasterFile:
     """Write a raster to a netCDF file.
 
     Args:
         raster: Raster Dataset.
-        destination: Output path or fsspec URL ending in `.nc`, `.nc4`, or
-            `.cdf`. A URL is uploaded once the file is written.
-        compute: False returns a delayed write instead of writing now. A URL
-            needs true.
+        destination: Output path, fsspec URL, or UPath carrying its
+            `storage_options`, ending in `.nc`, `.nc4`, or `.cdf`. A URL is
+            uploaded once the file is written.
         engine: Xarray netCDF backend.
         overwrite: Replace an existing destination when true.
-        storage_options: Options for the filesystem a URL names.
         **write_options: Supported xarray netCDF write options.
 
     Returns:
-        Destination path, or a delayed task returning it when `compute=False`.
+        The written file with the header it states, read back from the file
+        before it leaves its staging folder.
 
     Raises:
         FileExistsError: The destination exists and overwrite is false.
         TypeError: `raster` is not a Dataset.
-        ValueError: The destination path is invalid, or a URL is asked to
-            defer its write.
+        ValueError: The destination path is invalid.
+
+    Examples:
+        >>> write(raster, "scene.nc")
+        RasterFile(/abs/scene.nc, ['red', 'nir'], 2025-06-01)
     """
     if not isinstance(raster, xr.Dataset):
         raise TypeError(
             f"raster must be an xarray Dataset, got {type(raster).__name__}; "
-            f"write a stack with its own gs.to_netcdf"
+            f"write a tree with its own gs.to_netcdf"
         )
 
-    options: dict[str, Any] = dict(write_options)
-    # A deferred write cannot be staged, so it goes to a local path directly.
-    if not compute:
-        if not storage.is_local(destination):
-            raise ValueError(
-                f"{destination} is remote, and a NetCDF file is uploaded once "
-                f"written; pass compute=True"
-            )
-        path = storage.local_path(destination)
-        if path.suffix.lower() not in _FILE_SUFFIXES:
-            raise ValueError(
-                f"destination {path.name!r} must end in one of {list(_FILE_SUFFIXES)}"
-            )
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
-        # Passing the literal lets xarray's overloads say what each call returns.
-        written = raster.to_netcdf(
-            path, mode="w", engine=engine, compute=False, **options
-        )
-        return delayed(lambda _: storage.location(path))(written)
+    stated: list[xr.Dataset] = []
 
     def save(target: Path) -> None:
-        raster.to_netcdf(target, mode="w", engine=engine, compute=True, **options)
+        raster.to_netcdf(target, mode="w", engine=engine, compute=True, **write_options)
+        # The header is read while the file is still local, coordinates and all.
+        with open_raster(target, engine=engine) as opened:
+            header = RasterFile.from_xarray(target, opened).header
+            stated.append(
+                header.assign_coords({k: v.load() for k, v in header.coords.items()})
+            )
 
-    return storage.write(
-        destination,
-        save,
-        suffixes=_FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
+    written = storage.write(
+        destination, save, suffixes=_FILE_SUFFIXES, overwrite=overwrite
     )
+    return RasterFile.from_xarray(written, stated[0])

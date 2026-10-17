@@ -5,9 +5,8 @@ import pytest
 from odc.geo.geobox import GeoBox
 from shapely.geometry import Point
 
-from geosave.geodata import GeoVector
-from geosave.geodata.core.create import raster
-from geosave.geodata import io
+from geosave.geodata import GeoVector, io
+from geosave.geodata.core.raster.create import raster
 from geosave_flows.tasks.labels import find_labels, read_labels
 
 
@@ -17,14 +16,17 @@ def _label(path: Path, *, dated: bool = True) -> Path:
     if dated:
         label = label.assign_coords(time=np.datetime64("2025-01-15T12:00:00"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    return io.geotiff.write_cog(label, path)
+    return io.geotiff.write_cog(label, path).path
 
 
 def test_find_labels_preserves_tree_and_removes_only_the_final_suffix(
     tmp_path: Path,
 ) -> None:
-    first = _label(tmp_path / "north" / "a.v1.tif")
-    second = _label(tmp_path / "south" / "b.tif")
+    first = tmp_path / "north" / "a.v1.tif"
+    second = tmp_path / "south" / "b.tif"
+    for path in (first, second):
+        path.parent.mkdir(parents=True)
+        path.touch()
 
     assert find_labels(tmp_path, "**/*.tif") == {"north/a.v1": first, "south/b": second}
 
@@ -41,7 +43,6 @@ def test_a_label_directory_becomes_one_row_per_label(tmp_path: Path) -> None:
 
 def test_a_label_table_keeps_its_caller_columns(tmp_path: Path) -> None:
     root = tmp_path / "labels"
-    _label(root / "a.tif")
     labels = GeoVector.from_geometry(
         Point(0, 0),
         properties={
@@ -101,8 +102,6 @@ def test_a_label_table_needs_ids_that_name_one_sample_each(
     tmp_path: Path, ids: list, message: str
 ) -> None:
     root = tmp_path / "labels"
-    _label(root / "a.tif")
-    _label(root / "b.tif")
     table = GeoVector.concat(
         [
             GeoVector.from_geometry(

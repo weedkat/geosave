@@ -31,14 +31,33 @@ from rasterio.enums import ColorInterp, MaskFlags
 from geosave.geodata.conventions import TIME_COORDINATE
 from geosave.geodata.utils.datetime import parse_stem_dates
 from ..storage import Location, StorageOptions, absolute_location
-from .tags import GeoTIFFTags
+from geosave.geodata.attrs.groups.tiff import GeoTIFFTags
 
 if TYPE_CHECKING:
     from geosave.geodata import Dataset
 
 
 class RasterioOpenOptions(TypedDict, total=False):
-    """Optional rioxarray behavior supported when reading one raster."""
+    """Optional rioxarray behavior when reading one raster.
+
+    Omitted keys use rioxarray or rasterio defaults. These are passed to
+    `rioxarray.open_rasterio`, with rasterio open options forwarded beneath it.
+
+    Attributes:
+        parse_coordinates: Generate spatial coordinates from the file's
+            transform. None lets rioxarray decide for the stored grid.
+        cache: Cache accessed pixels as NumPy arrays. None lets rioxarray
+            choose based on chunking; this is separate from GDAL's block cache.
+        lock: Lock used for threaded lazy reads. False opens a separate file
+            handle per request; a lock object serializes access to a handle.
+        decode_times: Decode CF-encoded numeric dates instead of leaving them
+            as numbers. GeoTIFF acquisition tags are handled separately.
+        decode_timedelta: Decode CF duration variables as timedeltas; False
+            retains numbers, and None delegates the decoding policy.
+        overview_level: Zero-based rasterio overview index to open instead of
+            full-resolution pixels, when the file has that reduced-resolution
+            image. Omit to read the base image; -1 also selects the base image.
+    """
 
     parse_coordinates: bool | None
     cache: bool | None
@@ -48,10 +67,10 @@ class RasterioOpenOptions(TypedDict, total=False):
     overview_level: int
 
 
-def read(
+def open_raster(
     source: Location,
     *,
-    chunks: Any = None,
+    chunks: Any = {},
     mask_and_scale: bool = False,
     storage_options: StorageOptions | None = None,
     **open_options: Unpack[RasterioOpenOptions],
@@ -65,7 +84,10 @@ def read(
     Args:
         source: Local path or URI to a raster GDAL can open. An
             `hf://buckets/` URL is read through the bucket's S3 gateway.
-        chunks: Chunk configuration for the opened variables.
+        chunks: Chunk configuration for the opened variables. The default,
+            `{}`, opens Dask arrays chunked by the file's own tiles, so
+            arithmetic on them stays lazy; None opens rioxarray's lazy arrays,
+            which read on the first computation and keep the pixels.
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
         storage_options: fsspec options for an `s3://` URL, as `{"key": ...,
@@ -76,8 +98,9 @@ def read(
         **open_options: Supported rioxarray and rasterio open options.
 
     Returns:
-        Dataset holding one `(y, x)` variable per band, carrying a scalar
-        `time` where the file dates itself. ``GEOSAVE_DATETIME`` names the
+        Dataset holding one variable per band, each `(y, x)`; a dated file
+        carries its instant as a scalar `time` coordinate, not as attrs.
+        ``GEOSAVE_DATETIME`` names the
         precise instant; without it ``TIFFTAG_DATETIME`` supplies whole
         seconds, then the filename stem supplies a fallback. A stem naming a
         whole period places the raster at its first instant.
@@ -87,9 +110,9 @@ def read(
         ValueError: The file holds subdatasets or names one variable on two bands.
 
     Examples:
-        >>> read("scene.tif").gs.variables
+        >>> open_raster("scene.tif").gs.variables
         ('B04', 'B08')
-        >>> read("20190507_red.tif").time.item()
+        >>> open_raster("20190507_red.tif").time.item()
         datetime.datetime(2019, 5, 7, 0, 0)
     """
     # A UPath carries the options its write was given.
@@ -126,14 +149,16 @@ def read(
         # rioxarray names the bands by position; the bands name themselves.
         cube = cube.rename_vars(dict(zip(cube.data_vars, bands, strict=True)))
         cube.attrs = root
-        for name, band_attrs in bands.items():
+        for number, (name, band_attrs) in enumerate(bands.items(), start=1):
             cube[name].attrs = band_attrs
+            # A reader of the file's own tiles finds the variable by its band
+            cube[name].encoding["band"] = number
         if mask_and_scale:
             # Decoded pixels are physical, so the file's packing lives in encoding alone.
             cube = cube.assign(
                 {
-                    name: attrs.stamp(
-                        attrs.stamp(band, attrs.Packing, None), attrs.Nodata, None
+                    name: attrs.clear_attrs(
+                        attrs.clear_attrs(band, attrs.Packing), attrs.Nodata
                     )
                     for name, band in cube.data_vars.items()
                 }
@@ -150,13 +175,22 @@ def read(
             timespan = parse_stem_dates(PurePath(str(source)).stem)
             if timespan is not None:
                 instant = np.datetime64(timespan[0])
-        # A dated raster always spans `time`, so one date and many read alike.
+        # One file holds one instant, so its date is a scalar coordinate; the
+        # tags only carried it there, and a write states them again from it.
         if instant is not None:
-            # Xarray's lazy file arrays cannot gain an axis without being read;
-            # dask's can, so an unchunked file is chunked first.
-            if not cube.chunks:
-                cube = cube.chunk()
-            cube = cube.expand_dims({TIME_COORDINATE: [instant]})
+            cube = cube.assign_coords({TIME_COORDINATE: instant})
+            for tag in ("GEOSAVE_DATETIME", "TIFFTAG_DATETIME"):
+                cube.attrs.pop(tag, None)
+        if tags.time_coverage_start is not None or tags.time_coverage_end is not None:
+            if tags.time_coverage_start is None or tags.time_coverage_end is None:
+                raise ValueError("composite coverage needs both time_coverage_start and time_coverage_end")
+            first = np.datetime64(tags.time_coverage_start)
+            last = np.datetime64(tags.time_coverage_end)
+            if np.isnat(first) or np.isnat(last) or first > last:
+                raise ValueError("composite coverage needs ordered, finite bounds")
+            cube = cube.assign_coords(start_datetime=first, end_datetime=last)
+            cube.attrs.pop("time_coverage_start", None)
+            cube.attrs.pop("time_coverage_end", None)
     except BaseException:
         opened.close()
         raise

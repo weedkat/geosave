@@ -8,7 +8,7 @@ import xarray as xr
 from affine import Affine
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.create import array
+from geosave.geodata.core.raster.create import array
 from geosave.geodata.transform.color import colorize
 
 GRID = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")

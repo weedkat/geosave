@@ -15,7 +15,20 @@ from geosave.model.factory import BuildSpec
 
 
 class SchedulerSpec(BuildSpec):
-    """Configure a scheduler and its Lightning metadata."""
+    """Configure a scheduler and its Lightning metadata.
+
+    Attributes:
+        interval: Update the scheduler after optimizer steps (`step`) or
+            epochs (`epoch`). None leaves Lightning's default interval.
+        frequency: Number of configured intervals between scheduler updates.
+            None leaves Lightning's default frequency.
+        monitor: Logged metric used by a metric-driven scheduler, such as
+            `val_loss` for ReduceLROnPlateau.
+        strict: Whether Lightning raises if the monitored metric is absent.
+            None leaves Lightning's default behavior.
+        scheduler_name: Display name forwarded as Lightning's scheduler
+            `name`, for learning-rate monitoring. None omits the override.
+    """
 
     interval: Literal["step", "epoch"] | None = None
     frequency: int | None = None

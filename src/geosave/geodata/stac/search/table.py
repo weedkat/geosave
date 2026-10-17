@@ -12,17 +12,16 @@ from pystac.utils import datetime_to_str
 from geosave.geodata.errors import CollectionNotFoundError
 from geosave.geodata.io.storage import absolute_location
 from geosave.geodata.io.vector import stac_geoparquet
-from geosave.geodata.stac.source import StacSource
 
+from .api import StacClient
 from .query import StacQuery
 
 if TYPE_CHECKING:
-    from geosave.geodata import GeoDataFrame
     from geosave.geodata.io.storage import Location
 
 
-class StacTable:
-    """Search one STAC GeoParquet table with rustac and build sources on it.
+class StacTable(StacClient):
+    """A STAC GeoParquet table searched with rustac, opened by `StacClient.open`.
 
     Item properties are columns of a table, so a sort or filter names them
     without the `properties.` prefix a STAC API takes.
@@ -33,7 +32,7 @@ class StacTable:
             credentials or a custom endpoint. None creates a session.
 
     Examples:
-        >>> table = StacTable("samples/catalog.parquet")
+        >>> table = StacClient.open("samples/catalog.parquet")
         >>> table.collections()
         {'forest'}
         >>> source = table.source("forest")
@@ -52,23 +51,8 @@ class StacTable:
             duckdb: Caller-configured rustac session, or None to create one.
         """
         self._location = absolute_location(path)
+        self._patch_url = None
         self._duckdb = duckdb if duckdb is not None else rustac.DuckdbClient()
-
-    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
-        """Run one search to completion as an item table.
-
-        Args:
-            query: Query object, or raw search parameters.
-
-        Returns:
-            One row per matching Item, read through `gs` as a catalog. Empty
-            where nothing matches.
-
-        Examples:
-            >>> table.search(StacQuery(collections=["forest"]))["id"].tolist()
-            ['forest_20250601', 'forest_20250611']
-        """
-        return stac_geoparquet.from_item(self.search_items(query))
 
     def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
         """Run one search over the table as pystac Items, for loaders.
@@ -110,7 +94,7 @@ class StacTable:
         Returns:
             Collection IDs.
         """
-        return set(self._described())
+        return set(self._read_collections())
 
     def collection(self, collection: str) -> pystac.Collection:
         """Read one collection of this table.
@@ -126,52 +110,40 @@ class StacTable:
             CollectionNotFoundError: No stored Collection and no row carries
                 `collection`.
         """
-        described = self._described()
-        if collection not in described:
+        found = self._read_collections()
+        if collection not in found:
             raise CollectionNotFoundError(
                 f"collection {collection!r} not found in {self._location}; "
                 f"call collections() to see what it holds"
             )
-        return described[collection]
+        return found[collection]
 
-    def source(self, collection: str) -> StacSource:
-        """Build a source for one collection of this table.
-
-        Args:
-            collection: Collection ID. Discover them with `collections`.
+    def _read_collections(self) -> dict[str, pystac.Collection]:
+        """Read the table's collections, the stored ones over the derived.
 
         Returns:
-            Source for `collection`, on every default.
-
-        Raises:
-            CollectionNotFoundError: `collection` is not in this table.
-
-        Examples:
-            >>> source = table.source("forest").set_config(bands=["red", "nir"])
+            Collections keyed by id.
         """
-        self.collection(collection)
-        return StacSource(self, collection=collection)
+        return self._derived_collections() | self._stored_collections()
 
-    def _described(self) -> dict[str, pystac.Collection]:
-        """Return every collection of the table, keyed by id.
+    def _derived_collections(self) -> dict[str, pystac.Collection]:
+        """Read the Collections rustac derives from the rows' `collection` ids."""
+        return {
+            fields["id"]: pystac.Collection.from_dict(fields)
+            for fields in self._duckdb.get_collections(self._location)
+        }
 
-        Returns:
-            {
-                "<collection id>": the Collection the table stores, or the
-                    one derived from the rows carrying that id,
-            }
+    def _stored_collections(self) -> dict[str, pystac.Collection]:
+        """Read the Collections a writer stored in the file metadata.
+
+        They say more than the rows alone can. The same session reads them, so
+        one configuration reaches a remote table.
         """
-        described = {}
-        for fields in self._duckdb.get_collections(self._location):
-            described[fields["id"]] = pystac.Collection.from_dict(fields)
-        # What a writer stored says more than what rows alone can; the same
-        # session reads it, so one configuration reaches a remote table.
         metadata = self._duckdb.query_to_table(
             "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'stac-geoparquet'",
             [self._location],
         )
+        stored = {}
         for row in pa.table(metadata).to_pylist():
-            described.update(stac_geoparquet.parse_collections(row["value"]))
-        return described
-
-
+            stored.update(stac_geoparquet.parse_collections(row["value"]))
+        return stored

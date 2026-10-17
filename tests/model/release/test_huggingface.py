@@ -4,24 +4,29 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from huggingface_hub.errors import EntryNotFoundError
 import pytest
-from safetensors.torch import load_file, save_file
 import torch
+from huggingface_hub.errors import EntryNotFoundError
+from safetensors.torch import load_file, save_file
+from torch.utils.data import default_collate
 from transformers import AutoModel
 
 from geosave.__about__ import __version__
+from geosave.geodata import Dataset
 from geosave.model.chain import ModelChain, chain_step
-from geosave.model.stages.head.segmentation import SegmentationHead
 from geosave.model.registry import build_model, register_model
 from geosave.model.release import GeoSaveConfig, GeoSaveModel
 from geosave.model.spec import ModelSpec
+from geosave.model.stages.encoder import prithvi
+from geosave.model.stages.encoder.prithvi import BACKBONE_REGISTRY, PrithviTL
+from geosave.model.stages.head.segmentation import SegmentationHead
+from tests.model.stages.encoder.test_prithvi import Backbone
 
 
 @register_model("head", "periodic")
@@ -49,7 +54,7 @@ def stages() -> dict[str, dict[str, object]]:
     return {
         "head": {
             "name": "segmentation",
-            "init_args": {"feature_channels": 2, "classes": ["a", "b", "c"]},
+            "init_args": {"feature_channels": 2, "num_classes": 3},
         }
     }
 
@@ -171,9 +176,7 @@ def test_reload_fills_non_persistent_buffers(tmp_path: Path) -> None:
 
 
 def test_export_rejects_a_directly_composed_chain() -> None:
-    chain = ModelChain(
-        head=SegmentationHead(feature_channels=2, classes=["a", "b", "c"])
-    )
+    chain = ModelChain(head=SegmentationHead(feature_channels=2, num_classes=3))
 
     with pytest.raises(ValueError, match="stage specifications"):
         GeoSaveModel.from_chain(chain)
@@ -246,8 +249,7 @@ def test_publication_rejects_class_path_stages() -> None:
     chain = build_model(
         {
             "head": {
-                "class_path": "tests.model.chain.conftest.Head",
-                "init_args": {"channels": 2},
+                "class_path": f"{__name__}.PeriodicHead",
             }
         }
     )
@@ -288,3 +290,58 @@ def test_config_rejects_duplicate_stage_names() -> None:
                 {"stage": "encoder", "spec": {"name": "segmentation"}},
             ]
         )
+
+
+def test_transformers_reload_runs_on_prithvi_context(
+    scene: Dataset, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def build(*args: object, **kwargs: object) -> Backbone:
+        return Backbone()
+
+    monkeypatch.setattr(BACKBONE_REGISTRY, "build", build)
+    model = build_model(
+        {
+            "encoder": {
+                "name": "prithvi_tl",
+                "init_args": {
+                    "out_indices": [0],
+                    "num_frames": 2,
+                    "bands": ["BLUE"],
+                    "input_size": 8,
+                },
+            }
+        }
+    )
+    original_encoder = model.get_submodule("encoder")
+    assert isinstance(original_encoder, PrithviTL)
+    original_backbone = original_encoder.model
+    assert isinstance(original_backbone, Backbone)
+    with torch.no_grad():
+        original_backbone.scale.fill_(7.0)
+    GeoSaveModel.from_chain(model).save_pretrained(tmp_path)
+
+    restored = AutoModel.from_pretrained(tmp_path, local_files_only=True)
+    assert isinstance(restored, GeoSaveModel)
+    restored_encoder = restored.chain.get_submodule("encoder")
+    assert isinstance(restored_encoder, PrithviTL)
+    assert restored_encoder.model is not original_backbone
+    torch.testing.assert_close(
+        restored_encoder.model.state_dict()["scale"], torch.tensor(7.0)
+    )
+    inputs = default_collate(
+        [
+            {
+                "image": scene.isel(
+                    y=slice(0, 4), x=slice(4 * column, 4 * column + 4)
+                ).gs.to_tensor(),
+                **prithvi.model_context(
+                    scene.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
+                ),
+            }
+            for column in range(2)
+        ]
+    )
+    torch.testing.assert_close(
+        restored(**inputs),
+        model(**inputs),
+    )

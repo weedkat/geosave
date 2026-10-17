@@ -200,7 +200,18 @@ def time(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
 
 
 def latlon(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
-    """Return the raster's grid centre as a float32 latitude/longitude tensor."""
+    """Encode the raster's grid centre as latitude/longitude.
+
+    Args:
+        raster: Raster with a locatable geospatial grid.
+
+    Returns:
+        Float32 `(2,)` tensor containing latitude and longitude in degrees,
+        without reading pixels.
+
+    Raises:
+        ValueError: The raster has no locatable grid.
+    """
     longitude, latitude = raster.gs.anchor.lonlat
     return torch.tensor([latitude, longitude], dtype=torch.float32)
 
@@ -228,6 +239,7 @@ class Clay(nn.Module):
 
     pyramid_channels: Published[list[int]]
     pyramid_strides: Published[list[int]]
+    input_size: Published[int | tuple[int, int]]
 
     waves: torch.Tensor
     gsd: torch.Tensor
@@ -307,6 +319,7 @@ class Clay(nn.Module):
 
         self.pyramid_channels = [dim] * len(self.out_indices)
         self.pyramid_strides = [patch_size] * len(self.out_indices)
+        self.input_size = input_size
 
     def forward(
         self,

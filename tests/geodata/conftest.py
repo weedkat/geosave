@@ -5,8 +5,44 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
-from geosave.geodata.core.create import raster as build
-from geosave.geodata.core.stack import stack as build_stack
+from geosave.geodata.core.raster.create import raster as build
+from geosave.geodata.core.raster.create import tree as build_tree
+
+
+def flat(scenes):
+    """Return the files of every scene a writer returned, in order."""
+    return [file for scene in scenes for file in scene.written.values()]
+
+
+def item_table(scenes, *, id=None, prefix=None, **options):
+    """Catalog the scenes a writer returned as an item table, one Item each.
+
+    Each Item is named `id`, else its first file's stem, under `prefix/` where
+    one is given. An undated scene takes the span the dated ones cover unless
+    `datetime` is given.
+    """
+    from datetime import UTC
+
+    from geosave.geodata import stac
+
+    scenes = list(scenes)
+    spans = [f.header.gs.timespan for f in flat(scenes) if f.header.gs.timespan]
+    if spans and "datetime" not in options:
+        start = min(start for start, _ in spans).replace(tzinfo=UTC)
+        options["datetime"] = (start, max(end for _, end in spans).replace(tzinfo=UTC))
+    items = []
+    for scene in scenes:
+        name = id or next(iter(scene.written.values())).path.stem
+        name = name if prefix is None else f"{prefix}/{name}"
+        items.append(next(stac.create_items(scene, id_format=name, **options)))
+    return stac.create_catalog(
+        items,
+        collections=[
+            stac.create_collection(key, description=key)
+            for key in dict.fromkeys(item.collection_id for item in items)
+            if key is not None
+        ],
+    )
 
 
 def build_raster(
@@ -71,8 +107,8 @@ def raster() -> xr.Dataset:
 
 
 @pytest.fixture
-def stack(raster: xr.Dataset) -> xr.DataTree:
-    return build_stack({"optical": raster[["red"]], "infrared": raster[["nir"]]})
+def tree(raster: xr.Dataset) -> xr.DataTree:
+    return build_tree({"optical": raster[["red"]], "infrared": raster[["nir"]]})
 
 
 @pytest.fixture
@@ -114,8 +150,8 @@ def cog_template(root, name: str, *, dated: bool) -> str:
     return f"{root}/{name}.tif"
 
 
-def stack_templates(sample, root) -> dict[str, str]:
-    """Give every group of a stack its `cog_template` under `root`."""
+def tree_templates(sample, root) -> dict[str, str]:
+    """Give every group of a tree its `cog_template` under `root`."""
     return {
         name: cog_template(root, name, dated="time" in raster.dims)
         for name, raster in sample.gs.rasters.items()
@@ -124,15 +160,14 @@ def stack_templates(sample, root) -> dict[str, str]:
 
 def read_items(rows):
     """Read an item table's files as one raster, as a window reads one collection."""
-    from geosave.geodata.io.raster import cogs
-    from geosave.geodata.stac.translate.item import files
-    from geosave.geodata.io.vector.stac_geoparquet import to_item
+    from geosave.geodata.stac.translate.table import to_items
+    from geosave.geodata.io.raster.stac import open_raster
 
-    return cogs.read([f for item in to_item(rows) for f in files(item)])
+    return open_raster(to_items(rows))
 
 
 def titled(obj, title: str = "scene"):
-    """Return a copy of a raster or stack whose root names its title."""
+    """Return a copy of a raster or tree whose root names its title."""
     copied = obj.copy()
     copied.attrs = {**obj.attrs, "title": title}
     return copied
@@ -155,3 +190,10 @@ def geobox(*, crs: str = "EPSG:32633", shape: tuple[int, int] = (8, 8)) -> GeoBo
         shape=shape,
         tight=True,
     )
+
+
+@pytest.fixture
+def rows(scene, label, tmp_path):
+    sample = build_tree({"optical": scene, "label": label})
+    saved = sample.gs.to_cog(tree_templates(sample, tmp_path / "s0"))
+    return item_table(saved, prefix="s0")

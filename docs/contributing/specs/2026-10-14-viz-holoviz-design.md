@@ -1,6 +1,8 @@
 # viz on HoloViz's intended layers
 
-Status: proposed, 2026-10-14.
+The current module ownership, property filtering and interface names are recorded in [Visualization responsibilities](2026-10-15-viz-responsibilities.md).
+
+Status: implemented 2026-10-14; the explorer map half is superseded by [Explorer map on Lonboard](2026-10-16-viz-lonboard-design.md). Static figures still follow this spec.
 
 ## Goal
 
@@ -23,7 +25,9 @@ Public calls do not change: `.gs.plot()`, `.gs.explore()`, `Explorer`,
 | Vectors | Hand hvPlot/HoloViews a `spatialpandas.GeoDataFrame` | Polygons, lines, points and Multi* draw and rasterize |
 | Mixed geometry frames | Split once by `geom_type`, one element per part | hvPlot refuses a mixed frame |
 | Text column colouring | `aggregator=ds.count_cat(column)` + `shade(color_key=...)` | `rasterize` refuses non-numeric `c`; `ds.by(col, ds.any())` breaks `shade` |
-| Explorer map | One persistent plot; each layer renders through `rasterize` / `shade` / `spread`, stacked by HoloViews' `stack` | Swapping an overlay per layer change works without errors but resets the zoom and leaves the old plot in the document; a DynamicMap with a varying overlay is refused |
+| Explorer map | Each layer is a `DynamicMap` drawing one RGB per view part, its opacity and visibility linked with `.apply.opts`; the map overlays them on the basemap and is laid out again only when the stack changes, opening on the view it had | Opacity and visibility update in about 30 ms without a redraw; a rebuilt map keeps its ranges through `xlim`/`ylim`, and Panel leaves one plot behind it |
+| Compare | `pn.Swipe` of two map panes, axes linked by Panel | Panes of one document link their axes by default; no pixels are cut by hand |
+| Catalog search | `CatalogLayer` parameters (text, dates, cloud cover) filter the drawn footprints and, through Tabulator's `add_filter`, the table | One `filter_items` serves the map and the table |
 | Class rasters | Drawn as RGB through `.gs.colorize()`, named by a legend of swatches | Classes are colour already; a `{code: colour}` cmap on matplotlib misaligns colours, so a third colormap path buys nothing |
 | Dated figures | A `HoloMap` of one hvPlot element per date | `hvplot.rgb(groupby="time")` refuses a `(time, band, y, x)` array |
 
@@ -54,11 +58,21 @@ blended before they are coloured.
 
 ```text
 viz/
-├── style.py      # ColorRamp, Stretch, as_rgb, category_colors
+├── style.py      # Stretch, category_colors
+├── shapes.py     # drawable geometry split by the element drawing it: Polygons, Path, Points
 ├── plot.py       # static figures through hvPlot (matplotlib)
-├── map.py        # Web Mercator: View, Overview, image helpers, basemaps, map colours
-└── explorer/     # Panel app; layers render through HoloViews operations
+├── map.py        # Web Mercator: View, Overview, basemaps, map colours
+└── explorer/
+    ├── app.py    # Explorer: the stack, the map or swipe, the page
+    ├── layers/   # base (Layer, Key), raster, vector, catalog; one module per kind
+    └── docks/    # base (Dock), layers, search, compare, tabs, time, table
 ```
+
+A layer is state (parameters) plus `draw(view)`, a pure function returning an
+RGB, wrapped by `Layer.on_view` in a `DynamicMap` fed by `RangeXY`, `PlotSize`
+and its own parameters. A dock is a panel placed by `region` (`"sidebar"`,
+`"tabs"`, `"main"`); a tab naming an explorer parameter in `raised_by` comes
+forward when it changes, as Identify does on a click.
 
 `elements.py` is deleted. Map colours (`COLOR`, `HIGHLIGHT`, `OUTLINE`) and
 `CMAPS` live in `map.py`, the only module that defines how a map looks; the
@@ -136,34 +150,27 @@ self.full = values.gs.reproject(WEB_MERCATOR, resampling=kernels)   # refuses bl
 self.coarse = values.gs.reproject(self.full.gs.geobox.zoom_to(size), resampling=kernels).compute()
 ```
 
-Image helpers: `blank(view)`, `rgb_element(channels, alpha)`, `rgba(image)`.
-`aggregate`, `spread`, `stack`, `composite`, `on_web`, `plain_columns`,
-`Paint` and `_hoverable` are deleted. `tiles(name)` stays.
+A `View` is an odc-geo `BoundingBox` in Web Mercator with a screen size;
+`View.framing(bbox)` opens on a box with a margin. No image helpers remain:
+`hv.RGB` leaves nan clear itself, and the browser lays images over each other.
 
 ### Explorer layers
 
-Each layer returns a HoloViews `RGB` for a view; the explorer stacks them.
+Each layer draws itself; the explorer only overlays what layers return.
 
 ```python
-# RasterLayer
-def image(self, view) -> hv.RGB | None:
-    window = self.overview(...).view(view)                  # GDAL regrid of the selection
-    rgb = as_rgb(window, self.variable)
-    if rgb is None:
-        return shade(hv.Image(window[self.variable[0]]), cmap=self.cmap,
-                     clims=self.ramp.clim, cnorm="linear", alpha=..., dynamic=False)
-    if len(self.variable) == 3:
-        rgb = self.stretch.apply(rgb)
-    return webmap.rgb_element(rgb, self.alpha)
+# RasterLayer: one RGB per view, a band through shade, classes colorized, a composite stretched
+def element(self, time=None) -> hv.DynamicMap:
+    drawn = self.on_view(self.draw, "variable", "time", "cmap")
+    return drawn.apply.opts(alpha=self.param.alpha, visible=self.param.visible)
 
-# VectorLayer: count_cat with category_colors, mean with a ColorRamp, any() for one colour
+# VectorLayer: one DynamicMap per element (fills, edges and lines, points), then the selection
 # Explorer._draw
-return stack(hv.Overlay([x.image(view) for x in shown]), dynamic=False)
+self._pane.object = self._framed(reduce(operator.mul, [x.element() for x in self.stacked], self._basemap))
 ```
 
-The vector layer builds its spatialpandas shapes once, per geometry type,
-with the row number and size columns it already carries. Swipe keeps cutting
-two RGBA arrays at the split column.
+A text column with one category draws as one colour: datashader colours
+categories against the least counted one, so a lone category would vanish.
 
 ## Explorer page
 
@@ -172,12 +179,12 @@ Layout, served and in a notebook alike:
 ```text
 ┌ sidebar ──────────┬ main ──────────────────────────────────────┐
 │ Catalogs          │ basemap · theme toggle                      │
-│ Layers            │                                             │
-│ ───────────────── │                 map (fills the width)       │
-│ Style | Info |    │                                             │
-│ Identify          │ time bar · swipe                            │
-│ (selected layer)  │ attribute table: search, header filters,    │
-│                   │ rows per page, pager                        │
+│ Search Items      │                                             │
+│ Layers            │       map, or a swipe between two rasters   │
+│ Compare           │                                             │
+│ ───────────────── │ time player                                 │
+│ Style | Info |    │ attribute table: header filters, pager      │
+│ Identify          │                                             │
 └───────────────────┴─────────────────────────────────────────────┘
 ```
 
@@ -185,8 +192,8 @@ The selected layer's tabs move from the right contextbar into the sidebar
 under the layer list, as Planetary Computer and Copernicus Browser keep them,
 so the map takes every column the sidebar does not. Served, it is a
 `pmui.Page` with `sidebar` and `main` only; in a notebook, a `pmui.Row` of the
-same two columns. The attribute table keeps today's search, header filters,
-rows-per-page and pager.
+same two columns. The attribute table filters by column headers and pages
+through Tabulator's own pager; a catalog's table also follows its search.
 
 ### Light and dark
 
@@ -246,5 +253,10 @@ today's facts (CRS, rows, geometry, columns, dates).
   where today the highest category wins; overlapping polygons may tint.
 - `.gs.reproject` warns about a band with no fill value; after `.gs.to_nan`
   the overview passes nan explicitly so a map raises no warning.
-- `stack`, `shade` and `spread` per layer per pan must stay as fast as the
-  hand-written path; the browser smoke test times a pan on a large raster.
+- Replacing the map's plot (a reorder, an added or removed layer, compare on
+  or off) can leave Bokeh's `ResizeObserver` on the removed figure: when the
+  page resizes in the same moment, the browser logs `Cannot read properties
+  of undefined (reading 'top_panel')` from `FigureView._measure_layout`. The
+  live map is unaffected; pan, zoom and style changes never replace the plot.
+- panel-material-ui's `MenuList` sends a row action but leaves its menu open
+  until a click outside or Escape.

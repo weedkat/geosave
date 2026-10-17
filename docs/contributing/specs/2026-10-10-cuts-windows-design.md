@@ -1,14 +1,17 @@
 # Cuts as self-contained window rows
 
-Status: Plan 1 (`planning/plans/2026-10-10-stac-surface.md`) is implemented:
-`open_vector`, `eo:bands` names, private `_item`/`_table`, `get_collections`,
-`GeoCatalog`, and item-table returns from `create_items` and `search`. Plan 2
-implements the rest of this document.
+> Historical proposal, partially implemented. Window tables, `row.gs.to_tree`,
+> cuts, and prediction merging are available. The proposed `ChipWriter` and
+> task-owned prediction flow are not implemented. Current STAC creation uses
+> singular `create_item`, writers return `RasterFile` records, and source
+> Datasets are supplied by callers. The module paths and planned removals
+> below record an earlier design. See [Catalogs and cuts](../../guides/catalogs-and-cuts.md)
+> and [Training contracts](../../concepts/training.md) for current behavior.
 
 ## Goal
 
 `cuts` turns an item table into a table of windows. Each row reads into an
-aligned, lazy stack with `row.gs.to_stack()`, and traces back to the items it
+aligned, lazy stack with `row.gs.to_tree()`, and traces back to the items it
 came from. Stacks are found by footprint, not by a stored `geosave:stack`
 property. Every chip a model predicts is written back as a georeferenced COG,
 merged per frame, and catalogued as a new collection.
@@ -24,7 +27,7 @@ stacks  = gs.cuts.stacks(items, on="label")                        # one row per
 frames  = gs.cuts.frames(stacks, 4, tolerance="10D")               # each stack split in time
 windows = gs.cuts.chips(frames, 224, overlap=32)                   # each frame split in space
 
-chip = windows.iloc[0].gs.to_stack(resampling={"s2": "bilinear"})  # aligned lazy DataTree
+chip = windows.iloc[0].gs.to_tree(resampling={"s2": "bilinear"})  # aligned lazy DataTree
 ```
 
 ## Decisions
@@ -36,7 +39,7 @@ chip = windows.iloc[0].gs.to_stack(resampling={"s2": "bilinear"})  # aligned laz
 | Same instant twice | If two items of one group cover the window at the same instant, `stacks` keeps the first in table order and emits `DuplicateInstantsWarning`. |
 | Item instant | `datetime`, or `start_datetime` when the Item carries a range. |
 | Grid | The anchor item's grid (CRS, transform, shape). Other groups are reprojected onto it at read time. |
-| Alignment | `to_stack` always returns every group on the window grid. Groups keeping native resolution are out of scope. |
+| Alignment | `to_tree` always returns every group on the window grid. Groups keeping native resolution are out of scope. |
 | Loading | Existing transforms per group: `open_raster(href)` → `reproject(chip grid)` → `merge_bands` for an Item's band assets → `concat_time` across Items. Not odc-stac, which drops band names and attrs. |
 | Items | One Item = one scene of COG/GeoTIFF files. Zarr and NetCDF are datacube storage and never become Items. |
 | Band layout | By default, one multi-band COG per scene. `split_bands=True` gives one asset per band, for mixed resolutions or selective fetch. Both are common STAC conventions. |
@@ -44,7 +47,7 @@ chip = windows.iloc[0].gs.to_stack(resampling={"s2": "bilinear"})  # aligned laz
 | Index | Plain `RangeIndex`. `parent` holds the input row's index position. |
 | Trace back | Each member Item dict in `sources` keeps its `id` and `collection`. |
 | Chip boundary | `chips` lays tiles with `tiler.Tiler` via `layout()`. A chip row's grid columns are that tile's bbox placed on the ground. |
-| Halo | `to_stack` loads the part of the chip inside its parent, then pads the rest lazily with `mode` (`reflect` by default). |
+| Halo | `to_tree` loads the part of the chip inside its parent, then pads the rest lazily with `mode` (`reflect` by default). |
 | Anchor properties | A window row carries the anchor item's own properties (e.g. annotations) as columns, so model context reads them from the row as it does today. STAC structural fields (`type`, `stac_version`, `stac_extensions`, `assets`, `links`, `bbox`, `id`, `collection`, time fields) are excluded. |
 | Georeferenced only | Windows come from item tables, so every window has a CRS. In-memory and unreferenced parents are dropped from `cuts`; tests write their rasters as COGs first. |
 | Static group | A group contributing exactly one item to a window joins every frame whole (label, DEM). |
@@ -53,8 +56,8 @@ chip = windows.iloc[0].gs.to_stack(resampling={"s2": "bilinear"})  # aligned laz
 ## Window row
 
 Tables build stacks and rows read them. `cuts.stacks`, `frames` and `chips`
-map a table to a table and open nothing. `row.gs.to_stack()` opens one row.
-`GeoVector.to_stack`, which read many item rows as one sample, is removed.
+map a table to a table and open nothing. `row.gs.to_tree()` opens one row.
+`GeoVector.to_tree`, which read many item rows as one sample, is removed.
 
 A window row uses STAC projection names for its grid, but it is not a STAC
 Item. An Item is one scene with fixed asset keys, while a window points at many
@@ -114,7 +117,7 @@ the items whose instants it uses.
 
 ### `GeoSample`: reading a row
 
-`row.gs.to_stack(*, resampling=None, chunks=None)` is a pandas **Series**
+`row.gs.to_tree(*, resampling=None, chunks=None)` is a pandas **Series**
 accessor, `GeoSample`, in `cuts/sample.py`. It raises `AttributeError` for a
 Series without `sources`, the same way the DataFrame accessor rejects
 non-GeoDataFrames.
@@ -182,7 +185,7 @@ def _gs(data: gpd.GeoDataFrame) -> GeoVector:
 # root: open_* for every kind of data
 gs.open_raster("scene.tif")
 gs.open_vector("data/catalog.parquet")        # renamed from read_vector
-gs.open_stack("cache/s0.zarr")
+gs.open_tree("cache/s0.zarr")
 
 # gs.stac: build, inspect, search
 forest = gs.stac.create_collection("forest", description="Forest samples")
@@ -217,32 +220,35 @@ windows = gs.cuts.stacks(gs.GeoVector.concat([items, s2]), on="label")          
 
 Filtering a local catalog uses the existing `open_vector(path).gs.query(anchor)`.
 
-### `CogFile`: what `to_cog` returns
+### `RasterFile`: what `to_cog` returns
 
 ```python
-# geodata/io/raster/cogs.py
+# geodata/io/raster/file.py
 @dataclass(frozen=True)
-class CogFile:
-    """One Cloud Optimized GeoTIFF a write produced."""
+class RasterFile:
+    """One saved raster file and the header it states."""
 
-    href: str                         # absolute path or URL
-    bands: tuple[str, ...]            # the variables it holds, in band order
-    datetime: pd.Timestamp | None     # its instant; None when undated
-    collection: str | None = None     # the stack layer it was written from
+    path: UPath         # carries storage_options
+    header: xr.Dataset  # as the file states it, pixels replaced by empty lazy arrays
 ```
 
-The writer states what it knows when it names each file: href, bands, instant and
-layer. `create_items` groups the records into Items instead of reopening files
-to guess which ones belong together, and opens each file only for the metadata
-it actually stores (grid, dtype, nodata). The stack template field `{group}` is
-renamed `{collection}`, so one word runs from layer to Item. `CogFile` is plain
-data, so `io` imports no STAC code. `to_zarr` and `to_netcdf` keep returning a
-path, because datacube stores are never catalogued.
+The writer reads the header back from the staged file before it is moved or
+uploaded, because GDAL infers some of what a file states (colour
+interpretation, area-or-point). `create_item` takes the headers from the records
+instead of reopening each file, and opens only bare paths, through
+`RasterFile.open`. The layer is the header's ACDD `id`, so no separate field
+names it. The stack template field `{group}` is renamed `{collection}`, so one
+word runs from layer to Item. `RasterFile` is path-like for a local file, so it
+opens wherever a path does. `to_zarr` and `to_netcdf` keep returning a path,
+because datacube stores are never catalogued.
 
-Records read back through one reader, `io.raster.cogs.read(files, geobox=None)`.
+`CogFile` remains only on the read side: it names a catalog asset's bands and
+instant for `cogs.open_raster`, where there is no file to open.
+
+Records read back through one reader, `io.raster.cogs.open_raster(files, geobox=None)`.
 Files of one instant merge band by band, and instants join along `time`.
-`open_raster(files)` and `open_stack(files)` take the records `to_cog` returned,
-and `GeoSample.to_stack` reads a row's member Items by turning their assets into
+`open_raster(files)` and `open_tree(files)` take the records `to_cog` returned,
+and `GeoSample.to_tree` reads a row's member Items by turning their assets into
 the same records (`stac.item.cog_files`), onto the chip grid. `open_raster`
 otherwise reads one path, and folders of COGs are no longer read.
 
@@ -291,10 +297,10 @@ Dependencies: `cuts` → `stac._table` → pystac. `cuts` never imports `client`
 - `StacMetadata` and `StacItem` attrs models (root `stac_items`, `stac_groupby`), and `StacSourceConfig.item_properties` and `asset_fields`.
 - The datacube STAC extension (`stac/extensions/datacube.py`): one instant per COG makes it repeat the Item's `datetime`.
 - `cuts.select`, `cuts.select_times`, `cuts.select_pixels`.
-- `GeoVector.to_stack` (item rows to stack); `row.gs.to_stack()` replaces it.
+- `GeoVector.to_tree` (item rows to stack); `row.gs.to_tree()` replaces it.
 - `GeoVector.to_stac_parquet`; `GeoCatalog.to_geoparquet` replaces it.
 - Multi-path and folder `open_raster`, and `_combine_rasters`. `open_raster` reads one path.
-- `open_stack` on COG path lists; it reads Zarr/NetCDF stacks only.
+- `open_tree` on COG path lists; it reads Zarr/NetCDF stacks only.
 - `.zarr` and `.nc` in `_MEDIA_TYPES`, and `stac/extensions/zarr.py`.
 - The `times` column and string ids (`s0/frame-0/chip-3`).
 - `read_vector`, renamed to `open_vector` file by file, never by regex.
@@ -302,8 +308,8 @@ Dependencies: `cuts` → `stac._table` → pystac. `cuts` never imports `client`
 
 ## Consumers updated
 
-- `ModelSpec.prepare(raw, output, *, on, keep)`: iterate `cuts.stacks(raw, on=on)`, read each row with `to_stack`, preprocess, write COGs, and catalogue them with `create_items`.
-- `ml/segmentation/supervised/data.py` `Dataset`: built from a windows table; `__getitem__` is `windows.iloc[i].gs.to_stack()`.
+- `ModelSpec.prepare(raw, output, *, on, keep)`: iterate `cuts.stacks(raw, on=on)`, read each row with `to_tree`, preprocess, write COGs, and catalogue them with `create_items`.
+- `ml/segmentation/supervised/data.py` `Dataset`: built from a windows table; `__getitem__` is `windows.iloc[i].gs.to_tree()`.
 - `ml/segmentation/callbacks.py` `ChipWriter`: a logits COG per chip plus an item table.
 - `model/spec/cuts.py`: forwards to the new `frames` and `chips` signatures.
 - Docs, README, AGENTS.md, examples and workspace templates using any removed or renamed name.
@@ -312,7 +318,7 @@ Dependencies: `cuts` → `stac._table` → pystac. `cuts` never imports `client`
 
 The setup: a 10 m label with 512 px, and S2 on a shifted 20 m grid with 3 dates. S2 was saved as split-band COGs, giving one Item with 2 assets per date.
 
-- `odc.stac.load` on a 224 px chip geobox is lazy and reprojects correctly. On a 3-band COG written by `to_cog`, however, it names the variables `image.1`, `image.2` and `image.3`, and keeps only `nodata` in attrs. That rules it out for `to_stack`.
+- `odc.stac.load` on a 224 px chip geobox is lazy and reprojects correctly. On a 3-band COG written by `to_cog`, however, it names the variables `image.1`, `image.2` and `image.3`, and keeps only `nodata` in attrs. That rules it out for `to_tree`.
 - `open_raster(href, chunks={})` → `reproject(chip)` keeps `red`, `nir` and `swir` and their attrs. It stays lazy, gives 0 differing pixels against the source slice on a same-grid chip, and stays lazy for 10 m → 20 m.
 - `.pad(mode="reflect")` stays lazy.
 - A nested-dict `sources` column fails the parquet round trip. JSON text round-trips, and the reloaded Items load again.
@@ -341,7 +347,7 @@ Tests mirror the source tree, under `tests/geodata/cuts/`, `tests/geodata/stac/`
 - `sources` is unchanged.
 - `parent` indexes the frame row.
 
-**`to_stack`**
+**`to_tree`**
 - Every group is on the chip grid.
 - The result stays lazy.
 - A reflect halo appears only past the parent edge.
@@ -374,8 +380,8 @@ Tests mirror the source tree, under `tests/geodata/cuts/`, `tests/geodata/stac/`
 
 `read_vector`, `geosave:stack` catalogs, `create_item` returning a pystac Item, `create_stack_items`,
 `stac.table`, `stac.item`, `StacTableClient` export, `to_stac_parquet`,
-`open_raster([...])`, folder `open_raster`, `open_stack` on COG lists,
-`GeoVector.to_stack`, `table.load`, `cuts.select*`, string window ids,
+`open_raster([...])`, folder `open_raster`, `open_tree` on COG lists,
+`GeoVector.to_tree`, `table.load`, `cuts.select*`, string window ids,
 `StacClient.search` returning pystac Items, `ModelSpec.prepare` without `on`, and
 Zarr-backed prepared catalogs.
 

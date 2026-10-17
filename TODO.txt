@@ -1,2 +1,149 @@
-Cool Idea:
-1. Build parser for data_pipeline so the pipeline is preserved in config.yaml format
+# TODO
+
+Reviewed against current src and tests on 2026-10-13. Evidence and per-file
+coverage: docs/contributing/audits/2026-10-13-cleanup.md and
+docs/contributing/audits/2026-10-13-docs-tests-review.md.
+Unchecked items are retained concerns or future work, not approval to delete
+public code. Run a behavioral smoke before choosing a design or removal.
+
+## Retained code needing a decision
+
+- [ ] Explorer cache lifecycle: Style, FilterPanel and AttributeTable retain
+  cached widgets for removed layers; CatalogLayer retains previously opened
+  rasters. Measure retention in long sessions before choosing eviction and
+  watcher cleanup. Repeated opening currently preserves layer settings.
+
+- [ ] SAFE product readers: io/raster/safe.py is an intentional stub, still
+  dispatched by open_raster/open_stack. Implement XML metadata, band naming and
+  native-resolution groups, or explicitly drop product dispatch. It is not an
+  unused implementation.
+- [ ] Label ingestion helper: geosave_flows/tasks/labels.py has only test callers
+  but is still documented publicly. Trace its intended consumer before removing
+  old folder-ID restrictions or the helper. Smoke: read_labels(folder) produces
+  no collection column; cuts.stacks(rows, on="label") raises KeyError.
+- [ ] Optional scaffolds: geosave make is registered but no scaffolds are bundled.
+  Its tests synthesize content. Settle bundled content and empty-selection
+  behavior before deleting this explicitly permitted extension interface.
+- [ ] Startup environment: templates/common/.env copies CDSE endpoint settings
+  and placeholder credentials into every workspace. Decide provider-specific
+  configuration ownership; these settings are active, not unused text.
+- [ ] GeoTIFF creation_options: the typed nested option is forwarded as one GDAL
+  keyword rather than unpacked. Smoke the requested driver setting and either
+  support this option or remove it from the advertised schema.
+- [ ] Zarr option contracts: synchronizer/chunk_store options are exposed despite
+  backend limitations; writes use format 3. Align accepted options with backend
+  capabilities after checking external store reads as well as writes.
+
+## Reproduced behavior and follow-up tests
+
+- [ ] Month-end coverage: TimeSpec.bounds subtracts offsets from end-period
+  labels. January 1/31 observations resampled with ME report December 31 through
+  January 30 in gs.timespan. Check actual pandas bucket membership through
+  resampling -> anchor -> STAC coverage; existing bounds tests pin the arithmetic
+  rather than coverage. Include end/start aliases and closed/label choices.
+- [ ] Attr join warnings: identical scale_factor=1.0 declarations join to {} but
+  emit DroppedAttrsWarning claiming disagreement. Default serialization hides
+  the kept identity group from warning bookkeeping. Cover identity packing and
+  alias respelling while preserving intentional omission of default attrs.
+- [ ] OHEM: min_kept=0 bypasses threshold masking and equals ordinary CE. Settle
+  the intended zero behavior and add direct forward coverage for thresholds,
+  ignored/empty targets and device handling.
+- [ ] File ownership: iterable open_stack header scans call open_raster without
+  closing header datasets; mapping inputs use ExitStack. Observe close callbacks
+  and multi-file cogs.read failure paths before changing active resource handling.
+- [ ] Model shape/metrics coverage: verify encoder/decoder pyramid lengths, MIM
+  mask bounds and chip/context geometry. MulticlassMetrics lists AUROC micro as
+  a mode although upstream rejects it; decide whether to advertise that mode.
+- [ ] Calibration: test a successful threshold sweep and checkpoint/native
+  save/load. Thresholds currently live on Lightning modules, while releases
+  save task.model; settle head ownership before promising portable calibration.
+- [ ] Static typing audit: the previous full audit recorded 407 errors and two
+  warnings (20 source errors, 387 test errors); rerun to establish current counts.
+  Examples include native Dataset/accessor annotation mismatches,
+  _raw -> GeoVector in tests/model/spec/test_model.py
+  although it returns a GeoDataFrame, forwarded reader kwargs, and test doubles
+  inferred as torch tensors. Check real contracts and invalid-input test cases
+  before changing types; passing runtime tests do not validate these declarations.
+
+## Closed by the documentation and test review
+
+- [x] Native NumPy conversions run independently of torch; tensor tests use
+  a scoped optional-dependency fixture in tests/geodata/core/conftest.py.
+- [x] The far-edge crop regression crosses the right and bottom boundaries,
+  checks fill pixels and verifies no eager computation during window creation.
+- [x] Packaging checks share the layering import-time traversal, including
+  conditional/class imports, and parse each source file once per collection.
+
+## Ownership and implementation suggestions
+
+- [ ] STAC extension ownership: cuts/stacks.py imports ProjectionExtension
+  directly. Move live schema access through stac/extensions/projection.py so
+  only the extension package imports pystac.extensions.
+- [ ] Native model construction: registry built-in discovery imports all stages;
+  even a segmentation head build pulls in Lightning through the biomass
+  monolith's TerraTorch task. Check optional dependency/import cost and recipe,
+  checkpoint and output parity before migrating the deprecated factory/task.
+- [ ] ML ownership: builders/criterion.py imports the sibling criterion package,
+  conflicting with the rule that only tasks import root ML concerns. Both are
+  used; resolve ownership rather than deleting the implemented loss.
+- [ ] Original pipeline-preservation idea: there is no data_pipeline module.
+  ModelSpec.save/load already preserves ordered preprocessing, references,
+  inputs, context and tensor transforms in model_spec.yaml. Identify remaining
+  portability/migration requirements before adding a second config.yaml parser.
+  See the existing ModelSpec implementation rework decision.
+
+## Unimplemented features
+
+See docs/contributing/open-decisions.md and its linked specs for design context.
+Current implementations were checked; historical plans are not callable APIs.
+
+- [ ] Source-specific consumer Datasets for segmentation/regression starters;
+  datasets.MyDataset is intentionally a placeholder, not a shipped reader.
+- [ ] Prediction persistence back to chip/whole-raster outputs and item tables;
+  current Lightning tasks have no predict_step. Define each head's output/grid
+  contract before adding callbacks or a new writer.
+- [ ] Whole-raster evaluation after rebuilding chip outputs.
+- [ ] Prepared normalization statistics from catalogs.
+- [ ] Optional Prefect orchestration for dense preparation; ModelSpec.prepare
+  is implemented, but prepare_dense_data is absent and is not a CLI command.
+- [ ] Catalog folders with one table per collection; current writers/readers
+  operate on one item-table file.
+- [ ] Typed remote StacTable credentials translated into DuckDB secrets;
+  current duckdb= session configuration is implemented and tested.
+- [ ] Real remote catalog-write smoke against configured storage; local/memory
+  filesystem tests do not verify a live cloud service.
+- [ ] Single-band COG filename fallback when no stored band name exists;
+  current native reader deliberately uses band_1.
+- [ ] Raster explorer with attributes, variable choice and time scrubbing;
+  static plots and one-date explore() already work.
+- [ ] Checkpoint initialization for a new training run.
+- [ ] Detection after box convention, decoder and empty-output persistence settle.
+- [ ] Release convenience functions, generated model cards and LitServe adapter;
+  GeoSaveModel native releases already work. Dynamic serving batches need a
+  per-sample request interface and concurrent runner first.
+- [ ] Explicit postprocessing references with output identity, dimensions and grid.
+- [ ] Derive starter in_channels from declared model inputs rather than repeat it.
+- [ ] CI doctest smoke job and deferred example stages; notebook contents were
+  excluded from this cleanup as requested.
+
+Catalog follow-ups (2026-10-14 review):
+- [ ] Replace positional parent references before allowing parent tables to be reordered independently of their chips.
+- [ ] Define output time/provenance semantics for frame predictions; merge currently reconstructs spatial grids without assigning prediction dates.
+- [ ] Add prediction-catalog reconstruction from persisted raster assets; merge currently takes arrays keyed by chip row labels, not a GeoParquet prediction catalog.
+- [ ] Allow explicit target-grid assembly within one collection before native assembly rejects mixed grids; source mosaics and duplicate same-date contributors need a separate contract.
+
+STAC follow-up (2026-10-15):
+- [ ] Consolidate extension read_fields/stamp entry points into one reader per
+  schema; retain core/legacy field handling and extension-owned PySTAC imports.
+- [ ] Define explicit reference-grid selection for Items with multiple eligible
+  data resolutions. Sampling currently takes the first gridded data asset;
+  thumbnails and other explicitly non-data assets are excluded.
+
+Transform follow-ups (2026-10-15):
+- [ ] Resolve chunked warp parity for bilinear, cubic, and average kernels;
+  test_warp_edges.py has three strict expected failures against full-grid results.
+- [x] Validate categorical reductions before execution using public resampler
+  iteration; explicitly preserve attrs independently of xarray global options.
+- [ ] Reconcile staged obsolete tests/geodata/core/test_dataset.py and
+  test_datatree.py copies with canonical core/raster tests; their old imports
+  currently prevent broad test collection. The staged copies were preserved.

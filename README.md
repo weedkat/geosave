@@ -19,7 +19,7 @@ Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
 - **STAC catalogs.** Items are built from the files a writer saved and stored as
   stac-geoparquet item tables, searchable with rustac.
 - **Cuts.** Frames and chips are tables of windows; each row reads itself as a
-  lazy stack.
+  lazy tree.
 - **Model chains and releases.** Registered encoders (DINOv3, Prithvi,
   Prithvi-TL, Clay), decoders (DPT, UNet) and heads compose into one
   `ModelChain`, released as a Transformers model with its `model_spec.yaml`.
@@ -54,18 +54,37 @@ Working on GeoSave itself (clone + `uv sync`), or installing an
 exact dev build off a GitHub release — see the
 [documentation](https://weedkat.github.io/geosave-engine/).
 
-## Quick Start
+## Learn geospatial AI
+
+Follow one land-cover segmentation project through the notebooks:
+
+| Start with | Learn | Result |
+| --- | --- | --- |
+| [0 · Basics](examples/00_basics.ipynb) | Open real image/label pairs and train a small model with Lightning. | Validation metrics and a prediction on the label's grid. |
+| [1 · Model](examples/01_model.ipynb) | Compose and swap model stages, then train a registered recipe. | ModelChain and comparable TensorBoard runs. |
+| [2 · Build a dataset](examples/02_sources.ipynb) | Fetch imagery for an anchor, a label or a shape, and build a catalog. | Image/label pairs and a GeoParquet catalog. |
+| [3 · Inputs](examples/03_inputs.ipynb) | Add features, declare them in a model spec, cut chips, and train with GeoSave's Module and DataModule. | A best checkpoint, prediction maps, and a saved GeoTIFF. |
+
+Clone the repository and run `uv sync`, then open the notebooks with its `.venv`
+kernel. The notebooks share a prepared dataset downloaded on first use;
+notebook 2 also reads imagery from Planetary Computer, and notebook 3 starts
+from the dataset it saves. See the
+[examples guide](docs/examples.md) for requirements and next steps.
+
+## Create a workspace
 
 ```bash
 uv run geosave create my-project
 cd my-project
-# fill in .env with your CDSE (or other STAC provider) credentials
 ```
 
-`geosave create` prompts for a workspace starter; pass `-w segmentation`,
-`-w regression`, `-w custom_lightning`, or `-w blank` to select it, and `-d` to set the description.
+`geosave create` makes an empty workspace. Inside it, `geosave add-task` prompts
+for a task template; pass `segmentation-supervised`, `regression-supervised`, or
+`lightning-boilerplate` to select one.
 Start with [Your first raster](docs/first-raster.md), then
 [prepare training chips](docs/quickstart.md) and [train a model](docs/guides/training.md).
+The `lightning-boilerplate` task runs on generated data; the segmentation and
+regression tasks need your Dataset implementation before their first fit.
 The [workspace guide](docs/guides/workspaces.md) explains generated projects;
 the [API reference](docs/reference/index.md) lists public functions and classes.
 
@@ -76,13 +95,11 @@ my-project/
 ├── artifacts/     # checkpoints, logs, saved configs (created by training)
 ├── configs/       # LightningCLI YAML configs
 ├── data/          # project datasets
-├── logs/
 ├── modules/       # editable project modules
 ├── notebooks/
-├── predictions/
-├── scripts/       # `geosave make scripts <file>` copies optional scaffolds here
-├── .env           # CDSE credentials, filled in with placeholders
-├── geosave.toml   # project information, starter template, engine version
+├── scripts/
+├── .env.example   # CDSE credentials placeholders; copy to .env
+├── .gitignore
 └── main.py        # LightningCLI entry point — do not need to touch this
 ```
 

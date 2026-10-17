@@ -3,15 +3,27 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import torch
+from torch.utils.data import Dataset
 
 from geosave.ml.tasks.pretraining import mim
 from tests.ml.tasks.segmentation.supervised.test_data import (
     FLIP,
     NORMALIZE,
-    Chips,
     _batch,
     _spec,
 )
+
+
+class Chips(Dataset[mim.Sample]):
+    """Source yielding this method's Sample contract."""
+
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int) -> mim.Sample:
+        return {
+            "inputs": {"image": torch.full((2, 8, 8), float(index))},
+        }
 
 
 def _data(tmp_path, training: bool, **options: object) -> mim.DataModule:
@@ -24,7 +36,7 @@ def _data(tmp_path, training: bool, **options: object) -> mim.DataModule:
 
 def _unlabeled(times: int = 0) -> mim.Sample:
     batch = _batch(times)
-    return {"inputs": batch["inputs"], "valid": batch["valid"]}
+    return {"inputs": batch["inputs"]}
 
 
 def test_training_batches_are_augmented_then_transformed(tmp_path) -> None:
@@ -36,17 +48,14 @@ def test_training_batches_are_augmented_then_transformed(tmp_path) -> None:
     batch = data.on_after_batch_transfer(_unlabeled(times=3), 0)
 
     torch.testing.assert_close(batch["inputs"]["image"], (image.flip(-1) - mean) / std)
-    assert batch["valid"].all()
+    assert set(batch) == {"inputs"}
 
 
-def test_non_finite_pixels_become_zero_and_invalid(tmp_path) -> None:
-    data = _data(tmp_path, False, augmentations=FLIP)
+def test_input_values_are_not_repaired(tmp_path) -> None:
+    data = _data(tmp_path, False)
     unlabeled = _unlabeled()
     unlabeled["inputs"]["image"][0, 1, 3, 4] = torch.nan
 
     batch = data.on_after_batch_transfer(unlabeled, 0)
 
-    valid = batch["valid"]
-    assert batch["inputs"]["image"][0, 1, 3, 4] == 0
-    assert not valid[0, 3, 4]
-    assert valid.sum() == valid.numel() - 1
+    assert batch["inputs"]["image"][0, 1, 3, 4].isnan()

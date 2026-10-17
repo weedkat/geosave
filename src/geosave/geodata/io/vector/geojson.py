@@ -17,12 +17,31 @@ from ..storage import Location, StorageOptions
 
 if TYPE_CHECKING:
     from os import PathLike
+    from geosave.geodata import GeoDataFrame
 
 _FILE_SUFFIXES = (".geojson", ".json")
 
 
 class GeoJSONOpenOptions(TypedDict, total=False):
-    """Optional GeoPandas behavior supported when opening GeoJSON."""
+    """Optional GeoPandas behavior when opening GeoJSON.
+
+    Omitted keys use GeoPandas and the selected engine's defaults. Spatial
+    filters select features; they do not clip their geometries.
+
+    Attributes:
+        columns: Property columns to read; an empty list keeps only geometry.
+            None reads all properties.
+        bbox: Feature filter `(minx, miny, maxx, maxy)` in the file's CRS.
+            Mutually exclusive with `mask`.
+        mask: Geometry, GeoSeries, GeoDataFrame, or GeoJSON geometry selecting
+            intersecting features. GeoPandas reprojects objects carrying a CRS;
+            bare geometries must use the file's CRS. Cannot combine with `bbox`.
+        rows: Read the first N features with an integer, or a feature-position
+            slice. None reads all matching features.
+        driver_options: Extra read keywords for the selected GeoPandas engine,
+            such as pyogrio's `use_arrow`. Do not repeat direct options or set
+            `engine` or `ignore_geometry` here.
+    """
 
     columns: list[str] | None
     bbox: tuple[float, float, float, float] | None
@@ -31,12 +50,12 @@ class GeoJSONOpenOptions(TypedDict, total=False):
     driver_options: dict[str, Any]
 
 
-def read(
+def open_vector(
     source: Location,
     *,
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
     **open_options: Unpack[GeoJSONOpenOptions],
-) -> gpd.GeoDataFrame:
+) -> GeoDataFrame:
     """Open the features of one GeoJSON file.
 
     Args:
@@ -59,7 +78,7 @@ def read(
         ignore_geometry=False,
         **options,
     )
-    return cast("gpd.GeoDataFrame", frame)
+    return cast("GeoDataFrame", frame)
 
 
 def driver_read_options(open_options: Mapping[str, Any]) -> dict[str, Any]:
@@ -89,7 +108,25 @@ def driver_read_options(open_options: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class GeoJSONWriteOptions(TypedDict, total=False):
-    """Optional GeoPandas behavior supported when writing GeoJSON."""
+    """Optional GeoPandas behavior when writing GeoJSON.
+
+    Omitted keys use GeoPandas and engine defaults. Geometry is transformed
+    to WGS84 before writing. Engine-specific options need that engine's support.
+
+    Attributes:
+        index: Write the pandas index as property columns when True; False
+            omits it. None lets GeoPandas choose based on the index type.
+        promote_to_multi: Pyogrio option converting single geometries to their
+            multi equivalents. None lets pyogrio choose for the format.
+        nan_as_null: Pyogrio option writing floating-property NaNs as JSON null.
+            False requests format-specific NaN handling instead.
+        metadata: String metadata for engines/drivers supporting it. GeoJSON
+            does not provide GeoPandas' GeoPackage metadata support.
+        driver_options: Extra write keywords for the selected engine or GDAL
+            driver. Do not set `engine` or repeat direct options here.
+        storage_options: Filesystem credentials and connection options for
+            uploading the completed temporary file to a remote destination.
+    """
 
     index: bool | None
     promote_to_multi: bool | None

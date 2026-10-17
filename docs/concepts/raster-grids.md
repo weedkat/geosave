@@ -88,24 +88,27 @@ Projected CRSs such as this UTM CRS commonly use metres; geographic CRSs such
 as EPSG:4326 use degrees. A numeric resolution means units of the target CRS,
 so `resolution=10` is not always ten metres.
 
-## Keep or align a stack's native grids
+## Keep or align a tree's native grids
 
 An xarray `Dataset` uses one spatial grid for its variables. A `DataTree`
-stack can keep different grids in separate groups. When all groups share an
+tree can keep different grids in separate groups. When all groups share an
 exact grid, the root publishes common spatial coordinates. Otherwise each
-group retains its own coordinates, and the stack has no common `geobox`.
+group retains its own coordinates, and the tree has no common `geobox`.
 
-Use `stack.gs.align(...)` to put the groups on one grid before pixelwise
-combination. Supply resampling per variable, using names such as
+Use `tree.gs.align(target=reference)` to put the groups on the reference
+grid before pixelwise combination. The target is required; the default extent
+is `"match"`. Request `extent="union"` or `extent="intersection"` explicitly
+to change coverage. A reference tree must have a shared grid; otherwise select
+one of its groups. Supply resampling per variable, using names such as
 `"labels/mask"`, when continuous imagery and categorical labels need different
-treatment. Constructing a stack itself does
+treatment. Constructing a tree itself does
 not perform this alignment.
 
 ## Cropping and windows
 
 `isel(y=..., x=...)` selects pixel positions. `.gs.crop(region)` also masks
 pixels outside a geometry, using nodata. Neither operation changes resolution.
-A catalog window has its own grid; `.gs.to_stack()` places each source on that
+A catalog window has its own grid; `.gs.to_xarray()` places each source on that
 grid, slicing an aligned source and reprojecting a different one.
 
 Reprojection can be lazy for Dask inputs, but interpolation and nodata behavior

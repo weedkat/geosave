@@ -27,10 +27,10 @@ flowchart LR
 
 | Package | Responsibility |
 | --- | --- |
-| `geodata` | Accessors, metadata, I/O, transforms, STAC, windows, benchmarks, and visualization. |
+| `geodata` | Accessors, metadata, I/O, transforms, STAC, sampling, benchmarks, and visualization. |
 | `model` | Model chains, registry, stages, specifications, and native releases. |
 | `ml` | Lightning tasks, data modules, metrics, builders, transforms, and callbacks. |
-| `cli` | Workspace creation and optional file scaffolds. |
+| `cli` | Workspace creation and task templates. |
 | `templates` | Source files copied into consumer workspaces. |
 
 The model package does not import GeoSave's training package. Importing
@@ -48,7 +48,7 @@ public GeoSave APIs; `geosave` imports neither `geosave_flows` nor Prefect.
 raster files -> item table -> windows -> Dataset samples -> Lightning -> release
 ```
 
-Raster writers save pixels and return paths or file records. STAC describes
+Raster writers save pixels and return paths. STAC describes
 those files in an item table. Cuts describe model windows without reading their
 pixels. A source-specific torch Dataset reads windows, converts pixels to
 named tensors, and returns the task's sample contract. A DataModule batches and
@@ -60,6 +60,25 @@ chain and optional spec; a Lightning checkpoint additionally holds training stat
 
 ## Implementation rules
 
+- `core/vector` owns the vector, item-table, sample-table, and row accessors.
+  Its internal `CollectionTable` base owns Collection decoding, metadata-preserving
+  concatenation, and export restrictions shared by Item and sample tables.
+  Accessors expose thin table operations; `GeoSample` owns sample-row construction.
+  `sampling` owns orchestration, footprint matching, calendar selection, tile placement, and
+  weighted pixel accumulation; `core/vector/query.py` owns shared span rules.
+  Chips persist their parent's spatial key and match its time span on merge.
+- `stac/source.py` delegates pixel loading, time axes, grouping, and property
+  variables to ODC, then applies agreed band and Collection metadata. It does
+  not reconstruct interval bounds, promote properties to coordinates, or squeeze
+  dimensions based on search limits. `io/raster/stac.py`
+  opens native Item assets through format readers and assembles their rasters.
+  STAC translators interpret band metadata and Item dates; file assembly owns
+  positional band renaming. Metadata translation does not choose a loader.
+  Collection and band readers return plain attrs; Collection publication policy
+  is shared by JSON and GeoParquet in `io/vector/_stac.py`. It converts client-bound
+  definitions to native PySTAC values before updating extents and publication links.
+  Missing Item grid metadata does not prevent native image reads. Grid lookup
+  warns and returns None; spatial sampling omits those references.
 - Keep raster work lazy where the operation supports it. Pixel reads and writes
   must be clear at the public interface.
 - Preserve applicable CRS, coordinates, transform, nodata, dtype, and variable

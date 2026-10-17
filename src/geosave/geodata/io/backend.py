@@ -1,4 +1,4 @@
-"""Let xarray open GeoSave rasters and stacks by the engine name `geosave`."""
+"""Let xarray open GeoSave rasters and trees by the engine name `geosave`."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Any
 import xarray as xr
 from xarray.backends import BackendEntrypoint
 
-from .readers import open_raster, open_stack
+from .openers import open_raster, open_tree
 
 
 class GeoSaveBackendEntrypoint(BackendEntrypoint):
-    """Open rasters with `open_raster` and stacks with `open_stack`.
+    """Open rasters with `open_raster` and trees with `open_tree`.
 
     The engine runs only when named. It claims no file on its own, so
     `xr.open_dataset("scene.tif")` keeps choosing among xarray's own engines.
@@ -24,7 +24,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         ('label', 'sentinel_2_l2a')
     """
 
-    description = "GeoSave rasters and raster stacks (COG, Zarr, NetCDF)"
+    description = "GeoSave rasters and raster trees (COG, Zarr, NetCDF)"
     url = "https://github.com/weedkat/geosave-engine"
     open_dataset_parameters = ("filename_or_obj", "drop_variables")
 
@@ -59,7 +59,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         drop_variables: str | Iterable[str] | None = None,
         **options: Any,
     ) -> xr.DataTree:
-        """Open what `open_stack` reads.
+        """Open what `open_tree` reads.
 
         Args:
             filename_or_obj: Folder holding one raster per group, or group
@@ -70,4 +70,4 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         Returns:
             DataTree holding one group per raster.
         """
-        return open_stack(filename_or_obj, **options)
+        return open_tree(filename_or_obj, **options)

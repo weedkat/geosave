@@ -8,17 +8,20 @@ from collections import defaultdict
 from html import unescape
 from pathlib import Path
 
-from griffe import Alias, GriffeLoader, Object
+from griffe import Alias, DocstringSectionKind, GriffeLoader, Object
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "docs" / "reference"
 PACKAGES = ("geosave", "geosave_flows")
-NATIVE = {f"geosave.geodata.{name}" for name in ("DataArray", "DataTree", "Dataset", "GeoDataFrame")}
+PROTOCOLS = {"__getitem__", "__iter__", "__len__", "__eq__", "__hash__", "__repr__"}
+NATIVE = {
+    f"geosave.geodata.{name}"
+    for name in ("DataArray", "DataTree", "Dataset", "GeoDataFrame")
+}
 AREAS = {
     "data": "Geospatial data",
     "models": "Models",
     "training": "Training",
-    "commands": "Workspace commands",
     "flows": "Optional flows",
 }
 
@@ -28,16 +31,23 @@ def inventory() -> dict[str, Object]:
     loader = GriffeLoader(search_paths=[ROOT / "src"], allow_inspection=False)
     modules = []
     for package in PACKAGES:
-        loader.load(package)
-        for path in sorted((ROOT / "src" / package).rglob("*.py")):
-            parts = path.relative_to(ROOT / "src").with_suffix("").parts
-            if "templates" in parts or any(part.startswith("_") for part in parts[:-1]):
+        pending = [loader.load(package)]
+        while pending:
+            module = pending.pop()
+            parts = module.path.split(".")
+            if "templates" in parts or any(part.startswith("_") for part in parts):
                 continue
-            if parts[-1] == "__init__":
-                parts = parts[:-1]
-            elif parts[-1].startswith("_"):
+            if (
+                module.path.startswith("geosave.cli")
+                or module.path == "geosave_flows.cli"
+            ):
                 continue
-            modules.append(loader.load(".".join(parts)))
+            modules.append(module)
+            pending.extend(
+                member
+                for member in module.members.values()
+                if not member.is_alias and member.is_module
+            )
     loader.resolve_aliases(implicit=True, external=False)
 
     objects = {}
@@ -48,12 +58,12 @@ def inventory() -> dict[str, Object]:
             if module.exports is not None and name not in module.exports:
                 continue
             if isinstance(member, Alias):
-                if module.exports is None or not member.target_path.startswith(PACKAGES):
+                if module.exports is None or not member.target_path.startswith(
+                    PACKAGES
+                ):
                     continue
                 member = member.final_target
             if member.is_module or member.path in NATIVE:
-                continue
-            if member.is_attribute and not member.docstring:
                 continue
             objects[member.path] = member
     return dict(sorted(objects.items()))
@@ -66,12 +76,12 @@ def members(obj: Object) -> dict[str, Object]:
     selected = {
         name: member
         for name, member in obj.members.items()
-        if not name.startswith("_") and name != "model_config"
+        if (not name.startswith("_") or name in PROTOCOLS) and name != "model_config"
     }
     selected.update(
         (name, member)
         for name, member in obj.inherited_members.items()
-        if not name.startswith("_")
+        if (not name.startswith("_") or name in PROTOCOLS)
         and name != "model_config"
         and member.target_path.startswith(PACKAGES)
     )
@@ -86,8 +96,6 @@ def area(path: str) -> str:
         return "models"
     if path.startswith("geosave.ml."):
         return "training"
-    if path.startswith("geosave.cli."):
-        return "commands"
     return "data"
 
 
@@ -98,11 +106,15 @@ def pages(objects: dict[str, Object]) -> dict[Path, str]:
         "# Complete public API",
         "",
         "This index includes explicit `__all__` exports and each public function,",
-        "class, type alias, or documented constant defined in a GeoSave module.",
+        "class, type alias, or constant defined in a GeoSave module.",
         "For modules without `__all__`, imported names are excluded. Private names",
-        "and workspace templates are excluded. Classes include fields and methods",
+        "and workspace templates are excluded. CLI commands follow their `--help`",
+        "contracts. Classes include fields and methods",
         "defined by GeoSave and inherited from GeoSave bases; upstream methods keep",
         "their native library contracts. Low-level helpers retain their exact module paths.",
+        "GeoSave's indexing, iteration, length, equality, hashing, and representation",
+        "protocols are included; constructors appear in their class signatures.",
+        "Construction hooks such as `__post_init__` remain implementation details.",
         "",
         "The linked entries render parameter names, types, defaults, return types,",
         "and existing Google-style descriptions from the current source. A missing",
@@ -114,6 +126,7 @@ def pages(objects: dict[str, Object]) -> dict[Path, str]:
         "Native `gs.Dataset`, `gs.DataArray`, `gs.DataTree`, and `gs.GeoDataFrame`",
         "are the corresponding xarray and GeoPandas types; their GeoSave methods",
         "are documented on the accessors. See the [reference overview](index.md).",
+        "For command-line inputs and outputs, use the [CLI reference](cli.md).",
         "",
     ]
     grouped = defaultdict(list)
@@ -121,7 +134,14 @@ def pages(objects: dict[str, Object]) -> dict[Path, str]:
         grouped[area(path)].append((path, obj))
     generated = {}
     for key, title in AREAS.items():
-        index.extend([f"## {title}", "", f"[Read all {title.lower()} contracts](generated/{key}.md).", ""])
+        index.extend(
+            [
+                f"## {title}",
+                "",
+                f"[Read all {title.lower()} contracts](generated/{key}.md).",
+                "",
+            ]
+        )
         index.extend(f"- [`{path}`][{path}]" for path, _ in grouped[key])
         index.append("")
         lines = [
@@ -134,14 +154,20 @@ def pages(objects: dict[str, Object]) -> dict[Path, str]:
             "",
         ]
         for path, obj in grouped[key]:
-            lines.extend([f"::: {path}", "    options:", "      show_root_full_path: true"])
+            lines.extend(
+                [f"::: {path}", "    options:", "      show_root_full_path: true"]
+            )
             if obj.is_class:
                 selected = members(obj)
+                lines.append("      filters: []")
                 lines.append("      members:")
                 lines.extend(f"        - {name}" for name in selected)
                 if not selected:
                     lines[-1] = "      members: false"
                 inherited = [name for name in selected if name in obj.inherited_members]
+                inherited_init = obj.inherited_members.get("__init__")
+                if inherited_init and inherited_init.target_path.startswith(PACKAGES):
+                    inherited.append("__init__")
                 if inherited:
                     lines.append("      inherited_members:")
                     lines.extend(f"        - {name}" for name in inherited)
@@ -155,7 +181,10 @@ def check_site(objects: dict[str, Object], site: Path) -> list[str]:
     """Require an HTML heading for every definition and GeoSave class member."""
     anchors = set()
     for path in (site / "reference").rglob("*.html"):
-        anchors.update(unescape(value) for value in re.findall(r'\bid="([^\"]+)"', path.read_text()))
+        anchors.update(
+            unescape(value)
+            for value in re.findall(r'\bid="([^\"]+)"', path.read_text())
+        )
     expected = set(objects)
     for path, obj in objects.items():
         expected.update(f"{path}.{name}" for name in members(obj))
@@ -163,7 +192,7 @@ def check_site(objects: dict[str, Object], site: Path) -> list[str]:
 
 
 def audit(objects: dict[str, Object]) -> None:
-    """Report absent input and output annotations without inventing contracts."""
+    """Report absent annotations and Google sections without inventing contracts."""
     callables = {}
     for obj in objects.values():
         if obj.is_function:
@@ -172,28 +201,138 @@ def audit(objects: dict[str, Object]) -> None:
             target = member.final_target if isinstance(member, Alias) else member
             if target.is_function:
                 callables[target.path] = target
-        if obj.is_class and "__init__" in obj.members:
-            callables[obj.members["__init__"].path] = obj.members["__init__"]
-    findings = []
+        if obj.is_class and "__init__" in obj.all_members:
+            init = obj.all_members["__init__"]
+            if isinstance(init, Alias):
+                if not init.target_path.startswith(PACKAGES):
+                    continue
+                init = init.final_target
+            callables[init.path] = init
+    findings = defaultdict(list)
+    schemas = 0
+    schema_bases = {
+        "pydantic.BaseModel",
+        "pydantic.RootModel",
+        "typing.TypedDict",
+        "typing_extensions.TypedDict",
+    }
+    for obj in objects.values():
+        if not obj.is_class:
+            continue
+        owners = (obj, *obj.mro())
+        if not any(
+            base.canonical_path in schema_bases
+            for owner in owners
+            for base in owner.bases
+        ):
+            continue
+        schemas += 1
+        for owner in owners:
+            sections = (
+                owner.docstring.parse("google", warnings=False)
+                if owner.docstring
+                else []
+            )
+            described = {
+                field.name
+                for section in sections
+                if section.kind
+                in (DocstringSectionKind.attributes, DocstringSectionKind.parameters)
+                for field in section.value
+            }
+            for name, member in owner.members.items():
+                if (
+                    not name.startswith("_")
+                    and name != "model_config"
+                    and not member.is_alias
+                    and member.is_attribute
+                    and member.annotation is not None
+                    and "instance-attribute" in member.labels
+                    and not member.docstring
+                    and name not in described
+                ):
+                    location = f"{member.filepath.relative_to(ROOT)}:{member.lineno or 1}: {member.path}"
+                    if (
+                        location
+                        not in findings["Schema fields without an Attributes entry"]
+                    ):
+                        findings["Schema fields without an Attributes entry"].append(
+                            location
+                        )
     for path, obj in sorted(callables.items()):
+        location = f"{obj.filepath.relative_to(ROOT)}:{obj.lineno or 1}: {path}"
+        docstring = obj.docstring
+        if obj.name == "__init__" and docstring is None:
+            docstring = obj.parent.docstring
+        sections = docstring.parse("google", warnings=False) if docstring else []
+        described = {
+            parameter.name.lstrip("*")
+            for section in sections
+            if section.kind
+            in (DocstringSectionKind.parameters, DocstringSectionKind.attributes)
+            for parameter in section.value
+        }
         for parameter in obj.parameters:
-            if parameter.name not in ("self", "cls") and parameter.annotation is None:
-                findings.append(f"{path}: input {parameter.name} has no annotation")
-        if obj.returns is None:
-            findings.append(f"{path}: output has no annotation")
-        if not obj.docstring:
-            findings.append(f"{path}: no contract description")
-    print(f"Contract audit: {len(callables)} callables, {len(findings)} gaps")
-    for finding in findings:
-        print(finding)
+            if parameter.name in ("self", "cls"):
+                continue
+            if parameter.annotation is None:
+                findings["Input annotations"].append(f"{location}: {parameter.name}")
+            if parameter.name.lstrip("*") not in described:
+                findings["Parameters without an Args/Attributes entry"].append(
+                    f"{location}: {parameter.name}"
+                )
+        documented_returns = [
+            result
+            for section in sections
+            if section.kind
+            in (DocstringSectionKind.returns, DocstringSectionKind.yields)
+            for result in section.value
+        ]
+        if (
+            obj.name != "__init__"
+            and obj.returns is None
+            and not any(result.annotation is not None for result in documented_returns)
+        ):
+            findings["Outputs without a source or docstring type"].append(location)
+        if not docstring:
+            findings["Callables without a description"].append(location)
+        if (
+            obj.name != "__init__"
+            and str(obj.returns) not in ("None", "NoReturn", "Never")
+            and not any(
+                section.kind
+                in (DocstringSectionKind.returns, DocstringSectionKind.yields)
+                for section in sections
+            )
+        ):
+            findings["Non-None outputs without a Returns/Yields section"].append(
+                location
+            )
+    print(f"Contract audit: {len(callables)} callables, {schemas} input/output schemas")
+    print(
+        "Absent Google sections require review: concise obvious methods can describe their contract in one sentence."
+    )
+    print("Constructor outputs are implicitly the constructed instance.")
+    for kind, items in findings.items():
+        if not items:
+            continue
+        print(f"\n{kind}: {len(items)}")
+        for finding in items:
+            print(finding)
 
 
 def main() -> int:
     """Refresh generated references or verify freshness and rendered coverage."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="fail if generated Markdown is stale")
-    parser.add_argument("--site", type=Path, help="check rendered HTML after zensical build")
-    parser.add_argument("--audit", action="store_true", help="list source input/output contract gaps")
+    parser.add_argument(
+        "--check", action="store_true", help="fail if generated Markdown is stale"
+    )
+    parser.add_argument(
+        "--site", type=Path, help="check rendered HTML after zensical build"
+    )
+    parser.add_argument(
+        "--audit", action="store_true", help="list source input/output contract gaps"
+    )
     args = parser.parse_args()
     objects = inventory()
     generated = pages(objects)
@@ -211,9 +350,13 @@ def main() -> int:
     for path in missing:
         print(f"Missing rendered contract: {path}")
     member_count = sum(len(members(obj)) for obj in objects.values())
-    print(f"Public API: {len(objects)} definitions, {member_count} class fields/methods")
+    print(
+        f"Public API: {len(objects)} definitions, {member_count} class fields/methods"
+    )
     if args.site:
-        print(f"Rendered coverage: {len(objects) + member_count - len(missing)}/{len(objects) + member_count}")
+        print(
+            f"Rendered coverage: {len(objects) + member_count - len(missing)}/{len(objects) + member_count}"
+        )
     if args.audit:
         audit(objects)
     return int(bool(stale or missing))

@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 
-import numpy as np
 import orjson
+import numpy as np
 from pydantic import BeforeValidator, field_serializer, model_validator
 
 from geosave.geodata.utils.color import parse_color
 
-from .base import AttrsGroup, Decoded, Join, decode
+from .base import AttrsGroup, Decoded, decode
 
 if TYPE_CHECKING:
-    import xarray as xr
+    pass
 
 
 def _hexes(colors: object) -> object:
@@ -39,7 +39,7 @@ class Legend(AttrsGroup):
     takes and `flag_masks` the bits a value packs flags into; `flag_meanings`
     names them in order. `classes` reads an enumeration back keyed by value.
 
-    Args:
+    Attributes:
         flag_values: Pixel values, ascending and unique, one per class.
         flag_masks: Bit masks, for values packing several flags at once.
         flag_meanings: Space-separated class names, in listing order.
@@ -58,7 +58,7 @@ class Legend(AttrsGroup):
         {0: 'bg', 1: 'palm'}
     """
 
-    JOIN: ClassVar[Join] = "agree"
+    REFUSE_CONFLICT = True
 
     flag_values: Decoded[list[int]] | None = None
     flag_masks: Decoded[list[int]] | None = None
@@ -72,6 +72,28 @@ class Legend(AttrsGroup):
             return None
         return dict(zip(self.flag_values, self.flag_meanings.split(), strict=True))
 
+    @property
+    def colors(self) -> dict[int, str]:
+        """Return the colour of every class, in class order.
+
+        Raises:
+            ValueError: No classes are listed, or a class carries no colour.
+        """
+        classes = self.classes
+        if classes is None:
+            raise ValueError(
+                "the legend lists no classes, so its values name none to colour; "
+                "give it flag_values and flag_meanings"
+            )
+        color_map = self.color_map or {}
+        uncolored = [code for code in sorted(classes) if code not in color_map]
+        if uncolored:
+            raise ValueError(
+                f"classes {uncolored} carry no colour; give color_map an entry "
+                f"for every class"
+            )
+        return {code: color_map[code] for code in classes}
+
     @field_serializer("color_map")
     def _as_text(self, colors: dict[int, str] | None) -> str | None:
         """Write the palette as JSON text; NetCDF attrs hold no mappings."""
@@ -81,7 +103,7 @@ class Legend(AttrsGroup):
 
     @model_validator(mode="before")
     @classmethod
-    def _spell_classes(cls, data: Any) -> Any:
+    def _from_classes(cls, data: Any) -> Any:
         """Accept `classes` in place of the codes and names CF stores."""
         if not isinstance(data, dict) or data.get("classes") is None:
             return data
@@ -143,38 +165,28 @@ class Legend(AttrsGroup):
                 )
         return self
 
-    def held_by(self, band: xr.DataArray) -> Legend:
-        """Return the legend, refusing a code `band` cannot hold exactly.
+    def check_dtype(self, dtype: np.dtype) -> None:
+        """Refuse class codes a variable of `dtype` cannot store exactly.
 
-        A code the band stores as another number would name another class.
+        A code names a class only as the exact number stored, so a code
+        stored as another number, as 300 wraps to 44 on uint8, would name
+        another class or none.
+
+        Args:
+            dtype: Dtype of the variable the legend is written onto.
 
         Raises:
-            ValueError: A listed code is no value of the band's dtype.
+            ValueError: A code or flag mask is no value of `dtype`.
+
+        Examples:
+            >>> Legend(classes={0: "bg", 300: "palm"}).check_dtype(np.dtype("uint8"))
+            ValueError: codes [300] are no uint8 values
         """
         codes = [*(self.flag_values or ()), *(self.flag_masks or ())]
         with np.errstate(invalid="ignore", over="ignore"):
-            stored = np.asarray(codes).astype(band.dtype)
+            stored = np.asarray(codes).astype(dtype)
         outside = [
             code for code, kept in zip(codes, stored, strict=True) if kept != code
         ]
         if outside:
-            raise ValueError(f"codes {outside} are no {band.dtype} values")
-        return self
-
-
-def is_flag(band: xr.DataArray) -> bool:
-    """Say whether a variable's values are class codes, not measurements.
-
-    Dtype does not say: Sentinel-2 reflectance and a land cover map are both
-    integers. A legend key or a GDAL palette marks the values as codes, which
-    blending or ranking would destroy. Only the keys are read, so attrs that
-    fail `Legend` validation still answer.
-
-    Examples:
-        >>> is_flag(scene.landcover), is_flag(scene.red)
-        (True, False)
-    """
-    return (
-        any(key in band.attrs for key in Legend.KEYS)
-        or band.attrs.get("colorinterp") == "palette"
-    )
+            raise ValueError(f"codes {outside} are no {dtype} values")

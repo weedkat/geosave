@@ -12,16 +12,17 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .chain import ModelChain, Published, chain_step
-    from .registry import build_model
+    from .registry import build_model, list_models
 
 _LAZY = {
     "ModelChain": "chain",
     "Published": "chain",
     "chain_step": "chain",
     "build_model": "registry",
+    "list_models": "registry",
 }
 
-__all__ = ["ModelChain", "Published", "build_model", "chain_step"]
+__all__ = ["ModelChain", "Published", "build_model", "chain_step", "list_models"]
 
 
 def __getattr__(name: str) -> Any:

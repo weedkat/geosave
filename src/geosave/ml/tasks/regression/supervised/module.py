@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Any, cast
 
 import torch
+from torchmetrics import MetricCollection
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
@@ -16,8 +17,7 @@ from .data import Sample
 class Module(LightningModule):
     """Train and evaluate a pixelwise regression model chain on chip batches.
 
-    Every split scores chips one by one, over pixels with a known value;
-    validation and test also skip pixels whose inputs are not valid.
+    Every split scores pixels with known target values.
 
     Args:
         model_chain: Ordered stage construction specifications. The last
@@ -97,6 +97,12 @@ class Module(LightningModule):
         self.test_metrics = metrics.clone(prefix="test_")
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Build optimization for the configured chain's trainable parameters.
+
+        Returns:
+            The optimizer alone when scheduling is disabled, otherwise a
+            Lightning dictionary with `optimizer` and `lr_scheduler` entries.
+        """
         optimizer = build_optimizer(self.optimizer_spec, self.model)
         if self.scheduler_spec is None:
             return optimizer
@@ -111,6 +117,13 @@ class Module(LightningModule):
     def forward(self, **model_inputs: Any) -> torch.Tensor:
         """Return ``(B, variable, y, x)`` values for prepared model inputs.
 
+        Args:
+            **model_inputs: Named, batched tensors and context required by the
+                configured chain. Pixel preparation is the caller's job.
+
+        Returns:
+            `(batch, variable, y, x)` predictions in the head's variable order.
+
         Raises:
             TypeError: If the configured model does not return one tensor.
         """
@@ -120,64 +133,98 @@ class Module(LightningModule):
         return values
 
     def training_step(self, batch: Sample, batch_idx: int) -> torch.Tensor:
-        target = batch["target"]
-        predictions = self(**batch["inputs"])
-        known = torch.isfinite(target)
-        loss = self.criterion(predictions[known], target[known])
+        """Score known target values and log regression training metrics.
 
-        self.train_metrics.update(predictions[known].detach(), target[known])
+        Args:
+            batch: Prepared `Sample` with named inputs, floating targets
+                `(batch, variable, y, x)`. Non-finite targets are excluded.
+            batch_idx: Lightning's batch position; unused by this task.
+
+        Returns:
+            Criterion loss on the finite target entries, used by Lightning
+            for backpropagation.
+        """
+        batch_size = len(batch["target"])
+        predictions, target = self._evaluate(batch)
+        loss = self._loss(predictions, target)
+
         self.log(
             "train_loss",
             loss,
             on_step=True,
             on_epoch=True,
             prog_bar=True,
-            batch_size=target.shape[0],
+            batch_size=batch_size,
         )
-        self.log_dict(
+        if target.numel():
+            self.train_metrics.update(predictions.detach(), target)
+        self._log_metrics(
             self.train_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
-            batch_size=target.shape[0],
+            target.new_tensor(target.numel(), dtype=torch.long),
+            batch_size=batch_size,
         )
         return loss
 
     def validation_step(self, batch: Sample, batch_idx: int) -> None:
-        """Score validation chips over their known, valid pixels."""
+        """Log validation loss and metrics over finite target values.
+
+        Args:
+            batch: Prepared `Sample` with named inputs, floating targets
+                `(batch, variable, y, x)`.
+            batch_idx: Lightning's batch position; unused by this task.
+        """
         predictions, target = self._evaluate(batch)
         self.log(
             "val_loss",
-            self.criterion(predictions, target),
+            self._loss(predictions, target),
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             batch_size=len(batch["target"]),
         )
-        self.val_metrics.update(predictions, target)
-        self.log_dict(
+        if target.numel():
+            self.val_metrics.update(predictions, target)
+        self._log_metrics(
             self.val_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
+            target.new_tensor(target.numel(), dtype=torch.long),
             batch_size=len(batch["target"]),
         )
 
     def test_step(self, batch: Sample, batch_idx: int) -> None:
-        """Score test chips over their known, valid pixels."""
+        """Log test metrics over finite target values.
+
+        Args:
+            batch: Prepared `Sample` with named inputs, floating targets
+                `(batch, variable, y, x)`.
+            batch_idx: Lightning's batch position; unused by this task.
+        """
         predictions, target = self._evaluate(batch)
-        self.test_metrics.update(predictions, target)
-        self.log_dict(
+        if target.numel():
+            self.test_metrics.update(predictions, target)
+        self._log_metrics(
             self.test_metrics,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
+            target.new_tensor(target.numel(), dtype=torch.long),
             batch_size=len(batch["target"]),
         )
 
     def _evaluate(self, batch: Sample) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return predicted and true values at known pixels with valid inputs."""
+        """Return predicted and true values at known target entries."""
         predictions = self(**batch["inputs"])
         target = batch["target"]
-        scored = torch.isfinite(target) & batch["valid"].unsqueeze(1)
+        scored = torch.isfinite(target)
         return predictions[scored], target[scored]
+
+    def _loss(self, predictions: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Score selected target entries; an empty selection gives zero gradient."""
+        if not target.numel():
+            return predictions.sum() * 0
+        return self.criterion(predictions, target)
+
+    def _log_metrics(
+        self, metrics: MetricCollection, count: torch.Tensor, *, batch_size: int
+    ) -> None:
+        """Log on every rank when any rank has target entries to score."""
+        if self._trainer is not None:
+            count = self.trainer.strategy.reduce(count, reduce_op="sum")
+        if count:
+            self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=batch_size)

@@ -9,6 +9,12 @@ reuse an encoder or swap a decoder or head. This guide uses random weights and
 runs without downloads. For published encoder weights, follow
 [Build from pretrained weights](pretrained.md).
 
+For a real-image learning project, follow the
+[model composition notebook](../examples.md), which builds on the same Dataset
+and training loop as the basics notebook. Use the
+[encoder comparison](pretrained.md#choose-an-encoder) when choosing a built-in
+model for your data.
+
 ## Start with PyTorch
 
 ```python
@@ -105,7 +111,13 @@ A chain containing just one module can also run its annotated `forward`
 without a decorator. Its return is terminal. For multiple modules, each stage
 declares a `chain_step` method so the chain can route their values.
 
-## Use a registered stage
+## Use a built-in stage
+
+GeoSave ships built-in stages, selected by a short `name`. Your own stages are
+selected by `class_path` or by a name you register, as the next sections show.
+A release requires stages selected by a registered `name`. Since an artifact
+does not bundle Python code, the supported path is contributing the
+implementation to GeoSave before publishing it.
 
 `build_model` constructs stages from dictionaries suitable for a Python or YAML
 configuration. Start with a built-in head to see this without downloading an
@@ -119,7 +131,7 @@ head = build_model({
         "name": "segmentation",
         "init_args": {
             "feature_channels": 8,
-            "classes": ["background", "crop", "forest"],
+            "num_classes": 3,
         },
     },
 })
@@ -130,20 +142,22 @@ head(feature_map=torch.zeros(1, 8, 16, 16)).shape
 torch.Size([1, 3, 16, 16])
 ```
 
-`name` selects a factory within its stage; names are case insensitive.
+`name` selects a built-in within its stage; names are case insensitive.
 `init_args` are constructor arguments. The segmentation head maps decoded
-features to class logits, and the order of `classes` defines the class codes.
+features to one logit per class; class names stay with the label's legend.
 
 | Stage | Built-in names | Role |
 | --- | --- | --- |
-| `encoder` | `CLAY`, `DINOV3`, `PRITHVI`, `PRITHVI_TL` | Extract image features |
-| `decoder` | `DPT`, `UNET` | Fuse a feature pyramid into a dense feature map |
-| `head` | `CLASSIFICATION`, `REGRESSION`, `SEGMENTATION` | Produce task outputs |
-| `model` | `IBM_GRANITE_BIOMASS` | Run an end-to-end model |
+| `encoder` | `clay`, `dinov3`, `prithvi`, `prithvi_tl` | Extract image features |
+| `decoder` | `dpt`, `unet` | Fuse a feature pyramid into a dense feature map |
+| `head` | `classification`, `regression`, `segmentation` | Produce task outputs |
+| `model` | `ibm_granite_biomass` | Run an end-to-end model |
 
-Use `list_models()` from the same registry module to see the installed names.
-Stage contracts matter: classification consumes an encoder pyramid; dense heads
-consume `feature_map`. See [built-in stages](../reference/model-stages.md) for
+`list_models()` lists them as a table: each model's `forward` call, what it
+`publishes` for later stages, and which arguments it `requires` from you.
+`list_models("unet")` lists what can run before and after one model. Stage
+contracts matter: classification reads an encoder `pyramid`; dense heads read
+`feature_map`. See [built-in stages](../reference/model-stages.md) for
 their inputs and constructor arguments. Encoder defaults may download pretrained
 weights and may require access to the checkpoint repository.
 
@@ -168,7 +182,7 @@ chain = build_model({
     "encoder": SizedEncoder,
     "head": {
         "name": "segmentation",
-        "init_args": {"classes": ["background", "crop", "forest"]},
+        "init_args": {"num_classes": 3},
     },
 })
 chain(image=image).shape
@@ -185,37 +199,53 @@ order of the stage mapping, so put providers before consumers.
 This is separate from runtime routing: `Published` supplies constructor values,
 while `chain_step` routes values produced during a model call.
 
-## Register your own stage
+## Select your own stage by class path
 
-After the stage works as a normal module, give it a configured name:
+Once the stage works as a normal module, a configuration selects it by
+`class_path`: the module that defines it and the class name.
+
+```python
+chain = build_model({
+    "encoder": {"class_path": "my_project.models.SizedEncoder", "init_args": {"width": 8}},
+    "head": {
+        "name": "segmentation",
+        "init_args": {"num_classes": 3},
+    },
+})
+```
+
+Rebuilding the chain imports `my_project.models`, so it must be importable in
+every process that builds or loads the model. A class defined in a notebook is
+`__main__.SizedEncoder`. `build_model` also accepts module classes and already
+constructed modules for exploration.
+
+To select your stage by a short `name`, as the built-ins are, register it:
 
 ```python
 from geosave.model.registry import register_model
 
 
-@register_model("encoder", "tiny")
-class TinyEncoder(SizedEncoder):
-    pass
+@register_model("encoder", "sized")
+class SizedEncoder(Encoder):
+    feature_channels: Published[int]
+
+    def __init__(self, in_channels: int = 2, width: int = 8):
+        super().__init__(in_channels=in_channels, width=width)
+        self.feature_channels = width
 
 
 chain = build_model({
-    "encoder": {"name": "tiny", "init_args": {"width": 8}},
+    "encoder": {"name": "sized", "init_args": {"width": 8}},
     "head": {
         "name": "segmentation",
-        "init_args": {"classes": ["background", "crop", "forest"]},
+        "init_args": {"num_classes": 3},
     },
 })
 ```
 
-Import the Python module containing the registration before rebuilding this
-chain in another process. Registration records a factory name; it does not
-package your Python code.
-
-For experiments, `build_model` also accepts module classes, importable
-`class_path` specifications, and already constructed modules. A
-[release](release.md) requires registered-name specifications for every stage:
-classes and instances are useful for exploration but do not satisfy that
-export contract.
+Import the module that registers it before building in another process;
+registration names a class, it does not package your code. A
+[release](release.md) requires stages selected by a registered `name`.
 
 Continue with [model inputs](model-spec.md) to turn raster bands into the
 `image` tensor, then [training](training.md) to optimize the weights. To reuse

@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TypedDict, Unpack, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, TypedDict, Unpack, cast
 
 import xarray as xr
 import zarr
-from upath import UPath
-from dask.delayed import delayed
 from xarray.core.types import T_Chunks
 
 from geosave.geodata.conventions import to_yx
 from ..storage import Location, absolute_location, location
+from .file import RasterFile
 
 
 if TYPE_CHECKING:
-    from dask.delayed import Delayed
-
     from geosave.geodata import Dataset
 
 type ZarrChunkSpec = T_Chunks
@@ -32,6 +29,30 @@ class ZarrOpenOptions(TypedDict, total=False):
 
     CF decoding options are absent because disabling them drops `spatial_ref`,
     the time axis, or the spatial index.
+
+    Omitted keys use xarray or Zarr defaults, except `consolidated=False`,
+    which GeoSave supplies. The reader enables grid-mapping coordinate decoding.
+
+    Attributes:
+        synchronizer: Zarr synchronization object where the backend supports
+            it. The current Zarr 3 library warns that this is unimplemented.
+        drop_variables: One variable name or a sequence to exclude while opening.
+        consolidated: Require consolidated metadata when True; False reads
+            ordinary metadata. None delegates metadata discovery to xarray.
+        overwrite_encoded_chunks: Discard stored chunk sizes from each variable's
+            encoding when opening with a different requested chunk layout.
+        chunk_store: Separate store for chunk data where the backend supports
+            it. The current Zarr 3 library warns that this is unimplemented.
+        storage_options: Filesystem credentials and connection options merged
+            into the source UPath. These are forwarded only for remote stores.
+        decode_timedelta: Decode CF duration variables as timedeltas; False
+            retains numbers, and None delegates the decoding policy.
+        use_zarr_fill_value_as_mask: Use the Zarr fill value as missing-value
+            metadata for CF decoding with `mask_and_scale=True`. False ignores
+            it; None delegates to the store-format policy.
+        chunked_array_type: Registered xarray chunk manager, such as `"dask"`.
+        from_array_kwargs: Extra keywords for the chunk manager's `from_array`
+            operation, such as options for `dask.array.from_array`.
     """
 
     synchronizer: Any
@@ -51,6 +72,26 @@ class ZarrWriteOptions(TypedDict, total=False):
 
     Layout options are absent on purpose: a store holds one raster at its
     root, in the Zarr format this writer fixes. `region` is absent because this writer fixes `mode`, which it forbids.
+
+    Omitted keys use xarray or Zarr defaults, except `consolidated=False`.
+    GeoSave writes Zarr format 3 and supplies per-variable fill encodings.
+
+    Attributes:
+        encoding: Variable names mapped to storage settings such as `dtype`,
+            `chunks`, packing, and fill values. A supplied variable entry replaces
+            GeoSave's generated fill encoding for that variable.
+        consolidated: Consolidate metadata when True; False leaves it ordinary.
+            None delegates to xarray and the installed Zarr implementation.
+        safe_chunks: Require each Dask chunk to cover complete storage chunks.
+            False disables this check; it does not align the chunks itself.
+        align_chunks: Rechunk Dask arrays to align with the requested Zarr chunk
+            boundaries before writing.
+        write_empty_chunks: Store chunks consisting entirely of the fill value
+            when True; False omits them. None uses encoding or Zarr defaults.
+        chunkmanager_store_kwargs: Extra keywords for the chunk manager's
+            `store` operation, such as options for `dask.array.store`.
+        synchronizer: Zarr synchronization object where the backend supports
+            it. The current Zarr 3 library warns that this is unimplemented.
     """
 
     encoding: Mapping[Hashable, Mapping[str, Any]] | Mapping[str, Any]
@@ -60,10 +101,9 @@ class ZarrWriteOptions(TypedDict, total=False):
     write_empty_chunks: bool | None
     chunkmanager_store_kwargs: dict[str, Any] | None
     synchronizer: Any
-    storage_options: Mapping[str, Any] | None
 
 
-def read(
+def open_raster(
     source: Location,
     *,
     chunks: ZarrChunkSpec = None,
@@ -88,7 +128,7 @@ def read(
         ValueError: The store cannot be read.
 
     Examples:
-        >>> raster = read("scene.zarr")
+        >>> raster = open_raster("scene.zarr")
         >>> str(raster.red.dtype)
         'uint16'
     """
@@ -169,36 +209,13 @@ def _in_written_order(ds: xr.Dataset) -> xr.Dataset:
     return ordered
 
 
-@overload
 def write(
     raster: xr.Dataset,
     destination: Location,
     *,
-    compute: Literal[True] = True,
     overwrite: bool = False,
     **write_options: Unpack[ZarrWriteOptions],
-) -> UPath: ...
-
-
-@overload
-def write(
-    raster: xr.Dataset,
-    destination: Location,
-    *,
-    compute: Literal[False],
-    overwrite: bool = False,
-    **write_options: Unpack[ZarrWriteOptions],
-) -> Delayed: ...
-
-
-def write(
-    raster: xr.Dataset,
-    destination: Location,
-    *,
-    compute: bool = True,
-    overwrite: bool = False,
-    **write_options: Unpack[ZarrWriteOptions],
-) -> UPath | Delayed:
+) -> RasterFile:
     """Write a raster to a Zarr store.
 
     A Zarr group records no member order, so a Dataset's variable order
@@ -206,13 +223,13 @@ def write(
 
     Args:
         raster: Raster Dataset.
-        destination: Output path, fsspec URL, or UPath ending in `.zarr`.
-        compute: False returns a delayed write instead of writing now.
+        destination: Output path, fsspec URL, or UPath carrying its
+            `storage_options`, ending in `.zarr`.
         overwrite: Replace an existing destination when true.
         **write_options: Supported xarray Zarr write options.
 
     Returns:
-        Destination path, or a delayed task returning it when `compute=False`.
+        The written store with the header it states, as `open_raster` reads it.
 
     Raises:
         FileExistsError: The destination exists and overwrite is false.
@@ -221,23 +238,22 @@ def write(
 
     Examples:
         >>> write(raster, "scene.zarr")
-        PosixUPath('scene.zarr')
+        RasterFile(/abs/scene.zarr, ['red', 'nir'], 2025-06-01)
     """
     if not isinstance(raster, xr.Dataset):
         raise TypeError(
             f"raster must be an xarray Dataset, got {type(raster).__name__}; "
-            f"write a stack with its own gs.to_zarr"
+            f"write a tree with its own gs.to_zarr"
         )
 
     options: dict[str, Any] = dict(write_options)
-    store = location(destination, options.pop("storage_options", None))
+    store = location(destination)
     if store.suffix.lower() != _STORE_SUFFIX:
         raise ValueError(f"destination {store.name!r} must end in {_STORE_SUFFIX!r}")
     if not overwrite and store.exists():
         raise FileExistsError(
             f"{destination} exists; pass overwrite=True to replace it"
         )
-    path = absolute_location(store)
     # zarr refuses storage_options for a local path, so only a URL passes them.
     if store.storage_options:
         options["storage_options"] = dict(store.storage_options)
@@ -251,21 +267,15 @@ def write(
         **dict(options.get("encoding") or {}),
     }
     options.setdefault("consolidated", False)
-    mode: Literal["w", "w-"] = "w" if overwrite else "w-"
-    # Passing the literal lets xarray's overloads say what each call returns.
-    if not compute:
-        written = raster.to_zarr(
-            path,
-            mode=mode,
-            zarr_format=_STORE_ZARR_FORMAT,
-            compute=False,
-            **options,
-        )
-        return delayed(lambda _: store)(written)
     raster.to_zarr(
-        path, mode=mode, zarr_format=_STORE_ZARR_FORMAT, compute=True, **options
+        absolute_location(store),
+        mode="w" if overwrite else "w-",
+        zarr_format=_STORE_ZARR_FORMAT,
+        compute=True,
+        **options,
     )
-    return store
+    with open_raster(store) as written:
+        return RasterFile.from_xarray(store, written)
 
 
 def fill_encoding(raster: xr.Dataset) -> dict[str, dict[str, Any]]:

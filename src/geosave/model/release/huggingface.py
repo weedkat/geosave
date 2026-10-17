@@ -18,7 +18,14 @@ ARTIFACT_FORMAT_VERSION = 1
 
 
 class StageConfig(TypedDict):
-    """One named stage in an ordered Transformers configuration."""
+    """One named stage in an ordered Transformers configuration.
+
+    Attributes:
+        stage: Chain module name and registry stage, such as `encoder` or
+            `head`. Stage names must be unique in a release configuration.
+        spec: Factory selector and resolved `init_args` used to reconstruct
+            the module. Publication uses registered `name` specifications.
+    """
 
     stage: str
     spec: dict[str, Any]

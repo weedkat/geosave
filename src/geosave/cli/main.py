@@ -1,8 +1,9 @@
 import typer
 from dotenv import load_dotenv
 
+from .commands.add_task import add_task
 from .commands.create import create
-from .commands.make import make
+from .commands.publish import publish
 
 app = typer.Typer(
     help="GeoSave CLI",
@@ -10,7 +11,8 @@ app = typer.Typer(
     add_completion=True,
 )
 app.command()(create)
-app.command()(make)
+app.command("add-task")(add_task)
+app.command()(publish)
 
 
 @app.callback()

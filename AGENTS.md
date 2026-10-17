@@ -4,7 +4,7 @@ GeoSave makes geospatial ML development feel like normal Python: ingest geospati
 
 The project is in active Alpha development. Prefer simple, replaceable designs. Change an obsolete design instead of building compatibility layers around it unless compatibility is explicitly required.
 
-Lead with code. Explain after showing the implementation. When comparing design options, show each option as the code a caller and a maintainer would see, then explain the difference. Always do smoke test before the design is settled. Ignore ipynb file unless asked to. Choose variable and parameter name carefully, don't make naming too verbose.
+Lead with code. Explain after showing the implementation. When comparing design options, show each option as the code a caller and a maintainer would see, then explain the difference. Always do smoke test before the design is settled. Ignore ipynb file unless asked to. Choose variable and parameter name carefully, don't make naming too verbose. Name a function with a verb for what it does, and a variable for the value it holds, never for its role. Write loops out in full; no comprehension with more than one `for`, no clever one-liners. Put behavior on the class that owns it, and return a plain value rather than a throwaway container class.
 
 ## Commands
 
@@ -32,12 +32,12 @@ src/geosave/
 └── templates/    # source for generated workspaces
 
 src/geosave/geodata/
-├── core/         # `gs` accessors (raster, array, stack, vector, catalog), GeoAnchor, constructors
+├── core/         # `gs` accessors and GeoAnchor; raster/ (dataarray, dataset, datatree, constructors), vector/ (vector, item table, sample table, row)
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
 ├── stac/         # extensions/ per schema, translate/ per STAC level, search/, source.py, create.py
-├── cuts/         # item table -> stacks -> frames -> chips; window rows read as aligned stacks
-├── transform/    # explicit warp, crop, combine, nodata, temporal operations
+├── sampling/     # join Items into samples, frame, chip, and merge; nothing public
+├── transform/    # explicit operations, one module per thing changed: warp, extent, combine, nodata, temporal, color, vector
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
@@ -48,7 +48,7 @@ docs/contributing/  # architecture, open decisions, maintenance ledger and desig
 ```
 
 `src/geosave/templates/` is the source for generated workspace files.
-It contains `common/` startup, `workspaces/` starters, and optional `scaffolds/`.
+It contains `common/` startup and `tasks/` templates copied by `geosave add-task`.
 Public geospatial I/O lives in `geodata/io/`; original benchmark downloads live
 in `geodata/benchmarks/`. Internal helpers stay with their owning package.
 
@@ -56,7 +56,7 @@ Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_fl
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC is organized on two axes. `stac/extensions/` has one module per extension schema and is the only importer of `pystac.extensions`. `stac/translate/` has one module per STAC level, each translating to its xarray counterpart and composing the level below: Collection <-> root ACDD attrs, Item <-> a scene (files of one collection, instant and grid), Asset <-> one file and its variables, band <-> one variable's attrs. Public builders and clients (`create_items`, `StacClient`, `StacTable`, `StacSource`) stay thin over these.
+STAC is organized on two axes. `stac/extensions/` has one module per extension schema and is the only importer of `pystac.extensions`. `stac/translate/` has one module per STAC level, each translating to its xarray counterpart and composing the level below: Collection <-> root ACDD attrs, Item <-> a scene (files of one collection, instant and grid), Asset <-> one file and its variables, band <-> one variable's attrs. Public builders and clients (`create_item`, `StacClient`, `StacTable`, `StacSource`) stay thin over these.
 
 ## Design
 
@@ -133,8 +133,8 @@ Generated workspaces compose GeoSave and Lightning APIs; they do not own library
 Tests mirror the source tree:
 
 ```text
-src/geosave/geodata/core/raster.py
-tests/geodata/core/test_raster.py
+src/geosave/geodata/core/raster/dataset.py
+tests/geodata/core/raster/test_dataset.py
 ```
 
 Persistence changes require round-trip tests.

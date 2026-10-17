@@ -11,7 +11,14 @@ from geosave.model.factory import BuildSpec
 
 
 class OptimizerSpec(BuildSpec):
-    """Configure an optimizer and exact direct-child parameter groups."""
+    """Configure an optimizer and exact direct-child parameter groups.
+
+    Attributes:
+        groups: Direct child names, such as `encoder`, mapped to optimizer
+            group options such as `lr` or `weight_decay`. Frozen parameters
+            are excluded; remaining trainable parameters use `init_args`.
+            Groups cannot override `params` or share parameters.
+    """
 
     groups: dict[str, dict[str, Any]] = Field(default_factory=dict)
 

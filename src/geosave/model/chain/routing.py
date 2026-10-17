@@ -52,6 +52,22 @@ def dependencies(steps: list[BoundStep]) -> dict[BoundStep, set[BoundStep]]:
     return dependencies
 
 
+def declared_steps(cls: type) -> list[Step]:
+    """Return the steps a module class declares, its subclasses' winning.
+
+    Args:
+        cls: Module class whose methods carry `@chain_step`.
+
+    Returns:
+        Declared steps in attribute order; empty where none is declared.
+    """
+    attributes: dict[str, object] = {}
+    for base in reversed(cls.__mro__):
+        attributes.update(vars(base))
+    methods = [getattr(value, "_chain_step", None) for value in attributes.values()]
+    return [value for value in methods if isinstance(value, Step)]
+
+
 def ordered_steps(modules: Mapping[str, nn.Module]) -> list[BoundStep]:
     """Choose each stage's earliest available method and sort the resulting chain.
 
@@ -72,11 +88,7 @@ def ordered_steps(modules: Mapping[str, nn.Module]) -> list[BoundStep]:
     """
     candidates: list[BoundStep] = []
     for stage, module in modules.items():
-        attributes: dict[str, object] = {}
-        for cls in reversed(type(module).__mro__):
-            attributes.update(vars(cls))
-        methods = [getattr(value, "_chain_step", None) for value in attributes.values()]
-        declared = [value for value in methods if isinstance(value, Step)]
+        declared = declared_steps(type(module))
         if not declared:
             # A lone end-to-end model is called on its forward.
             forward = type(module).forward

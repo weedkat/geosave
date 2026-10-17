@@ -37,7 +37,7 @@ Examples:
     coordinates every group shares, so a group repeats only `spatial_ref` and
     xarray refuses one that does not align:
 
-    >>> stack({"sentinel-2-l2a": optical, "dem": dem})
+    >>> tree({"sentinel-2-l2a": optical, "dem": dem})
     <xarray.DataTree>
     Group: /
     │   Dimensions:      (y: 512, x: 512, time: 2)
@@ -121,7 +121,7 @@ def to_yx[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
     any other name, by the CF `axis` or `standard_name` its coordinates carry.
 
     Args:
-        data: Band, raster, or stack as a loader named its grid.
+        data: Band, raster, or tree as a loader named its grid.
 
     Returns:
         Renamed view sharing its pixels, lazily. A band or raster already on
@@ -140,7 +140,7 @@ def require_yx(data: xr.DataArray | xr.Dataset | xr.DataTree) -> None:
     """Refuse a grid spanning anything but `y` and `x`.
 
     Args:
-        data: Band, raster, or stack about to be read through `gs`.
+        data: Band, raster, or tree about to be read through `gs`.
 
     Raises:
         ValueError: Its spatial dimensions, or a group's, carry another pair.

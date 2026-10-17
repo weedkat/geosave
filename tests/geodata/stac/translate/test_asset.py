@@ -1,62 +1,49 @@
-from __future__ import annotations
+"""Raster file descriptions become native Assets without reading pixels."""
 
+from datetime import UTC, datetime
+
+import dask
 import pystac
 
+from geosave.geodata.io.raster.file import RasterFile
 from geosave.geodata.stac.translate import asset
+from tests.geodata.conftest import build_raster
 
 
-def test_asset_reader_keeps_core_band_precedence() -> None:
-    entry = pystac.Asset(
-        "https://example.com/a.tif",
-        extra_fields={
-            "unit": "asset",
-            "description": "asset",
-            "raster:bands": [{"unit": "raster"}],
-            "eo:bands": [{"description": "EO"}],
-            "bands": [{"unit": "core", "description": "Core"}],
-        },
-    )
+def test_file_translation_returns_owned_asset_without_assembling_item(tmp_path):
+    raster = build_raster(times=1).isel(time=0).chunk()
+    file = RasterFile.from_xarray(tmp_path / "image.tif", raster)
+    owner = pystac.Item("scene", None, None, datetime(2025, 6, 1, tzinfo=UTC), {})
 
-    assert asset.fields(entry) == {"unit": "core", "description": "Core"}
+    def refuse_pixels(*args, **kwargs):
+        raise AssertionError("translation computed pixels")
 
+    with dask.config.set(scheduler=refuse_pixels):
+        result = asset.from_file(file, owner=owner)
 
-def test_legacy_listings_pair_by_index() -> None:
-    entry = pystac.Asset(
-        "a.tif",
-        extra_fields={
-            "raster:bands": [{"data_type": "uint16", "nodata": 0, "scale": 0.0001}],
-            "eo:bands": [{"name": "B04", "common_name": "red"}, {"name": "B08"}],
-        },
-    )
+    assert owner.assets == {}
+    assert result.owner is owner
+    assert result.href == str(tmp_path / "image.tif")
+    assert result.roles == ["data"]
+    assert result.extra_fields["proj:shape"] == list(raster.gs.geobox.shape)
+    assert len(result.extra_fields["raster:bands"]) == len(raster.data_vars)
+    assert any("projection" in schema for schema in owner.stac_extensions)
+    assert any("raster" in schema for schema in owner.stac_extensions)
 
-    (first, red), (second, nir) = asset.bands(entry)
-
-    assert (first.scale, red.common_name) == (0.0001, "red")
-    assert (second.to_dict(), nir.name) == ({}, "B08")
+    owner.add_asset("image", result)
+    assert owner.assets["image"] is result
 
 
-def test_core_bands_read_without_parquet_nulls() -> None:
-    entry = pystac.Asset(
-        "a.tif",
-        extra_fields={
-            "bands": [{"name": "label", "unit": None, "raster:scale": None}],
-            "raster:bands": [{"unit": "ignored"}],
-        },
-    )
+def test_an_asset_reads_back_as_the_header_written(tmp_path):
+    from geosave.geodata import attrs, stac
+    from geosave.geodata.stac.translate import band
 
-    ((raster, spectral),) = asset.bands(entry)
+    raster = build_raster(times=1, packed=True).isel(time=0)
+    scene = raster.gs.to_cog(tmp_path / "image.tif")[0]
+    item = next(stac.create_items(scene))
+    entry = item.assets["image"]
 
-    assert (raster.to_dict(), spectral.to_dict()) == ({}, {"name": "label"})
-
-
-def test_an_asset_without_bands_reads_as_none() -> None:
-    assert asset.bands(pystac.Asset("thumbnail.png")) == []
-
-
-def test_a_core_multiband_asset_names_its_variables_by_key() -> None:
-    entry = pystac.Asset(
-        "visual.tif",
-        extra_fields={"bands": [{"name": "B04"}, {"name": "B03"}, {"name": "B02"}]},
-    )
-
-    assert asset.names("visual", entry) == ("visual.1", "visual.2", "visual.3")
+    assert entry.href == str(scene.written["image"].path)
+    for index, name in enumerate(raster.data_vars):
+        metadata = band.read_attrs(raster[name], entry, index)
+        assert attrs.Packing.from_attrs(metadata) == raster[name].gs.packing

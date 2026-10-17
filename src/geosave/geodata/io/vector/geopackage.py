@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import geopandas as gpd
 
@@ -16,12 +16,30 @@ from .geojson import driver_read_options
 
 if TYPE_CHECKING:
     from os import PathLike
+    from geosave.geodata import GeoDataFrame
 
 _FILE_SUFFIXES = (".gpkg",)
 
 
 class GeoPackageOpenOptions(TypedDict, total=False):
-    """Optional GeoPandas behavior supported when opening a GeoPackage."""
+    """Optional GeoPandas behavior when opening a GeoPackage.
+
+    Omitted keys use GeoPandas and engine defaults. The reader's explicit
+    `layer` selects a layer; spatial filters select features without clipping.
+
+    Attributes:
+        columns: Property columns to read; an empty list keeps only geometry.
+            None reads all properties.
+        bbox: Feature filter `(minx, miny, maxx, maxy)` in the selected layer's
+            CRS. Mutually exclusive with `mask`.
+        mask: Geometry, GeoSeries, GeoDataFrame, or GeoJSON geometry selecting
+            intersecting features. GeoPandas reprojects objects carrying a CRS;
+            bare geometries must use the layer's CRS. Cannot combine with `bbox`.
+        rows: Read the first N features with an integer, or a feature-position
+            slice. None reads all matching features.
+        driver_options: Extra read keywords for the selected engine. Do not
+            repeat direct options or set `engine` or `ignore_geometry` here.
+    """
 
     columns: list[str] | None
     bbox: tuple[float, float, float, float] | None
@@ -30,13 +48,13 @@ class GeoPackageOpenOptions(TypedDict, total=False):
     driver_options: dict[str, Any]
 
 
-def read(
+def open_vector(
     source: Location,
     *,
     layer: str | None = None,
     engine: Literal["fiona", "pyogrio"] = "pyogrio",
     **open_options: Unpack[GeoPackageOpenOptions],
-) -> gpd.GeoDataFrame:
+) -> GeoDataFrame:
     """Open one GeoPackage layer as a GeoDataFrame.
 
     Args:
@@ -66,17 +84,36 @@ def read(
         selected_layer = layer_names[0]
 
     options = driver_read_options(open_options)
-    return gpd.read_file(
+    frame = gpd.read_file(
         path,
         layer=selected_layer,
         engine=engine,
         ignore_geometry=False,
         **options,
     )
+    return cast("GeoDataFrame", frame)
 
 
 class GeoPackageWriteOptions(TypedDict, total=False):
-    """Optional GeoPandas behavior supported when writing a GeoPackage."""
+    """Optional GeoPandas behavior when writing a GeoPackage.
+
+    Omitted keys use GeoPandas and engine defaults. The writer retains the
+    table's CRS and writes one layer into a new or replaced file.
+
+    Attributes:
+        index: Write the pandas index as property columns when True; False
+            omits it. None lets GeoPandas choose based on the index type.
+        promote_to_multi: Pyogrio option converting single geometries to their
+            multi equivalents. None lets pyogrio choose for the format.
+        nan_as_null: Pyogrio option writing floating-property NaNs as missing
+            values. Exact handling depends on the GeoPackage driver.
+        metadata: Layer metadata with string keys and values, supported by the
+            selected GeoPandas engine's GeoPackage writer.
+        driver_options: Extra write keywords for the selected engine or GDAL
+            driver. Do not set `engine` or repeat direct options here.
+        storage_options: Filesystem credentials and connection options for
+            uploading the completed temporary file to a remote destination.
+    """
 
     index: bool | None
     promote_to_multi: bool | None

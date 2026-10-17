@@ -1,10 +1,13 @@
+from datetime import datetime
+from types import SimpleNamespace
+
 import pystac
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 import pytest
 
-from geosave.geodata.stac import StacClient
+from geosave.geodata.stac import StacClient, StacQuery
 from geosave.geodata.errors import CollectionNotFoundError
 
 
@@ -105,3 +108,59 @@ def test_planetary_computer_signs_when_loading_not_when_searching(monkeypatch):
     # Searched hrefs stay unsigned, so a saved table outlives the day-long token.
     assert "modifier" not in opened
     assert client.source("s2").config.patch_url is planetary_computer.sign
+
+
+def _item(name: str, cloud: float | None) -> pystac.Item:
+    properties = {} if cloud is None else {"eo:cloud_cover": cloud}
+    return pystac.Item(name, None, None, datetime(2024, 1, 1), properties)
+
+
+def test_a_sorted_search_passes_the_sort_to_the_api(monkeypatch):
+    native = Client(id="local", description="Local catalog")
+    answered = [_item("c", 0.06), _item("a", 0.5)]
+    asked = {}
+
+    def search(**params):
+        asked.update(params)
+        return SimpleNamespace(items=lambda: iter(answered))
+
+    monkeypatch.setattr(native, "search", search)
+    query = StacQuery(collections=["s2"], max_items=2).sort_by("eo:cloud_cover")
+
+    found = StacClient(native).search_items(query)
+
+    assert [item.id for item in found] == ["c", "a"]
+    assert asked["sortby"] == [{"field": "eo:cloud_cover", "direction": "asc"}]
+    assert asked["max_items"] == 2
+
+
+def test_search_attaches_only_returned_collections(monkeypatch):
+    native = _offering(Client(id="local", description="Local catalog"), "s2")
+    entry = _item("scene", None)
+    entry.collection_id = "s2"
+    entry.geometry = {"type": "Point", "coordinates": [0.0, 0.0]}
+    entry.bbox = [0.0, 0.0, 0.0, 0.0]
+    client = StacClient(native)
+    monkeypatch.setattr(client, "search_items", lambda query: [entry])
+
+    found = client.search(StacQuery(collections=["s2", "absent"]))
+
+    assert list(found.gs.collections) == ["s2"]
+    found.attrs["stac:collections"]["s2"]["description"] = "changed"
+    assert client.collection("s2").description == "Rows"
+
+
+def test_empty_search_fetches_no_collections(monkeypatch):
+    native = Client(id="local", description="Local catalog")
+    client = StacClient(native)
+    monkeypatch.setattr(client, "search_items", lambda query: [])
+
+    def refuse(name):
+        raise AssertionError("empty search fetched a Collection")
+
+    monkeypatch.setattr(client, "collection", refuse)
+
+    found = client.search(StacQuery(collections=["s2"]))
+
+    assert found.empty
+    assert found.gs.collections == {}

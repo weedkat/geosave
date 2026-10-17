@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
 import torch
+from lightning.pytorch.core.optimizer import LightningOptimizer
+from torch.optim import Optimizer
 
 from geosave.ml.tasks.regression import supervised
 from geosave.model.chain import ModelChain
@@ -29,7 +32,7 @@ class Module(supervised.Module):
         unlabeled_weight: Weight of the consistency loss once ramped up.
         rampup_steps: Optimizer steps over which the weight ramps up; 0
             starts at full weight.
-        ema: Share of the teacher kept at each step.
+        ema: Share of the teacher kept at each optimizer step.
 
     Examples:
         # LightningCLI YAML:
@@ -76,7 +79,12 @@ class Module(supervised.Module):
         self.teacher = deepcopy(self.model).requires_grad_(False)
 
     def consistency_weight(self) -> float:
-        """Return the consistency weight at the current step."""
+        """Return the consistency weight at the current optimizer step.
+
+        Returns:
+            `unlabeled_weight` scaled by the Gaussian ramp-up until
+            `rampup_steps`; the full weight afterward or with no ramp-up.
+        """
         if not self.rampup_steps:
             return self.unlabeled_weight
         progress = min(self.global_step / self.rampup_steps, 1.0)
@@ -86,41 +94,70 @@ class Module(supervised.Module):
     def training_step(  # type: ignore[override]
         self, batch: TrainingBatch, batch_idx: int
     ) -> torch.Tensor:
+        """Train the student from labeled values and the teacher's weak view.
+
+        Args:
+            batch: Finished `TrainingBatch` with a labeled regression sample
+                and unlabeled weak/strong named inputs.
+            batch_idx: Lightning's batch position; unused by this task.
+
+        Returns:
+            Labeled criterion loss plus ramped consistency loss. Labeled
+            scoring excludes non-finite targets; consistency uses detached
+            teacher predictions across the full unlabeled output.
+        """
         target = batch["labeled"]["target"]
         weak = batch["unlabeled"]["weak"]
         strong = batch["unlabeled"]["strong"]
-        valid = batch["unlabeled"]["valid"]
-
         # Labeled loss on pixels with a known value.
-        predictions = self(**batch["labeled"]["inputs"])
-        known = torch.isfinite(target)
-        labeled_loss = self.criterion(predictions[known], target[known])
+        predictions, known_target = self._evaluate(batch["labeled"])
+        labeled_loss = self._loss(predictions, known_target)
 
         # Consistency: the student's strong view against the teacher's weak view.
         self.teacher.eval()
         with torch.no_grad():
             taught = self.teacher(**weak)
-        scored = valid.unsqueeze(1).expand_as(taught)
-        unlabeled_loss = self.criterion(self(**strong)[scored], taught[scored])
+        unlabeled_loss = self.criterion(self(**strong).flatten(), taught.flatten())
 
         loss = labeled_loss + self.consistency_weight() * unlabeled_loss
 
         batch_size = len(target)
-        self.train_metrics.update(predictions[known].detach(), target[known])
         self.log(
             "train_loss", loss, on_epoch=True, prog_bar=True, batch_size=batch_size
         )
         self.log(
             "train_unlabeled_loss", unlabeled_loss, on_epoch=True, batch_size=batch_size
         )
-        self.log_dict(
-            self.train_metrics, on_step=False, on_epoch=True, batch_size=batch_size
+        if known_target.numel():
+            self.train_metrics.update(predictions.detach(), known_target)
+        self._log_metrics(
+            self.train_metrics,
+            known_target.new_tensor(known_target.numel(), dtype=torch.long),
+            batch_size=batch_size,
         )
         return loss
 
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Optimizer | LightningOptimizer,
+        optimizer_closure: Callable[[], Any] | None = None,
+    ) -> None:
+        """Update the teacher once after each student optimizer step.
+
+        Args:
+            epoch: Current epoch.
+            batch_idx: Current training batch.
+            optimizer: Student optimizer.
+            optimizer_closure: Lightning's training and backward closure.
+        """
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+        self._update_teacher()
+
     @torch.no_grad()
-    def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
-        """Move the teacher's weights toward the student's; copy its buffers."""
+    def _update_teacher(self) -> None:
+        """Update teacher parameters by EMA and copy student buffers."""
         for kept, trained in zip(
             self.teacher.parameters(), self.model.parameters(), strict=True
         ):

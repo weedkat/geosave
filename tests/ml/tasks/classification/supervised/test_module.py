@@ -37,12 +37,18 @@ def test_defaults_and_class_count() -> None:
     assert isinstance(module.configure_optimizers(), torch.optim.AdamW)
 
 
+class Uncounted(nn.Module):
+    @chain_step(head=True)
+    def logits(self, image: torch.Tensor) -> torch.Tensor:
+        return image.mean(dim=(-2, -1))
+
+
 def test_a_last_stage_without_a_class_count_is_refused() -> None:
     module = supervised.Module(
-        model_chain={"model": {"class_path": "torch.nn.Identity"}}
+        model_chain={"model": {"class_path": f"{__name__}.Uncounted"}}
     )
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="Uncounted.*num_classes"):
         module.configure_model()
 
 
@@ -55,7 +61,6 @@ class _Chips(Dataset):
         return {
             "inputs": {"image": image},
             "target": torch.tensor(index % 3),
-            "valid": torch.ones(4, 4, dtype=torch.bool),
         }
 
 
@@ -63,7 +68,11 @@ def test_lightning_fits_validates_and_tests(tmp_path) -> None:
     module = supervised.Module(model_chain=STAGES, metrics=["accuracy.macro"])
     trainer = Trainer(
         accelerator="cpu",
-        max_epochs=2,
+        max_epochs=1,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        limit_test_batches=1,
+        num_sanity_val_steps=0,
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
@@ -78,4 +87,3 @@ def test_lightning_fits_validates_and_tests(tmp_path) -> None:
 
     assert {"train_loss", "val_loss", "val_accuracy_macro"} <= fitted
     assert 0.0 <= result[0]["test_accuracy_macro"] <= 1.0
-

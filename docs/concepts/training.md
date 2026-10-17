@@ -13,7 +13,7 @@ geographic regions, run raster preprocessing, or construct chips. Use
 [catalogs and cuts](../guides/catalogs-and-cuts.md) for raster windows and
 [ModelSpec](../guides/model-spec.md) for raster requirements and preprocessing.
 
-Each method exports its Module, DataModule, and sample dictionary type under
+Each method exports its Module, DataModule, sample dictionary type and Dataset protocol under
 `geosave.ml.tasks.<task>.<method>`. Pass torch Datasets for `train` and
 `val`; supervised pairs also accept `test`. A test loader requires its Dataset.
 
@@ -24,10 +24,11 @@ Each method exports its Module, DataModule, and sample dictionary type under
 | `segmentation.supervised` | `int64 (y, x)` class codes | `(B, classes, y, x)` logits | `ignore_index`, default `255` |
 | `classification.supervised` | Scalar `int64` class code | `(B, classes)` logits | Exclude unlabeled chips in the Dataset |
 | `regression.supervised` | `float32 (variable, y, x)` physical values | `(B, variable, y, x)` values | NaN |
-| `pretraining.mim` | No target key | Reconstruction of selected pixel input | Uses the input validity mask |
+| `pretraining.mim` (experimental) | No target key | Reconstruction of selected pixel input | Scores the selected hidden patches |
 
 `B` is the number of samples in a batch. Supervised samples also contain
-`inputs`, a dictionary of named tensors, and `valid`, a boolean `(y, x)` mask.
+`inputs`, a dictionary of named model-ready tensors. There is no input-validity
+field: the source and selected model own handling unavailable input data.
 Pixel inputs end in `(band, y, x)`; a temporal input may include preceding
 axes such as `(time, band, y, x)`. The Dataset must produce the layout the
 selected model expects and include its contextual inputs when required.
@@ -38,42 +39,33 @@ integer `num_classes`. For regression it must expose a list named
 information when Lightning calls `configure_model`. Supplying a stage without
 the required declaration raises an error before training.
 
-### Loss and validity
+### Dataset outputs and target availability
 
-```python
-# Segmentation: do this in the Dataset before returning the sample.
-target[~valid] = 255
+Each method's `SampleDataset` protocol requires `__len__()` and
+`__getitem__(index: int) -> Sample`. Source datasets can remain ordinary torch
+Datasets; no GeoSave Dataset wrapper is required. The protocol declares the
+Python output type, while tensor shape, dtype and acceptable input values remain
+the selected model's contract.
 
-# Regression: use NaN for unknown values or unusable input pixels.
-target[:, ~valid] = float("nan")
-```
+Segmentation scores supplied class labels in every split and excludes
+`ignore_index`. Unknown labels must already carry that value. The Dataset,
+DataModule, Module and criterion use the same ignore value; a conflicting
+criterion value raises `ValueError` at construction. Geometric augmentation
+assigns that value to target pixels it introduces.
 
-Segmentation training calculates cross entropy from `target` and ignores the
-configured ignore label. It does not additionally mask by `valid`. Validation
-and test replace labels at invalid pixels with `ignore_index`, then update
-metrics from each batch's logits and labels. Make the Dataset, DataModule,
-Module, and any explicit criterion use the same ignore value. An explicit
-criterion `ignore_index` overrides the Module's injected default, so a
-mismatch is possible.
+Regression scores finite target values in every split. Values for all scored
+variables are flattened together for the configured regression metrics, giving
+aggregate scores rather than separate scores per variable. Unknown targets and
+augmentation-created target pixels are NaN. The default loss is mean squared
+error; metrics include `mae`, `rmse` and `r2`.
 
-Regression training uses finite target values. Validation and test also
-require `valid` input pixels, broadcasting the mask over the variable axis.
-Values for all scored variables are flattened together for the configured
-regression metrics. This yields aggregate scores, not separate metrics per
-variable. The default loss is mean squared error; choose metrics from `mae`,
-`rmse`, and `r2`.
+Classification scores one class target per chip. Exclude unlabeled chips in the
+source Dataset; its metrics require class codes in the head's class range.
 
-Classification scores one class per chip. Its scoring step uses the chip's
-class target and does not exclude it according to pixel `valid`. There is no
-Module `ignore_index` setting, and its metrics require valid class codes.
-Exclude unlabeled or unusable chips in the Dataset; the pixel mask still informs
-the DataModule's input preparation. The default loss is cross entropy.
-
-For all supervised tasks, ensure that each scored batch includes known targets.
-An empty selection or a batch of entirely ignored labels can produce an
-undefined loss or metric. Validation of tensor layout and label codes remains
-part of the Dataset's source contract; these dictionary types do not enforce
-it at runtime.
+An entirely ignored segmentation target or an empty regression target selection
+produces differentiable zero loss and no metric update. An entirely unscored
+split has no target metrics to report. No task infers input availability,
+repairs NaN/Inf inputs or filters evaluation using an input mask.
 
 ## Apply augmentation and normalization
 
@@ -110,17 +102,16 @@ transforms:
         std: [0.25, 0.25]
 ```
 
-In `on_after_batch_transfer`, the DataModule applies training augmentation
-first, then the spec's transforms to each pixel input in every split. It
-intersects `valid` with pixels that remain finite in every band and time
-step, and replaces NaN input values with zero before the model call. Contextual
-inputs pass through. Choose statistics in the same band order as the input;
-normalization does not infer band semantics.
+In `on_after_batch_transfer`, the DataModule applies training augmentation,
+optional CutMix, then the spec's input transforms in every split. `ImageAugmenter`
+owns synchronized tensor geometry; `InputTransform` applies the named spec
+transforms; `CutMix` pastes the same region into images and targets. Context
+inputs pass through. Input values are not repaired automatically.
 
 For temporal inputs, geometry is shared across all instants of each chip and
-normalization applies the same per-band statistics to every instant. The
-supervised segmentation/regression training path does not move `valid` through
-augmentation, which is why training relies on missing values in `target`.
+normalization applies the same per-band statistics to every instant. Per-input
+spec transforms must preserve geometry; place spatial transforms in the joint
+training augmentation. Choose statistics in the input's band order.
 
 For direct use outside a DataModule, `ImageAugmenter` constructs a Kornia
 pipeline. Supply `data_keys` when moving several tensors together:
@@ -172,23 +163,32 @@ chips; it does not merge predictions to remove repeated pixels.
 
 | Method | Additional Dataset | Training behavior |
 | --- | --- | --- |
-| `segmentation.fixmatch` | `unlabeled`, returning `inputs` and `valid` | Confident predictions on a weakly augmented view supervise a strongly augmented view. |
-| `regression.mean_teacher` | `unlabeled`, returning `inputs` and `valid` | A teacher updated by an exponential moving average supervises a strongly augmented view. |
+| `segmentation.fixmatch` | `unlabeled`, returning only `inputs` | Confident predictions on a weakly augmented view supervise a strongly augmented view. |
+| `regression.mean_teacher` | `unlabeled`, returning only `inputs` | A teacher updated by an exponential moving average supervises a strongly augmented view. |
 
 These methods extend their task's supervised pair. Their training DataModules
 return labeled batches alongside weak and strong views of unlabeled batches;
 validation and test retain the supervised task's contracts. Strong
 augmentations must preserve geometry so a prediction at a weak-view pixel still
 matches that pixel in the strong view. Photometric changes, such as noise,
-are suitable; an independent crop or flip is not.
+are suitable; geometric strong augmentations are rejected at construction.
+Mean Teacher updates its EMA once per optimizer step, including when gradients
+are accumulated. FixMatch averages confidence-gated loss over all unlabeled
+pixels, so its contribution increases as more pseudo-labels become confident.
 
-`pretraining.mim` learns to reconstruct masked image regions without target
-labels. Its Dataset returns only `inputs` and `valid`. The Module selects the
-input named by `reconstruct`, masks regions, and scores reconstruction error
-on valid masked pixels. It uses deterministic validation masks to make the
-validation loss comparable between epochs. See the
-[task API](../reference/training.md) before choosing model stages and method
-arguments.
+### Experimental masked image modeling
+
+`pretraining.mim` is scaffolding for developing self-supervised methods. Its
+masking, reconstruction loss, and Lightning wiring have small tests; a validated
+pretraining-to-downstream transfer workflow is still being developed.
+
+Its Dataset returns only `inputs`. The Module zero-masks patches of
+the input named by `reconstruct` and scores dense reconstruction with mean
+absolute error on hidden pixels. Validation masks are deterministic for
+the same batch position. The final regression head predicts one channel per
+input band and instant. This is the current reconstruction contract; a complete
+MAE architecture and fine-tuning recipe are not supplied by selecting a head.
+See the [task API](../reference/training.md) when experimenting with this method.
 
 ## Calibrate segmentation confidence
 

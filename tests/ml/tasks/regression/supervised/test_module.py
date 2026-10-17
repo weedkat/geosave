@@ -46,13 +46,27 @@ def test_only_known_pixels_are_scored() -> None:
     batch: supervised.Sample = {
         "inputs": {"image": torch.ones(1, 2, 2, 2)},
         "target": target,
-        "valid": torch.ones(1, 2, 2, dtype=torch.bool),
     }
 
     loss = module.training_step(batch, 0)
 
     # Errors 2, 0, 0 over the three known pixels.
     assert loss.item() == pytest.approx(4 / 3)
+
+
+def test_unknown_targets_produce_zero_loss_and_no_metric_update() -> None:
+    module = _module()
+    batch = {
+        "inputs": {"image": torch.ones(1, 2, 2, 2)},
+        "target": torch.full((1, 1, 2, 2), torch.nan),
+    }
+
+    loss = module.training_step(batch, 0)
+    loss.backward()
+
+    assert loss.item() == 0.0
+    assert module.model.get_submodule("model").factor.grad.item() == 0.0
+    assert module.train_metrics["train_mae"].update_count == 0
 
 
 def test_the_last_stage_names_its_variables() -> None:
@@ -64,18 +78,17 @@ def test_the_last_stage_names_its_variables() -> None:
         module.configure_model()
 
 
-def test_evaluation_scores_known_pixels_with_valid_inputs() -> None:
+def test_evaluation_scores_all_known_targets() -> None:
     module = _module()
     batch: supervised.Sample = {
         "inputs": {"image": torch.ones(1, 2, 2, 2)},
         "target": torch.tensor([[[[3.0, torch.nan], [5.0, 1.0]]]]),
-        "valid": torch.tensor([[[True, True], [False, True]]]),
     }
 
     predictions, target = module._evaluate(batch)
 
-    assert target.tolist() == [3.0, 1.0]
-    assert predictions.tolist() == [1.0, 1.0]
+    assert target.tolist() == [3.0, 5.0, 1.0]
+    assert predictions.tolist() == [1.0, 1.0, 1.0]
 
 
 class _Chips(Dataset):
@@ -87,7 +100,6 @@ class _Chips(Dataset):
         return {
             "inputs": {"image": image},
             "target": image[:1] * 2,
-            "valid": torch.ones(4, 4, dtype=torch.bool),
         }
 
 
@@ -97,7 +109,10 @@ def test_lightning_fits(tmp_path) -> None:
     )
     trainer = Trainer(
         accelerator="cpu",
-        max_epochs=5,
+        max_epochs=1,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        num_sanity_val_steps=0,
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,

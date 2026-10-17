@@ -26,6 +26,7 @@ from geosave.geodata.utils.geometry import SomeGeometry
 type GridAnchor = Literal["edge", "centre", "floating"]
 
 if TYPE_CHECKING:
+    import geopandas as gpd
     from odc.geo import Resolution
     from pyproj import CRS
 
@@ -236,7 +237,7 @@ class GeoAnchor:
     @classmethod
     def from_geometry(
         cls,
-        geometry: SomeGeometry,
+        geometry: SomeGeometry | gpd.GeoDataFrame | gpd.GeoSeries,
         *,
         resolution: float | None = None,
         shape: int | tuple[int, int] | None = None,
@@ -245,7 +246,7 @@ class GeoAnchor:
         anchor: GridAnchor = "edge",
         timespan: AnchorDatetime | None = None,
     ) -> Self:
-        """Build an anchor on a grid covering one geometry.
+        """Build an anchor on a grid covering one geometry or a vector's features.
 
         The grid always covers the geometry. Size it by `resolution` and the
         pixel count follows, or by `shape` and the pixel size follows. A
@@ -253,7 +254,8 @@ class GeoAnchor:
 
         Args:
             geometry: GeoJSON mapping, WKT string, Shapely geometry, or ODC
-                geometry.
+                geometry; or a GeoDataFrame or GeoSeries, covered whole in
+                its own CRS.
             resolution: Pixel size in grid CRS units.
             shape: Pixels to divide the extent into — one value spans the
                 longest axis at square pixels, or `(height, width)` spans both.
@@ -282,10 +284,16 @@ class GeoAnchor:
             >>> GeoAnchor.from_geometry(field, shape=512).geobox.resolution
             Resolution(x=21.6149, y=-21.6149)
         """
-        from .vector import GeoVector
+        import geopandas as gpd
 
+        from .vector.vector import GeoVector
+
+        if isinstance(geometry, gpd.GeoSeries):
+            geometry = gpd.GeoDataFrame(geometry=geometry)
+        if not isinstance(geometry, gpd.GeoDataFrame):
+            geometry = GeoVector.from_geometry(geometry)
         # Reproject before bounding, so the box fits no looser than the CRS change forces.
-        footprint = GeoVector.from_geometry(geometry).gs.footprint
+        footprint = geometry.gs.footprint
         grid_crs = select_grid_crs(footprint, crs)
         return cls.from_bbox(
             footprint.to_crs(grid_crs).boundingbox,

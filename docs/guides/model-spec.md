@@ -1,5 +1,10 @@
 # Declare and prepare model inputs
 
+ModelSpec is under active development in Alpha. This guide describes the
+current implementation; its API and preparation pattern may change. To learn
+model development with plain Python preparation, start with the
+[notebooks](../examples.md).
+
 ## Describe the raster a model reads
 
 Save this as `model_spec.yaml`:
@@ -134,27 +139,30 @@ from datetime import UTC, datetime
 label = gs.raster({
     "label": (("y", "x"), np.zeros((4, 4), dtype="uint8")),
 }, grid)
-files = gs.stack({"optical": scene, "label": label}).gs.to_cog(
-    "data/raw/{collection}.tif"
+scenes = gs.tree({"optical": scene, "label": label}).gs.to_cog(
+    "data/raw/{collection}/{band}.tif"
 )
-raw = gs.stac.create_item(
-    files, id="sample", datetime=datetime(2025, 6, 1, tzinfo=UTC)
+raw = gs.stac.create_catalog(
+    gs.stac.create_items(scenes, id_format="sample", datetime=datetime(2025, 6, 1, tzinfo=UTC))
 )
 
-catalog_path = spec.prepare(raw, "data/prepared", on="label")
+catalog_path = spec.prepare(raw, "data/prepared", keep=["label"])
 catalog = gs.open_vector(catalog_path)
 ```
 
-`on="label"` uses each label Item as a window. For each window, `prepare`
+`{band}` creates a file per variable. Each single-band STAC asset is named
+after that variable, so catalog reads keep `red` and `nir` as the spec expects.
+
+`prepare` groups equal-footprint Items and applies the declared frames. For each sample, it
 selects the declared rasters, runs preprocessing, and saves the raster roots
-read by `inputs`. Here those are `image` and the automatically retained label.
+read by `inputs`. Here those are `image` and the explicitly retained label.
 It writes COG assets, `catalog.parquet`, and `model_spec.yaml` into a new output
 folder. Choose a fresh path on subsequent runs; an existing output folder
 raises `FileExistsError`.
 
 ```python
-windows = gs.cuts.stacks(catalog, on="label")
-sample = windows.iloc[0].gs.to_stack()
+windows = catalog.gs.sample()
+sample = windows.iloc[0].gs.to_xarray()
 inputs = spec.model_inputs(sample.gs.rasters)
 image = inputs["image"].gs.to_tensor(dtype="float32").unsqueeze(0)
 sample.close()
@@ -166,8 +174,8 @@ The prepared catalog holds physical values, so bind its inputs directly.
 
 Temporal frames and spatial chips are separate cuts after preparation. Add a
 `chips` section for a training DataModule, then cut windows with
-`spec.chips.cut(windows)`. [Catalogs and cuts](catalogs-and-cuts.md) explains
-window tables, lazy reads, and frame/chip construction.
+`spec.chips.cut(windows, target=grid)`. [Catalogs and cuts](catalogs-and-cuts.md) explains
+sample tables, lazy reads, and frame/chip construction.
 
 Continue with [model input contracts](../concepts/model-inputs.md) for optional
 metadata requirements, STAC acquisition, tensor normalization, and geospatial

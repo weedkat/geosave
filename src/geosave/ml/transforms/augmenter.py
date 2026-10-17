@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast, overload
 
 import kornia.augmentation as K
 import torch
 from kornia.augmentation.base import _AugmentationBase
+from kornia.augmentation._2d.intensity.base import IntensityAugmentationBase2D
 
 DataKey = Literal[
     "input",
@@ -63,6 +64,17 @@ def build_augmentation_pipeline(
     Nested `AugmentationSequential` configs retain their own constructor options.
     The configuration is left unchanged.
 
+    Args:
+        augmentations: Ordered Kornia class names and optional `init_args`.
+            Nested `AugmentationSequential` entries hold their child configs
+            under `augmentations`.
+        size: Default `(height, width)` or square side length for constructors
+            accepting `size`; an explicit transform argument takes precedence.
+
+    Returns:
+        Constructed augmentation modules in configuration order. Construction
+        does not apply them to tensors or draw a sample's random parameters.
+
     Raises:
         AttributeError: An augmentation name is absent from Kornia.
     """
@@ -106,21 +118,46 @@ class ImageAugmenter(torch.nn.Module):
     Args:
         augmentations: Kornia transforms and their constructor arguments.
         size: Default spatial size for transforms such as RandomCrop.
+        photometric: Require intensity transforms that preserve pixel geometry.
 
     Raises:
         AttributeError: A transform name is absent from Kornia.
+        ValueError: `photometric` is requested with a spatial transform.
     """
 
     def __init__(
         self,
         augmentations: list[dict[str, Any]],
         size: tuple[int, int] | int,
+        *,
+        photometric: bool = False,
     ) -> None:
         super().__init__()
         self.pipeline = K.AugmentationSequential(
             *build_augmentation_pipeline(augmentations, size),
             data_keys=None,
         )
+        if photometric and any(
+            isinstance(module, _AugmentationBase)
+            and not isinstance(module, IntensityAugmentationBase2D)
+            for module in self.pipeline.modules()
+        ):
+            raise ValueError("Photometric augmentations must preserve pixel geometry.")
+
+    @overload
+    def forward(
+        self, image: torch.Tensor, *, data_keys: Sequence[DataKey] | None = None
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward(
+        self,
+        image: torch.Tensor,
+        other: torch.Tensor,
+        /,
+        *args: torch.Tensor,
+        data_keys: Sequence[DataKey] | None = None,
+    ) -> tuple[torch.Tensor, ...]: ...
 
     def forward(
         self,
@@ -132,6 +169,8 @@ class ImageAugmenter(torch.nn.Module):
 
         Args:
             image: Image whose geometry determines the joint augmentation.
+                Batched images may have leading temporal axes, shaped
+                `(B, ..., band, y, x)`; every instant shares spatial geometry.
             *args: Other images or targets, in `data_keys` order.
             data_keys: Format of each tensor, required for multiple inputs.
                 A single image defaults to `input`.
@@ -153,16 +192,40 @@ class ImageAugmenter(torch.nn.Module):
         if keys[0] not in ("input", "image"):
             raise ValueError("The first input must be an image.")
 
+        # Joint geometry folds time into channels; normalization folds it into
+        # the batch instead, in InputTransform.
+        shapes = {}
+        masks = []
+        for index, (tensor, key) in enumerate(zip(inputs, keys, strict=True)):
+            if key in ("input", "image") and tensor.ndim > 4:
+                shapes[index] = tensor.shape[1:-2]
+                inputs[index] = tensor.flatten(1, -3)
+            elif key == "mask" and tensor.ndim == 3 and image.ndim >= 4:
+                masks.append(index)
+                inputs[index] = tensor.unsqueeze(1)
+
         # Kornia transforms boxes in pixels; only YOLO needs conversion.
         yolo_indices = [index for index, key in enumerate(keys) if key == "bbox_yolo"]
         height, width = image.shape[-2:]
         for index in yolo_indices:
             inputs[index] = _yolo_to_xyxy(inputs[index], height, width)
         native_keys = ["bbox_xyxy" if key == "bbox_yolo" else key for key in keys]
-        outputs = self.pipeline(*inputs, data_keys=native_keys)
+        # DataModules are not nn.Modules, so Lightning does not move their
+        # augmentation buffers when it moves the training model.
+        self.pipeline.to(image.device)
+        result = self.pipeline(*inputs, data_keys=native_keys)
+        outputs = (
+            [cast(torch.Tensor, result)]
+            if not args
+            else list(cast(list[torch.Tensor], result))
+        )
+        for index, shape in shapes.items():
+            outputs[index] = outputs[index].unflatten(1, shape)
+        for index in masks:
+            outputs[index] = outputs[index].squeeze(1)
 
         if not args:
-            return outputs
+            return outputs[0]
 
         # Cropping or resizing can change the image size used for normalization.
         height, width = outputs[0].shape[-2:]

@@ -5,10 +5,12 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
 
+import pandas as pd
 import torch.nn as nn
 
 from geosave.model.chain import ModelChain
-from geosave.model.chain.published import published_kwargs
+from geosave.model.chain.published import published_attrs, published_kwargs
+from geosave.model.chain.routing import declared_steps
 from geosave.model.factory import BuildSpec
 
 MODEL_REGISTRY: dict[str, dict[str, Callable[..., nn.Module]]] = {}
@@ -27,13 +29,17 @@ def register_model[Factory: Callable[..., nn.Module]](
         Decorator that registers and returns the class or factory unchanged.
 
     Raises:
-        ValueError: The stage and name already identify another factory.
+        ValueError: The stage and name already identify another factory. A
+            factory of the same module and qualified name, as a notebook cell
+            run again defines, replaces the one registered.
     """
 
     def decorator(factory: Factory) -> Factory:
         key = name.upper()
         existing = MODEL_REGISTRY.get(stage, {}).get(key)
-        if existing is not None and existing is not factory:
+        # A notebook cell run again defines a new class under the same path.
+        redefined = existing is not None and _path(existing) == _path(factory)
+        if existing is not None and existing is not factory and not redefined:
             raise ValueError(f"{stage!r}/{name!r} already identifies another factory")
         MODEL_REGISTRY.setdefault(stage, {})[key] = factory
         return factory
@@ -41,20 +47,169 @@ def register_model[Factory: Callable[..., nn.Module]](
     return decorator
 
 
-def list_models(stage: str | None = None) -> dict[str, list[str]]:
-    """List registered model names by stage.
+def _path(factory: Callable[..., nn.Module]) -> tuple[str, str]:
+    """Return where a factory is defined, as its module and qualified name."""
+    return factory.__module__, factory.__qualname__
+
+
+# Stages a chain runs in order; other stages follow alphabetically.
+_CHAIN_ORDER = ("encoder", "decoder", "head", "model")
+
+
+def list_models(name: str | None = None) -> pd.DataFrame:
+    """List the registered models, or what connects to one of them.
 
     Args:
-        stage: Stage to list. None lists every stage.
+        name: A model's name, as a recipe spells it. None lists every model.
 
     Returns:
-        Stage names mapped to registered names; an unknown stage has an empty list.
+        With no name, one row per stage and name: `forward`, the step methods
+        a chain can call and what they read; `publishes`, what later stages
+        can take; and `requires`, the arguments a caller must give. With a
+        name, one row per stage holding the models that can run `before` it,
+        feeding what it reads and needs, and `after` it, reading what it
+        returns.
+
+    Raises:
+        KeyError: No model has the name.
+
+    Examples:
+        >>> list_models().loc[("head", "segmentation"), "requires"]
+        'classes'
+        >>> list_models("unet")
+                                            before                     after
+        encoder  clay, dinov3, prithvi, prithvi_tl
+        head                                        regression, segmentation
     """
     from geosave.model.stages import decoder, encoder, head, monolith  # noqa: F401
 
-    if stage is not None:
-        return {stage: list(MODEL_REGISTRY.get(stage, {}))}
-    return {name: list(factories) for name, factories in MODEL_REGISTRY.items()}
+    stages = sorted(
+        MODEL_REGISTRY,
+        key=lambda stage: (
+            _CHAIN_ORDER.index(stage) if stage in _CHAIN_ORDER else len(_CHAIN_ORDER),
+            stage,
+        ),
+    )
+    models = {
+        (stage, key.lower()): factory
+        for stage in stages
+        for key, factory in MODEL_REGISTRY[stage].items()
+    }
+    published = set()
+    for factory in models.values():
+        published.update(published_attrs(factory))
+
+    if name is None:
+        rows = {
+            model: {
+                "forward": _forward(factory),
+                "publishes": ", ".join(published_attrs(factory)),
+                "requires": ", ".join(_requires(factory, published)),
+            }
+            for model, factory in models.items()
+        }
+        table = pd.DataFrame.from_dict(
+            rows, orient="index", columns=["forward", "publishes", "requires"]
+        )
+        table.index = pd.MultiIndex.from_tuples(table.index, names=["stage", "name"])
+        return table
+
+    found = [factory for (_, key), factory in models.items() if key == name.lower()]
+    if not found:
+        raise KeyError(f"no model named {name!r}; list_models() lists them")
+    (chosen,) = found[:1]
+    connections: dict[str, dict[str, list[str]]] = {}
+    for (stage, key), factory in models.items():
+        if _feeds(factory, chosen, models, published):
+            connections.setdefault(stage, {"before": [], "after": []})["before"].append(
+                key
+            )
+        if _feeds(chosen, factory, models, published):
+            connections.setdefault(stage, {"before": [], "after": []})["after"].append(
+                key
+            )
+    return pd.DataFrame.from_dict(
+        {
+            stage: {side: ", ".join(keys) for side, keys in sides.items()}
+            for stage, sides in connections.items()
+        },
+        orient="index",
+        columns=["before", "after"],
+    )
+
+
+def _forward(factory: Callable[..., nn.Module]) -> str:
+    """Spell each step a model declares as its call, as `forward_pyramid(image)`."""
+    calls = []
+    for step in declared_steps(factory):
+        method = getattr(factory, step.name)
+        arguments = []
+        for parameter in list(inspect.signature(method).parameters.values())[1:]:
+            if parameter.default is inspect.Parameter.empty:
+                arguments.append(parameter.name)
+            else:
+                arguments.append(f"{parameter.name}={parameter.default!r}")
+        calls.append(f"{step.name}({', '.join(arguments)})")
+    # A lone end-to-end model runs its forward.
+    return ", ".join(calls) or "forward(image)"
+
+
+def _requires(factory: Callable[..., nn.Module], published: set[str]) -> list[str]:
+    """Return the constructor arguments only a caller can give."""
+    own = published_attrs(factory)
+    required = []
+    for argument, parameter in inspect.signature(factory).parameters.items():
+        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+            continue
+        if parameter.default is not inspect.Parameter.empty:
+            continue
+        if argument in published and argument not in own:
+            continue
+        required.append(argument)
+    return required
+
+
+def _reads_from(
+    first: Callable[..., nn.Module], then: Callable[..., nn.Module]
+) -> bool:
+    """Say whether `then` reads something `first` returns."""
+    returns = {output for step in declared_steps(first) for output in step.outputs}
+    reads = {name for step in declared_steps(then) for name in step.inputs}
+    return bool(returns & reads)
+
+
+def _feeds(
+    first: Callable[..., nn.Module],
+    then: Callable[..., nn.Module],
+    models: Mapping[tuple[str, str], Callable[..., nn.Module]],
+    published: set[str],
+) -> bool:
+    """Say whether `then` can run right after `first`.
+
+    It reads something `first` returns, and every argument it must take from
+    earlier stages is published by `first` or by a stage that can run before it.
+    """
+    if not _reads_from(first, then):
+        return False
+
+    # Published values reach every later stage, so walk back from `first`.
+    given: set[str] = set()
+    pending, seen = [first], []
+    while pending:
+        stage = pending.pop()
+        if any(stage is visited for visited in seen):
+            continue
+        seen.append(stage)
+        given.update(published_attrs(stage))
+        pending.extend(m for m in models.values() if _reads_from(m, stage))
+
+    own = published_attrs(then)
+    for argument, parameter in inspect.signature(then).parameters.items():
+        taken = argument in published and argument not in own
+        required = parameter.default is inspect.Parameter.empty
+        if taken and required and argument not in given:
+            return False
+    return True
 
 
 def build_model(

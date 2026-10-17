@@ -2,29 +2,37 @@
 
 from __future__ import annotations
 
+
+import copy
+import warnings
+
+import odc.stac
+import pystac
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime as dt
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-import odc.stac
 from odc.stac.model import PropertyLoadRequest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from geosave.geodata.conventions import to_yx
+from geosave import __path__ as _package_paths
+import geosave.geodata.attrs as attrs
+from geosave.geodata.conventions import SPATIAL_DIMENSIONS, to_yx
+from geosave.geodata.warnings import DroppedAttrsWarning
 from geosave.geodata.errors import AnchorFetchError
-from geosave.geodata.io.vector import stac_geoparquet
 from geosave.geodata.transform.warp import Resampling
 
 from .search.query import StacQuery
-from .translate import asset, load_attrs
+from .translate import band, collection
+from .extensions import eo
 
 if TYPE_CHECKING:
-    import pystac
+    import xarray as xr
+    from odc.stac.model import ParsedItem
 
     from geosave.geodata.core import GeoAnchor
     from geosave.geodata.stac.search.api import StacClient
-    from geosave.geodata.stac.search.table import StacTable
     from geosave.geodata import Dataset, GeoDataFrame
 
 Bands = list[str] | tuple[str, ...]
@@ -40,7 +48,7 @@ def _default_chunks() -> dict[str, ChunkSize]:
 class StacSourceConfig(BaseModel):
     """How one source loads its pixels.
 
-    Args:
+    Attributes:
         bands: Band names to load. None loads whatever the matched items
             publish.
         groupby: How odc-stac groups scenes along the time axis.
@@ -51,9 +59,9 @@ class StacSourceConfig(BaseModel):
         nodata: Nodata value, paired with `dtype`. None keeps each asset's own.
         fail_on_error: False skips a scene that fails to read instead of
             raising.
-        with_properties: Item properties loaded as coordinates along `time`,
+        with_properties: Item properties loaded by ODC along `time`,
             as property names or request mappings with `key` and optional
-            `name`, `dtype`, `nodata`, `units`, and `fuser`, e.g.
+            `dtype`, `nodata`, `units`, and `fuser` (a supplied `name` must equal `key`), e.g.
             `("view:sun_azimuth", "eo:cloud_cover")`.
         stac_cfg: Per-collection band overrides odc-stac applies, correcting
             nodata, dtype, or asset aliases a catalog publishes wrongly.
@@ -84,13 +92,39 @@ class StacSourceConfig(BaseModel):
     patch_url: Callable[[str], str] | None = None
     preserve_original_order: bool = False
 
+    @model_validator(mode="after")
+    def exact_property_names(self) -> Self:
+        """Keep STAC property identity in coordinate names."""
+        for request in PropertyLoadRequest.from_user_input(self.with_properties or ()):
+            if request.name is not None and request.name != request.key:
+                raise ValueError(
+                    "with_properties must keep the exact STAC key as its name"
+                )
+        return self
+
     def to_load_kwargs(self) -> dict[str, Any]:
-        """Return native odc-stac settings."""
+        """Return native odc-stac settings.
+
+        Returns:
+            New keyword mapping for `odc.stac.load`, omitting unset options
+            except `chunks=None`, which explicitly requests eager loading.
+            Property requests are emitted as a list.
+        """
         options = self.model_dump(exclude_none=True)
         # None explicitly selects eager loading; ODC otherwise chooses its default.
         options["chunks"] = self.chunks
         if self.with_properties is not None:
-            options["with_properties"] = list(self.with_properties)
+            requests = []
+            for request in self.with_properties:
+                fields = {"key": request} if isinstance(request, str) else dict(request)
+                # ODC sanitizes names by default; its native name option preserves the key.
+                fields["name"] = fields["key"]
+                if units := eo.property_units(fields["key"]):
+                    fields.setdefault("units", units)
+                    if fields["units"] != units:
+                        raise ValueError(f"{fields['key']} uses percent units (%)")
+                requests.append(fields)
+            options["with_properties"] = requests
         return options
 
 
@@ -101,8 +135,8 @@ class StacSource:
     """One STAC collection, loaded onto an anchor's own grid.
 
     Pixels arrive as the provider published them, with no radiometric scaling.
-    A fresh source loads on every default; narrow it with `set_config` and
-    `set_query` before `load`.
+    A fresh source loads on every default; `set_config` and `set_query` return
+    a narrowed copy, so one source can seed several.
 
     Args:
         client: Client used to search the catalog.
@@ -116,7 +150,7 @@ class StacSource:
         >>> ds = source.load(anchor)
     """
 
-    def __init__(self, client: StacClient | StacTable, *, collection: str) -> None:
+    def __init__(self, client: StacClient, *, collection: str) -> None:
         """Bind the client and collection, on default settings.
 
         Args:
@@ -145,10 +179,10 @@ class StacSource:
         patch_url: Callable[[str], str] | None = _UNSET,
         preserve_original_order: bool = _UNSET,
     ) -> Self:
-        """Merge load settings onto the current config.
+        """Return a copy with load settings merged onto its config.
 
         Only the fields passed change; the rest keep their current value. See
-        `StacSourceConfig` for what each field means.
+        `StacSourceConfig` for what each field means. This source is unchanged.
 
         Args:
             bands: Band names to load. None loads whatever the matched items
@@ -162,7 +196,7 @@ class StacSource:
                 own.
             fail_on_error: False skips a scene that fails to read instead of
                 raising.
-            with_properties: Item properties loaded as coordinates along time.
+            with_properties: Item properties loaded as ODC variables along time.
             stac_cfg: Per-collection band overrides odc-stac applies.
             pool: Reader threads odc-stac uses. None takes its default.
             progress: Progress bar odc-stac reports reads through. None is
@@ -172,13 +206,13 @@ class StacSource:
                 order rather than sorting them by time.
 
         Returns:
-            This source, for chaining.
+            New source carrying the merged config.
 
         Raises:
             ValidationError: A value does not satisfy `StacSourceConfig`.
 
         Examples:
-            >>> source.set_config(bands=["B04", "B08"], groupby="time")
+            >>> red = source.set_config(bands=["B04", "B08"], groupby="time")
         """
         changes: dict[str, Any] = {
             "bands": bands,
@@ -196,8 +230,9 @@ class StacSource:
             "preserve_original_order": preserve_original_order,
         }
         updates = {name: v for name, v in changes.items() if v is not _UNSET}
-        self.config = type(self.config)(**{**self.config.model_dump(), **updates})
-        return self
+        narrowed = copy.copy(self)
+        narrowed.config = type(self.config)(**{**self.config.model_dump(), **updates})
+        return narrowed
 
     def set_query(
         self,
@@ -211,10 +246,10 @@ class StacSource:
         max_items: int | None = None,
         limit: int | None = None,
     ) -> Self:
-        """Replace the search narrowing merged with each anchor's extent.
+        """Return a copy whose search is narrowed beyond each anchor's extent.
 
-        Every call rebuilds the query from scratch on this source's own
-        collection.
+        Every call builds the query from scratch on this source's own
+        collection. This source is unchanged.
 
         Args:
             bbox: WGS84 bounding box `(min_lon, min_lat, max_lon, max_lat)`.
@@ -229,7 +264,7 @@ class StacSource:
             limit: Server page-size hint.
 
         Returns:
-            This source, for chaining.
+            New source carrying the query.
 
         Raises:
             ValueError: `bbox` is not a valid WGS84 box, `filter` is not valid
@@ -237,8 +272,8 @@ class StacSource:
                 `limit` is below one.
 
         Examples:
-            >>> source.set_query(
-            ...     filter="eo:cloud_cover <= 10", sortby=["-properties.eo:cloud_cover"]
+            >>> clear = source.set_query(
+            ...     filter="eo:cloud_cover <= 10", sortby=["properties.eo:cloud_cover"]
             ... )
         """
         query = StacQuery(
@@ -254,14 +289,16 @@ class StacSource:
             query = query.set_filter(filter)
         if sortby is not None:
             query = query.sort_by(*sortby)
-        self.query = query
-        return self
+        narrowed = copy.copy(self)
+        narrowed.query = query
+        return narrowed
 
     def __repr__(self) -> str:
-        """Describe the collection and the settings it loads with.
+        """Describe this source's collection and current load configuration.
 
         Returns:
-            Multi-line summary of the collection and its config.
+            Multi-line text containing the collection ID and every load
+            configuration field. This does not search or read pixels.
         """
         lines = "\n".join(
             f"  {key}: {value!r}" for key, value in self.config.model_dump().items()
@@ -286,7 +323,7 @@ class StacSource:
         """Name the per-acquisition properties this collection publishes.
 
         These are the names `StacSourceConfig.with_properties` loads as
-        coordinates, and the columns of `search(anchor)`.
+        variables, and the columns of `search(anchor)`.
 
         Returns:
             Property names, sorted. Empty when the collection has no items.
@@ -297,31 +334,6 @@ class StacSource:
         """
         sample = self.sample_item()
         return () if sample is None else tuple(sorted(sample.properties))
-
-    def list_asset_fields(self) -> tuple[str, ...]:
-        """Name the asset fields this collection publishes.
-
-        They are the fields of each asset in `search(anchor)["assets"]`.
-
-        Returns:
-            Field names, sorted. Empty when the collection has no items.
-
-        Examples:
-            >>> [f for f in source.list_asset_fields() if "wavelength" in f]
-            ['eo:center_wavelength']
-        """
-        sample = self.sample_item()
-        if sample is None:
-            return ()
-        return tuple(
-            sorted(
-                {
-                    key
-                    for entry in sample.assets.values()
-                    for key in asset.fields(entry)
-                }
-            )
-        )
 
     @property
     def collection(self) -> pystac.Collection:
@@ -342,9 +354,7 @@ class StacSource:
             >>> source.search(anchor)["eo:cloud_cover"].tolist()
             [4.2, 11.0]
         """
-        return stac_geoparquet.from_item(
-            self.client.search_items(self._search_query(anchor))
-        )
+        return self.client.search(self._search_query(anchor))
 
     def load(self, anchor: GeoAnchor) -> Dataset:
         """Load this collection onto an anchor's grid.
@@ -359,12 +369,18 @@ class StacSource:
 
         Returns:
             Dataset on the anchor's exact geobox. Its arrays are
-            Dask-backed unless `chunks=None` was configured.
+            Dask-backed unless `chunks=None` was configured. ODC owns the time
+            axis, grouping, and requested property variables. Search limits do
+            not squeeze dimensions, and composite bounds are not reconstructed.
 
         Raises:
             AnchorFetchError: The search matched no items.
-            ValueError: Matched items disagree on one asset's decoding, or the
-                loaded Dataset carries no locatable grid.
+            ValueError: The loaded Dataset carries no locatable grid.
+
+        Warns:
+            DroppedAttrsWarning: Contributing Items disagree on band metadata.
+                Conflicting source attributes are omitted; loader metadata remains
+                authoritative and published digital numbers are not decoded.
 
         Examples:
             >>> ds = source.load(anchor)
@@ -377,21 +393,74 @@ class StacSource:
                 f"no {self._collection!r} items matched the anchor's extent and window"
             )
 
-        # odc-stac names a geographic grid latitude/longitude.
-        data = to_yx(
-            odc.stac.load(matched, geobox=anchor.geobox, **self.config.to_load_kwargs())
+        loaded = odc.stac.load(
+            matched, geobox=anchor.geobox, **self.config.to_load_kwargs()
         )
-        if self.config.with_properties:
-            property_names = [
-                request.output_name
-                for request in PropertyLoadRequest.from_user_input(
-                    self.config.with_properties
-                )
-            ]
-            # odc-stac loads auxiliary properties as time-indexed variables.
-            data = data.set_coords(property_names)
-        data = load_attrs(matched, self.collection, data, stac_cfg=self.config.stac_cfg)
+        data = self._apply_metadata(matched, to_yx(loaded))
         return data.gs.write_crs()
+
+    def _apply_metadata(
+        self, items: Sequence[pystac.Item], loaded: xr.Dataset
+    ) -> xr.Dataset:
+        """Apply agreed source metadata, preserving the loader's pixel metadata."""
+        if not items:
+            raise ValueError("reading a STAC load's attrs needs at least one item")
+
+        parsed = list(odc.stac.parse_items(items, cfg=self.config.stac_cfg))
+        described = {}
+        for name, variable in loaded.data_vars.items():
+            # ODC property variables retain their own values, dimensions, and attrs.
+            if not set(SPATIAL_DIMENSIONS) <= set(variable.dims):
+                continue
+            metadata = self._read_band_attrs(items, parsed, str(name), variable)
+            stated = variable.assign_attrs({**metadata, **variable.attrs})
+
+            # ODC states its fill as `nodata`; normalize it to CF's spelling.
+            nodata = attrs.Nodata.from_attrs(stated.attrs)
+            described[name] = (
+                stated if nodata is None else attrs.stamp_attrs(stated, nodata)
+            )
+
+        return loaded.assign(described).assign_attrs(
+            collection.read_attrs(self.collection)
+        )
+
+    @staticmethod
+    def _read_band_attrs(
+        items: Sequence[pystac.Item],
+        parsed: Sequence[ParsedItem],
+        name: str,
+        variable: xr.DataArray,
+    ) -> dict[str, Any]:
+        """Resolve an ODC band and keep only metadata all contributing Items agree on."""
+        published = []
+        for entry, odc_item in zip(items, parsed, strict=True):
+            key, index = odc_item.collection.band_key(name)
+            asset = entry.assets.get(key)
+            published.append(
+                {} if asset is None else band.read_attrs(variable, asset, index - 1)
+            )
+
+        kept = attrs.intersect(published)
+        stated_keys = set()
+        for fields in published:
+            stated_keys.update(fields)
+        disputed = sorted(stated_keys - kept.keys())
+        if disputed:
+            values = {}
+            for key in disputed:
+                values[key] = {
+                    entry.id: fields.get(key)
+                    for entry, fields in zip(items, published, strict=True)
+                }
+            warnings.warn(
+                f"STAC items publish {disputed} differently for {name!r}, so "
+                f"those source attrs are dropped: {values}",
+                DroppedAttrsWarning,
+                skip_file_prefixes=tuple(_package_paths),
+            )
+
+        return kept
 
     def _search_query(self, anchor: GeoAnchor) -> StacQuery:
         """Narrow this source's search to one anchor.

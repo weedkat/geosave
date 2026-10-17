@@ -17,7 +17,15 @@ _METRIC_FNS: dict[str, Callable[..., torch.Tensor]] = {
 
 
 def softmax_argmax(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the top class and confidence for each pixel."""
+    """Return the top class and softmax confidence for each pixel.
+
+    Args:
+        logits: Raw class scores shaped `(batch, classes, y, x)`.
+
+    Returns:
+        Int64 labels and top-class probabilities, both `(batch, y, x)` and
+        on the input device. This does not apply calibrated thresholds.
+    """
     probabilities = logits.softmax(dim=1)
     confidence, labels = probabilities.max(dim=1)
     return labels, confidence
@@ -142,6 +150,21 @@ class ThresholdCalibrator(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
+        """Collect detached validation predictions on CPU during the last epoch.
+
+        Args:
+            trainer: Trainer supplying epoch limits and sanity-check state.
+            pl_module: Validated module; unused while collecting outputs.
+            outputs: Step mapping with `logits` shaped `(batch, classes, y, x)`
+                and int64 `label` shaped `(batch, y, x)`.
+            batch: Original validation batch; the collector uses `outputs`.
+            batch_idx: Batch position, unused by the collector.
+            dataloader_idx: Loader position; all collected loaders contribute.
+
+        Raises:
+            TypeError: An eligible step lacks tensor logits or labels.
+            ValueError: A finite final epoch cannot be determined.
+        """
         if not self._is_last_epoch(trainer):
             return
         # Tensor overlaps Mapping's protocol, so narrow by excluding the other arms.
@@ -162,6 +185,17 @@ class ThresholdCalibrator(Callback):
         self._labels.append(label.detach().cpu())
 
     def on_validation_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Sweep collected validation pixels and update the threshold buffer.
+
+        Args:
+            trainer: Trainer identifying the last non-sanity validation epoch.
+            pl_module: Module whose `class_thresholds` tensor is overwritten
+                in place on its device. Collected CPU tensors are then cleared.
+
+        Raises:
+            TypeError: The module has no tensor `class_thresholds` buffer.
+            ValueError: A finite final epoch cannot be determined.
+        """
         if not self._is_last_epoch(trainer) or not self._preds:
             return
         class_thresholds = getattr(pl_module, "class_thresholds", None)

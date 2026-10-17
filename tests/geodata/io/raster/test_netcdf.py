@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 from upath import UPath
 import xarray as xr
-from dask.delayed import Delayed
 
 from geosave.geodata.io import netcdf
 from tests.geodata.conftest import build_raster
@@ -17,8 +16,8 @@ def test_netcdf_round_trip_preserves_the_profile(
 ) -> None:
     written = build_raster(crs=crs, times=times, packed=True)
 
-    destination = netcdf.write(written, tmp_path / "scene.nc")
-    restored = netcdf.read(destination)
+    destination = netcdf.write(written, tmp_path / "scene.nc").path
+    restored = netcdf.open_raster(destination)
 
     assert restored.gs.geobox == written.gs.geobox
     assert restored.red.dtype == np.dtype("uint16")
@@ -30,17 +29,17 @@ def test_netcdf_reads_a_file_url(tmp_path: Path) -> None:
     written = build_raster()
     netcdf.write(written, tmp_path / "scene.nc")
 
-    with netcdf.read((tmp_path / "scene.nc").as_uri()) as restored:
+    with netcdf.open_raster((tmp_path / "scene.nc").as_uri()) as restored:
         np.testing.assert_array_equal(restored["red"], written["red"])
 
 
 def test_netcdf_refuses_an_existing_destination(tmp_path: Path) -> None:
-    destination = netcdf.write(build_raster(), tmp_path / "scene.nc")
+    destination = netcdf.write(build_raster(), tmp_path / "scene.nc").path
 
     with pytest.raises(FileExistsError):
         netcdf.write(build_raster(), destination)
 
-    assert netcdf.write(build_raster(), destination, overwrite=True) == destination
+    assert netcdf.write(build_raster(), destination, overwrite=True).path == destination
 
 
 def test_netcdf_refuses_a_foreign_suffix(tmp_path: Path) -> None:
@@ -48,14 +47,15 @@ def test_netcdf_refuses_a_foreign_suffix(tmp_path: Path) -> None:
         netcdf.write(build_raster(), tmp_path / "scene.tif")
 
 
-def test_netcdf_deferred_write_returns_a_delayed_result(tmp_path: Path) -> None:
+def test_a_deferred_file_is_written_only_once_computed(tmp_path: Path) -> None:
     destination = tmp_path / "deferred.nc"
 
-    deferred = netcdf.write(build_raster(), destination, compute=False)
+    pending = build_raster().gs.to_netcdf(destination, compute=False)
 
-    assert isinstance(deferred, Delayed)
-    assert deferred.compute() == destination
-    assert netcdf.read(destination).gs.geobox == build_raster().gs.geobox
+    assert not destination.exists()
+    (file,) = pending.compute().written.values()
+    assert file.path == destination
+    assert file.header.gs.geobox == build_raster().gs.geobox
 
 
 def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> None:
@@ -64,7 +64,10 @@ def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> Non
 
     written = build_raster(times=2)
 
-    saved = written.gs.to_netcdf(f"{bucket}/scene.nc", storage_options={})
+    (file,) = written.gs.to_netcdf(
+        f"{bucket}/scene.nc", storage_options={}
+    ).written.values()
+    saved = file.path
 
     assert saved == UPath(f"{bucket}/scene.nc")
     saved.fs.get(saved.path, str(tmp_path / "copy.nc"))
@@ -72,8 +75,10 @@ def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> Non
         np.testing.assert_array_equal(restored.red, written.red)
     with pytest.raises(ValueError, match="local"):
         open_raster(saved)
-    with pytest.raises(ValueError, match="compute"):
-        written.gs.to_netcdf(f"{bucket}/later.nc", compute=False)
+    # A deferred upload stages the whole file when computed.
+    pending = written.gs.to_netcdf(f"{bucket}/later.nc", compute=False)
+    (file,) = pending.compute().written.values()
+    assert file.path == UPath(f"{bucket}/later.nc")
 
 
 def _foreign() -> xr.Dataset:
@@ -95,7 +100,7 @@ def test_netcdf_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
     foreign = _foreign()
     foreign.to_netcdf(tmp_path / "foreign.nc")
 
-    restored = netcdf.read(tmp_path / "foreign.nc", chunks={})
+    restored = netcdf.open_raster(tmp_path / "foreign.nc", chunks={})
 
     assert restored.red.dims == ("y", "x")
     assert restored.gs.geobox == foreign.odc.geobox

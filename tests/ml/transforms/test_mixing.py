@@ -28,12 +28,19 @@ def test_probability_decides_which_samples_get_a_box(p: float, expected: int) ->
     assert int(boxes.flatten(1).any(dim=1).sum()) == expected
 
 
-def test_one_box_moves_image_and_label_together() -> None:
-    image = torch.arange(2 * 3 * 8 * 8, dtype=torch.float32).reshape(2, 3, 8, 8)
-    label = image[:, 0].long()
-    box = cutmix_boxes(2, (8, 8))
+def test_cutmix_pastes_one_donor_box_across_temporal_inputs_and_targets():
+    from geosave.ml.transforms import CutMix
 
-    mixed_image = torch.where(box[:, None], image.roll(1, 0), image)
-    mixed_label = torch.where(box, label.roll(1, 0), label)
+    image = torch.arange(2 * 3 * 2 * 8 * 8, dtype=torch.float32).reshape(2, 3, 2, 8, 8)
+    target = image[:, 0, 0].long()
+    dem = target[:, None].float()
 
-    assert torch.equal(mixed_image[:, 0].long(), mixed_label)
+    pixels, elevation, labels = CutMix(p=1.0)(image, dem, target)
+
+    changed = (pixels != image).flatten(1, 2).all(dim=1)
+    assert changed.any()
+    assert torch.equal(labels, torch.where(changed, target.roll(1, 0), target))
+    assert torch.equal(elevation[:, 0].long(), labels)
+    torch.testing.assert_close(
+        pixels, torch.where(changed[:, None, None], image.roll(1, 0), image)
+    )

@@ -155,8 +155,18 @@ class _UpBlock(nn.Module):
 
 @register_model("decoder", "unet")
 class Unet(nn.Module):
-    """
-    U-Net Decoder with a toggleable `vit_adapter` parameter.
+    """Fuse encoder pyramid levels into a dense feature map with U-Net skips.
+
+    Args:
+        pyramid_channels: Channel count of each ordered encoder level.
+            Published by built-in encoders during chain construction.
+        pyramid_strides: Each level's pixel stride relative to the input image,
+            in the same order as `pyramid_channels`.
+        decoder_channels: Widths of successive upsampling blocks. The last
+            width is the output `feature_channels` published to a dense head.
+        use_norm: Apply BatchNorm2d after the decoder's refinement convolutions.
+        vit_adapter: Reassemble levels onto strides 4, 8, 16, and so on. False
+            projects channels while preserving the encoder levels' grids.
     """
 
     feature_channels: Published[int]
@@ -235,7 +245,9 @@ class Unet(nn.Module):
             pyramid: Per-level (B, C_in, H_src, W_src) features from the encoder.
 
         Returns:
-            (B, decoder_channels[-1], 2H, 2W) dense feature map.
+            `(B, decoder_channels[-1], y, x)` dense features, with spatial
+            dimensions twice those of the finest adapted pyramid level.
+            A task head can resize them to the requested input size.
         """
         # Reassemble ViT levels, or just project hierarchical ones.
         levels = [block(f) for block, f in zip(self.encoder_adapter, pyramid)]

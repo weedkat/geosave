@@ -7,12 +7,11 @@ Examples:
     One preprocess, end to end::
 
         clear = nodata.mask(raw, raw.scl.isin(CLEAR_CLASSES))
-        filled = combine.mosaic([clear, last_week])
-        monthly = temporal.reduce(temporal.resample(filled, "MS"), "median")
+        monthly = temporal.reduce(temporal.resample(clear, "MS"), "median")
         dem = warp.reproject(srtm, monthly, resampling="bilinear")
         prepared = monthly.assign(elevation=dem.elevation)
 """
 
-from . import color, combine, crop, nodata, temporal, vector, warp
+from . import color, combine, extent, nodata, temporal, vector, warp
 
-__all__ = ["color", "combine", "crop", "nodata", "temporal", "vector", "warp"]
+__all__ = ["color", "combine", "extent", "nodata", "temporal", "vector", "warp"]

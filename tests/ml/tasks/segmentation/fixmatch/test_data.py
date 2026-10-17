@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
+from torch.utils.data import Dataset
 
 from geosave.ml.tasks.segmentation import fixmatch
 from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch, _spec
@@ -11,11 +13,38 @@ from tests.ml.tasks.segmentation.supervised.test_data import FLIP, Chips, _batch
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
 
+class Scenes(Dataset[fixmatch.Unlabeled]):
+    """Unlabeled source returning only model inputs."""
+
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int) -> fixmatch.Unlabeled:
+        return {"inputs": {"image": torch.full((2, 8, 8), float(index))}}
+
+
+def test_views_need_only_model_inputs(tmp_path):
+    data = _training(tmp_path, augmentations=FLIP, strong_augmentations=NOISE)
+    labeled = _batch()
+
+    result = data.on_after_batch_transfer(
+        {"labeled": labeled, "unlabeled": {"inputs": _batch(times=2)["inputs"]}}, 0
+    )
+
+    assert set(result["unlabeled"]) == {"weak", "strong"}
+    assert set(result["labeled"]) == {"inputs", "target"}
+
+
+def test_strong_augmentations_cannot_move_geometry(tmp_path):
+    with pytest.raises(ValueError, match="geometry"):
+        _training(tmp_path, strong_augmentations=FLIP)
+
+
 def _training(tmp_path: Path, **options: object) -> fixmatch.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
     path = _spec().save(tmp_path / "model_spec.yaml")
     data = fixmatch.DataModule(
-        spec=path, train=Chips(), val=Chips(), unlabeled=Chips(), **options
+        spec=path, train=Chips(), val=Chips(), unlabeled=Scenes(), **options
     )
     data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
     return data
@@ -23,7 +52,7 @@ def _training(tmp_path: Path, **options: object) -> fixmatch.DataModule:
 
 def _unlabeled(times: int = 0) -> fixmatch.Unlabeled:
     batch = _batch(times)
-    return {"inputs": batch["inputs"], "valid": batch["valid"]}
+    return {"inputs": batch["inputs"]}
 
 
 def test_strong_views_perturb_the_weak_view_without_moving_it(tmp_path) -> None:
@@ -41,7 +70,7 @@ def test_strong_views_perturb_the_weak_view_without_moving_it(tmp_path) -> None:
     assert noise.abs().gt(0).any()
     assert noise.abs().mean() < 2.0
     assert torch.equal(weak["location_coords"], inputs["location_coords"])
-    assert views["valid"].all()
+    assert set(views) == {"weak", "strong"}
 
 
 def test_labeled_chips_are_finished_as_in_supervised_training(tmp_path) -> None:
@@ -58,22 +87,20 @@ def test_labeled_chips_are_finished_as_in_supervised_training(tmp_path) -> None:
     assert torch.equal(labeled["target"], original["target"].flip(-1))
 
 
-def test_pixels_an_augmentation_invents_are_not_valid(tmp_path) -> None:
-    shift = [
-        {
-            "name": "RandomAffine",
-            "init_args": {"degrees": 0.0, "translate": [0.5, 0.5], "p": 1.0},
-        }
-    ]
-    data = _training(tmp_path, augmentations=shift)
+def test_shared_geometry_is_applied_before_splitting_views(tmp_path) -> None:
+    crop = [{"name": "CenterCrop", "init_args": {"size": (4, 4)}}]
+    data = _training(tmp_path, augmentations=crop)
+    original = _unlabeled(times=2)
 
-    batch = data.on_after_batch_transfer(
-        {"labeled": _batch(), "unlabeled": _unlabeled(times=2)}, 0
+    result = data.on_after_batch_transfer(
+        {"labeled": _batch(), "unlabeled": original}, 0
     )
 
-    views = batch["unlabeled"]
-    assert views["valid"].any() and not views["valid"].all()
-    assert views["strong"]["image"].shape == (2, 2, 2, 8, 8)
+    for view in ("weak", "strong"):
+        torch.testing.assert_close(
+            result["unlabeled"][view]["image"],
+            original["inputs"]["image"][..., 2:6, 2:6],
+        )
 
 
 def test_evaluation_batches_pass_as_supervised(tmp_path) -> None:

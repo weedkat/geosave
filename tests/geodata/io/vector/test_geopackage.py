@@ -48,7 +48,7 @@ def test_an_option_given_twice_refuses(tmp_path: Path) -> None:
     path = _plots().gs.to_geopackage(tmp_path / "survey.gpkg")
 
     with pytest.raises(TypeError, match="rows"):
-        geopackage.read(path, rows=1, driver_options={"rows": 2})
+        geopackage.open_vector(path, rows=1, driver_options={"rows": 2})
 
 
 def test_a_file_url_reads_as_its_local_path(tmp_path: Path) -> None:

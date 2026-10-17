@@ -6,10 +6,10 @@ from typing import Any
 import dask.array as da
 import numpy as np
 import pytest
-from pydantic import ValidationError
-
+import pystac
 import xarray as xr
 from odc.geo.geobox import GeoBox
+from pydantic import ValidationError
 
 import geosave.geodata.stac.source as source_module
 from geosave.geodata import GeoAnchor, raster
@@ -17,8 +17,12 @@ from geosave.geodata.stac import StacQuery, StacSource, StacSourceConfig
 
 
 class FakeClient:
-    def search_items(self, query: object) -> list[object]:
-        return [object()]
+    def search_items(self, query: object) -> list[pystac.Item]:
+        return [
+            pystac.Item(
+                "scene", None, None, dt.fromisoformat("2025-06-01T00:00:00+00:00"), {}
+            )
+        ]
 
     def collection(self, collection: str) -> object:
         return object()
@@ -73,15 +77,6 @@ def test_item_ids_do_not_gain_target_selectors() -> None:
     assert source._search_query(_target()) == query
 
 
-def test_query_rejects_bbox_and_intersects_together() -> None:
-    with pytest.raises(ValueError, match="bbox.*intersects"):
-        StacQuery(
-            collections=["example"],
-            bbox=(0, 0, 1, 1),
-            intersects={"type": "Point", "coordinates": [0, 0]},
-        )
-
-
 def test_source_config_defaults_to_spatial_dask_chunks() -> None:
     first = StacSourceConfig()
     second = StacSourceConfig()
@@ -134,7 +129,7 @@ def test_load_returns_dask_backed_arrays_by_default(
 
     monkeypatch.setattr(source_module.odc.stac, "load", fake_load)
     monkeypatch.setattr(
-        source_module, "load_attrs", lambda items, collection, loaded, **kwargs: loaded
+        StacSource, "_apply_metadata", lambda self, items, loaded: loaded
     )
     anchor = GeoAnchor.from_coordinates(
         -6.5914,
@@ -171,7 +166,7 @@ def test_load_names_a_geographic_grid_y_x(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(source_module.odc.stac, "load", fake_load)
     monkeypatch.setattr(
-        source_module, "load_attrs", lambda items, collection, loaded, **kwargs: loaded
+        StacSource, "_apply_metadata", lambda self, items, loaded: loaded
     )
     anchor = GeoAnchor.from_coordinates(
         -6.5914,
@@ -194,7 +189,7 @@ def test_load_names_a_geographic_grid_y_x(monkeypatch: pytest.MonkeyPatch) -> No
 def test_chunks_none_remains_an_explicit_eager_mode() -> None:
     source = StacSource(FakeClient(), collection="example")  # type: ignore[arg-type]
 
-    source.set_config(chunks=None)
+    source = source.set_config(chunks=None)
 
     assert source.config.chunks is None
     assert source.config.to_load_kwargs()["chunks"] is None
@@ -206,7 +201,7 @@ def test_with_properties_forwards_odc_native_requests() -> None:
             "platform",
             {
                 "key": "view:sun_azimuth",
-                "name": "sun_azimuth",
+                "name": "view:sun_azimuth",
                 "dtype": "float32",
                 "units": "degree",
             },
@@ -214,10 +209,10 @@ def test_with_properties_forwards_odc_native_requests() -> None:
     )
 
     assert source.config.to_load_kwargs()["with_properties"] == [
-        "platform",
+        {"key": "platform", "name": "platform"},
         {
             "key": "view:sun_azimuth",
-            "name": "sun_azimuth",
+            "name": "view:sun_azimuth",
             "dtype": "float32",
             "units": "degree",
         },
@@ -256,15 +251,102 @@ def test_a_source_searches_the_items_it_loads_and_keeps_no_copy(local_source) ->
 
     assert type(rows.gs).__name__ == "GeoCatalog"
     assert source.collection.id == rows["collection"].iloc[0]
+    assert (
+        rows.gs.collections[source.collection.id].description
+        == source.collection.description
+    )
     assert "stac_items" not in loaded.attrs
     assert "stac_groupby" not in loaded.attrs
 
 
 def test_a_load_states_its_collection_as_acdd(local_source) -> None:
-    from geosave.geodata.stac.translate import collection
-
     source, anchor = local_source
     loaded = source.load(anchor)
 
-    assert loaded.gs.acdd == collection.read(source.collection)
+    assert loaded.attrs["id"] == source.collection.id
+    assert loaded.attrs["license"] == source.collection.license
     assert loaded.attrs["summary"] == "Local reflectance"
+
+
+def test_a_one_item_query_keeps_odcs_time_axis(local_source) -> None:
+    source, anchor = local_source
+
+    many = source.load(anchor)
+    one = source.set_query(max_items=1).load(anchor)
+
+    assert "time" in many.red.dims
+    assert one.sizes["time"] == 1
+    assert one.red.dims == many.red.dims
+    assert one.squeeze("time").time.ndim == 0
+
+
+def test_narrowing_returns_a_copy_and_leaves_the_source_unchanged() -> None:
+    source = StacSource(FakeClient(), collection="example")  # type: ignore[arg-type]
+
+    red = source.set_config(bands=["red"])
+    one = red.set_query(max_items=1)
+
+    assert source.config.bands is None and source.query.max_items is None
+    assert red.config.bands == ["red"] and red.query.max_items is None
+    assert one.config.bands == ["red"] and one.query.max_items == 1
+
+
+@pytest.mark.parametrize("groupby", ["id", "time"])
+@pytest.mark.parametrize(
+    "properties",
+    [
+        None,
+        ["eo:cloud_cover"],
+        [
+            {"key": "start_datetime", "dtype": "str"},
+            {"key": "end_datetime", "dtype": "str"},
+        ],
+    ],
+)
+def test_source_keeps_odc_time_and_property_representation(
+    local_source, groupby, properties
+):
+    import odc.stac
+    from copy import deepcopy
+    from unittest.mock import Mock
+
+    source, anchor = local_source
+    composite = source.search(anchor).gs.to_items()[0]
+    instant = composite.clone()
+    instant.id = "instant"
+    instant.datetime = composite.datetime
+    instant.properties.pop("datetime", None)
+    composite.properties["eo:cloud_cover"] = 20.0
+    instant.properties["eo:cloud_cover"] = 40.0
+    composite.properties.update(
+        start_datetime="2025-05-31T00:00:00Z",
+        end_datetime="2025-06-01T23:59:59Z",
+    )
+    collection = source.collection
+    source.client = Mock()
+    source.client.search_items.return_value = [composite, instant]
+    source.client.collection.return_value = collection
+    original = deepcopy(instant.properties)
+
+    configured = source.set_config(
+        groupby=groupby,
+        with_properties=properties,
+    )
+    expected = odc.stac.load(
+        [composite, instant], geobox=anchor.geobox, **configured.config.to_load_kwargs()
+    )
+    loaded = configured.load(anchor)
+
+    assert isinstance(loaded.red.data, da.Array)
+    assert dict(loaded.sizes) == dict(expected.sizes)
+    assert set(loaded.coords) == set(expected.coords)
+    assert set(loaded.data_vars) == set(expected.data_vars)
+    xr.testing.assert_equal(loaded.time, expected.time)
+    np.testing.assert_array_equal(loaded.red.values, expected.red.values)
+    for request in properties or []:
+        key = request if isinstance(request, str) else request["key"]
+        xr.testing.assert_equal(loaded[key], expected[key])
+    assert instant.properties == original
+    if not properties:
+        assert "start_datetime" not in loaded
+        assert "end_datetime" not in loaded

@@ -29,11 +29,36 @@ def _strip_administrative_suffix(value: str | None) -> str | None:
 class Place:
     """One reverse-geocoded address, one field per Nominatim level.
 
-    Every level Nominatim returned is kept, so a caller picks the ones it
+    Every supported level Nominatim returned is kept, so a caller picks the ones it
     wants rather than being handed one rendering.
 
+    Attributes:
+        city: City name.
+        town: Town name.
+        village: Village name.
+        hamlet: Hamlet name.
+        isolated_dwelling: Name of an isolated dwelling.
+        suburb: Suburb name.
+        borough: Borough name.
+        quarter: Quarter name.
+        neighbourhood: Neighbourhood name.
+        city_district: District within a city.
+        county: County name.
+        municipality: Municipality name.
+        district: Administrative district name.
+        state_district: District within a state.
+        state: State name.
+        province: Province name.
+        region: Region name.
+        country: Country name.
+        country_code: ISO 3166-1 alpha-2 country code as supplied.
+        iso_state: ISO subdivision code when supplied.
+
+    Each field is an optional constructor input and defaults to None when the
+    service does not supply that address level.
+
     Examples:
-        >>> place = Place.from_coordinate(-8.05, 112.15)
+        >>> place = Place(city="Malang", city_district="Kedungkandang", state="Jawa Timur", country_code="id")
         >>> place.city, place.state, place.country_code
         ('Malang', 'Jawa Timur', 'id')
     """
@@ -63,11 +88,12 @@ class Place:
         """Build a human-readable address below the state level.
 
         Returns:
-            Comma-separated populated-place and district fields, finest first.
+            Comma-separated populated-place and district fields in declaration
+            order, excluding state-level fields, country, and country codes.
 
         Examples:
             >>> place.to_address()
-            'Kedungkandang, Malang'
+            'Malang, Kedungkandang'
         """
         excluded = {
             "state",

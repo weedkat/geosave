@@ -55,7 +55,6 @@ class Samples(Dataset):
         return {
             "inputs": {"image": torch.ones(2, 4, 4)},
             "target": torch.zeros(4, 4, dtype=torch.long),
-            "valid": torch.ones(4, 4, dtype=torch.bool),
         }
 
 

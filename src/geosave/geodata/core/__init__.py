@@ -1,23 +1,31 @@
-"""Public geodata core: the raster accessors and independent value types."""
+"""Public geodata core: the `gs` accessors of rasters and vectors, and GeoAnchor."""
 
 from .anchor import GeoAnchor
-from .array import GeoArray
-from .raster import GeoRaster
+from .raster.dataarray import GeoDataArray
+from .raster.dataset import GeoDataset
+from .raster.datatree import GeoDataTree
+from .vector.catalog import GeoCatalog
+from .vector.accessors import FrameAccessor, RowAccessor  # noqa: F401  registers `gs`
+from .vector.item import GeoItem
+from .vector.sample import GeoSample
+from .vector.samples import GeoSamples
+from .vector.vector import GeoVector
 
-# After .array and .raster, so `core.array` and `core.raster` name these
-# functions rather than the same-named submodules.
-from .create import RasterVariable, array, raster
-from .stack import GeoStack, stack
-from .vector import GeoVector
+# After the accessors, which import the `raster` package this name would shadow.
+from .raster.create import RasterVariable, array, raster, tree  # noqa: E402
 
 __all__ = [
     "GeoAnchor",
-    "GeoArray",
-    "GeoRaster",
-    "GeoStack",
+    "GeoDataArray",
+    "GeoDataset",
+    "GeoDataTree",
     "RasterVariable",
     "GeoVector",
+    "GeoCatalog",
+    "GeoSamples",
+    "GeoItem",
+    "GeoSample",
     "array",
     "raster",
-    "stack",
+    "tree",
 ]

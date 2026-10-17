@@ -60,3 +60,37 @@ def cutmix_boxes(
     )
     drawn = torch.rand(batch, device=device) < p
     return inside_rows & inside_columns & drawn[:, None, None]
+
+
+class CutMix(torch.nn.Module):
+    """Paste one donor box jointly into images and targets.
+
+    Args:
+        p: Probability each sample receives a box from its batch neighbour.
+    """
+
+    def __init__(self, p: float = 1.0) -> None:
+        super().__init__()
+        self.p = p
+
+    def forward(
+        self, image: torch.Tensor, *targets: torch.Tensor
+    ) -> tuple[torch.Tensor, ...]:
+        """Return tensors mixed by the same box across all instants and bands.
+
+        Args:
+            image: Batched image ending in `(band, y, x)`.
+            *targets: Other images or targets sharing batch and spatial axes.
+
+        Returns:
+            Mixed tensors in their input order, retaining their shapes.
+        """
+        if not self.p:
+            return (image, *targets)
+        height, width = image.shape[-2:]
+        box = cutmix_boxes(len(image), (height, width), p=self.p, device=image.device)
+        mixed = []
+        for tensor in (image, *targets):
+            spread = box.reshape(len(box), *([1] * (tensor.ndim - 3)), *box.shape[-2:])
+            mixed.append(torch.where(spread, tensor.roll(1, 0), tensor))
+        return tuple(mixed)

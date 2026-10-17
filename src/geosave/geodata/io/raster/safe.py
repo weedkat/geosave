@@ -20,11 +20,11 @@ Examples:
 
 A leaf is named `T{tile}_{instant}_{band}_{resolution}m.jp2`, so its band and
 instant are read from the filename rather than from metadata inside the file.
-This is what separates a vendor product from the COGs `cogs` writes, which
+This is what separates a vendor product from the COGs `to_cog` writes, which
 name their own variables in their band descriptions.
 
-The resolution groups sit on different grids, so a whole product is a stack
-rather than a cube: `read_stack` gives one group per resolution, and `read`
+The resolution groups sit on different grids, so a whole product is a tree
+rather than a cube: `open_tree` gives one group per resolution, and `open_raster`
 takes the one resolution asked for. Implementing either also means translating
 `MTD_MSIL2A.xml` into CF attrs, the way `io/raster/gdal` translates a GDAL
 band's slots and tags.
@@ -39,20 +39,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from os import PathLike
+from ..storage import Location
 
+if TYPE_CHECKING:
     from geosave.geodata import Dataset, DataTree
 
 _UNBUILT = (
     "reading a SAFE product is not built yet; open its JP2 leaves with "
-    "`io.gdal.read` and combine them yourself, or convert the product to "
+    "`io.gdal.open_raster` and combine them yourself, or convert the product to "
     "COGs and read them with `open_raster`"
 )
 
 
-def read(
-    source: str | PathLike[str], *, resolution: int = 10, **rio_options: Any
+def open_raster(
+    source: Location, *, resolution: int = 10, **rio_options: Any
 ) -> Dataset:
     """Read one resolution group of a SAFE product as a cube.
 
@@ -70,7 +70,7 @@ def read(
     raise NotImplementedError(_UNBUILT)
 
 
-def read_stack(source: str | PathLike[str], **rio_options: Any) -> DataTree:
+def open_tree(source: Location, **rio_options: Any) -> DataTree:
     """Read a whole SAFE product as one group per resolution.
 
     Args:
@@ -78,7 +78,7 @@ def read_stack(source: str | PathLike[str], **rio_options: Any) -> DataTree:
         **rio_options: Open options passed to every leaf.
 
     Returns:
-        Stack holding one group per `R{n}m` directory, each on its own grid.
+        Tree holding one group per `R{n}m` directory, each on its own grid.
 
     Raises:
         NotImplementedError: Always; reading a SAFE product is unbuilt.

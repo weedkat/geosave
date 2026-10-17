@@ -1,11 +1,21 @@
+import asyncio
 from pathlib import Path
 
 import fsspec
+import numpy as np
 import pytest
+import xarray as xr
 from upath import UPath
 
 from geosave.geodata import io
-from geosave.geodata.io.storage import is_local, local_path, location, write
+from geosave.geodata.io.storage import (
+    is_local,
+    local_path,
+    location,
+    open_geotiff,
+    read_coarsest,
+    write,
+)
 
 from tests.geodata.conftest import build_raster
 
@@ -63,9 +73,12 @@ def test_a_upath_destination_writes_like_a_url(bucket: str) -> None:
 @pytest.mark.parametrize(
     ("name", "write"),
     [
-        ("forest.tif", lambda cube, url: io.geotiff.write_cog(cube.isel(time=0), url)),
-        ("forest.zarr", lambda cube, url: io.zarr.write(cube, url)),
-        ("forest.nc", lambda cube, url: io.netcdf.write(cube, url)),
+        (
+            "forest.tif",
+            lambda cube, url: io.geotiff.write_cog(cube.isel(time=0), url).path,
+        ),
+        ("forest.zarr", lambda cube, url: io.zarr.write(cube, url).path),
+        ("forest.nc", lambda cube, url: io.netcdf.write(cube, url).path),
     ],
 )
 def test_a_file_url_writes_to_the_local_path_it_names(
@@ -195,3 +208,55 @@ def test_a_remote_write_returns_a_upath_carrying_its_options(bucket: str) -> Non
 def test_storage_options_cannot_choose_the_filesystem() -> None:
     with pytest.raises(ValueError, match="protocol"):
         location("memory://catalogs/catalog.parquet", {"protocol": "s3"})  # type: ignore[typeddict-unknown-key]
+
+
+
+def write_cog(path: Path) -> Path:
+    band = xr.DataArray(
+        np.arange(256 * 256, dtype="uint16").reshape(256, 256),
+        dims=("y", "x"),
+        coords={
+            "y": 9_000_000 - 10 * np.arange(256),
+            "x": 500_000 + 10 * np.arange(256),
+        },
+    ).rio.write_crs("EPSG:32749")
+    band.rio.to_raster(path, driver="COG")
+    return path
+
+
+def test_open_geotiff_reads_a_local_cog(tmp_path) -> None:
+    geotiff = open_geotiff(write_cog(tmp_path / "band.tif"))
+
+    assert (geotiff.height, geotiff.width) == (256, 256)
+    assert geotiff.crs.to_epsg() == 32749
+
+
+def test_open_geotiff_opens_inside_a_running_event_loop(tmp_path) -> None:
+    path = write_cog(tmp_path / "band.tif")
+
+    async def open_in_loop():
+        return open_geotiff(path)
+
+    assert asyncio.run(open_in_loop()).width == 256
+
+
+def test_read_coarsest_reads_the_smallest_overview(tmp_path) -> None:
+    values = read_coarsest(open_geotiff(write_cog(tmp_path / "band.tif")))
+
+    assert values.ndim == 3 and values.shape[0] == 1
+    assert values.shape[1] <= 256
+
+
+def test_a_web_url_reads_over_http_and_a_bucket_unsigned_on_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from obstore.store import HTTPStore, S3Store
+
+    from geosave.geodata.io.storage import create_store
+
+    web = create_store("https://sentinel-cogs.s3.us-west-2.amazonaws.com/a/b")
+    assert isinstance(web, HTTPStore)
+    monkeypatch.setenv("AWS_NO_SIGN_REQUEST", "YES")
+    bucket = create_store("s3://sentinel-cogs/a", {"region": "us-west-2"})
+    assert isinstance(bucket, S3Store)
+    assert str(bucket.config.get("skip_signature")).lower() == "true"

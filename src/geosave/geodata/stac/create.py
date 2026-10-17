@@ -1,25 +1,26 @@
-"""Build a Collection and the item table of saved rasters."""
+"""Build a Collection, the Item of each saved scene, and their item table."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from geosave.geodata.stac.translate import table as stac_table
+
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
 import pystac
-import xarray as xr
 
-from geosave.geodata.io.raster import cogs
-from geosave.geodata.io.readers import open_raster
-from geosave.geodata.io.storage import absolute_location
-from geosave.geodata.io.vector import stac_geoparquet
+from geosave.geodata.io.raster.file import Scene
 
-from . import translate
-from .translate.item import ItemTime, Scene
+from .translate import item as stac_item
+from .translate.item import ItemTime
 
 if TYPE_CHECKING:
+    from geosave.geodata import GeoDataFrame, GeoCatalog
+    from geosave.geodata.io.storage import Location
 
-    from geosave.geodata import GeoDataFrame
-    from geosave.geodata.io.storage import Location, StorageOptions
+# An Item's id by default: its time and the centre of its grid, which together
+# name one scene of a collection.
+ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{lat:.4f}_{lon:.4f}"
 
 
 def create_collection(
@@ -47,9 +48,9 @@ def create_collection(
 
     Examples:
         >>> forest = create_collection("forest", description="Forest samples")
-        >>> files = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
-        >>> create_item(files, collection=forest)["collection"].unique().tolist()
-        ['forest']
+        >>> scenes = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
+        >>> next(create_items(scenes, collection=forest)).collection_id
+        'forest'
     """
     extent = pystac.Extent(
         pystac.SpatialExtent([[-180.0, -90.0, 180.0, 90.0]]),
@@ -66,116 +67,76 @@ def create_collection(
     )
 
 
-def create_item(
-    files: Iterable[Location] | Mapping[str, Location],
+def create_items(
+    scenes: Mapping[str, Location] | Scene | Iterable[Scene],
     *,
+    id_format: str = ID_FORMAT,
     collection: pystac.Collection | str | None = None,
-    id: str | None = None,
     datetime: ItemTime | None = None,
-    storage_options: StorageOptions | None = None,
-) -> GeoDataFrame:
-    """Build the item table of saved rasters, reading their headers only.
-
-    Files sharing a collection, an instant and a grid are one Item, one Asset
-    each, named by a single-band file's band or `"image"`. Asset keys mapped
-    to files make one Item whose assets the caller names.
+) -> Iterator[pystac.Item]:
+    """Build the Item listing each scene's saved files, reading their headers only.
 
     Args:
-        files: Saved raster files (GeoTIFF, JPEG 2000 or PNG) as paths, URLs
-            or the UPaths `to_cog` returned, or asset keys mapped to files, as
-            `{"optical": "s0/optical.tif", "label": "s0/label.tif"}`.
-        collection: Collection, or its id, of every Item. None takes the ACDD
-            `id` each file states, as `to_cog` writes a stack's layer.
-        id: Item id. None names each Item after its file, or the stem its
-            files share. A `GeoAnchor.format` template, as
-            `"{lat:.2f}N_{start:%Y%m%d}"`, is filled from each Item's raster;
-            plain text names one Item, or prefixes each of several, as
-            `"s0/forest_20250601"`.
-        datetime: Time for undated files, as one instant or a start and end.
-            None dates named assets by their `time` coordinates, and undated
-            files by the span the dated ones cover.
-        storage_options: Options for the filesystem a URL names.
+        scenes: Asset names mapped to saved file paths, or the result of a
+            raster writer. File paths are opened for headers only.
+        id_format: `GeoAnchor.format` template each Item's id is filled from,
+            its fields taken from the Item's own grid and time: `lat`, `lon`,
+            `start`, `end`, `res`, `width`, `height` and `epsg`. Text without
+            fields names every Item alike.
+        collection: Collection, or its id, of every Item. None takes each
+            scene's.
+        datetime: Time for a scene whose files state none, as one instant or
+            a start and end.
 
-    Returns:
-        Item table, one row per Item, in the order the files first name
-        them. No pixel is read.
+    Yields:
+        One Item per scene, in order, with one data Asset per file.
 
     Raises:
-        ValueError: No file is given; a file holds several dates; two files
-            of one scene share an asset key; ids repeat; or no file is dated
-            and `datetime` is None.
+        RuntimeError: A scene is still pending; compute it first.
+
+    Warns:
+        TimelessItemWarning: A scene states no time and `datetime` is None,
+            so its Item spans all of time.
 
     Examples:
-        >>> create_item(sorted(Path("labels").glob("*.tif")), collection="label")["id"].tolist()
-        ['north', 'south']
-        >>> create_item(ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif"))["id"].tolist()
+        >>> scenes = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
+        >>> [item.id for item in create_items(scenes, id_format="forest_{start:%Y%m%d}")]
         ['forest_20250601', 'forest_20250611']
-        >>> create_item({"optical": "s0/optical.tif", "label": "s0/label.tif"}, id="s0")["id"].tolist()
-        ['s0']
+        >>> catalog = create_catalog(create_items(scenes))
+        >>> items = create_items({"image": "image.tif"}, collection="optical")
     """
-    if isinstance(files, Mapping):
-        named = cast("Mapping[str, Location]", files)
-        hrefs = {key: absolute_location(path) for key, path in named.items()}
-        headers = {
-            absolute_location(path): _header(path, storage_options)
-            for path in named.values()
-        }
-        scene = Scene(_identity(collection), None, None, hrefs)
-        item_id = scene.stem if id is None else id
-        items = [translate.item.write(scene, headers, id=item_id, when=datetime)]
-    else:
-        headers = {
-            absolute_location(path): _header(path, storage_options) for path in files
-        }
-        if not headers:
-            raise ValueError("create_item needs saved raster files")
-        found = translate.item.scenes(headers, collection=_identity(collection))
-        undated = datetime or translate.item.span(headers.values())
-        items = [
-            translate.item.write(
-                scene,
-                headers,
-                id=_scene_id(id, scene, headers, several=len(found) > 1),
-                when=None if scene.datetime is not None else undated,
-            )
-            for scene in found
-        ]
-
-    # A template that leaves out time would name several Items alike.
-    ids = [item.id for item in items]
-    if len(set(ids)) != len(ids):
-        raise ValueError(
-            f"id {id!r} gives several Items the same id {ids}; add a time field "
-            f"such as {{start:%Y%m%d}}"
+    if isinstance(collection, pystac.Collection):
+        collection = collection.id
+    if isinstance(scenes, Mapping):
+        scenes = Scene.open(
+            cast("Mapping[str, Location]", scenes), collection=collection
         )
-    return stac_geoparquet.from_item(items)
+    for scene in [scenes] if isinstance(scenes, Scene) else scenes:
+        yield stac_item.from_scene(
+            scene, id_format=id_format, collection=collection, datetime=datetime
+        )
 
 
-def _scene_id(
-    template: str | None,
-    scene: Scene,
-    headers: Mapping[str, xr.Dataset],
-    *,
-    several: bool,
-) -> str:
-    """Name a scene's Item as `create_item` documents its `id`."""
-    if template is None:
-        return scene.stem
-    # Fields fill per scene; plain text names one Item or prefixes several stems.
-    if cogs.fields_named(template):
-        first = next(iter(scene.assets.values()))
-        return headers[first].gs.anchor.format(template)
-    return f"{template}/{scene.stem}" if several else template
+def create_catalog(
+    items: Iterable[pystac.Item], *, collections: Iterable[pystac.Collection] = ()
+) -> GeoDataFrame[GeoCatalog]:
+    """Lay Items out as an item table, one row per Item.
 
+    Args:
+        items: Items, as `create_items` builds them.
+        collections: Native definitions stored once on the table, keyed by id.
 
-def _header(path: Location, storage_options: StorageOptions | None) -> xr.Dataset:
-    """Read a saved raster's grid, variables, times and attrs; its pixels stay unread."""
-    with open_raster(path, storage_options=storage_options) as raster:
-        return raster
+    Returns:
+        Item table in WGS84, in the order given.
 
+    Raises:
+        ValueError: Two Items of one collection share an id.
 
-def _identity(collection: pystac.Collection | str | None) -> str | None:
-    """Return the id an Item of this Collection carries, None for no Collection."""
-    if collection is None or isinstance(collection, str):
-        return collection
-    return collection.id
+    Examples:
+        >>> scenes = ds.gs.to_cog("samples/forest_{time:%Y%m%d}.tif")
+        >>> create_catalog(create_items(scenes, id_format="forest_{start:%Y%m%d}"))["id"].tolist()
+        ['forest_20250601', 'forest_20250611']
+    """
+    items = list(items)
+    stac_table.validate_ids(items)
+    return stac_table.from_items(items, collections=collections)

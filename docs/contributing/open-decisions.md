@@ -25,7 +25,24 @@ design history lives in git.
   implementation behind it. Spec `transforms` stay the inference-time
   preprocessing (the Hugging Face `preprocessor_config.json` role); training
   augmentation stays in the DataModule.
-- **`in_channels`** is typed by hand in the starters' `train.yaml` although the
+- **Dataset owns ModelSpec preparation.** User direction, 2026-10-16: use a
+  standard PyTorch Dataset to hold the ModelSpec and coordinate sampling,
+  framing, chipping and raster reads. Keep catalog, frame and chip
+  GeoDataFrames as the Dataset's preparation state, available for inspection
+  and prediction merging. Prepare the tables in `__init__`; open requested
+  rows and produce tensors in `__getitem__`. Use the same preparation for
+  labelled training and unlabelled inference. Apply this direction when
+  reworking ModelSpec instead of introducing another preparation flow or
+  execution framework. Notebook 3 demonstrates the Dataset/table boundary
+  without ModelSpec; keep ModelSpec out of the basic notebooks while its API
+  remains in development.
+  The model's input grid belongs at `chip(..., target=grid)`, independently
+  of collection membership. Spatial sampling groups equal footprints and chooses no grid. Preserve the grid policy
+  for unlabelled inference; read each chip with `target=row.gs.geobox` to
+  request alignment. Chips retain their full layout grid for merging. A
+  model producing a different output resolution also needs an explicit
+  output-grid contract; the current merger expects chip-sized outputs.
+- **`in_channels`** is typed by hand in the task templates' configs although the
   model spec lists the variables.
 
 ## Training outputs
@@ -35,7 +52,7 @@ design history lives in git.
   `write_classes`) was removed. Modules have no `predict_step`.
 - **Per-source Datasets.** DataModules take one Dataset per split returning
   their `Sample`; the library ships none, so the segmentation and regression
-  starters' `train.yaml` name a placeholder `datasets.MyDataset`.
+  task templates' configs name a stub `modules.datasets.MyDataset`.
 - **Whole-raster evaluation.** Validation scores chips; scoring rebuilt rasters
   could return as a callback for chipped datasets.
 
@@ -59,15 +76,24 @@ design history lives in git.
   smoke-tested.
 - **Single-band COG without a stored band name** (for example `<scene>/B04.tif`)
   reads as `band_1`; a file-stem fallback is deferred.
-- **Raster explorer.** A HoloViz/Panel explorer over native xarray objects
-  (attributes, variable selection, spatial display, time scrubbing, lazy
-  metadata) is not built; `geodata/viz` has static plots and `explore()`.
+- **Explorer environments and computed overviews.** The native Panel explorer
+  uses independent raster callbacks and native GeoViews elements. Its table
+  remains below the map while sidebar selection changes. Full-extent computed
+  rasters can still execute every source chunk; no pyramid is generated.
+  See the [current validation](handoffs/2026-10-16-holoviz-explorer/VALIDATION.md)
+  for actual browser measurements and notebook limitations. Static plot spacing
+  and VS Code's missing static copy control remain separate follow-ups.
 
 ## Examples
 
-- Notebooks 3 to 5 and the Ship part (6 to 8) of
-  `specs/2026-10-09-examples-series-design.md` are deferred. Naming question:
-  `transform.crop.crop` shares its name with `.gs.crop`.
+- [The examples plan](specs/2026-10-09-examples-series-design.md) follows the
+  existing `00_basics`, `01_model`, `02_sources`, and `03_inputs` notebooks.
+  `03_inputs` stays basic: TIFF paths, Dataset-owned preparation and a
+  model built inside the LightningModule. `04_recipe` introduces ModelSpec
+  after its API is settled, with preprocessing, prepared data and the supervised training
+  task. Pretrained models, multiple sources, workspaces and model releases
+  follow as separate planned lessons. Orchestration and deployment remain
+  deferred. See [the examples guide](../examples.md) for runnable lessons.
 
 ## Deferred by the user for this cleanup
 

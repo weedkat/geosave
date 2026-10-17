@@ -4,38 +4,37 @@ from pathlib import Path
 
 from geosave.cli.core.copy import safe_copy
 
-from .templates import COMMON_DIR, WORKSPACES_DIR, get_workspaces
+from .templates import COMMON_DIR, TASKS_DIR, get_tasks
 
 _REQUIRED_DIRS = frozenset(
-    (
-        "artifacts",
-        "configs",
-        "data",
-        "logs",
-        "modules",
-        "notebooks",
-        "predictions",
-        "scripts",
-    )
+    ("artifacts", "configs", "data", "modules", "notebooks", "scripts")
 )
 _EXCLUDE = frozenset(("__pycache__", ".ipynb_checkpoints", "description.txt"))
 
 
-def create_workspace(root: Path, workspace: str | None = None) -> None:
-    """Create a workspace from shared startup and an optional starter.
+def create_workspace(root: Path) -> None:
+    """Create a workspace holding the shared startup files.
 
     Args:
         root: Destination workspace directory.
-        workspace: Bundled starter name. None creates a bare workspace.
-
-    Raises:
-        ValueError: The workspace starter does not exist.
     """
-    if workspace is not None and workspace not in get_workspaces():
-        raise ValueError(f"Workspace {workspace!r} is not a valid workspace.")
     for directory_name in _REQUIRED_DIRS:
         (root / directory_name).mkdir(parents=True, exist_ok=True)
-
     safe_copy(COMMON_DIR, root, exclude=_EXCLUDE)
-    if workspace is not None:
-        safe_copy(WORKSPACES_DIR / workspace, root, exclude=_EXCLUDE)
+
+
+def add_task(root: Path, task: str) -> None:
+    """Copy one task template into an existing workspace.
+
+    Existing files prompt before they are overwritten.
+
+    Args:
+        root: Workspace directory.
+        task: Bundled task template name.
+
+    Raises:
+        ValueError: The task template does not exist.
+    """
+    if task not in get_tasks():
+        raise ValueError(f"Task {task!r} is not a valid task.")
+    safe_copy(TASKS_DIR / task, root, exclude=_EXCLUDE)

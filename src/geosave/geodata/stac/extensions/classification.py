@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, cast
-
 import pystac
+
 import xarray as xr
 from pystac.extensions.classification import Classification, ClassificationExtension
-from pystac.extensions.raster import RasterBand, RasterExtension
+from pystac.extensions.raster import RasterBand
 
 import geosave.geodata.attrs as attrs
 from geosave.geodata.utils.color import parse_color
@@ -17,54 +16,48 @@ from geosave.geodata.utils.color import parse_color
 _CLASS_NAME = re.compile(r"[0-9A-Za-z_-]+")
 
 
-def write(asset: pystac.Asset, raster: xr.Dataset) -> None:
-    """Write each variable's legend as classes on its Raster band.
-
-    Classes sit inside the band they describe, so the Raster extension must
-    have written the asset's bands first.
+def from_dataarray(variable: xr.DataArray) -> list[Classification] | None:
+    """Describe a variable's legend as the classes its Raster band lists.
 
     Args:
-        asset: Asset already added to its Item, carrying its Raster bands.
-        raster: Raster as `open_raster` opens it. A variable with no legend,
-            or one that lists bit masks, writes nothing.
+        variable: Variable as `open_raster` opens it.
+
+    Returns:
+        Its classes, or None where it has no legend or its legend lists bit
+        masks, whose offset, length and names CF does not state.
 
     Raises:
         ValueError: A class name carries a character the schema refuses.
 
     Examples:
-        >>> write(asset, label)
-        >>> band = RasterExtension.ext(asset).bands[0]
-        >>> ClassificationExtension.ext(band).classes[1].name
-        'forest'
+        >>> [c.name for c in from_dataarray(label.label)]
+        ['background', 'forest']
     """
-    bands = RasterExtension.ext(asset).bands or []
-    for name, band in zip(raster.gs.variables, bands, strict=True):
-        legend = raster[name].gs.legend
-        # CF masks do not state the bit offset, length and names a STAC bitfield needs.
-        if legend is None or legend.classes is None or legend.flag_masks is not None:
-            continue
-        ClassificationExtension.ext(band).apply(classes=_classes(legend))
-        # A band has no owner to declare the schema on.
-        ClassificationExtension.add_to(cast("pystac.Item", asset.owner))
+    legend = variable.gs.legend
+    if legend is None or legend.classes is None or legend.flag_masks is not None:
+        return None
+    return _classes(legend)
 
 
-def read(band: RasterBand) -> dict[str, Any]:
-    """Read the CF flag attrs one Raster band's classes state.
+def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
+    """Stamp the legend a Raster band's classes state onto its variable.
 
     Args:
-        band: One band of an asset's Raster listing.
+        variable: Variable the band describes.
+        band: Its Raster band, listing its classes.
 
     Returns:
-        The legend as `flag_values`, `flag_meanings` and, where classes carry
-        colour hints, `color_map`. Empty where the band lists no classes.
+        The variable carrying its classes as `flag_values`, `flag_meanings`
+        and, where classes carry colour hints, `color_map`; unchanged where
+        the band lists none.
 
     Examples:
-        >>> read(RasterExtension.ext(asset).bands[0])["flag_meanings"]
+        >>> stamp(variable, band).attrs["flag_meanings"]
         'background forest'
     """
     classes = ClassificationExtension.ext(band).classes
     if not classes:
-        return {}
+        return variable
     colors = {
         entry.value: f"#{entry.color_hint}"
         for entry in classes
@@ -77,7 +70,7 @@ def read(band: RasterBand) -> dict[str, Any]:
             "color_map": colors or None,
         }
     )
-    return legend.to_attrs()
+    return variable.assign_attrs(legend.to_attrs())
 
 
 def _classes(legend: attrs.Legend) -> list[Classification]:
@@ -96,3 +89,15 @@ def _classes(legend: attrs.Legend) -> list[Classification]:
             hint = f"{red:02X}{green:02X}{blue:02X}"
         classes.append(Classification.create(value=value, name=name, color_hint=hint))
     return classes
+
+
+def write_band(asset: pystac.Asset, band: RasterBand, variable: xr.DataArray) -> None:
+    """Attach classes to a band and declare the schema on its owning Item."""
+    if classes := from_dataarray(variable):
+        ClassificationExtension.ext(band).apply(classes=classes)
+        ClassificationExtension.ext(asset, add_if_missing=True)
+
+
+def read_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
+    """Read a band's classification fields."""
+    return stamp(variable, RasterBand(fields))

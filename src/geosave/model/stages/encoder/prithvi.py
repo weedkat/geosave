@@ -33,7 +33,18 @@ def temporal_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
 
 
 def location_coords(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
-    """Return the raster's grid centre as a float32 latitude/longitude tensor."""
+    """Encode the raster's grid centre as latitude/longitude.
+
+    Args:
+        raster: Raster with a locatable geospatial grid.
+
+    Returns:
+        Float32 `(2,)` tensor containing latitude and longitude in degrees,
+        without reading pixels.
+
+    Raises:
+        ValueError: The raster has no locatable grid.
+    """
     longitude, latitude = raster.gs.anchor.lonlat
     return torch.tensor([latitude, longitude], dtype=torch.float32)
 
@@ -108,9 +119,10 @@ class _Prithvi(nn.Module):
             drop_path_rate: stochastic depth rate.
             out_indices: which of the model's blocks to return features from. `None`
                 uses this `model_name`'s default (see `MODEL_SPECS`).
-            ckpt_path: local checkpoint path; `None` fetches the public one from HF Hub.
-            vpt: use Visual Prompt Tuning (freeze backbone, learn small prompt tokens
-                prepended per block) instead of full fine-tuning.
+            ckpt_path: matching local upstream checkpoint, used only with
+                `pretrained=True`; `None` selects the public Hub checkpoint.
+            vpt: add learnable Visual Prompt Tuning tokens per block.
+                Backbone freezing is a separate training choice.
             vpt_n_tokens: prompt tokens per block. Required if `vpt` is True.
             vpt_dropout: dropout on VPT prompt tokens.
 
@@ -231,8 +243,33 @@ class PrithviTL(_Prithvi):
         vpt_n_tokens: int | None = None,
         vpt_dropout: float = 0.0,
     ):
-        """Same backbone options as `Prithvi`, defaulting
-        `model_name` to a `_tl` variant."""
+        """Build a Prithvi backbone with temporal and location embeddings.
+
+        Args:
+            model_name: TerraTorch registry name from this class's `MODEL_SPECS`.
+            pretrained: Load upstream encoder weights. False initializes a new
+                backbone; True reads `ckpt_path` or downloads from Hugging Face.
+            bands: Input bands in channel order, using TerraTorch `HLSBands`
+                names. None uses BLUE, GREEN, RED, NIR_NARROW, SWIR_1, SWIR_2.
+                Matching names preserve pretrained patch-embedding slices;
+                other names receive random slices. This does not change pixels.
+            input_size: Spatial size used to construct position embeddings,
+                as a side length or `(height, width)`. The backbone interpolates
+                embeddings for call-time grids; patch remainders are cropped.
+            num_frames: Number of temporal frames supplied to the encoder.
+            drop_path_rate: Backbone stochastic-depth probability.
+            out_indices: Transformer blocks returned as pyramid levels. None
+                uses the selected model's configured depth samples.
+            ckpt_path: Matching local upstream checkpoint, used only when
+                `pretrained` is True. None selects the public Hub checkpoint.
+            vpt: Add learnable prompt tokens per block; freezing is explicit.
+            vpt_n_tokens: Number of prompt tokens per block; required for VPT.
+            vpt_dropout: Dropout probability applied to the prompt tokens.
+
+        Raises:
+            ValueError: The model name is unsupported, or VPT lacks its token
+                count. Upstream checkpoint-loading errors propagate.
+        """
         super().__init__(
             model_name=model_name,
             pretrained=pretrained,

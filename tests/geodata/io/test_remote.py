@@ -28,14 +28,13 @@ from shapely.geometry import box
 from geosave.geodata import (
     configure_gdal,
     open_raster,
-    open_stack,
+    open_tree,
     open_vector,
-    stack,
+    tree,
 )
 from geosave.geodata.io import storage
-from geosave.geodata import stac
 
-from tests.geodata.conftest import build_raster, read_items
+from tests.geodata.conftest import build_raster, read_items, item_table
 
 pytestmark = pytest.mark.integration
 
@@ -137,14 +136,14 @@ def test_a_zarr_store_round_trips_lazily(remote) -> None:
     restored.close()
 
 
-def test_a_stack_round_trips_through_a_upath_carrying_its_options(remote) -> None:
+def test_a_tree_round_trips_through_a_upath_carrying_its_options(remote) -> None:
     prefix, options = remote
     folder = storage.location(f"{prefix}/s0", options)
-    sample = stack({"optical": build_raster(times=2), "label": build_raster()})
+    sample = tree({"optical": build_raster(times=2), "label": build_raster()})
 
     sample.gs.to_zarr(folder)
 
-    assert open_stack(folder).gs.groups == ("label", "optical")
+    assert open_tree(folder).gs.groups == ("label", "optical")
 
 
 def test_a_netcdf_file_uploads(remote) -> None:
@@ -201,13 +200,11 @@ def test_an_item_table_of_cogs_loads_back(remote) -> None:
         f"{prefix}/forest_{{time:%Y%m%d}}.tif", storage_options=options
     )
     # GDAL reads a remote TIFF with the keys in its environment, not fsspec options.
-    rows = stac.create_item(paths)
+    rows = item_table(paths)
 
-    catalog = rows.gs.to_geoparquet(
-        f"{prefix}/catalog.parquet", storage_options=options
-    )
+    saved = rows.gs.to_geoparquet(f"{prefix}/catalog.parquet", storage_options=options)
 
-    rows = open_vector(catalog, storage_options=options)
+    rows = open_vector(saved, storage_options=options)
     assert rows.iloc[0]["assets"]["image"]["href"] == str(paths[0])
     with dask.config.set(scheduler=_refuse):
         restored = read_items(rows)
