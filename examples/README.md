@@ -16,37 +16,28 @@ access. Later runs reuse local files. Maps and TensorBoard need a browser.
 
 ## From files to model inputs
 
-Every notebook passes TIFF paths to the `DynamicWorld` Dataset. With labels,
-it returns `(image, label)` tensors. Without labels, it returns an image tensor.
-Notebook 3 builds its catalog, frames and chips inside Dataset initialization;
-callers continue to pass image and label paths.
+Notebook 3 uses one `DynamicWorld` Dataset for every split and for inference.
+Pass image and label paths for tensor pairs, or image paths alone for image
+tensors. Training reads complete tiles and applies random crops. Setting
+`chip_size` makes the same Dataset read fixed windows.
 
-Notebook 3 downloads the dataset at the beginning. Its Lightning DataModule
-creates the split Datasets in `setup()` and supplies DataLoaders to Trainer.
-The original training splits are preserved. `preprocess()` masks, scales and converts one chip
-to tensors when requested.
+Validation and test collect chip scores and call `dataset.merge()` at epoch end.
+Metrics count each valid pixel once on the restored grid. These loaders run in
+Dataset order and cover every chip; the short validation split contains two
+complete tiles.
 
-The Dataset prepares its chip index using these operations:
+For KHDTK inference:
 
 ```python
-samples = catalog.gs.sample().iloc[:1]
-frames = samples.gs.frame(
-    windows={"sentinel-2-l2a": {"slots": ["0D"]}},
-    reference="label",
-)
-chips = frames.gs.chip(128, target=grid)
+forest = DynamicWorld(images, chip_size=128, overlap=64)
+loader = DataLoader(forest, batch_size=8)
+batches = trainer.predict(module, dataloaders=loader)
+merged = forest.merge(torch.cat(batches).numpy())
+forest_cover = postprocess(merged, forest.frames)
 ```
 
-`sample` groups scenes at the same place. `frame` chooses their time windows.
-`chip` divides them into pixel windows on that sample's image grid. Each training
-sample keeps its native CRS. For prediction, omit `reference="label"`; image
-timestamps supply the reference times instead.
-
-The Dataset's `chips` holds the chip rows, and `frames` holds their original maps.
-Pixels are read when a chip is requested. `postprocess(logits, frames, chips)`
-reconstructs dated label maps. `IGNORE_INDEX`, `CLASS_MAP` and `COLOR_MAP` are
-loaded once from the dataset's class YAML and shared by preprocessing, training
-and postprocessing. KHDTK is used only for inference.
+`postprocess()` adds dates, class IDs, colours and nodata from `classes.yaml`.
+KHDTK is used only for inference.
 
 ## Saved files
 

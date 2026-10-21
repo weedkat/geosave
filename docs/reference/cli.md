@@ -15,39 +15,39 @@ These commands show the installed version's accepted inputs. Use the
 ## Create a project
 
 ```bash
-geosave create demo
+geosave create demo --task segmentation --method supervised
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `NAME` | Interactive prompt | Destination directory, relative to the current directory unless absolute. |
-| `--force` | Off | Create inside a directory that is not empty. |
+| `NAME` | Interactive prompt | Destination directory. |
+| `--task`, `-t` | Interactive selection | `segmentation`, `regression`, `classification`, `pretraining`, `lightning`, or `blank`. |
+| `--method`, `-m` | Interactive selection | A method supported by the selected task. No method for `blank`. |
+| `--force` | Off | Permit a non-empty destination while preserving existing startup files. |
 
-The output is an editable directory with shared startup files and no task
-configs. It does not start training or download data. A non-empty target is
-refused without `--force`.
+The output is an editable project with local training implementations, config,
+and method-specific scripts. It does not train or download data. Task/method
+validation happens before writing files. See [available methods](training.md).
 
-## Add a task
+## Add a task and method
 
 ```bash
 cd demo
-geosave add-task segmentation-supervised
+geosave add-task --task segmentation --method fixmatch
 ```
 
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `TASK` | Interactive selection | `segmentation-supervised`, `regression-supervised`, or `lightning-boilerplate`. |
-
-The output is `configs/<task>.yaml` plus the template's shared files
-(`configs/model_spec.yaml`, `modules/datasets.py`, scripts). Run it inside a
-workspace, which is a directory containing `main.py`. Existing files trigger
-overwrite/skip prompts, so a second task keeps your edited shared files.
+`--task` / `-t` and `--method` / `-m` have the same selectors as creation,
+without the blank option. Existing methods are disabled in the selector;
+explicitly selecting an existing method reports an error without changing files.
+Run inside a workspace containing `main.py`. Each method gets separate local
+Python, config, processing-document, and script paths. Shared startup files are
+not copied again. Existing incidental files trigger overwrite/skip prompts.
 
 ## Publish a model
 
 `geosave publish [CHECKPOINT] --repo ORG/NAME` is a placeholder: it prints that
 it is not implemented yet and exits with status 1. Release a checkpoint with
-`scripts/publish.py` from the segmentation starter in the meantime.
+`scripts/segmentation/supervised/publish.py` from the segmentation starter in the meantime.
 
 ## Acquire model rasters
 

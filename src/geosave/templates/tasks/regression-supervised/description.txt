@@ -1,1 +1,0 @@
-Supervised pixelwise regression with GeoSave's Module and DataModule.

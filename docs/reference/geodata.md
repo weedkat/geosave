@@ -13,8 +13,7 @@ xarray and GeoPandas reference for their native methods.
 | [Transforms](transforms.md) | Grids, cropping, combining, time, masks, and vector conversion. |
 | [Features](features.md) | Spectral indices and cloud or shadow masks. |
 | [Metadata](attrs.md) | Validated metadata groups. |
-| [STAC](stac.md), [windows](windows.md) | Item catalogs, image sources, and readable windows. |
-| [Benchmarks](benchmarks.md) | Original dataset downloads. |
+| [STAC](stac.md), [catalog operations](catalog.md) | Item catalogs, image sources, and readable windows. |
 | [Errors and warnings](errors.md) | GeoSave conditions callers can handle. |
 
 `gs.Dataset`, `gs.DataArray`, `gs.DataTree`, and `gs.GeoDataFrame` are native

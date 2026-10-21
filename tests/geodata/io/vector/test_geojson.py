@@ -1,12 +1,16 @@
 """GeoJSON features read and write as plain vectors."""
 
+from __future__ import annotations
+
 import json
 
+import geopandas as gpd
 import pytest
 from shapely.geometry import box, mapping
 from upath import UPath
 
 from geosave.geodata import GeoVector, io
+from tests.geodata.conftest import _size
 
 
 def test_plain_geojson_nested_assets_remain_mappings(tmp_path):
@@ -78,3 +82,22 @@ def test_a_file_url_reads_as_its_local_path(tmp_path) -> None:
     )
 
     assert len(io.geojson.open_vector(UPath(path.as_uri()))) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("suffix", [".geojson"])
+def test_a_plain_vector_uploads(remote, suffix) -> None:
+    prefix, options = remote
+    plots = gpd.GeoDataFrame(
+        {"name": ["near", "far"]},
+        geometry=[box(0, 0, 1, 1), box(10, 10, 11, 11)],
+        crs="EPSG:4326",
+    )
+    write = {
+        ".parquet": plots.gs.to_geoparquet,
+        ".geojson": plots.gs.to_geojson,
+        ".gpkg": plots.gs.to_geopackage,
+    }[suffix]
+    written = write(f"{prefix}/plots{suffix}", storage_options=options)
+    assert written == f"{prefix}/plots{suffix}"
+    assert _size(written, options) > 0

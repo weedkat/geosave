@@ -45,14 +45,14 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
 
 ## Prediction logging
 
-::: geosave.ml.tasks.segmentation.callbacks
+::: geosave.ml.callbacks.segmentation
     options:
       members:
         - DensePredictionLogger
 
 ## Threshold calibration
 
-::: geosave.ml.tasks.segmentation.calibrate
+::: geosave.ml.callbacks.calibrate
     options:
       members:
         - ThresholdCalibrator

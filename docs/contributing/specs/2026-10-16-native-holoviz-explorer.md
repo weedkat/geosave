@@ -3,10 +3,8 @@
 Status: library direction and product requirements agreed; implementation
 architecture intentionally open until a measured browser proof.
 
-This replaces the earlier prescriptive version of this document. Start with
-[the handoff](../handoffs/2026-10-16-holoviz-explorer/HANDOFF.md), which records
-preservation boundaries, previous evidence, and relevant documentation.
-Older HoloViz and Lonboard implementation plans are not the new architecture.
+This replaces the earlier prescriptive version of this document. Older HoloViz
+and Lonboard plans are deleted and are not the new architecture.
 
 ## Required outcome
 

@@ -13,7 +13,7 @@ frames = samples.gs.frame(
     reference="label",
     stride=1,
 )
-chips = frames.gs.chip(128, target=grid)
+chips = frames.gs.chip(128, resolution=10)
 image = chips.iloc[0].gs.to_xarray()["image"].dataset
 ```
 
@@ -72,5 +72,10 @@ implementation, returning one Dataset per collection in a DataTree.
 Output `time` labels are bin starts, with explicit inclusive
 `start_datetime`/`end_datetime` coordinates. Original acquisitions and coverage
 remain in the row's Items. Reference observations retain their own metadata.
-Spatial alignment is explicit: supply `target` when reading. Chips require an
-explicit target GeoBox; their pixel grid is independent of the temporal clock.
+Chipping declares spatial alignment: supply chip size and resolution to plan a
+local grid in each row's shared source CRS, or supply an explicit target GeoBox.
+Chip reads honour the recorded grid and resampling before temporal assembly.
+Unchipped reads keep native grids by default. Use
+`row.gs.to_xarray(resolution=10)` to align a complete frame on the same local
+grid used by resolution-based chipping, without building a chip index.
+The spatial grid is independent of the temporal clock.

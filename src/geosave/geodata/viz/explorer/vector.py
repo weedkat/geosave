@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import datashader as ds
+from bokeh.models import HoverTool
 from holoviews.operation.datashader import datashade, rasterize
+from holoviews.core.util import dimension_sanitizer
 import geoviews as gv
 import holoviews as hv
 import pandas as pd
@@ -187,7 +189,29 @@ class VectorLayer(param.Parameterized):
             element = constructors[kind](
                 group, vdims=self.columns, crs=gv.tile_sources.OSM.crs
             )
-            options: dict[str, Any] = {"tools": ["hover"], "visible": visible}
+            hover_columns = self.columns
+            if self.is_catalog:
+                hover_columns = [
+                    name
+                    for name in hover_columns
+                    if name not in {"id", "type", "stac_version"}
+                ]
+            if column is not None:
+                hover_columns = [
+                    column,
+                    *[name for name in hover_columns if name != column],
+                ]
+            options: dict[str, Any] = {
+                "tools": [
+                    HoverTool(
+                        tooltips=[
+                            (name, f"@{{{dimension_sanitizer(name)}}}")
+                            for name in hover_columns[:4]
+                        ]
+                    )
+                ],
+                "visible": visible,
+            }
             if column is None:
                 options["color"] = color
             else:

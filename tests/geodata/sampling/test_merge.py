@@ -13,9 +13,10 @@ def _red_outputs(chips) -> dict:
 
 
 @pytest.mark.parametrize("taper", [None, "hann"])
-def test_merge_rebuilds_the_sample_from_overlapping_chips(items, taper, grid):
+@pytest.mark.parametrize("overlap", [8, 0.25])
+def test_merge_rebuilds_the_sample_from_overlapping_chips(items, taper, grid, overlap):
     samples = items.gs.sample()
-    chips = samples.gs.chip(32, overlap=8, target=grid)
+    chips = samples.gs.chip(32, overlap=overlap, target=grid)
 
     merged = samples.gs.merge(chips, _red_outputs(chips), bands=["red"], taper=taper)
 

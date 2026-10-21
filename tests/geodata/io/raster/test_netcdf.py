@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
 import pytest
-from upath import UPath
 import xarray as xr
+from upath import UPath
 
+from geosave.geodata import (
+    open_raster,
+)
 from geosave.geodata.io import netcdf
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import _size, build_raster
 
 
 @pytest.mark.parametrize("crs", ["EPSG:32749", "EPSG:4326"])
@@ -60,8 +65,6 @@ def test_a_deferred_file_is_written_only_once_computed(tmp_path: Path) -> None:
 
 def test_netcdf_uploads_but_does_not_read_remotely(bucket: str, tmp_path) -> None:
 
-    from geosave.geodata import open_raster
-
     written = build_raster(times=2)
 
     (file,) = written.gs.to_netcdf(
@@ -106,3 +109,15 @@ def test_netcdf_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
     assert restored.gs.geobox == foreign.odc.geobox
     assert restored.red.chunks is not None
     restored.close()
+
+
+@pytest.mark.integration
+def test_a_netcdf_file_uploads(remote) -> None:
+    prefix, options = remote
+
+    written = build_raster(times=2).gs.to_netcdf(
+        f"{prefix}/forest.nc", storage_options=options
+    )
+
+    assert written == f"{prefix}/forest.nc"
+    assert _size(written, options) > 0

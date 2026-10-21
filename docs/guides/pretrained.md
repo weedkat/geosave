@@ -220,7 +220,8 @@ that Dataset. [Training](training.md) shows the complete sample contract;
 ## Fine-tune or freeze the encoder
 
 ```python
-from geosave.ml.tasks.segmentation.supervised import Module
+# From a generated segmentation/supervised workspace:
+from modules.segmentation.supervised import Module
 
 module = Module(
     model_chain=stages,

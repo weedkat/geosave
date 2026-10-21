@@ -325,10 +325,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.benchmarks.dynamic_world.download
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.conventions.BAND_DIMENSION
     options:
       show_root_full_path: true
@@ -1368,6 +1364,10 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.stac.extensions.projection.read_crs
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.stac.extensions.projection.to_geobox
     options:
       show_root_full_path: true
@@ -1845,6 +1845,7 @@ fields appear as attributes, including their annotated types and defaults.
         - height
         - map
         - status
+        - serve
         - table
         - zoom
         - add

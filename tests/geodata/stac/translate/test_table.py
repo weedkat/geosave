@@ -1,13 +1,18 @@
 """Pure Item-table conversion keeps order, fields and identity."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
+
 import pytest
-from geosave.geodata.core import GeoCatalog
 from pystac.extensions.raster import RasterExtension
-from geosave.geodata.stac.translate import table as stac_table
-from geosave.geodata.stac import create_items
-from geosave.geodata.io.raster.file import Scene, RasterFile
+
+from geosave.geodata.core import GeoCatalog
+from geosave.geodata.io.raster.file import RasterFile, Scene
 from geosave.geodata.io.raster.layout import layout
+from geosave.geodata.stac import create_items
+from geosave.geodata.stac.translate import table as stac_table
+from tests.geodata.stac.conftest import create_native_item, entry
 
 
 def _items(raster, collection=None):
@@ -75,3 +80,41 @@ def test_filtered_rows_keep_only_the_assets_they_have(scene, label, tmp_path) ->
 
 def test_empty_table_converts_to_no_items():
     assert stac_table.to_items(stac_table.from_items([])) == []
+
+
+def test_a_native_item_needs_no_geosave_fields(tmp_path):
+    entry, _ = create_native_item(tmp_path)
+
+    rows = stac_table.from_items([entry])
+
+    assert rows.id.tolist() == [entry.id]
+    assert rows.iloc[0]["provider:quality"] == "good"
+    assert not any(name.startswith("geosave:") for name in rows.columns)
+    assert (
+        rows.iloc[0].assets["reflectance"]["href"] == entry.assets["reflectance"].href
+    )
+
+
+def test_relative_assets_resolve_without_mutating_thecreate_native_item(
+    tmp_path,
+):
+    entry, _ = create_native_item(tmp_path)
+    entry.assets["reflectance"].href = "scene.tif"
+    entry.set_self_href(str(tmp_path / "scene.json"))
+
+    rows = stac_table.from_items([entry])
+
+    assert entry.assets["reflectance"].href == "scene.tif"
+    assert rows.iloc[0].assets["reflectance"]["href"] == str(tmp_path / "scene.tif")
+
+
+def test_duplicate_items_rejected_by_both_writers(tmp_path):
+    from geosave.geodata.io.vector import stac_geoparquet, stac_json
+    from geosave.geodata.stac.translate.table import from_items
+
+    item = entry(None)
+    rows = from_items([item, item])
+    with pytest.raises(ValueError, match="share the id"):
+        stac_geoparquet.write(rows, tmp_path / "duplicate.parquet")
+    with pytest.raises(ValueError, match="share the id"):
+        stac_json.write([item, item], tmp_path / "json")

@@ -148,8 +148,15 @@ def read_window(data: xr.Dataset, target: GeoBox) -> xr.Dataset:
         sample = window.isel(steps).gs.to_nan().astype("float32").compute()
         for name in computed:
             values[name] = sample[name]
+    return _project_window(values, target)
+
+
+def _project_window(
+    data: xr.Dataset | dict[str, xr.DataArray], target: GeoBox
+) -> xr.Dataset:
+    """Project sampled in-memory pixels onto the displayed grid."""
     projected = {}
-    for name, variable in values.items():
+    for name, variable in data.items():
         source_grid = variable.odc.geobox
         pixels = np.full(tuple(target.shape), np.nan, dtype="float32")
         reproject(
@@ -234,6 +241,11 @@ class RasterLayer(param.Parameterized):
         self.time = dates[0] if dates else None
         self.limits = (0.0, 1.0)
         self._plot = None
+        self._grid = None
+        self._pixels = None
+        self._selection = None
+        self._contrast = None
+        self._stretched = None
 
     @property
     def bbox(self):
@@ -287,7 +299,33 @@ class RasterLayer(param.Parameterized):
             shape=(600, 900),
             tight=True,
         )
-        sampled = read_window(self.select(), target)
+        selection = (self.display, self.rgb, self.time)
+        grid = self._grid
+        reuse = False
+        if grid is not None and self._selection == selection:
+            bounds = grid.boundingbox
+            view = target.boundingbox
+            reuse = (
+                bounds.left <= view.left
+                and bounds.bottom <= view.bottom
+                and bounds.right >= view.right
+                and bounds.top >= view.top
+                and abs(grid.resolution.x) <= abs(target.resolution.x) * 1.001
+                and abs(grid.resolution.y) <= abs(target.resolution.y) * 1.001
+            )
+        if reuse:
+            assert self._pixels is not None
+            return self._pixels
+        # Keep the buffered image's bounds and data stable during nearby pans.
+        # Bokeh can move it with the viewport without receiving another image.
+        grid = target.pad(90, 60)
+        sampled = read_window(self.select(), grid)
+        self._pixels = self._create_image(sampled)
+        self._grid = grid
+        self._selection = selection
+        return self._pixels
+
+    def _create_image(self, sampled):
         if not sampled.data_vars:
             return hv.Overlay([gv.Image([], crs=gv.tile_sources.OSM.crs)])
         x, y = sampled.x.values, sampled.y.values
@@ -351,18 +389,26 @@ class RasterLayer(param.Parameterized):
                 time=self.param.time,
             )
             pixels = hv.DynamicMap(draw, streams=[ranges])
-            self._plot = pixels.apply(
+            contrast = pixels.apply(
+                self._stretch,
+                clim=self.param.clim,
+                stretch=self.param.stretch,
+            )
+            self._plot = contrast.apply(
                 self._style,
                 alpha=self.param.alpha,
                 visible=self.param.visible,
                 cmap=self.param.cmap,
-                clim=self.param.clim,
-                stretch=self.param.stretch,
             )
         return self._plot
 
-    def _style(self, plot, alpha, visible, cmap, clim, stretch):
+    def _stretch(self, plot, clim, stretch):
         element = plot.values()[0]
+        data = element.data
+        if self._contrast is not None:
+            previous, limits, percentiles = self._contrast
+            if previous is data and limits == clim and percentiles == stretch:
+                return self._stretched
         if self.is_rgb or not (self.legend and self.legend.classes):
             dimensions = element.vdims[:3] if self.is_rgb else element.vdims[:1]
             channels = np.stack(
@@ -382,12 +428,18 @@ class RasterLayer(param.Parameterized):
                     )
                 )
                 plot = hv.Overlay([element])
+        self._stretched = plot.opts(
+            hv.opts.Image(clim=clim or self.limits, backend="bokeh")
+        )
+        self._contrast = (data, clim, stretch)
+        return self._stretched
+
+    def _style(self, plot, alpha, visible, cmap):
         return plot.opts(
             hv.opts.Image(
                 alpha=alpha,
                 visible=visible,
                 cmap=cmap,
-                clim=clim or self.limits,
                 tools=["hover"],
                 backend="bokeh",
             ),

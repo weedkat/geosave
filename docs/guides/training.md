@@ -2,21 +2,23 @@
 
 For real satellite files, prediction maps, and GeoTIFF export, start with the
 [notebook learning path](../examples.md). Those notebooks define ordinary
-Lightning training code. This guide shows GeoSave's supervised
+Lightning training code. This guide shows the generated project’s editable supervised
 Module/DataModule pair and the sample dictionaries it consumes.
 
-Train the library's supervised segmentation task on small, generated images.
+Train the project’s supervised segmentation recipe on small, generated images.
 This example runs on CPU with no data downloads or pretrained weights. Each
 pixel has two input bands and a label: class `1` where the second band exceeds
 the first, class `0` everywhere else.
 
 ```bash
 pip install 'geosave[ml]'
+geosave create demo --task segmentation --method supervised
+cd demo
 ```
 
 ## Describe the inputs
 
-Save this as `model_spec.yaml` in a new working directory:
+Save this as `model_spec.yaml` in the workspace:
 
 ```yaml
 schema_version: 2
@@ -44,7 +46,7 @@ from lightning import Trainer, seed_everything
 from torch import nn
 from torch.utils.data import Dataset
 
-from geosave.ml.tasks.segmentation.supervised import DataModule, Module, Sample
+from modules.segmentation.supervised import DataModule, Module, Sample
 
 
 class Chips(Dataset[Sample]):
@@ -195,10 +197,10 @@ another device, move its input tensors there first. Calling
 `on_after_batch_transfer` after fitting applies the same input transforms as
 validation, without training augmentation.
 
-The supplied task pair has no prediction DataLoader or custom `predict_step`
-that unpacks `Sample`. Use the named-input call above for model development.
-To use `Trainer.predict`, supply a prediction loader and a `predict_step` that
-accepts its batches and applies the required input preparation.
+The segmentation Module's `predict_step` returns the logits of a prepared
+`Sample`, ignoring any target. The DataModule has no prediction DataLoader, so
+for `Trainer.predict` pass your own loader of prepared samples. Use the
+named-input call above for quick model development.
 
 ## Save a checkpoint
 

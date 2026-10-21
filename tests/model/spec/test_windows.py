@@ -11,6 +11,16 @@ def test_a_square_size_names_both_sides():
     assert ChipsSpec(size=[224, 256]).shape == (224, 256)
 
 
+def test_chip_spec_cuts_at_its_declared_resolution(items):
+    spec = ChipsSpec(size=[50, 70], resolution=5)
+    restored = ChipsSpec.model_validate_json(spec.model_dump_json())
+
+    chips = restored.cut(items.gs.sample())
+
+    assert len(chips) == 4
+    assert chips.iloc[0].gs.geobox.resolution.x == 5
+
+
 @pytest.mark.parametrize("size", [0, [224], [224, 0], [1, 2, 3]])
 def test_a_size_that_names_no_tile_is_refused(size):
     with pytest.raises(ValueError):
@@ -20,6 +30,29 @@ def test_a_size_that_names_no_tile_is_refused(size):
 def test_a_window_needs_overlapping_tiles():
     with pytest.raises(ValueError, match="overlap"):
         ChipsSpec(size=4, window="hann")
+
+
+@pytest.mark.parametrize("overlap", [0.0, 0.25, 0.5])
+def test_fractional_overlap_survives_spec_serialization(overlap):
+    spec = ChipsSpec(size=[20, 40], overlap=overlap)
+
+    restored = ChipsSpec.model_validate_json(spec.model_dump_json())
+
+    assert isinstance(restored.overlap, float)
+    assert restored.overlap == overlap
+
+
+@pytest.mark.parametrize("overlap", [-0.1, 1.0, 1.5])
+def test_fractional_overlap_outside_tilers_range_is_rejected(overlap):
+    with pytest.raises(ValueError):
+        ChipsSpec(size=8, overlap=overlap)
+
+
+def test_fractional_overlap_must_cover_taper_seams_on_both_axes():
+    with pytest.raises(ValueError, match="at least 2"):
+        ChipsSpec(size=[8, 32], overlap=0.125, window="hann")
+    # Tiler rounds fractional overlap up: just over 1/8 gives two shared pixels.
+    assert ChipsSpec(size=[8, 32], overlap=0.126, window="hann").overlap == 0.126
 
 
 @pytest.mark.parametrize(
@@ -60,11 +93,14 @@ def test_frames_cut_as_the_spec_declares(composites):
     assert len(cut) == 4
 
 
-def test_chips_cut_as_the_spec_declares(items, grid):
+@pytest.mark.parametrize("overlap", [4, 0.25])
+def test_chips_cut_as_the_spec_declares(items, grid, overlap):
     samples = items.gs.sample()
 
-    cut = ChipsSpec(size=[25, 35], overlap=4, mode="edge").cut(samples, target=grid)
+    cut = ChipsSpec(size=[25, 35], overlap=overlap, mode="edge").cut(
+        samples, target=grid
+    )
 
     assert cut.equals(
-        samples.gs.chip((25, 35), overlap=4, pad_mode="edge", target=grid)
+        samples.gs.chip((25, 35), overlap=overlap, pad_mode="edge", target=grid)
     )

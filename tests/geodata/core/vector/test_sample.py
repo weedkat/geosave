@@ -50,6 +50,18 @@ def test_a_sample_aligns_only_onto_an_explicit_target(items, grid):
     assert isinstance(tree["s1"].dataset.vv.data, da.Array)
 
 
+def test_a_sample_can_align_at_resolution_without_chipping(items, grid):
+    row = items.gs.sample().iloc[0]
+
+    tree = row.gs.to_xarray(resolution=10)
+
+    assert row.gs.geobox is None
+    for collection in tree.children:
+        assert tree[collection].dataset.gs.geobox == grid
+        for variable in tree[collection].dataset.data_vars.values():
+            assert isinstance(variable.data, da.Array)
+
+
 def test_alignment_options_need_a_target(items):
     row = items.gs.sample().iloc[0]
 
@@ -59,7 +71,7 @@ def test_alignment_options_need_a_target(items):
 
 @pytest.mark.parametrize("target", ["label", "s1"])
 def test_a_collection_can_supply_the_alignment_grid(items, target, grid):
-    row = items.gs.sample().gs.chip(32, overlap=8, target=grid).iloc[0]
+    row = items.gs.sample().iloc[0]
     native = row.gs.to_xarray()
 
     aligned = row.gs.to_xarray(target=target)
@@ -108,16 +120,15 @@ def test_an_inner_chip_reads_the_samples_pixels(items, grid):
     np.testing.assert_array_equal(part.values, whole.values[:, 25:, 35:])
 
 
-def test_an_edge_chip_pads_each_collection_in_its_own_pixels(items, grid):
+def test_an_edge_chip_aligns_and_pads_every_collection_on_its_grid(items, grid):
     chip = items.gs.sample().gs.chip(32, overlap=8, target=grid).iloc[0]
 
-    native = chip.gs.to_xarray()
-    aligned = chip.gs.to_xarray(target=chip.gs.anchor.geobox)
+    aligned = chip.gs.to_xarray()
 
-    assert native["s2"].dataset.gs.geobox == chip.gs.anchor.geobox
-    assert native["s1"].dataset.sizes["y"] == 16
-    assert aligned["s1"].dataset.gs.geobox == chip.gs.anchor.geobox
+    for name in aligned.children:
+        assert aligned[name].dataset.gs.geobox == chip.gs.geobox
     assert aligned["label"].dataset.label.dtype == "uint8"
+    assert isinstance(aligned["s1"].dataset.vv.data, da.Array)
 
 
 def test_a_sample_selects_collections_in_order(items):
@@ -133,6 +144,8 @@ def test_a_sample_selects_collections_in_order(items):
 def test_chip_padding_uses_native_ground_extent_across_crs(
     items, grid, tmp_path, monkeypatch
 ):
+    from rasterio.warp import reproject
+
     from geosave.geodata import raster
     from geosave.geodata.core import GeoCatalog
     from geosave.geodata.transform import extent
@@ -159,12 +172,28 @@ def test_chip_padding_uses_native_ground_extent_across_crs(
 
     monkeypatch.setattr(extent, "pad", bounded_pad)
     result = chip.gs.to_xarray(collections=["geographic"])["geographic"].dataset
-    expected = native_grid.enclosing(chip.gs.anchor.geobox.extent)
+    expected = chip.gs.geobox
     assert result.gs.geobox.shape == expected.shape
     assert result.gs.geobox.crs == expected.crs
     assert result.gs.geobox.transform.almost_equals(expected.transform, precision=1e-10)
     assert isinstance(result.value.data, da.Array)
-    np.testing.assert_array_equal(result.value.compute(), 1)
+    # Compare against Rasterio directly: the projected bounding rectangle's
+    # corner can lie outside the geographic source's sloped edge.
+    pixels = np.full(tuple(expected.shape), 65535, dtype="uint16")
+    reproject(
+        np.ones(native_grid.shape, dtype="uint16"),
+        pixels,
+        src_transform=native_grid.transform,
+        src_crs=str(native_grid.crs),
+        dst_transform=expected.transform,
+        dst_crs=str(expected.crs),
+        dst_nodata=65535,
+    )
+    (top, bottom), (left, right) = chip.gs.pad_widths
+    height, width = expected.shape
+    pixels = pixels[top : height - bottom, left : width - right]
+    pixels = np.pad(pixels, chip.gs.pad_widths, mode="reflect")
+    np.testing.assert_array_equal(result.value.compute(), pixels)
 
 
 def test_sample_properties_describe_the_anchor_and_padding(items, grid):
@@ -182,3 +211,50 @@ def test_sample_timespan_normalizes_offsets_and_handles_missing_bounds(items):
     assert row.gs.timespan == (pd.Timestamp("2024-03-01"), pd.Timestamp("2024-03-02"))
     row["end_datetime"] = None
     assert row.gs.timespan is None
+
+
+@pytest.mark.parametrize("chip", [False, True])
+def test_explicit_grid_aligns_acquisitions_before_time_assembly(tmp_path, chip):
+    import dask.array as da
+    import numpy as np
+    from odc.geo.geobox import GeoBox
+
+    import geosave as gs
+
+    fine = GeoBox.from_bbox((0, 0, 40, 40), "EPSG:3857", resolution=10)
+    coarse = GeoBox.from_bbox((0, 0, 40, 40), "EPSG:3857", resolution=20)
+    entries = []
+    for index, box in enumerate([fine, coarse]):
+        source = gs.raster(
+            {
+                "red": (
+                    ("y", "x"),
+                    da.full(tuple(box.shape), index + 1.0, chunks=tuple(box.shape)),
+                )
+            },
+            box,
+            nodata=np.nan,
+        )
+        source = source.assign_coords(time=np.datetime64(f"2024-01-0{index + 1}", "us"))
+        entries.extend(
+            gs.stac.create_items(
+                source.gs.to_cog(tmp_path / f"{index}.tif"),
+                collection="image",
+                id_format=str(index),
+            )
+        )
+    row = gs.stac.create_catalog(entries).gs.sample().iloc[0]
+    with pytest.raises(ValueError):
+        row.gs.to_xarray()
+    if chip:
+        chips = gs.stac.create_catalog(entries).gs.sample().gs.chip(4, resolution=10)
+        restored = gs.open_vector(chips.gs.to_geoparquet(tmp_path / "chips.parquet"))
+        row = restored.iloc[0]
+        tree = row.gs.to_xarray()
+    else:
+        tree = row.gs.to_xarray(target=fine, resampling={"image/red": "nearest"})
+    raster = tree["image"].dataset
+    assert raster.sizes == {"time": 2, "y": 4, "x": 4}
+    assert raster.red.chunks is not None
+    np.testing.assert_allclose(raster.red.isel(time=0).values, 1)
+    np.testing.assert_allclose(raster.red.isel(time=1).values, 2)

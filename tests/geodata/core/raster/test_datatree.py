@@ -4,19 +4,27 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import dask
+import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
 from upath import UPath
 
-from geosave.geodata import open_raster, open_tree
-from geosave.geodata.core.raster.datatree import map_groups
+from geosave.geodata import (
+    open_raster,
+    open_tree,
+    tree,
+)
 from geosave.geodata.core.raster.create import tree as build_tree
-from geosave.geodata.io import gdal
-from tests.geodata.conftest import build_raster, item_table
+from geosave.geodata.core.raster.datatree import map_groups
+from geosave.geodata.io import gdal, storage
+from tests.geodata.conftest import (
+    build_raster,
+    flat,
+    item_table,
+)
 from tests.geodata.conftest import titled as _titled
 from tests.geodata.core.raster.conftest import optical
-from tests.geodata.conftest import flat
 
 
 @pytest.mark.parametrize(
@@ -357,7 +365,6 @@ def test_map_groups_rebuilds_a_tree_that_shares_no_grid() -> None:
 
 
 def test_a_tree_reads_the_pixel_operations_through_gs(tree: xr.DataTree) -> None:
-    import geopandas as gpd
     import shapely
 
     valid = np.array([[True, False], [True, True]])
@@ -478,3 +485,14 @@ def test_a_tree_converts_each_group_on_its_own_dtype(torch) -> None:
     assert tensors["optical"].dtype is torch.uint16
     assert tensors["height"].dtype is torch.float32
     assert scene.gs.to_tensor(dtype="float32")["optical"].dtype is torch.float32
+
+
+@pytest.mark.integration
+def test_a_tree_round_trips_through_a_upath_carrying_its_options(remote) -> None:
+    prefix, options = remote
+    folder = storage.location(f"{prefix}/s0", options)
+    sample = tree({"optical": build_raster(times=2), "label": build_raster()})
+
+    sample.gs.to_zarr(folder)
+
+    assert open_tree(folder).gs.groups == ("label", "optical")

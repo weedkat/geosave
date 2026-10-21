@@ -1,1 +1,0 @@
-A compact ordinary PyTorch Lightning task with deterministic in-memory data.

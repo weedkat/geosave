@@ -18,6 +18,9 @@ from geosave.geodata.transform.temporal import concat, interpolate, reduce, resa
 from geosave.geodata.warnings import DroppedAttrsWarning, GeoSaveWarning
 from tests.geodata.conftest import geobox
 
+from .conftest import build
+from .conftest import geobox as transform_geobox
+
 UTM = "EPSG:32633"
 
 # Two observations in January, one in March, so February covers none.
@@ -542,6 +545,7 @@ def test_concat_refuses_missing_bands_instead_of_promoting_to_nan() -> None:
 @pytest.mark.parametrize("as_array", [False, True])
 def test_select_keeps_overlapping_composites_lazy_and_in_source_order(as_array):
     import dask.array as da
+
     from geosave.geodata.transform import temporal
 
     data = series(1, 2, 3).chunk({"time": 1})
@@ -652,3 +656,10 @@ def test_reduction_preserves_metadata_under_xarray_drop_attrs_option(kind):
     assert attrs.TimeSpec.from_attrs(result.time.attrs).time_freq == "MS"
     assert variable.chunks is not None
     np.testing.assert_allclose(variable.compute()[:, 0, 0], [500, np.nan, 500])
+
+
+def test_concat_preserves_tree_root_attrs():
+    source = tree({"optical": build(transform_geobox())})
+    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
+    result = concat([source, source])
+    assert result.attrs == source.attrs

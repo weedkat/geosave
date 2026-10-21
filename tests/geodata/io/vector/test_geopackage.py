@@ -6,10 +6,13 @@ from pathlib import Path
 
 import geopandas as gpd
 import pytest
+from shapely.geometry import Point, box
 from upath import UPath
-from shapely.geometry import Point
 
-from geosave.geodata import open_vector
+from geosave.geodata import (
+    open_vector,
+)
+from tests.geodata.conftest import _size
 
 
 def _plots() -> gpd.GeoDataFrame:
@@ -55,3 +58,22 @@ def test_a_file_url_reads_as_its_local_path(tmp_path: Path) -> None:
     path = _plots().gs.to_geopackage(tmp_path / "survey.gpkg")
 
     assert len(open_vector(UPath(path.as_uri()))) == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("suffix", [".gpkg"])
+def test_a_plain_vector_uploads(remote, suffix) -> None:
+    prefix, options = remote
+    plots = gpd.GeoDataFrame(
+        {"name": ["near", "far"]},
+        geometry=[box(0, 0, 1, 1), box(10, 10, 11, 11)],
+        crs="EPSG:4326",
+    )
+    write = {
+        ".parquet": plots.gs.to_geoparquet,
+        ".geojson": plots.gs.to_geojson,
+        ".gpkg": plots.gs.to_geopackage,
+    }[suffix]
+    written = write(f"{prefix}/plots{suffix}", storage_options=options)
+    assert written == f"{prefix}/plots{suffix}"
+    assert _size(written, options) > 0

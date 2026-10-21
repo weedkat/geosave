@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from geosave.geodata.stac.translate import table as stac_table
+from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
+import pystac
+import pytest
+import xarray as xr
 from pystac.extensions.eo import EOExtension
 
-from geosave.geodata import stac
-from geosave.geodata.stac import translate
+from geosave.geodata import attrs, stac
 from geosave.geodata.io.raster.stac import open_raster
+from geosave.geodata.stac import translate
 from geosave.geodata.stac.translate import band
-import xarray as xr
+from geosave.geodata.stac.translate import table as stac_table
+from tests.geodata.conftest import build_raster
 
 
 def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
@@ -29,7 +34,6 @@ def _item(tmp_path, assets):
     """Build an Item whose data assets list EO bands, as `(key, bands)` pairs."""
     from datetime import UTC, datetime
 
-    import pystac
     from pystac.extensions.eo import Band
 
     item = pystac.Item(
@@ -106,10 +110,7 @@ def test_a_name_claimed_by_a_one_band_asset_falls_back_to_key(tmp_path) -> None:
 def test_attrs_carry_band_facts_by_variable_name(tmp_path) -> None:
     from datetime import UTC, datetime
 
-    import pystac
     from pystac.extensions.eo import Band
-
-    import geosave.geodata.attrs as attrs
 
     item = pystac.Item(
         "scene",
@@ -154,7 +155,6 @@ def test_scene_combines_instant_and_composite_coverage(tmp_path):
 
 
 def test_scene_reads_explicit_coverage_from_each_file(tmp_path):
-    import numpy as np
 
     from geosave.geodata.io.raster.file import RasterFile, Scene
     from tests.geodata.conftest import build_raster
@@ -174,3 +174,89 @@ def test_scene_reads_explicit_coverage_from_each_file(tmp_path):
     assert item.datetime.isoformat() == "2025-06-01T00:00:00+00:00"
     assert item.properties["start_datetime"].startswith("2025-05-15")
     assert item.properties["end_datetime"].startswith("2025-06-15")
+
+
+def test_composite_keeps_nominal_time_and_bounds(tmp_path):
+    from geosave.geodata.attrs import TimeSpec
+
+    ds = build_raster(times=1)
+    ds.time.attrs.update(TimeSpec.from_resample("MS").to_attrs())
+    scene = ds.gs.to_cog(str(tmp_path / "composite.tif"))[0]
+    item = next(stac.create_items(scene))
+    assert item.datetime == datetime(2025, 6, 1, tzinfo=UTC)
+    assert item.properties["start_datetime"].startswith("2025-06-01")
+    assert item.properties["end_datetime"].startswith("2025-06-30")
+
+
+def test_unsplit_multidate_store_cannot_be_one_observation(tmp_path):
+    ds = build_raster(times=2)
+    scenes = ds.gs.to_netcdf(tmp_path / "cube.nc")
+    with pytest.raises(ValueError, match="split multiple dates"):
+        list(stac.create_items(scenes))
+    split = [
+        ds.isel(time=index).gs.to_netcdf(tmp_path / f"date-{index}.nc")
+        for index in range(2)
+    ]
+    assert len(list(stac.create_items(split))) == 2
+
+
+@pytest.mark.parametrize("value", [-1.0, 101.0, float("inf")])
+def test_invalid_cloud_cover_rejected(tmp_path, value):
+    ds = build_raster(times=1).assign_coords({"eo:cloud_cover": value})
+    scenes = ds.gs.to_cog(tmp_path / "scene.tif")
+    with pytest.raises(ValueError, match="eo:cloud_cover"):
+        list(stac.create_items(scenes))
+
+
+def test_missing_and_dropped_properties_are_not_exported(tmp_path):
+    ds = build_raster(times=1).assign_coords(
+        {"eo:cloud_cover": float("nan"), "unknown:value": 12}
+    )
+    item = next(stac.create_items(ds.gs.to_cog(tmp_path / "missing.tif")))
+    assert "eo:cloud_cover" not in item.properties
+    assert "unknown:value" not in item.properties
+    ds = ds.assign_coords({"eo:cloud_cover": 12}).drop_vars("eo:cloud_cover")
+    item = next(stac.create_items(ds.gs.to_cog(tmp_path / "dropped.tif")))
+    assert "eo:cloud_cover" not in item.properties
+
+
+def test_item_id_and_geometry_do_not_depend_on_asset_order(tmp_path):
+    from geosave.geodata.io.raster.file import Scene
+
+    ds = build_raster(times=1)
+    scene = ds.gs.to_cog(str(tmp_path / "{band}.tif"))[0]
+    reversed_scene = Scene(
+        scene.collection,
+        dict(reversed(list(scene.written.items()))),
+        coords=scene.coords,
+    )
+    first = next(stac.create_items(scene))
+    second = next(stac.create_items(reversed_scene))
+    assert (first.id, first.geometry) == (second.id, second.geometry)
+
+
+def test_equal_explicit_interval_is_an_instant(tmp_path):
+    ds = build_raster()
+    stamp = datetime(2025, 1, 1, tzinfo=UTC)
+    item = next(
+        stac.create_items(
+            ds.gs.to_cog(tmp_path / "undated.tif"), datetime=(stamp, stamp)
+        )
+    )
+    assert item.datetime == stamp
+
+
+def test_item_identity_uses_union_footprint_and_grid_fields_require_one_grid(tmp_path):
+    from geosave.geodata.io.raster.file import RasterFile, Scene
+
+    ds = build_raster(times=1).isel(time=0)
+    shifted = ds.assign_coords(x=ds.x + 1000)
+    files = {
+        "first": RasterFile.from_xarray(tmp_path / "first.tif", ds),
+        "second": RasterFile.from_xarray(tmp_path / "second.tif", shifted),
+    }
+    first = next(stac.create_items(Scene(None, files)))
+    second = next(stac.create_items(Scene(None, dict(reversed(list(files.items()))))))
+    assert (first.id, first.geometry) == (second.id, second.geometry)
+    with pytest.raises(ValueError, match="common grid"):
+        next(stac.create_items(Scene(None, files), id_format="{width}"))

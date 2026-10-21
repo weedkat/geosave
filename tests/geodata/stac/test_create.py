@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from geosave.geodata.stac.translate import table as stac_table
-
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,12 +16,12 @@ from pystac.extensions.eo import EOExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import RasterExtension
 
-from geosave.geodata import io, raster, stac, tree
-from geosave.geodata import open_vector
+from geosave.geodata import attrs, io, open_vector, raster, stac, tree
 from geosave.geodata.io.raster.file import RasterFile, Scene
+from geosave.geodata.stac import create_items
+from geosave.geodata.stac.translate import table as stac_table
 from geosave.geodata.stac.translate.item import TIMELESS, read_timespan
 from geosave.geodata.warnings import TimelessItemWarning
-
 from tests.geodata.conftest import build_raster, cog_template, flat, tree_templates
 
 IDS = ["forest_20250601T000000", "forest_20250602T000000"]
@@ -368,7 +366,6 @@ def test_a_trees_layers_become_collections(scene, label, tmp_path) -> None:
 
 
 def test_collection_overrides_what_files_state(scene, tmp_path) -> None:
-    from geosave.geodata import attrs
 
     named = scene.gs.write_acdd(attrs.ACDD(id="sentinel-2-l2a"))
     paths = named.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
@@ -429,7 +426,6 @@ def test_an_id_without_fields_names_the_item(scene, tmp_path) -> None:
 
 
 def test_an_id_template_fills_whatever_collections_files_state(scene, tmp_path):
-    from geosave.geodata import attrs
 
     paths = []
     for day, collection in ((0, "sentinel-2-l2a"), (1, "landsat")):
@@ -470,3 +466,13 @@ def test_create_items_describes_saved_paths_without_computing_pixels(tmp_path):
     xr.testing.assert_equal(
         opened.drop_vars("spatial_ref"), source.drop_vars("spatial_ref")
     )
+
+
+@pytest.mark.integration
+def test_described_items_validate_against_their_schemas(tmp_path) -> None:
+    scene = build_raster(times=1, packed=True)
+
+    (written,) = scene.gs.to_cog(f"{tmp_path}/scene_{{time:%Y%m%d}}.tif")
+    item = next(create_items(written, id_format="scene"))
+
+    item.validate()

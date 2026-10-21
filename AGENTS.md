@@ -28,8 +28,7 @@ src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
 ├── model/        # what a release contains: chain, registry, spec, release; stages/ holds encoder/decoder/head/monolith
-├── ml/           # Lightning training: tasks/ holds Module + DataModule pairs; builders, criterion, metrics, transforms
-└── templates/    # source for generated workspaces
+└── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
 ├── core/         # `gs` accessors and GeoAnchor; raster/ (dataarray, dataset, datatree, constructors), vector/ (vector, item table, sample table, row)
@@ -41,16 +40,17 @@ src/geosave/geodata/
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
+src/templates/      # source for generated workspaces; bundled CLI resources
 
-tests/            # mirrors src/geosave; tests/flows mirrors src/geosave_flows
+tests/            # mirrors source; flows/ and templates/ mirror the sibling source directories
 workspace/        # generated consumer workspace, not library source
 docs/contributing/  # architecture, open decisions, maintenance ledger and design specs (published)
 ```
 
-`src/geosave/templates/` is the source for generated workspace files.
+`src/templates/` is the source for generated workspace files.
 It contains `common/` startup and `tasks/` templates copied by `geosave add-task`.
-Public geospatial I/O lives in `geodata/io/`; original benchmark downloads live
-in `geodata/benchmarks/`. Internal helpers stay with their owning package.
+Public geospatial I/O lives in `geodata/io/`. Internal helpers stay with their
+owning package.
 
 Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`, so a release loads and preprocesses without the training stack.
 
@@ -105,28 +105,22 @@ LightningCLI    -> workspace entry point and configuration
 Logger          -> experiment logging
 ```
 
-A training setup is one LightningModule and the DataModule that feeds it, kept together in `ml/tasks/<head type>/<method>/`:
+A training setup is one project-owned LightningModule, DataModule, and Dataset,
+kept together in `modules/<task>/<method>/` in the generated workspace. The
+source recipes live in `templates/tasks/<task>/<method>/`; `geosave create`
+and `geosave add-task` select the task and then the method. Recipes call reusable
+library operations directly; there is no library-owned `ml/tasks` package.
 
-```text
-ml/
-├── metrics/          # MulticlassMetrics, RegressionMetrics
-├── builders/         # criterion, optimizer, scheduler from configuration
-├── criterion/        # losses the library owns
-├── transforms/       # augmentation and mixing
-└── tasks/
-    └── segmentation/
-        ├── calibrate.py  # shared by every segmentation method
-        └── supervised/
-            ├── module.py # Module(LightningModule)
-            └── data.py   # DataModule(LightningDataModule)
-```
+Each package at the root of `ml/` owns one reusable concern: metrics, builders,
+criterion, transforms, callbacks, or CLI. Each generated method's `data.py`
+declares the samples its Datasets return. Semi-supervised methods carry a local
+supervised base; editing one method must not change another method's files.
+Generated configs and scripts use separate method paths.
 
-Each package at the root of `ml/` owns one concern, and only `tasks/` imports
-the others. Each method's `data.py` declares the `Sample` its datasets return;
-torch Datasets are written per data source and passed in per split. Share code
-across head types only once two written modules repeat it.
-
-Generated workspaces compose GeoSave and Lightning APIs; they do not own library implementations.
+ModelSpec redesign is on hold until preprocessing/postprocessing code publication
+and execution trust are settled. Preserve its current behavior during the
+training-template migration. Generated workspaces compose GeoSave and Lightning
+APIs and own their experiment-specific training implementations.
 
 ## Tests
 

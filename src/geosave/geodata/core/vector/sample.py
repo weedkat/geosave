@@ -1,13 +1,14 @@
 """The `gs` accessor of one sample-table row: Items read lazily as a DataTree.
 
-Every collection keeps its native grid and selected acquisition dates. Chips
-crop and pad each collection on its native pixels. Alignment happens only
-on request; frame construction owns temporal selection.
+Unchipped samples keep native grids and selected acquisition dates. Chips
+align collections to their recorded grids before temporal assembly, then crop
+and pad their pixels. Frame construction owns temporal selection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from math import isfinite
 from typing import TYPE_CHECKING, cast
 
 import hashlib
@@ -126,6 +127,7 @@ class GeoSample:
         region: GeoBox,
         pad_widths: list[list[int]],
         pad_mode: Padding,
+        resampling: Resampling | Mapping[str, Resampling],
         geometry: str = "geometry",
     ) -> pd.Series:
         """Copy the row onto a chip grid, recording its padding and parent.
@@ -135,6 +137,7 @@ class GeoSample:
             region: Full region covered by this chip layout, for merging.
             pad_widths: Pixels before and after each of the y and x axes.
             pad_mode: How pixels outside the read region are filled.
+            resampling: Kernels used to read sources onto the chip grid.
             geometry: Active geometry column to update with the chip footprint.
 
         Returns:
@@ -155,6 +158,9 @@ class GeoSample:
         row["pad_widths"] = pad_widths
         is_padded = any(before or after for before, after in pad_widths)
         row["pad_mode"] = pad_mode if is_padded else None
+        row["resampling"] = orjson.dumps(
+            dict(resampling) if isinstance(resampling, Mapping) else resampling
+        ).decode()
         row[geometry] = grid.extent.to_crs("EPSG:4326").geom
         return row
 
@@ -206,6 +212,35 @@ class GeoSample:
         transform = Affine(*self._row["proj:transform"][:6])
         return GeoBox((height, width), transform, str(self._row["proj:code"]))
 
+    def _create_grid(self, resolution: float) -> GeoBox:
+        """Plan a local grid for reading this row or cutting it into chips."""
+        from geosave.geodata.stac.extensions import projection
+        from geosave.geodata.stac.translate.item import select_data_assets
+
+        if not isfinite(resolution) or resolution <= 0:
+            raise ValueError("resolution must be positive and finite")
+        grid = self.geobox
+        crs = None if grid is None else grid.crs
+        if crs is None:
+            codes = set()
+            for entries in self.items.values():
+                for item in entries:
+                    for asset in select_data_assets(item).values():
+                        source = projection.read_crs(asset)
+                        if source is None:
+                            raise ValueError(
+                                "source CRS is missing; supply target=grid"
+                            )
+                        codes.add(source)
+            if len(codes) != 1:
+                raise ValueError(
+                    "sources must share one CRS per row; supply target=grid"
+                )
+            (crs,) = codes
+        return GeoBox.from_geopolygon(
+            self.region, crs=crs, resolution=resolution, anchor="edge", tol=1e-7
+        )
+
     @property
     def timespan(self) -> tuple[pd.Timestamp, pd.Timestamp] | None:
         """Return the row's span as naive UTC, None when timeless."""
@@ -241,33 +276,31 @@ class GeoSample:
     ) -> DataTree:
         """Open the sample as a lazy xarray DataTree, keeping native grids.
 
-        Each collection reads its selected Items on its own pixels. Chips crop
-        to their read region and pad as recorded. Actual acquisition dates are
+        Unchipped collections read their selected Items on native pixels. Chips
+        align observations to their recorded grid before temporal assembly,
+        then crop to their read region and pad as recorded. Acquisition dates are
         preserved for unframed samples. Frames execute their recorded bin
         reductions and interpolation, returning one time step per requested bin.
         An unframed collection static over the span reads without a time
-        dimension; other collections retain their time axis::
-
-            row grid (chip)        s2, 10 m          s1, 20 m
-            +--pad--+------+       32 x 32           16 x 16
-            |       |region|       native            native
-            +-------+------+       target=grid  ->   32 x 32 each
+        dimension; other collections retain their time axis.
 
         Args:
             collections: Collections to read, in output order. None reads all.
             target: Collection name, GeoBox, reference raster, or CRS to align
                 onto. A collection name uses that collection's cropped and
                 padded grid, even when excluded from `collections`. Matching
-                collection names take precedence over CRS strings. None keeps
-                native grids.
+                collection names take precedence over CRS strings. None uses a
+                chip's recorded grid, or native grids for unchipped samples.
             extent: Ground to cover when aligning: ``"match"`` adopts the
                 target, ``"union"`` covers all groups, ``"intersection"``
                 keeps their shared extent.
             resolution: Output pixel size, or ``"native"`` to keep each
-                group's resolution. Requires a target.
+                group's resolution. Without a target, a positive scalar plans
+                a local grid in the sources' shared CRS, in CRS units, using
+                the same pixel snapping as chip planning.
             resampling: Kernel, or mapping of ``collection/variable`` to
-                kernels with ``"*"`` as fallback. None uses nearest when
-                aligning. Requires a target.
+                kernels with ``"*"`` as fallback. None uses the chip's recorded
+                kernels, or nearest for other explicit alignment targets.
             chunks: File-opening chunk sizes. An empty mapping uses native
                 Dask chunks; ``"auto"`` chooses sizes; None disables Dask.
 
@@ -289,6 +322,14 @@ class GeoSample:
         """
         from geosave.geodata.core.raster.create import tree
 
+        if target is None and self.geobox is not None:
+            target = self.geobox
+        if target is None and isinstance(resolution, (int, float)):
+            target = self._create_grid(resolution)
+            resolution = None
+        kernels = self._row.get("resampling")
+        if resampling is None and isinstance(kernels, str):
+            resampling = orjson.loads(kernels)
         if target is None and (
             resampling is not None or resolution is not None or extent != "match"
         ):

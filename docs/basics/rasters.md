@@ -47,10 +47,9 @@ You can still use normal xarray selection and arithmetic.
 | `Dataset` | Named arrays on shared coordinates | Working with several bands or derived features. |
 | `DataTree` | Named Dataset groups | Keeping inputs with different variables, dates, or grids together. |
 
-The constructors accept NumPy and lazy arrays. They attach coordinates and
-metadata; they do not resample or compute the pixels. Use dimensions such as
-`("time", "y", "x")` for a time series and supply `time=dates` when the reference
-has no time coordinate. Pixel lengths must match the reference's coordinates.
+The constructors attach coordinates and metadata to NumPy or lazy arrays; they
+do not resample or compute pixels. For time series and other options, see
+[raster grids](../concepts/raster-grids.md).
 
 ## Select bands and pixels
 
@@ -129,10 +128,8 @@ NDVI compares near-infrared and red reflectance. This synthetic example only
 shows the calculation. The feature function returns an unnamed `DataArray`;
 assignment gives it the name `ndvi`.
 
-Spectral indices decode the selected bands' nodata and scale/offset metadata
-before calculating. For your own arithmetic, decode explicitly with
-`scene.gs.mask_and_scale()` when the file stores packed values.
-See [describe raster values](attrs.md).
+Indices decode nodata and scale/offset first. See
+[describe raster values](attrs.md).
 
 ## Plot a band
 
@@ -152,40 +149,9 @@ composite: `scene.gs.plot("B08", "B04", "B03")`.
 scene.gs.explore("ndvi", basemap="Imagery")
 ```
 
-`explore` returns a native Panel Material UI app with a light/dark theme toggle.
-The compact sidebar groups catalogs, rasters and vectors separately, with
-visibility and zoom/remove actions on each layer. Style, Info and Identify tabs
-contain the selected layer’s controls, legend and metadata.
-The map sits beside it; a collapsible catalog or attribute table sits below
-the map. Checking catalog rows opens their rasters automatically; unchecking
-removes them. Column filters and date ranges retain original row identity.
-
-A raster opens with its declared RGB channels, otherwise its first spatial
-band. Explicit `band` or `rgb` arguments take priority. The **Display** dropdown lists
-each spatial band and **RGB** when a declared or explicit composite exists. Each raster
-keeps its own choices, opacity, stretch and date. **Color by** selects a vector
-attribute. The optional comparison card switches between two open rasters.
-
-The map uses Panel, HoloViews, GeoViews and Bokeh. Dense point, line and polygon layers
-use Datashader for numeric, categorical and single-color rendering. Imagery, light, dark and OpenStreetMap basemaps include their
-providers' attribution. Basemaps need network access; the explorer needs a
-live notebook kernel or `panel serve`.
-
-COG display reads windows and overviews before reprojection. Computed xarray
-rasters select and sample the viewport before Dask execution. A zoomed-out
-computed overview can still execute every source chunk; the explorer does
-not create a pyramid. Opacity and visibility changes reuse displayed raster
-pixels; hidden rasters do no viewport work. Percentile sliders apply on release.
-Display choices do not mutate the source raster or its RGB metadata.
-
-Layers compose with `scene.gs.explore() * prediction * fields`, or with
-`scene.gs.explore(overlay={"fields": fields})`. Two explorers also compose:
-`raster1.gs.explore() * raster2.gs.explore()` lists both under Rasters, with
-independent display settings and no catalog table. Adding a catalog shows its
-checkbox table; adding a vector shows its attribute table. For local serving, put
-`scene.gs.explore().servable()` in a script and run `panel serve explore.py`.
-See the [Material UI and performance validation](../contributing/handoffs/2026-10-16-holoviz-explorer/UI-VALIDATION.md)
-for the tested notebook setup and remaining environment limitations.
+`explore` returns an interactive map with a layer sidebar. It needs a live
+notebook kernel or `panel serve`. See [the interactive explorer](../concepts/explorer.md)
+for layers, catalogs, performance and serving.
 
 ## Put new pixels on an existing grid
 
@@ -208,13 +174,8 @@ Data variables:
     label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 ```
 
-`gs.raster` needs explicit dimension names ending in `y, x`. Passing `scene`
-as the reference places the prediction on the same grid. Coordinates on other
-dimensions, such as `time`, pass on when the new variables use those dimensions.
-Same-name variables also inherit band attrs; supply a new name or explicit attrs
-when the new values have different meaning.
-
-To build one `DataArray` directly, use
+Passing `scene` as the reference places the prediction on the same grid.
+Dimensions must be named and end in `y, x`. For one `DataArray`, use
 `gs.array(prediction, scene, dims=("y", "x"), nodata=255)`.
 
 ## Prepare an image tensor
@@ -230,13 +191,10 @@ Output:
 (torch.Size([2, 4, 4]), torch.float32)
 ```
 
-The tensor has channels first, in the selected variable order. Converting to a
-tensor reads the pixels. It does not mask nodata or scale stored values for you.
-Keep the georeferenced raster alongside the tensor to place model outputs later.
-For a time series, the shape is `[time, band, y, x]`; other shared nonspatial
-axes also precede `band`. All variables must span the same axes. If their
-dtypes differ, pass `dtype=` explicitly; GeoSave does not choose a common dtype
-for you.
+The tensor has channels first, in the selected variable order. Converting
+reads the pixels and does not mask nodata or scale values; keep the raster to
+place model outputs later. Time series, mixed dtypes and masking are covered in
+[metadata and pixel values](../concepts/metadata.md).
 
 ## Put rasters together
 
@@ -273,9 +231,7 @@ Group: /
             label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 ```
 
-A tree is an xarray `DataTree`, with one `Dataset` per group. These groups share
-one spatial grid, so their spatial coordinates appear at the root. Other trees
-can keep each group's native grid until you align them explicitly.
+A tree is an xarray `DataTree` with one `Dataset` per group.
 `sample["optical"].to_dataset()` retrieves a raster, and
 `sample.gs.to_tensor()` returns a dictionary of tensors keyed by group name.
 

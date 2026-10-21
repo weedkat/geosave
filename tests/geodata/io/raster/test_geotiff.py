@@ -4,21 +4,29 @@ import struct
 import subprocess
 from pathlib import Path
 
+import dask
 import dask.array as da
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 import xarray as xr
+from odc.geo.geobox import GeoBox
 from rasterio.control import GroundControlPoint
 from rasterio.crs import CRS
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 from upath import UPath
 
-from geosave.geodata import attrs
+import geosave as gs
+from geosave.geodata import (
+    attrs,
+    open_raster,
+)
 from geosave.geodata.io import gdal, geotiff
+from geosave.geodata.transform import temporal
 from geosave.geodata.warnings import UnreadMaskWarning
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import _refuse, build_raster
 
 
 def _interpreted(ds: xr.Dataset, **colours: str) -> xr.Dataset:
@@ -565,3 +573,55 @@ def test_a_palette_read_from_a_cog_writes_to_netcdf(tmp_path: Path) -> None:
     again = netcdf.open_raster(netcdf.write(restored, tmp_path / "labels.nc"))
 
     assert again.red.gs.legend.color_map == {0: "#000000", 1: "#00FF00"}
+
+
+@pytest.mark.parametrize("explicit", [False, True], ids=["resampled", "explicit"])
+def test_saved_paths_preserve_composite_coverage(tmp_path: Path, explicit: bool):
+    grid = GeoBox.from_bbox((0, 0, 20, 20), "EPSG:3857", resolution=10)
+    source = gs.raster(
+        {"red": (("time", "y", "x"), da.full((2, 2, 2), 5.0, chunks=(1, 2, 2)))},
+        grid,
+        time=pd.to_datetime(["2024-02-05", "2024-02-20"]),
+        nodata=np.nan,
+    )
+    monthly = temporal.reduce(temporal.resample(source, "MS"), "median")
+    if explicit:
+        monthly.time.attrs = {}
+        monthly = monthly.assign_coords(
+            start_datetime=np.datetime64("2024-02-01T00:00:00", "us"),
+            end_datetime=np.datetime64("2024-02-29T23:59:59.999999", "us"),
+        )
+    monthly.gs.to_cog(tmp_path / "{time:%Y%m}.tif")
+    collection = gs.stac.create_collection("image", description="Monthly imagery")
+    items = list(
+        gs.stac.create_items({"image": tmp_path / "202402.tif"}, collection=collection)
+    )
+    assert items[0].properties["start_datetime"] == "2024-02-01T00:00:00Z"
+    assert items[0].properties["end_datetime"] == "2024-02-29T23:59:59.999999Z"
+    table = gs.stac.create_catalog(items, collections=[collection])
+    restored = gs.open_vector(table.gs.to_geoparquet(tmp_path / "catalog.parquet"))
+    raster = restored.iloc[0].gs.to_xarray()
+    assert raster.to_array().chunks is not None
+    assert raster.start_datetime.values == np.datetime64("2024-02-01")
+    assert raster.end_datetime.values == np.datetime64("2024-02-29T23:59:59.999999")
+    assert raster.gs.timespan == (
+        pd.Timestamp("2024-02-01"),
+        pd.Timestamp("2024-02-29T23:59:59.999999"),
+    )
+    np.testing.assert_allclose(raster.to_array().values, 5)
+
+
+@pytest.mark.integration
+def test_cogs_round_trip_lazily(remote) -> None:
+    prefix, options = remote
+    source = build_raster(times=2)
+
+    paths = source.gs.to_cog(
+        f"{prefix}/forest_{{time:%Y%m%d}}.tif", storage_options=options
+    )
+
+    assert all(str(path).startswith(prefix) for path in paths)
+    with dask.config.set(scheduler=_refuse):
+        restored = open_raster(list(paths), chunks={})
+    np.testing.assert_array_equal(restored.red.values, source.red.values)
+    restored.close()

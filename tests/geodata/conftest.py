@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+import os
+import uuid
+from urllib.parse import urlsplit
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -5,8 +11,10 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
+from geosave.geodata import configure_gdal
 from geosave.geodata.core.raster.create import raster as build
 from geosave.geodata.core.raster.create import tree as build_tree
+from geosave.geodata.io import storage
 
 
 def flat(scenes):
@@ -160,8 +168,8 @@ def tree_templates(sample, root) -> dict[str, str]:
 
 def read_items(rows):
     """Read an item table's files as one raster, as a window reads one collection."""
-    from geosave.geodata.stac.translate.table import to_items
     from geosave.geodata.io.raster.stac import open_raster
+    from geosave.geodata.stac.translate.table import to_items
 
     return open_raster(to_items(rows))
 
@@ -197,3 +205,80 @@ def rows(scene, label, tmp_path):
     sample = build_tree({"optical": scene, "label": label})
     saved = sample.gs.to_cog(tree_templates(sample, tmp_path / "s0"))
     return item_table(saved, prefix="s0")
+
+
+@pytest.fixture
+def torch():
+    """Load torch only for tests that convert pixels to tensors."""
+    return pytest.importorskip("torch")
+
+
+_GDAL_KEYS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_DEFAULT_REGION",
+    "AWS_S3_ENDPOINT",
+    "AWS_VIRTUAL_HOSTING",
+    "AWS_HTTPS",
+    "GDAL_DISABLE_READDIR_ON_OPEN",
+)
+
+
+def _refuse(*args, **kwargs):
+    raise AssertionError("pixels were computed")
+
+
+def _size(url: str, options: dict) -> int:
+    return storage.location(url, options).stat().st_size
+
+
+def _s3_service() -> tuple[str, dict, str]:
+    """Return the prefix, storage options and GDAL endpoint of an S3 service."""
+    endpoint = os.environ["GEOSAVE_S3_ENDPOINT"]
+    bucket = os.environ.get("GEOSAVE_S3_BUCKET", "predictions")
+    options = {
+        "key": os.environ.get("AWS_ACCESS_KEY_ID", "minioadmin"),
+        "secret": os.environ.get("AWS_SECRET_ACCESS_KEY", "minioadmin"),
+        "client_kwargs": {"endpoint_url": endpoint},
+    }
+    storage.location(f"s3://{bucket}", options).mkdir(exist_ok=True)
+    return f"s3://{bucket}", options, endpoint
+
+
+def _hf_bucket() -> tuple[str, dict, str]:
+    """Return the prefix, storage options and GDAL endpoint of an HF bucket."""
+    return f"hf://buckets/{os.environ['GEOSAVE_HF_BUCKET']}", {}, "https://s3.hf.co"
+
+
+@pytest.fixture(params=["s3", "hf"])
+def remote(request):
+    """Yield a unique remote prefix and its storage options, emptied afterwards."""
+    variable = {"s3": "GEOSAVE_S3_ENDPOINT", "hf": "GEOSAVE_HF_BUCKET"}[request.param]
+    if variable not in os.environ:
+        pytest.skip(f"set {variable} to run against this service")
+    root, options, endpoint = _s3_service() if request.param == "s3" else _hf_bucket()
+    prefix = f"{root}/geosave-tests/{uuid.uuid4()}"
+
+    # GDAL reads TIFFs itself, so it is told about the same service.
+    before = {name: os.environ.get(name) for name in _GDAL_KEYS}
+    address = urlsplit(endpoint)
+    configure_gdal(
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID", "minioadmin"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY", "minioadmin"),
+        aws_default_region="us-east-1",
+        aws_s3_endpoint=address.netloc,
+        aws_virtual_hosting=False,
+        aws_https=address.scheme == "https",
+        gdal_disable_readdir_on_open="EMPTY_DIR",
+    )
+    try:
+        yield prefix, options
+    finally:
+        for name, value in before.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        folder = storage.location(prefix, options)
+        if folder.exists():
+            folder.fs.rm(folder.path, recursive=True)

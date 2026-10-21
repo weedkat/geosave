@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from math import ceil
 from typing import TYPE_CHECKING, Annotated, Self, cast
 
-from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
+from pydantic import Field, NonNegativeInt, PositiveFloat, PositiveInt, model_validator
 
 from geosave.geodata.transform.extent import Padding
 from geosave.geodata.core.vector.samples import Taper, Window
@@ -39,7 +40,10 @@ class ChipsSpec(SpecModel):
 
     Attributes:
         size: Chip side in pixels, or height and width.
-        overlap: Pixels neighbouring chips share.
+        resolution: Pixel size in each row's CRS units. None requires an
+            explicit target grid when cutting unchipped samples.
+        overlap: Shared pixels (int), or a fraction of each chip dimension in
+            [0.0, 1.0) (float), rounded up to whole pixels by Tiler.
         mode: How a chip reaching past the raster is filled.
         window: How overlapping chips are weighed when merged. None weighs
             every chip alike.
@@ -48,12 +52,16 @@ class ChipsSpec(SpecModel):
         ValueError: Overlap cannot provide coverage for the selected window.
 
     Examples:
-        >>> ChipsSpec(size=224, overlap=32).cut(samples).iloc[0]["proj:shape"]
+        >>> ChipsSpec(size=224, resolution=10, overlap=32).cut(samples).iloc[0]["proj:shape"]
         [224, 224]
     """
 
     size: PositiveInt | Annotated[list[PositiveInt], Field(min_length=2, max_length=2)]
-    overlap: NonNegativeInt = 0
+    resolution: PositiveFloat | None = None
+    overlap: (
+        Annotated[NonNegativeInt, Field(strict=True)]
+        | Annotated[float, Field(ge=0, lt=1)]
+    ) = 0
     mode: Padding = "reflect"
     window: Taper | None = None
 
@@ -64,7 +72,10 @@ class ChipsSpec(SpecModel):
                 f"window {self.window!r} weighs overlapping chips; set overlap"
             )
         # Zero or negative edge weights need two pixels of shared support.
-        if self.overlap == 1 and self.window in (
+        overlap = self.overlap
+        if isinstance(overlap, float):
+            overlap = ceil(overlap * min(self.shape))
+        if overlap == 1 and self.window in (
             "hann",
             "bartlett",
             "barthann",
@@ -85,17 +96,23 @@ class ChipsSpec(SpecModel):
         height, width = self.size
         return height, width
 
-    def cut(self, samples: gpd.GeoDataFrame, *, target: GeoBox) -> GeoDataFrame:
+    def cut(
+        self, samples: gpd.GeoDataFrame, *, target: GeoBox | None = None
+    ) -> GeoDataFrame:
         """Cut samples into chips of this size.
 
         Args:
             samples: Spatial sample or frame table.
-            target: Explicit pixel lattice used for training and inference.
+            target: Explicit pixel lattice, as an alternative to resolution.
 
         Returns:
             One row per chip, as `samples.gs.chip` lists them.
         """
         sample_table = cast("GeoSamples", samples.gs)
         return sample_table.chip(
-            self.shape, target=target, overlap=self.overlap, pad_mode=self.mode
+            self.shape,
+            target=target,
+            resolution=self.resolution,
+            overlap=self.overlap,
+            pad_mode=self.mode,
         )

@@ -98,7 +98,7 @@ def test_only_ml_tasks_import_ml_tasks():
 @pytest.mark.slow
 def test_geodata_loads_no_torch():
     assert not _loads(
-        "geosave.geodata, geosave.geodata.io, geosave.geodata.benchmarks",
+        "geosave.geodata, geosave.geodata.io",
         "torch",
     )
 

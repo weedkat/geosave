@@ -119,7 +119,11 @@ interpolation and interval boundaries.
 Supply `target=grid` to choose the pixel lattice. `grid` is an explicit GeoBox. Its
 CRS, resolution and pixel alignment apply over every frame's footprint;
 its original extent does not limit inference to the training location.
-Samples and frames have no grid; only existing chips can omit the target.
+Alternatively, supply `resolution=10` to build a local grid in each row's
+shared source CRS, with pixel edges snapped to multiples of that resolution.
+Resolution is in CRS units; different rows may use different CRSs. If a row's
+sources disagree on CRS, supply an explicit target grid. Do not combine target
+and resolution. Existing chips can omit both to reuse their recorded grid.
 
 ```python
 chips = frames.gs.chip(64, target=anchor.geobox, overlap=16)
@@ -138,8 +142,11 @@ Output:
 With overlap, a halo keeps the sample's border away from chip edges, so a
 chip may reach past the sample. `pad_widths` counts those pixels; reading fills
 them as `pad_mode` says, `reflect` by default.
-Chipping records metadata only. Use `row.gs.to_xarray(target=row.gs.geobox)`
-to explicitly align the raster collections onto a chip's recorded grid.
+Chipping records metadata only. `row.gs.to_xarray()` aligns the selected
+rasters onto the recorded chip grid before combining observations in time.
+The chip call can record per-variable resampling, for example
+`resampling={"*": "nearest", "optical/red": "bilinear"}`. Nearest is the default
+and preserves categorical labels.
 Merging reconstructs the full layout grid stored in the chips, which can
 differ from any source grid.
 
@@ -156,12 +163,10 @@ Output:
 <xarray.DataArray 'red' (time: 2, y: 64, x: 64)> dask.array<chunksize=(1, 40, 40)>
 ```
 
-Every collection keeps its native grid and dates: it is cut to the chip on its
-own pixels, retaining the Items selected by framing. A collection with a coarser grid
-reads fewer pixels. The label, static over the frame, reads without a `time`
-dimension. Pass `target="label"` to put every collection on the label
-chip's grid (an explicit GeoBox is also accepted), with `resampling={"*": "nearest", "optical/red": "bilinear"}` for
-per-variable kernels.
+Every collection uses the chip's grid, retaining the Items selected by framing.
+A collection with a coarser source grid is resampled lazily to the requested
+pixel size. The label, static over the frame, reads without a `time` dimension.
+Unchipped samples and frames still keep native grids unless explicitly aligned.
 
 ## Save samples for another process
 

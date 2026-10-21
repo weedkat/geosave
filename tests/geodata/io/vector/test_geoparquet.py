@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,7 +9,12 @@ import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import Point, box
 
-from geosave.geodata import GeoVector, io, open_vector
+from geosave.geodata import (
+    GeoVector,
+    io,
+    open_vector,
+)
+from tests.geodata.conftest import _size
 
 
 def test_geoparquet_catalog_supports_bbox_and_column_filtering(
@@ -130,3 +137,39 @@ def test_failed_remote_write_keeps_the_destination_unchanged(monkeypatch, existi
         assert filesystem.cat(target) == b"existing"
     else:
         assert not filesystem.exists(target)
+
+
+@pytest.mark.integration
+def test_geoparquet_reads_back_with_a_bbox(remote) -> None:
+    prefix, options = remote
+    plots = gpd.GeoDataFrame(
+        {"name": ["near", "far"]},
+        geometry=[box(0, 0, 1, 1), box(10, 10, 11, 11)],
+        crs="EPSG:4326",
+    )
+    written = plots.gs.to_geoparquet(
+        f"{prefix}/plots.parquet", write_covering_bbox=True, storage_options=options
+    )
+
+    selected = open_vector(written, bbox=(-1, -1, 2, 2), storage_options=options)
+
+    assert selected["name"].tolist() == ["near"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("suffix", [".parquet"])
+def test_a_plain_vector_uploads(remote, suffix) -> None:
+    prefix, options = remote
+    plots = gpd.GeoDataFrame(
+        {"name": ["near", "far"]},
+        geometry=[box(0, 0, 1, 1), box(10, 10, 11, 11)],
+        crs="EPSG:4326",
+    )
+    write = {
+        ".parquet": plots.gs.to_geoparquet,
+        ".geojson": plots.gs.to_geojson,
+        ".gpkg": plots.gs.to_geopackage,
+    }[suffix]
+    written = write(f"{prefix}/plots{suffix}", storage_options=options)
+    assert written == f"{prefix}/plots{suffix}"
+    assert _size(written, options) > 0

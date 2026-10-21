@@ -3,7 +3,8 @@
 An item table holds one STAC Item per row. `items.gs.sample()` groups equal
 spatial footprints into gridless rows, retaining all dates and native grids.
 `samples.gs.frame(windows={"image": {"slots": ["0D"]}})` selects temporal bins within
-each sample; `frames.gs.chip(128, target=grid)` records explicit pixel windows.
+each sample; `frames.gs.chip(128, resolution=10)` records aligned pixel windows on each
+row's local grid. Chip reads honour that grid and the recorded resampling.
 An Item row opens as a Dataset; a sample row opens as a DataTree, both through
 `row.gs.to_xarray()`. See [the catalog guide](../guides/catalogs-and-cuts.md).
 

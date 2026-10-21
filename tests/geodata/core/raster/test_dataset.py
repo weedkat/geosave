@@ -9,12 +9,18 @@ import pytest
 import xarray as xr
 from odc.geo import CRS
 
-from geosave.geodata import GeoDataArray, GeoDataset, GeoDataTree, attrs
+from geosave.geodata import (
+    GeoDataArray,
+    GeoDataset,
+    GeoDataTree,
+    attrs,
+    open_raster,
+    stac,
+)
 from geosave.geodata.core.raster.create import raster
 from geosave.geodata.io import gdal
-from tests.geodata.conftest import build_raster, geobox
+from tests.geodata.conftest import build_raster, flat, geobox
 from tests.geodata.core.raster.conftest import optical
-from tests.geodata.conftest import flat
 
 UTM = "EPSG:32633"
 
@@ -277,7 +283,6 @@ def test_a_written_legend_survives_a_geotiff_round_trip(tmp_path: Path) -> None:
 
 
 def test_a_legend_without_colours_writes_to_netcdf(tmp_path: Path) -> None:
-    from geosave.geodata import open_raster
 
     labelled = _classes()[["label"]].gs.write_legend(NAMES, None)
 
@@ -493,3 +498,12 @@ def test_write_rgb_refuses_a_name_the_raster_does_not_carry() -> None:
 def test_write_rgb_refuses_one_variable_on_two_channels() -> None:
     with pytest.raises(ValueError, match="cannot draw two channels"):
         build_bands(None, None).gs.write_rgb("b0", "b0", "b1")
+
+
+@pytest.mark.parametrize("compute", [True, False])
+def test_properties_survive_per_band_cog_writing(tmp_path, compute):
+    ds = build_raster(times=2).assign_coords({"eo:cloud_cover": ("time", [12.0, 65.0])})
+    scenes = ds.gs.to_cog(str(tmp_path / "{time:%Y%m%d}_{band}.tif"), compute=compute)
+    items = list(stac.create_items([scene.compute() for scene in scenes]))
+    assert [item.properties["eo:cloud_cover"] for item in items] == [12.0, 65.0]
+    assert any("eo/" in schema for schema in items[0].stac_extensions)

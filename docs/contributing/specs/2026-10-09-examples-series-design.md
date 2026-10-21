@@ -5,9 +5,7 @@ are planned and must be smoke-tested before their designs are settled.
 
 This plan follows the current files in `examples/`. The
 [examples guide](../../examples.md) describes the runnable lessons. Earlier
-numbering, API proposals and experimental measurements are preserved in
-[historical notes](../audits/2026-10-09-examples-series-history.md); they are not
-requirements for the remaining lessons.
+numbering and API proposals are not requirements for the remaining lessons.
 
 ## Goal and reader
 

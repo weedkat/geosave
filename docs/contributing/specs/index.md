@@ -1,15 +1,9 @@
 # Design specs
 
-Proposals written before larger changes, newest first. A spec records the
-design as agreed; its status note says what was built. Current behavior is
-documented in the guides and API reference.
+Proposals for larger changes. Current behavior is documented in the guides and
+API reference; specs for implemented work are deleted.
 
 | Date | Spec |
 | --- | --- |
-| 2026-10-16 | [Explorer map on Lonboard](2026-10-16-viz-lonboard-design.md) |
-| 2026-10-14 | [viz on HoloViz's intended layers](2026-10-14-viz-holoviz-design.md) |
-| 2026-10-12 | [STAC package structure](2026-10-12-stac-structure-design.md) |
-| 2026-10-10 | [Cuts as self-contained window rows](2026-10-10-cuts-windows-design.md) |
+| 2026-10-16 | [Native HoloViz explorer](2026-10-16-native-holoviz-explorer.md) |
 | 2026-10-09, updated 2026-10-16 | [Examples series: one land-cover project](2026-10-09-examples-series-design.md) |
-| 2026-10-09 | [Catalog per collection](2026-10-09-catalog-per-collection-design.md) |
-| 2026-10-08 | [Prepare: raw catalog to model-ready catalog](2026-10-08-prepare-design.md) |

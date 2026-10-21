@@ -1,0 +1,66 @@
+seed_everything: 0
+model_name: pretraining-mim
+trainer:
+  max_epochs: 100
+  log_every_n_steps: 10
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      filename: epoch={epoch:02d}-val_loss={val_loss:.4f}
+      save_last: true
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: epoch
+  - class_path: lightning.pytorch.callbacks.RichProgressBar
+model:
+  class_path: modules.pretraining.mim.module.Module
+  init_args:
+    model_chain:
+      encoder:
+        name: dinov3
+        init_args:
+          in_channels: 4
+          input_size: 224
+      decoder:
+        name: dpt
+      head:
+        name: regression
+        init_args:
+          variables:
+          - blue
+          - green
+          - red
+          - nir
+    optimizer:
+      name: adamw
+      init_args:
+        lr: 0.001
+        weight_decay: 0.01
+      groups:
+        encoder:
+          lr: 0.0001
+    lr_scheduler:
+      name: cosine_annealing
+      init_args:
+        T_max: 100
+      interval: epoch
+    reconstruct: image
+    patch_size: 16
+    mask_ratio: 0.6
+data:
+  class_path: modules.pretraining.mim.data.DataModule
+  init_args:
+    spec: configs/pretraining-mim/model_spec.yaml
+    train:
+      class_path: modules.pretraining.mim.datasets.MyDataset
+      init_args:
+        split: train
+    val:
+      class_path: modules.pretraining.mim.datasets.MyDataset
+      init_args:
+        split: val
+    batch_size: 8
+    num_workers: 4

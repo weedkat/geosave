@@ -7,7 +7,9 @@ import html
 import json
 from collections.abc import Mapping, Sequence
 from functools import partial
+from importlib import import_module
 from typing import Any
+from urllib.parse import urlsplit
 
 import geopandas as gpd
 import geoviews as gv
@@ -17,10 +19,10 @@ from holoviews.streams import PlotSize, RangeXY, SingleTap, Stream
 import pandas as pd
 import panel as pn
 import panel_material_ui as mui
-from panel.io.notebook import load_notebook
+from panel.util.parameters import edit_readonly
 import param
 import xarray as xr
-from odc.geo.geom import bbox_union
+from odc.geo.geom import BoundingBox, bbox_union
 
 from geosave.geodata.core import GeoCatalog
 from geosave.geodata.viz.map import BASEMAPS, frame_bbox, scope_hover
@@ -65,7 +67,7 @@ class Explorer(pn.viewable.Viewer):
 
     Raster settings belong to each raster. Checking catalog rows reads their
     metadata lazily and opens them; unchecking releases their display layers.
-    Use `.servable()` with Panel, or display the explorer in a notebook.
+    Display it in a notebook, or call `.serve()` to launch a web server.
     """
 
     layers = param.List(default=[])
@@ -82,6 +84,9 @@ class Explorer(pn.viewable.Viewer):
         if not layers:
             raise ValueError("an explorer needs a raster or vector")
         backend = hv.Store.current_backend
+        # GeoViews registering a renderer does not initialize notebook resources.
+        if not hv.extension._loaded:
+            hv.extension("bokeh")
         pn.extension("tabulator", comms="ipywidgets")
         hv.renderer("bokeh")
         hv.Store.set_current_backend("bokeh")
@@ -94,6 +99,7 @@ class Explorer(pn.viewable.Viewer):
         self._updating = False
         self._closed = False
         self._extent = None
+        self._shape = None
         self._vector = None
         self.layers = [create_layer(value) for value in layers]
         extent = frame_bbox(bbox_union(layer.bbox for layer in self.layers))
@@ -108,6 +114,7 @@ class Explorer(pn.viewable.Viewer):
         )
         self._tap = SingleTap(source=self._anchor)
         self._size = PlotSize(source=self._anchor)
+        self._size.add_subscriber(self._resize)
         self._tap.add_subscriber(self._identify)
         self.map = mui.HoloViews(
             backend="bokeh", sizing_mode="stretch_width", height=height
@@ -137,6 +144,10 @@ class Explorer(pn.viewable.Viewer):
                 ".sidebar": {"backgroundColor": "background.paper"},
             },
         )
+        # Mirroring global busy state in inline pages can create a notebook
+        # widget feedback loop that starves raster updates.
+        with edit_readonly(self._layout):
+            self._layout.busy = False
         self._menus = {}
         self._groups = {}
         self._layer_list = mui.Column(
@@ -315,11 +326,81 @@ class Explorer(pn.viewable.Viewer):
     def __panel__(self):
         return self._layout
 
-    def _repr_mimebundle_(self, include=None, exclude=None):
-        # Captured or cleared setup output can leave Python's extension flags
-        # set while the notebook frontend has none of the core resources.
-        load_notebook(inline=pn.config.inline, reloading=False)
-        return super()._repr_mimebundle_(include=include, exclude=exclude)
+    def serve(
+        self,
+        title: str | None = None,
+        port: int = 5006,
+        address: str | None = "localhost",
+        websocket_origin: str | list[str] | None = None,
+        threaded: bool | None = None,
+        verbose: bool = True,
+        open: bool = True,
+        location: bool = True,
+        **kwargs: Any,
+    ):
+        """Serve the explorer from a script, notebook, or Google Colab.
+
+        Notebooks run the server in a background thread. Scripts block until
+        interrupted. Colab displays the server through its port-proxy iframe.
+
+        Args:
+            title: Browser title.
+            port: Local server port, default 5006.
+            address: Listening address, default localhost.
+            websocket_origin: Additional allowed browser origins (host:port).
+            threaded: Override automatic notebook threading.
+            verbose: Print the server address.
+            open: Open a browser tab, or display an iframe in Colab.
+            location: Include Panel's browser location component.
+            **kwargs: Additional Panel server options.
+
+        Returns:
+            Native Panel server or background thread, with a `.stop()` method.
+
+        Examples:
+            >>> server = catalog.gs.explore().serve()
+            >>> server = scene.gs.explore().serve(port=5007)
+        """
+        if not 1 <= port <= 65535:
+            raise ValueError("port must be between 1 and 65535")
+        try:
+            from IPython.core.getipython import get_ipython
+        except ImportError:
+            shell = None
+        else:
+            shell = get_ipython()
+        colab = type(shell).__module__.startswith("google.colab.")
+        if threaded is None:
+            threaded = hasattr(shell, "kernel")
+        if colab and not threaded:
+            raise ValueError("Colab requires threaded=True.")
+        origins = [f"localhost:{port}", f"127.0.0.1:{port}"]
+        if address and address not in ("localhost", "127.0.0.1", "0.0.0.0", "::"):
+            origins.append(f"{address}:{port}")
+        if isinstance(websocket_origin, str):
+            origins.append(websocket_origin)
+        elif websocket_origin:
+            origins.extend(websocket_origin)
+        output = None
+        if colab:
+            output = import_module("google.colab.output")
+            proxy = output.eval_js(f"google.colab.kernel.proxyPort({port})")
+            origins.append(urlsplit(proxy).netloc)
+        server = pn.serve(
+            self,
+            title=title,
+            port=port,
+            address=address,
+            websocket_origin=origins,
+            threaded=threaded,
+            verbose=verbose,
+            show=open and not colab,
+            location=location,
+            **kwargs,
+        )
+        if output is not None and open:
+            output.serve_kernel_port_as_iframe(port, height=self.height + 480)
+        return server
 
     @property
     def table(self):
@@ -762,7 +843,23 @@ class Explorer(pn.viewable.Viewer):
 
     def zoom(self, bbox):
         """Frame a layer without changing its display settings."""
-        extent = frame_bbox(bbox)
+        self._frame(frame_bbox(bbox))
+
+    def _resize(self, width=None, height=None, **_):
+        if not width or not height or self._shape == (width, height):
+            return
+        assert self._ranges.x_range is not None
+        assert self._ranges.y_range is not None
+        left, right = self._ranges.x_range
+        bottom, top = self._ranges.y_range
+        if self._shape is not None:
+            center = (left + right) / 2
+            half_width = (top - bottom) * width / height / 2
+            left, right = center - half_width, center + half_width
+        self._shape = (width, height)
+        self._frame(BoundingBox(left, bottom, right, top, crs="EPSG:3857"))
+
+    def _frame(self, extent):
         width, height = self._size.width, self._size.height
         if width and height:
             ratio = width / height
@@ -871,6 +968,7 @@ class Explorer(pn.viewable.Viewer):
             if isinstance(layer, VectorLayer):
                 layer.close()
         self._tap.clear()
+        self._size.clear()
         self.map.object = None
         self.layers = []
         self.selected = None

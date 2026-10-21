@@ -108,7 +108,8 @@ geosave = "geosave.geodata.io.backend:GeoSaveBackendEntrypoint"
 path = "src/geosave/__about__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/geosave", "src/geosave_flows"]
+# Templates are resource files copied by the CLI.
+packages = ["src/geosave", "src/geosave_flows", "src/templates"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

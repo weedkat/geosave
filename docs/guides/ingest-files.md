@@ -17,7 +17,8 @@ original = gs.raster(
     {"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)},
     anchor.geobox, nodata=0,
 )
-((source,),) = original.gs.to_cog(root / "scene.tif")
+(scene_file,) = original.gs.to_cog(root / "scene.tif")
+source = scene_file
 
 scene = gs.open_raster(source, chunks={"y": 2, "x": 2})
 scene
@@ -104,8 +105,8 @@ boundaries in more detail.
 
 ```python
 prepared = gs.raster({"ndvi": ndvi}, patch).gs.write_nodata(np.nan)
-(scene,) = prepared.gs.to_cog(root / "prepared/ndvi.tif")
-(destination,) = scene.written.values()
+(saved,) = prepared.gs.to_cog(root / "prepared/ndvi.tif")
+(destination,) = saved.written.values()
 destination.name
 ```
 
@@ -128,10 +129,15 @@ Writers refuse existing destinations unless you pass `overwrite=True`.
 ```python
 from datetime import UTC, datetime
 
+ndvi_collection = gs.stac.create_collection("ndvi", description="NDVI patch")
 items = gs.stac.create_catalog(
     gs.stac.create_items(
-        scene, id_format="ndvi", collection="ndvi", datetime=datetime(2025, 1, 1, tzinfo=UTC)
-    )
+        saved,
+        id_format="ndvi",
+        collection=ndvi_collection,
+        datetime=datetime(2025, 1, 1, tzinfo=UTC),
+    ),
+    collections=[ndvi_collection],
 )
 catalog = items.gs.to_geoparquet(root / "prepared/catalog.parquet")
 gs.open_vector(catalog)[["collection", "datetime"]]

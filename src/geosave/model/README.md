@@ -171,7 +171,8 @@ after loading, not stored in the artifact.
 ## Releasing a trained model
 
 ```python
-from geosave.ml.tasks.segmentation import supervised
+# In a generated segmentation/supervised workspace:
+from modules.segmentation import supervised
 
 # Restore the selected checkpoint, not whichever epoch remains in memory.
 task = supervised.Module.load_from_checkpoint(checkpoint)
@@ -191,7 +192,7 @@ output = model(**model_inputs)
 
 The spec loads through `hf://` without downloading weights. Lightning
 checkpoints stay training artifacts: a generated workspace's
-`scripts/publish.py` uploads them with the workspace code under `workspace/`.
+`scripts/segmentation/supervised/publish.py` uploads them with the workspace code under `workspace/`.
 
 ### Reusing a backbone
 

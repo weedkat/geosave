@@ -1,177 +1,119 @@
 # Create a training workspace
 
-To learn from real satellite images through training and prediction maps,
-follow the [notebooks](../examples.md). A workspace keeps your Python modules
-and run configurations together once you choose a training setup.
+GeoSave generates editable Python training code. Choose a task, then a method:
 
 ```bash
 geosave create demo
-cd demo
-geosave add-task lightning-boilerplate
-python main.py fit --config configs/lightning-boilerplate.yaml --trainer.max_epochs 1
 ```
 
-Output, after the Lightning startup messages:
+The terminal selector offers segmentation (supervised or FixMatch), regression
+(supervised or Mean Teacher), classification (supervised), pretraining
+(experimental MIM), Lightning (boilerplate), and a blank workspace.
+Omitted options prompt for the missing selection. For scripts, provide both:
 
-```text
-`Trainer.fit` stopped: `max_epochs=1` reached.
+```bash
+geosave create landcover --task segmentation --method supervised
 ```
 
-`create` makes an empty workspace; `add-task` copies one task template into it.
-The `lightning-boilerplate` task trains a small feature classifier on generated
-data. It requires no dataset download, pretrained weights, or remote service.
-The command above limits it to one epoch; the config itself trains for 100,
-logging to `artifacts/lightning-boilerplate/` and keeping the best checkpoint.
+Use `--task blank` to create shared startup files without choosing a method.
+Invalid combinations are rejected before writing files. Non-empty directories
+require `--force`; existing startup files are preserved.
 
 ## Find the files you edit
 
 ```text
-demo/
-├── configs/lightning-boilerplate.yaml
-├── modules/
-│   ├── task.py
-│   └── data.py
+landcover/
+├── main.py
+├── modules/segmentation/supervised/
+│   ├── module.py
+│   ├── data.py
+│   ├── datasets.py
+│   └── README.md
+├── configs/
+│   ├── segmentation-supervised.yaml
+│   └── segmentation-supervised/model_spec.yaml
+├── scripts/segmentation/supervised/
+│   ├── prepare_example.py
+│   └── publish.py
 ├── artifacts/
 ├── data/
 ├── notebooks/
-├── scripts/
 ├── .env.example
-├── .gitignore
-└── main.py
+└── .gitignore
 ```
 
-`modules/task.py` contains an ordinary LightningModule with the network, loss,
-and optimizer. `modules/data.py` supplies the generated examples through a
-Dataset and DataLoaders. `configs/lightning-boilerplate.yaml` selects those classes and sets
-Trainer options. `main.py` runs `GeosaveCLI`, a LightningCLI subclass.
-The [GeosaveCLI API](../reference/training-tools.md) describes logger and
-configuration behavior. `.gitignore` keeps `.env`, data, and checkpoints out
-of the repository, so the workspace can be pushed as is.
-Each run's effective configuration is saved as `config.yaml` in its
-`artifacts/<model_name>/version_N/` folder.
+`module.py` owns training, loss, metrics, and optimizer behavior. `data.py` owns
+batching and device-side augmentation; `datasets.py` owns sample reads. These
+classes are local implementations you can edit, using reusable GeoSave helpers.
+FixMatch and Mean Teacher include a local supervised base in their own package.
+Changing that base does not change a separate supervised recipe.
 
-Change a run without editing Python:
+Implement the geospatial Dataset stubs and supply data before fitting. The default
+encoder uses pretrained weights and can download them. See each method's README
+for target shapes and method requirements.
 
-```bash
-python main.py fit --config configs/lightning-boilerplate.yaml \
-  --trainer.max_epochs 3 --data.init_args.batch_size 8
-```
-
-To change the data source, edit the Dataset in `modules/data.py`; to change
-training behavior, edit `modules/task.py`.
-
-## Choose a task for your workspace
-
-| Task template | Provides | Before the first fit |
-| --- | --- | --- |
-| `lightning-boilerplate` | Editable Lightning Module/DataModule and a synthetic example. | Run the command above. |
-| `segmentation-supervised` | Config selecting GeoSave's supervised segmentation pair, a model spec, a Dataset stub, plus example-preparation and publication scripts. | Implement `modules/datasets.py` and supply suitable data; review encoder weight downloads. |
-| `regression-supervised` | Config selecting GeoSave's supervised pixelwise regression pair, a model spec, and a Dataset stub. | Implement `modules/datasets.py` and supply suitable data; review encoder weight downloads. |
-
-Without an argument, `add-task` prompts for a template. A workspace has one
-dataset: `modules/datasets.py` and `configs/model_spec.yaml` are shared, and
-each added task contributes its own `configs/<task>.yaml`, so you can compare
-training methods on the same data. Files that already exist prompt before they
-are overwritten. To start a segmentation project:
+`main.py` uses `GeosaveCLI`, a LightningCLI subclass. Each run saves its effective
+configuration under `artifacts/<model_name>/version_N/`. `.gitignore` excludes
+local environment files, data, and training artifacts.
 
 ```bash
-geosave create landcover
 cd landcover
-geosave add-task segmentation-supervised
+python main.py fit --config configs/segmentation-supervised.yaml
 ```
 
-This creates the project; its first fit needs your dataset implementation.
-The supplied config references `datasets.MyDataset`, which is a placeholder,
-not a bundled class. Put your Dataset in an importable Python module and
-replace that `class_path` and its `init_args` for each split.
-[Train a segmentation model](training.md) shows a complete Dataset feeding the
-real library Module/DataModule before you connect larger encoders or files.
+## Add another method
 
-Both task starters include `configs/model_spec.yaml`. It describes raster
-requirements, chip size, input bindings, and tensor transforms; the training
-YAML separately configures the Module, DataModule, optimizer, and Trainer.
-See [Model spec](model-spec.md).
-
-ModelSpec is still under active development in Alpha. The starter reflects the
-current API; your Dataset remains responsible for raster reading, preparation,
-cuts, and conversion to the task's sample contract.
-
-The segmentation starter's default DINOv3 encoder uses pretrained weights.
-For a complete recipe with explicit band/context requirements, see
-[Build from pretrained weights](pretrained.md). Choose `pretrained: false` in
-the encoder's `init_args` when testing an architecture without downloading
-weights; that trains from random encoder parameters.
-
-## Keep a run configuration
-
-```yaml
-# An excerpt from the lightning-boilerplate task's config
-model:
-  class_path: modules.task.CustomTask
-  init_args:
-    input_size: 4
-    hidden_size: 8
-    learning_rate: 0.001
-data:
-  class_path: modules.data.CustomDataModule
-  init_args:
-    train_size: 16
-    val_size: 8
-    batch_size: 4
-    num_workers: 0
-```
-
-`class_path` identifies the Python class to construct. `init_args` supplies its
-constructor arguments. This allows a project to change training classes
-without regenerating the workspace. Library task Modules construct their
-network from their own `model_chain` settings; the CLI constructs the Module
-and DataModule selected above.
-
-To override a configured stage from the shell, pass the whole stage mapping:
+Inside the workspace, run `geosave add-task` for the same task/method selectors,
+or provide explicit options:
 
 ```bash
-python main.py fit --config configs/segmentation-supervised.yaml \
-  --model.init_args.model_chain.encoder \
-  '{name: dinov3, init_args: {in_channels: 4, input_size: 224, pretrained: false}}'
+geosave add-task --task segmentation --method fixmatch
+python main.py fit --config configs/segmentation-fixmatch.yaml
 ```
 
-This command belongs to a segmentation or regression task, once its Dataset
-is configured. `model_chain` is a mapping; CLI overrides do not reach further
-inside an encoder's `init_args`. The whole-stage override replaces the original
-encoder specification, so include every argument you want to retain.
+This adds `modules/segmentation/fixmatch/`, its config and processing document,
+and `scripts/segmentation/fixmatch/publish.py`. It leaves existing methods and
+`main.py` untouched. Existing methods are disabled in the selector; selecting one
+explicitly reports that it already exists. To share a Dataset, point compatible
+method configurations at the same project Dataset class.
 
-`GeosaveCLI` selects TensorBoard under `artifacts/<model_name>/`. Set
-`MLFLOW_TRACKING_URI` if you also want an MLflow logger, or configure Lightning
-loggers explicitly. Choose checkpoint behavior through Trainer options and
-Lightning callbacks.
+## Run the offline starter
 
-Resume a saved task run with the same task/data configuration and a checkpoint:
+The Lightning boilerplate needs no downloads or external dataset:
 
 ```bash
-python main.py fit --config configs/lightning-boilerplate.yaml \
-  --ckpt_path path/to/last.ckpt \
-  --trainer.max_epochs 5 --trainer.default_root_dir artifacts/run-3
+geosave create demo --task lightning --method boilerplate
+cd demo
+python main.py fit --config configs/lightning-boilerplate.yaml --trainer.max_epochs 1
 ```
 
-The checkpoint path must name a file from a run that enabled checkpoint saving.
-`max_epochs` is the total epoch limit including completed epochs. Use a new
-output directory for the effective config while restoring the checkpoint's
-training state.
+It supplies separate editable Module, DataModule, and deterministic Dataset
+files under `modules/lightning/boilerplate/`.
 
-## Optional scripts and publication
+## Publish a native model
 
-The segmentation starter includes `scripts/prepare_example.py`, a small
-synthetic reflectance-preprocessing example, and `scripts/publish.py`, which
-uploads a trained model release and selected workspace files to Hugging Face. Review
-these scripts and their inputs before running them. Publication is a separate
-step from fitting; see [Release a model](release.md).
+For a supported registered model architecture:
 
-For catalog preparation, call `ModelSpec.prepare` from your own script; see
-[Model spec](model-spec.md). To run ingestion as a Prefect job, install the
-`flows` extra (`pip install "geosave[flows]"`); see [Optional ingestion flows](workflows.md).
-The `geosave` CLI provides workspace creation.
+```bash
+python scripts/segmentation/supervised/publish.py your-account/your-model \
+  artifacts/segmentation-supervised/version_0/checkpoints/best.ckpt
+```
 
-To improve what future workspaces receive, edit
-`src/geosave/templates/`. Your generated workspace remains an editable
-consumer project. The [architecture guide](../contributing/architecture.md) explains that
-source/consumer boundary.
+The script loads the local Module checkpoint and exports its native trained
+model. The repository root holds inference weights/config and the current
+processing document; `workspace/` holds the selected training workspace and
+run checkpoints. Deployment does not import uploaded training code.
+Mean Teacher's starter exports the student; see its README before choosing EMA
+teacher deployment. Training-only calibration state is not automatically part
+of a chain-only release.
+
+ModelSpec behavior is preserved for now. Its redesign and publication of custom
+preprocessing/postprocessing code are deferred; see
+[open decisions](../contributing/open-decisions.md). The existing release
+format still requires registered model stages.
+
+## Template ownership
+
+Edit generated project files freely. Future starter changes belong in
+`src/templates/tasks/<task>/<method>/`; reusable library operations
+remain in GeoSave. Updating GeoSave does not overwrite an existing project.

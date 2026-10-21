@@ -36,7 +36,6 @@ nav = [
         { "Save and publish a model" = "guides/release.md" },
         { "Create a training workspace" = "guides/workspaces.md" },
         { "Optional ingestion flows" = "guides/workflows.md" },
-        { "Download benchmark files" = "guides/benchmarks.md" },
     ] },
     { "Advanced" = [
         { "Overview" = "concepts/index.md" },
@@ -44,6 +43,8 @@ nav = [
         { "Raster grids" = "concepts/raster-grids.md" },
         { "Metadata and pixel values" = "concepts/metadata.md" },
         { "Lazy execution" = "concepts/lazy-data.md" },
+        { "Storage and file layouts" = "concepts/storage.md" },
+        { "The interactive explorer" = "concepts/explorer.md" },
         { "Catalogs and windows" = "concepts/catalog-windows.md" },
         { "Model input contracts" = "concepts/model-inputs.md" },
         { "Training contracts" = "concepts/training.md" },
@@ -73,7 +74,6 @@ nav = [
             { "Metadata groups" = "reference/attrs.md" },
             { "STAC" = "reference/stac.md" },
             { "Catalog operations" = "reference/catalog.md" },
-            { "Benchmark downloads" = "reference/benchmarks.md" },
             { "Errors and warnings" = "reference/errors.md" },
         ] },
         { "Models" = [
@@ -95,7 +95,6 @@ nav = [
         { "Architecture" = "contributing/architecture.md" },
         { "Maintain the documentation" = "contributing/documentation.md" },
         { "Open decisions" = "contributing/open-decisions.md" },
-        { "Maintenance ledger" = "contributing/maintenance-ledger.md" },
         { "Design specs" = "contributing/specs/index.md" },
     ] },
 ]

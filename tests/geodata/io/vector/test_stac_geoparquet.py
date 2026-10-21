@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
-from geosave.geodata.stac.translate import table as stac_table
-
 import shutil
+from datetime import UTC, datetime
+from pathlib import Path
 
 import dask
 import numpy as np
 import pyarrow.parquet as pq
+import pystac
 import pytest
+from pystac.extensions.raster import RasterExtension
+from stac_geoparquet.arrow import stac_table_to_items
 
-from geosave.geodata import GeoVector, open_vector, stac, tree
+from geosave.geodata import GeoVector, attrs, open_vector, stac, tree
+from geosave.geodata.io.raster import stac as stac_io
 from geosave.geodata.io.vector import stac_geoparquet as table
-from tests.geodata.conftest import cog_template, read_items, tree_templates, item_table
+from geosave.geodata.stac import create_catalog, create_items
+from geosave.geodata.stac.translate import table as stac_table
+from tests.geodata.conftest import (
+    build_raster,
+    cog_template,
+    item_table,
+    read_items,
+    tree_templates,
+)
+from tests.geodata.stac.conftest import create_native_item, entry
 
 
 def _refuse(*args, **kwargs):
@@ -321,7 +334,9 @@ def test_open_vector_reads_an_item_table_with_hrefs_that_open(
 
     assert len(samples) == 1
     sample = samples.iloc[0].gs.to_xarray()
-    np.testing.assert_array_equal(sample.gs.rasters["optical"].red.values, scene.red.values)
+    np.testing.assert_array_equal(
+        sample.gs.rasters["optical"].red.values, scene.red.values
+    )
 
 
 def test_a_stored_table_names_no_absolute_location(scene, label, tmp_path) -> None:
@@ -470,3 +485,140 @@ def test_importing_core_and_io_loads_no_stac() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
+    optical = build_raster(times=2, packed=True)[["red"]]
+    optical = optical.gs.write_spectral("red", center_wavelength=0.665, target="red")
+    optical = optical.assign(red=optical.red.assign_attrs(units="1"))
+    label = build_raster()[["nir"]].astype("uint8").rename(nir="label")
+    label = label.gs.write_legend(
+        {0: "background", 1: "forest"}, {1: "#00ff00"}, target="label"
+    )
+    when = datetime(2025, 6, 1, tzinfo=UTC)
+    optical_scenes = optical.gs.to_cog(
+        f"{tmp_path}/optical_{{time:%Y%m%d}}_{{band}}.tif"
+    )
+    (label_scene,) = label.gs.to_cog(f"{tmp_path}/{{band}}.tif")
+    rows = create_catalog(
+        [
+            *create_items(optical_scenes, id_format="optical_{start:%Y%m%d}"),
+            *create_items(label_scene, id_format="label", datetime=when),
+        ]
+    )
+
+    saved = rows.gs.to_geoparquet(tmp_path / "items.parquet")
+
+    restored = stac_table.to_items(open_vector(saved))
+    red = stac_io.open_raster([restored[0]]).red
+    label = stac_io.open_raster([restored[-1]]).label
+    assert RasterExtension.ext(restored[0].assets["red"]).bands[0].data_type == "uint16"
+    assert red.attrs["units"] == "1"
+    assert red.gs.packing.scale_factor == pytest.approx(1e-4)
+    assert red.gs.spectral.common_name == "red"
+    assert red.gs.spectral.center_wavelength == 0.665
+    assert red.gs.nodata == optical.red.gs.nodata
+    legend = attrs.Legend.model_validate(label.attrs)
+    assert legend.classes == {0: "background", 1: "forest"}
+
+
+def test_collection_survives_read_filter_rewrite(tmp_path):
+    collection = stac.create_collection(
+        "optical", description="Surface reflectance", license="CC-BY-4.0"
+    )
+    collection.extra_fields["custom:version"] = "v1"
+    rows = stac.create_catalog([entry()], collections=[collection])
+    saved = rows.gs.to_geoparquet(tmp_path / "first.parquet")
+    restored = open_vector(saved)
+    second = restored.iloc[:1].gs.to_geoparquet(tmp_path / "second.parquet")
+    assert (
+        open_vector(second).gs.collections["optical"].description
+        == collection.description
+    )
+    assert (
+        open_vector(second).gs.collections["optical"].extra_fields["custom:version"]
+        == "v1"
+    )
+    assert collection.extent.spatial.bboxes == [[-180.0, -90.0, 180.0, 90.0]]
+
+
+def test_missing_collection_is_not_fabricated(tmp_path):
+    rows = stac.create_catalog([entry()])
+    with pytest.raises(ValueError, match="missing.*optical"):
+        rows.gs.to_geoparquet(tmp_path / "missing.parquet")
+
+
+def test_collection_links_and_nested_fields_survive_publication(tmp_path):
+    collection = stac.create_collection(
+        "optical", description="Reflectance", keywords=["optical"]
+    )
+    collection.add_link(pystac.Link("license", "https://example.com/license"))
+    rows = stac.create_catalog([entry()], collections=[collection])
+    collection.keywords.append("changed")
+    assert rows.gs.collections["optical"].keywords == ["optical"]
+    saved = rows.gs.to_geoparquet(tmp_path / "links.parquet")
+    restored = open_vector(saved).gs.collections["optical"]
+    assert restored.get_single_link("license").target == "https://example.com/license"
+
+
+def test_a_written_table_retains_item_and_asset_properties(tmp_path):
+    first, source = create_native_item(tmp_path, "first")
+    second, _ = create_native_item(tmp_path, "second")
+    bands = [
+        {"name": name, "data_type": source[name].dtype.name}
+        for name in source.gs.variables
+    ]
+    first.assets["reflectance"].extra_fields["bands"] = bands
+    second.properties["new:property"] = 7
+    second.assets["other"] = second.assets.pop("reflectance")
+
+    saved = stac_table.from_items([second, first]).gs.to_geoparquet(
+        tmp_path / "items.parquet"
+    )
+
+    restored = list(stac_table_to_items(pq.read_table(saved)))
+    assert [entry["id"] for entry in restored] == ["second", "first"]
+    assert restored[0]["properties"]["new:property"] == 7
+    assert restored[1]["assets"]["reflectance"]["bands"] == bands
+
+
+def test_a_table_keeps_its_bbox_through_read_and_rewrite(tmp_path):
+    entry, _ = create_native_item(tmp_path)
+    first = stac_table.from_items([entry]).gs.to_geoparquet(
+        tmp_path / "catalog.parquet"
+    )
+    second = open_vector(first).gs.to_geoparquet(tmp_path / "again.parquet")
+
+    for path in (first, second):
+        (restored,) = stac_table_to_items(pq.read_table(path))
+        assert restored["bbox"] == pytest.approx(entry.bbox)
+
+
+def test_an_edited_geometry_changes_the_bbox_written(tmp_path):
+    entry, _ = create_native_item(tmp_path)
+    rows = stac_table.from_items([entry])
+    rows = rows.set_geometry(rows.geometry.translate(xoff=1.0))
+
+    (restored,) = stac_table_to_items(
+        pq.read_table(rows.gs.to_geoparquet(tmp_path / "catalog.parquet"))
+    )
+
+    assert restored["bbox"][0] == pytest.approx(entry.bbox[0] + 1.0)
+
+
+@pytest.mark.parametrize("folder", ["dataset", "data set"])
+def test_native_table_follows_its_assets_when_moved(tmp_path, folder):
+    home = tmp_path / folder
+    home.mkdir()
+    entry, _ = create_native_item(home)
+    saved = stac_table.from_items([entry]).gs.to_geoparquet(home / "catalog.parquet")
+    stored = pq.read_table(saved).column("assets")[0].as_py()
+    assert stored["reflectance"]["href"] == "./scene.tif"
+    assert stored["thumbnail"]["href"] == "https://example.com/thumb.jpg"
+
+    moved = tmp_path / "moved"
+    shutil.move(home, moved)
+
+    href = open_vector(moved / "catalog.parquet").iloc[0].assets["reflectance"]["href"]
+    assert href == str(moved / "scene.tif")
+    assert Path(href).is_file()

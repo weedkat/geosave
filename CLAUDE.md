@@ -28,8 +28,7 @@ src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
 ├── model/        # what a release contains: chain, registry, spec, release; stages/ holds encoder/decoder/head/monolith
-├── ml/           # Lightning training: tasks/ holds Module + DataModule pairs; builders, criterion, metrics, transforms
-└── templates/    # source for generated workspaces
+└── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
 ├── core/         # `gs` accessors and GeoAnchor; raster/ (dataarray, dataset, datatree, constructors), vector/ (vector, item table, stack table, row)
@@ -41,16 +40,17 @@ src/geosave/geodata/
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
+src/templates/      # source for generated workspaces; bundled CLI resources
 
 tests/            # mirrors src/geosave; tests/flows mirrors src/geosave_flows
 workspace/        # generated consumer workspace, not library source
 docs/contributing/  # architecture, open decisions, maintenance ledger and design specs (published)
 ```
 
-`src/geosave/templates/` is the source for generated workspace files.
+`src/templates/` is the source for generated workspace files.
 It contains `common/` startup and `tasks/` templates copied by `geosave add-task`.
-Public geospatial I/O lives in `geodata/io/`; original benchmark downloads live
-in `geodata/benchmarks/`. Internal helpers stay with their owning package.
+Public geospatial I/O lives in `geodata/io/`. Internal helpers stay with their
+owning package.
 
 Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`, so a release loads and preprocesses without the training stack.
 

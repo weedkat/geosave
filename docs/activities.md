@@ -12,7 +12,6 @@ expected result, and the contracts needed for that task.
 | A model spec with acquisition recipes | Acquire all declared inputs on one grid. | [Ingestion flows](guides/workflows.md) | Sample directory with one store per raster. |
 | Saved imagery and labels | Index observations and select training windows. | [Catalogs and cuts](guides/catalogs-and-cuts.md) | Item and window GeoDataFrames. |
 | Polygons | Build raster labels on the image grid. | [Vector data](basics/vectors.md) | Label raster. |
-| Benchmark labels | Download the publisher's original files. | [Benchmarks](guides/benchmarks.md) | Local label directory. |
 
 Opening an existing file and acquiring imagery from a service are separate
 activities. A catalog describes assets; it does not contain their pixels.

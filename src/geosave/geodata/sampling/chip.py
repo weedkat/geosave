@@ -6,6 +6,7 @@ from __future__ import annotations
 # Work behind the tables' operations; call those instead.
 __all__: list[str] = []
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -21,13 +22,14 @@ from geosave.geodata.core.vector.samples import GeoSamples
 if TYPE_CHECKING:
     from geosave.geodata import GeoDataFrame
     from geosave.geodata.transform.extent import Padding
+    from geosave.geodata.transform.warp import Resampling
 
 
 def create_tiler(
     region_shape: tuple[int, int],
     chip_shape: tuple[int, int],
     *,
-    overlap: int,
+    overlap: int | float,
     pad_mode: Padding,
 ) -> tuple[Tiler, list[tuple[int, int]]]:
     """Lay chips over a region, with a halo around it when chips overlap.
@@ -86,17 +88,27 @@ def chip(
     size: int | tuple[int, int],
     *,
     target: GeoBox | None,
-    overlap: int,
+    resolution: float | None,
+    resampling: Resampling | Mapping[str, Resampling],
+    overlap: int | float,
     pad_mode: Padding,
 ) -> GeoDataFrame[GeoSamples]:
     """Implement `GeoSamples.chip` without changing its public table contract."""
+    if target is not None and not isinstance(target, GeoBox):
+        raise TypeError("target must be a GeoBox; use resolution to plan local grids")
+    if resolution is not None and target is not None:
+        raise ValueError("target already fixes resolution; supply only one")
     chip_shape = (size, size) if isinstance(size, int) else size
     layouts = {}
     records = []
     for _, row in samples.iterrows():
         grid = target if target is not None else row.gs.geobox
+        if resolution is not None:
+            grid = row.gs._create_grid(resolution)
         if grid is None:
-            raise ValueError("gridless samples require chip(..., target=grid)")
+            raise ValueError(
+                "chip requires resolution or target=grid for an unchipped sample"
+            )
         # WGS84 footprints can return a fraction of a pixel past their original
         # edges. ODC's snapping tolerance avoids manufacturing an extra border.
         bounds = grid.project(row.gs.region).boundingbox
@@ -120,6 +132,7 @@ def chip(
                     region=region,
                     pad_widths=padding,
                     pad_mode=pad_mode,
+                    resampling=resampling,
                     geometry=samples.geometry.name,
                 )
             )

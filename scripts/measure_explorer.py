@@ -2,7 +2,7 @@
 
 Run `uv run python scripts/measure_explorer.py`. Fixture creation is excluded
 from display timings. Output is JSON Lines; browser latency is measured by
-`tests/geodata/viz/explorer/test_browser.py` separately.
+`tests/geodata/viz/explorer/test_app.py` separately.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from multiprocessing import get_context
 from time import perf_counter
 
 import dask.array as da
+from bokeh.document import Document
+from bokeh.models import GlyphRenderer, ImageRGBA
 import geopandas as gpd
 import numpy as np
 import rasterio
@@ -189,6 +191,7 @@ def measure():
             for label, x_range, y_range in [
                 ("computed overview", (-1000000, -900000), (5000000, 5100000)),
                 ("computed zoom", (-980000, -970000), (5020000, 5030000)),
+                ("computed nearby pan", (-979500, -969500), (5020500, 5030500)),
             ]:
                 source_reads.clear()
                 tasks = []
@@ -215,10 +218,27 @@ def measure():
             vector = VectorLayer(fields)
             cog = RasterLayer(data, name="COG")
             viewer = Explorer(layer, cog, vector, basemap="None")
-            viewer.map.get_root()
+            document = Document()
+            root = viewer.map.get_root(document)
+            document.add_root(root)
+            images = {
+                renderer.data_source
+                for renderer in root.select({"type": GlyphRenderer})
+                if isinstance(renderer.glyph, ImageRGBA)
+            }
+            updates = []
+
+            def record_image(event):
+                if event.model in images and getattr(event, "attr", None) == "data":
+                    updates.append(
+                        sum(np.asarray(image).nbytes for image in event.model.data["image"])
+                    )
+
+            document.on_change(record_image)
             for label, raster in [("computed contrast", layer), ("COG contrast", cog)]:
                 read_requests()
                 source_reads.clear()
+                updates.clear()
                 tasks = []
                 start = perf_counter()
                 with Callback(pretask=lambda key, *_: tasks.append(key)):
@@ -233,12 +253,15 @@ def measure():
                             "source_chunks": len(source_reads),
                             "http_bytes": sum(requests),
                             "dask_tasks": len(tasks),
+                            "image_updates": len(updates),
+                            "image_bytes": sum(updates),
                         }
                     ),
                     flush=True,
                 )
             read_requests()
             source_reads.clear()
+            updates.clear()
             tasks = []
             start = perf_counter()
             with Callback(pretask=lambda key, *_: tasks.append(key)):
@@ -254,6 +277,30 @@ def measure():
                         "source_chunks": len(source_reads),
                         "http_bytes": sum(requests),
                         "dask_tasks": len(tasks),
+                        "image_updates": len(updates),
+                        "image_bytes": sum(updates),
+                    }
+                ),
+                flush=True,
+            )
+            updates.clear()
+            tasks.clear()
+            left, right = viewer._ranges.x_range
+            bottom, top = viewer._ranges.y_range
+            dx, dy = (right - left) * 0.01, (top - bottom) * 0.01
+            start = perf_counter()
+            with Callback(pretask=lambda key, *_: tasks.append(key)):
+                viewer._ranges.event(
+                    x_range=(left + dx, right + dx), y_range=(bottom + dy, top + dy)
+                )
+            print(
+                json.dumps(
+                    {
+                        "phase": "cached map pan",
+                        "seconds": perf_counter() - start,
+                        "dask_tasks": len(tasks),
+                        "image_updates": len(updates),
+                        "image_bytes": sum(updates),
                     }
                 ),
                 flush=True,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from geosave.cli.core.copy import safe_copy
 
-from .templates import COMMON_DIR, TASKS_DIR, get_tasks
+from .templates import COMMON_DIR, TASKS_DIR, get_methods, get_tasks
 
 _REQUIRED_DIRS = frozenset(
     ("artifacts", "configs", "data", "modules", "notebooks", "scripts")
@@ -12,29 +12,36 @@ _REQUIRED_DIRS = frozenset(
 _EXCLUDE = frozenset(("__pycache__", ".ipynb_checkpoints", "description.txt"))
 
 
+def has_method(root: Path, task: str, method: str) -> bool:
+    """Return whether a workspace already contains this recipe."""
+    package = root / "modules" / task / method.replace("-", "_")
+    return package.exists() or (root / f"configs/{task}-{method}.yaml").exists()
+
+
 def create_workspace(root: Path) -> None:
-    """Create a workspace holding the shared startup files.
+    """Create a workspace holding shared startup files, preserving existing files.
 
     Args:
         root: Destination workspace directory.
     """
-    for directory_name in _REQUIRED_DIRS:
-        (root / directory_name).mkdir(parents=True, exist_ok=True)
-    safe_copy(COMMON_DIR, root, exclude=_EXCLUDE)
+    for name in _REQUIRED_DIRS:
+        (root / name).mkdir(parents=True, exist_ok=True)
+    safe_copy(COMMON_DIR, root, exclude=_EXCLUDE, skip_all=True)
 
 
-def add_task(root: Path, task: str) -> None:
-    """Copy one task template into an existing workspace.
-
-    Existing files prompt before they are overwritten.
+def add_task(root: Path, task: str, method: str) -> None:
+    """Copy an independent training recipe into a workspace.
 
     Args:
         root: Workspace directory.
-        task: Bundled task template name.
+        task: Bundled task name.
+        method: Method belonging to the task.
 
     Raises:
-        ValueError: The task template does not exist.
+        ValueError: The recipe is invalid or already exists.
     """
-    if task not in get_tasks():
-        raise ValueError(f"Task {task!r} is not a valid task.")
-    safe_copy(TASKS_DIR / task, root, exclude=_EXCLUDE)
+    if task not in get_tasks() or method not in get_methods(task):
+        raise ValueError(f"Invalid training recipe: {task}/{method}.")
+    if has_method(root, task, method):
+        raise ValueError(f"{task}/{method} already exists in {root}.")
+    safe_copy(TASKS_DIR / task / method, root, exclude=_EXCLUDE)

@@ -4,17 +4,18 @@ Start with [a complete offline segmentation run](../guides/training.md). This
 page explains what changes when you connect real rasters, add transforms, or
 choose another training method.
 
-## Feed the task's DataModule
+## Feed the project's DataModule
 
 The Dataset reads one sample from your source. Its DataModule batches samples
 and prepares tensors on the device; the Module owns loss and metrics. Lightning
-runs the training loop. The library DataModules do not discover files, split
+runs the training loop. The generated DataModules do not discover files, split
 geographic regions, run raster preprocessing, or construct chips. Use
 [catalogs and cuts](../guides/catalogs-and-cuts.md) for raster windows and
 [ModelSpec](../guides/model-spec.md) for raster requirements and preprocessing.
 
-Each method exports its Module, DataModule, sample dictionary type and Dataset protocol under
-`geosave.ml.tasks.<task>.<method>`. Pass torch Datasets for `train` and
+Each generated method owns its Module, DataModule, sample dictionary type and
+Dataset protocol under `modules.<task>.<method>`. Generate it with
+`geosave create demo --task TASK --method METHOD`, then work inside `demo`. Pass torch Datasets for `train` and
 `val`; supervised pairs also accept `test`. A test loader requires its Dataset.
 
 ## Choose the target for the task
@@ -35,7 +36,7 @@ selected model expects and include its contextual inputs when required.
 
 For segmentation and classification, the last model stage must expose an
 integer `num_classes`. For regression it must expose a list named
-`variables`, in output channel order. The training Module discovers this
+`variables`, in output channel order. The project’s training Module discovers this
 information when Lightning calls `configure_model`. Supplying a stage without
 the required declaration raises an error before training.
 
@@ -194,7 +195,7 @@ See the [task API](../reference/training.md) when experimenting with this method
 
 ```python
 from lightning import Trainer
-from geosave.ml.tasks.segmentation.calibrate import ThresholdCalibrator
+from geosave.ml.callbacks.calibrate import ThresholdCalibrator
 
 trainer = Trainer(
     max_epochs=20,

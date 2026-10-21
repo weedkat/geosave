@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from geosave.geodata.core.raster.create import raster
@@ -28,9 +27,3 @@ def optical(shape: tuple[int, int] = (8, 8), *, times: int = 2) -> xr.Dataset:
         box,
         time=labels,
     ).gs.write_nodata(0)
-
-
-@pytest.fixture
-def torch():
-    """Load torch only for tests that convert pixels to tensors."""
-    return pytest.importorskip("torch")

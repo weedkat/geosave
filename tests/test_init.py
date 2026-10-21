@@ -5,9 +5,11 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 import geosave as gs
+from geosave.geodata import attrs
 
 
 @pytest.mark.parametrize("name", ["features", "stac"])
@@ -18,7 +20,6 @@ def test_the_root_offers_the_geodata_modules(name: str) -> None:
 
 
 def test_the_root_array_constructor_builds_native_xarray() -> None:
-    import numpy as np
     import xarray as xr
 
     from geosave import geodata
@@ -50,7 +51,6 @@ def test_importing_the_root_registers_raster_and_vector_accessors_without_torch(
 
 
 def test_the_root_offers_the_attrs_groups() -> None:
-    from geosave.geodata import attrs
 
     assert gs.attrs is attrs
     assert gs.attrs.ACDD(id="label", summary="Classes").id == "label"
@@ -76,3 +76,10 @@ def test_vector_formats_can_load_before_stac(module: str) -> None:
         [sys.executable, "-c", f"import geosave.geodata.io.vector.{module}"],
         check=True,
     )
+
+
+def test_stac_client_and_query_are_available_at_the_root() -> None:
+    import geosave as gs
+
+    assert gs.StacClient is gs.stac.StacClient
+    assert gs.StacQuery is gs.stac.StacQuery

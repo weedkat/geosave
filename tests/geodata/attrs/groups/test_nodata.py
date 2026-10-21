@@ -5,6 +5,7 @@ import pytest
 import xarray as xr
 
 from geosave.geodata import attrs
+from tests.geodata.attrs.conftest import _band
 
 
 def test_nodata_is_spelled_as_cf_fill_value_only() -> None:
@@ -40,3 +41,13 @@ def test_a_float_fill_masks_a_band_of_lower_precision(fill) -> None:
 
     assert attrs.Nodata.from_attrs(band.attrs) == attrs.Nodata(value=fill)
     assert np.isnan(to_nan(band).values[0])
+
+
+def test_a_band_stating_none_of_a_groups_keys_parses_to_none() -> None:
+    assert attrs.Nodata.from_attrs(_band().attrs) is None
+
+
+def test_text_and_numpy_spellings_parse_as_native_values() -> None:
+    assert attrs.Nodata.from_attrs(_band(_FillValue="0").attrs) == attrs.Nodata(value=0)
+    parsed = attrs.Nodata.from_attrs(_band("uint16", _FillValue=np.uint16(0)).attrs)
+    assert parsed is not None and type(parsed.value) is int

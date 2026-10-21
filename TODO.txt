@@ -21,9 +21,6 @@ public code. Run a behavioral smoke before choosing a design or removal.
   but is still documented publicly. Trace its intended consumer before removing
   old folder-ID restrictions or the helper. Smoke: read_labels(folder) produces
   no collection column; cuts.stacks(rows, on="label") raises KeyError.
-- [ ] Optional scaffolds: geosave make is registered but no scaffolds are bundled.
-  Its tests synthesize content. Settle bundled content and empty-selection
-  behavior before deleting this explicitly permitted extension interface.
 - [ ] Startup environment: templates/common/.env copies CDSE endpoint settings
   and placeholder credentials into every workspace. Decide provider-specific
   configuration ownership; these settings are active, not unused text.
@@ -83,14 +80,13 @@ public code. Run a behavioral smoke before choosing a design or removal.
   even a segmentation head build pulls in Lightning through the biomass
   monolith's TerraTorch task. Check optional dependency/import cost and recipe,
   checkpoint and output parity before migrating the deprecated factory/task.
-- [ ] ML ownership: builders/criterion.py imports the sibling criterion package,
-  conflicting with the rule that only tasks import root ML concerns. Both are
-  used; resolve ownership rather than deleting the implemented loss.
 - [ ] Original pipeline-preservation idea: there is no data_pipeline module.
   ModelSpec.save/load already preserves ordered preprocessing, references,
-  inputs, context and tensor transforms in model_spec.yaml. Identify remaining
-  portability/migration requirements before adding a second config.yaml parser.
-  See the existing ModelSpec implementation rework decision.
+  inputs, context and tensor transforms in model_spec.yaml. ModelSpec redesign
+  is on hold (2026-10-17) until preprocessing/postprocessing code publication,
+  versioning and execution trust are settled. Do not expand the recipe language
+  or add a second config.yaml parser during the training-template migration.
+  See the processing-code publication decision in open-decisions.md.
 
 ## Unimplemented features
 
@@ -98,10 +94,11 @@ See docs/contributing/open-decisions.md and its linked specs for design context.
 Current implementations were checked; historical plans are not callable APIs.
 
 - [ ] Source-specific consumer Datasets for segmentation/regression starters;
-  datasets.MyDataset is intentionally a placeholder, not a shipped reader.
+  modules/<task>/<method>/datasets.py intentionally supplies a placeholder,
+  not a shipped reader.
 - [ ] Prediction persistence back to chip/whole-raster outputs and item tables;
-  current Lightning tasks have no predict_step. Define each head's output/grid
-  contract before adding callbacks or a new writer.
+  the generated segmentation recipe returns logits, but has no persistence
+  flow. Define each head's output/grid contract before adding callbacks or a new writer.
 - [ ] Whole-raster evaluation after rebuilding chip outputs.
 - [ ] Prepared normalization statistics from catalogs.
 - [ ] Optional Prefect orchestration for dense preparation; ModelSpec.prepare
@@ -141,9 +138,8 @@ STAC follow-up (2026-10-15):
 
 Transform follow-ups (2026-10-15):
 - [ ] Resolve chunked warp parity for bilinear, cubic, and average kernels;
-  test_warp_edges.py has three strict expected failures against full-grid results.
+  test_warp.py has three strict expected failures against full-grid results.
 - [x] Validate categorical reductions before execution using public resampler
   iteration; explicitly preserve attrs independently of xarray global options.
-- [ ] Reconcile staged obsolete tests/geodata/core/test_dataset.py and
-  test_datatree.py copies with canonical core/raster tests; their old imports
-  currently prevent broad test collection. The staged copies were preserved.
+- [x] Reconcile obsolete core dataset/datatree tests with canonical core/raster
+  tests; both copies had identical test bodies and only obsolete imports.

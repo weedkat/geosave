@@ -142,7 +142,7 @@ celerybeat.pid
 
 # Environments
 .env
-!src/geosave/templates/common/.env
+!src/templates/common/.env
 .envrc
 .venv
 env/

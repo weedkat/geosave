@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from geosave.geodata import Dataset, GeoDataFrame
     from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.transform.extent import Padding
+    from geosave.geodata.transform.warp import Resampling
 
 
 class Window(TypedDict):
@@ -60,8 +61,8 @@ class GeoSamples(CollectionTable):
     Items, and start/end dates. The area remains stable when the displayed
     geometry is renamed or reprojected. Samples have no pixel grid.
 
-    Chips additionally carry proj:code, proj:transform, proj:shape, padding,
-    parent identity and parent_grid. Caller columns and Collection metadata
+    Chips additionally carry proj:code, proj:transform, proj:shape, resampling,
+    padding, parent identity and parent_grid. Caller columns and Collection metadata
     survive framing, chipping and GeoParquet persistence.
 
     Examples:
@@ -160,11 +161,13 @@ class GeoSamples(CollectionTable):
         self,
         size: int | tuple[int, int],
         *,
+        resolution: float | None = None,
         target: GeoBox | None = None,
-        overlap: int = 0,
+        resampling: Resampling | Mapping[str, Resampling] = "nearest",
+        overlap: int | float = 0,
         pad_mode: Padding = "reflect",
     ) -> GeoDataFrame[GeoSamples]:
-        """Cut each row's footprint into pixel windows on a chosen grid.
+        """Plan aligned pixel chips at a chosen resolution without reading files.
 
         Chips cover the row's read region on the chosen pixel lattice.
         Chipping a chip cuts its read part. Pixels past the region are filled as
@@ -179,11 +182,19 @@ class GeoSamples(CollectionTable):
 
         Args:
             size: Chip side in pixels, or height and width.
+            resolution: Positive pixel size in CRS units. Each row uses its
+                sources' shared CRS, with pixel edges snapped to multiples of
+                this resolution. Different rows can use different CRSs. Sources
+                within a row must state one shared CRS; otherwise supply target.
             target: Grid supplying CRS, resolution and pixel alignment. Its
                 lattice is extended over each row's read region; its extent
-                does not limit coverage. None uses an existing chip's grid; spatial samples require a target.
-                This records windows only; no pixels are read or resampled.
-            overlap: Pixels neighbouring chips share.
+                does not limit coverage. Cannot be combined with resolution.
+                With neither option, an existing chip's grid is reused.
+            resampling: Kernel or collection/variable mapping used when chips
+                are read. Nearest preserves categorical label values by default.
+            overlap: Pixels neighbouring chips share (int), or a fraction of
+                each chip dimension in [0.0, 1.0) (float). Fractional overlap
+                is rounded up to whole pixels by Tiler.
             pad_mode: How a chip's pixels past the read region are filled.
 
         Returns:
@@ -191,13 +202,21 @@ class GeoSamples(CollectionTable):
             footprint, `pad_widths` and `pad_mode`.
 
         Examples:
-            >>> chips = samples.gs.chip(32, target=grid, overlap=8)
+            >>> chips = samples.gs.chip(32, resolution=10, overlap=8)
             >>> chips[["proj:shape", "pad_widths"]].iloc[0].tolist()
             [[32, 32], [[12, 0], [12, 0]]]
         """
         from geosave.geodata.sampling.chip import chip
 
-        return chip(self._data, size, target=target, overlap=overlap, pad_mode=pad_mode)
+        return chip(
+            self._data,
+            size,
+            target=target,
+            resolution=resolution,
+            resampling=resampling,
+            overlap=overlap,
+            pad_mode=pad_mode,
+        )
 
     def merge(
         self,

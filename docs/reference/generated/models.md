@@ -312,6 +312,7 @@ fields appear as attributes, including their annotated types and defaults.
       filters: []
       members:
         - size
+        - resolution
         - overlap
         - mode
         - window

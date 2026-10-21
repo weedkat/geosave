@@ -7,10 +7,14 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
+from geosave.geodata import tree
 from geosave.geodata.core.raster.create import raster as build_raster
 from geosave.geodata.core.raster.create import tree as build_tree
 from geosave.geodata.transform.nodata import mask, to_nan, unpack
 from tests.geodata.conftest import geobox, titled
+
+from .conftest import build
+from .conftest import geobox as transform_geobox
 
 UTM = "EPSG:32633"
 
@@ -491,3 +495,19 @@ def test_unpacking_reads_small_integers_as_float32(dtype: str, unpacked: str) ->
 
     assert physical.red.dtype == np.dtype(unpacked)
     assert physical.red.values[0, 0] == pytest.approx(0.01)
+
+
+def test_mask_preserves_tree_root_attrs():
+    source = tree({"optical": build(transform_geobox())})
+    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
+    optical = source.gs.rasters["optical"]
+    valid = np.ones((optical.sizes["y"], optical.sizes["x"]), bool)
+    result = mask(source, valid, fill=0)
+    assert result.attrs == source.attrs
+
+
+def test_to_nan_preserves_tree_root_attrs():
+    source = tree({"optical": build(transform_geobox())})
+    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
+    result = to_nan(source)
+    assert result.attrs == source.attrs

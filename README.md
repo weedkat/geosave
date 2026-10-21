@@ -78,15 +78,11 @@ uv run geosave create my-project
 cd my-project
 ```
 
-`geosave create` makes an empty workspace. Inside it, `geosave add-task` prompts
-for a task template; pass `segmentation-supervised`, `regression-supervised`, or
-`lightning-boilerplate` to select one.
-Start with [Your first raster](docs/first-raster.md), then
-[prepare training chips](docs/quickstart.md) and [train a model](docs/guides/training.md).
-The `lightning-boilerplate` task runs on generated data; the segmentation and
-regression tasks need your Dataset implementation before their first fit.
-The [workspace guide](docs/guides/workspaces.md) explains generated projects;
-the [API reference](docs/reference/index.md) lists public functions and classes.
+`geosave create` prompts for a task and then a training method. For scripts,
+use `geosave create my-project --task segmentation --method supervised`, or
+`--task blank` for shared startup only. Inside a workspace, use
+`geosave add-task --task segmentation --method fixmatch` to add another editable
+recipe without changing the first.
 
 ## Generated Workspace
 

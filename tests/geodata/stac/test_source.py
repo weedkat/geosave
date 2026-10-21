@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime as dt
+from datetime import timezone
 from typing import Any
+from unittest.mock import Mock
 
 import dask.array as da
 import numpy as np
-import pytest
 import pystac
+import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 from pydantic import ValidationError
 
+import geosave.geodata  # noqa: F401  — registers the .gs accessor
 import geosave.geodata.stac.source as source_module
-from geosave.geodata import GeoAnchor, raster
+from geosave.geodata import GeoAnchor, open_raster, open_vector, raster, stac
+from geosave.geodata.attrs import Packing, Spectral
+from geosave.geodata.features import ndvi
 from geosave.geodata.stac import StacQuery, StacSource, StacSourceConfig
+from geosave.geodata.stac.search.api import StacClient
+from geosave.geodata.warnings import DroppedAttrsWarning
 
 
 class FakeClient:
@@ -306,9 +313,10 @@ def test_narrowing_returns_a_copy_and_leaves_the_source_unchanged() -> None:
 def test_source_keeps_odc_time_and_property_representation(
     local_source, groupby, properties
 ):
-    import odc.stac
     from copy import deepcopy
     from unittest.mock import Mock
+
+    import odc.stac
 
     source, anchor = local_source
     composite = source.search(anchor).gs.to_items()[0]
@@ -350,3 +358,278 @@ def test_source_keeps_odc_time_and_property_representation(
     if not properties:
         assert "start_datetime" not in loaded
         assert "end_datetime" not in loaded
+
+
+def _apply_metadata(items, collection, loaded):
+    client = Mock(spec=StacClient)
+    client.collection.return_value = collection
+    source = StacSource(client, collection=collection.id)
+    return source._apply_metadata(items, loaded)
+
+
+def _item(id: str, timestamp: dt, fields: dict[str, object]) -> pystac.Item:
+    item = pystac.Item(
+        id=id,
+        geometry=None,
+        bbox=None,
+        datetime=timestamp.replace(tzinfo=timezone.utc),
+        properties={},
+    )
+    item.add_asset(
+        "red",
+        pystac.Asset(
+            href=f"https://example.com/{id}.tif",
+            media_type=pystac.MediaType.GEOTIFF,
+            extra_fields={"raster:bands": [fields]},
+        ),
+    )
+    return item
+
+
+def _collection() -> pystac.Collection:
+    return pystac.Collection(
+        id="example",
+        description="Example collection",
+        extent=pystac.Extent(
+            pystac.SpatialExtent([[-180, -90, 180, 90]]),
+            pystac.TemporalExtent([[dt(2025, 1, 1, tzinfo=timezone.utc), None]]),
+        ),
+        license="CC-BY-4.0",
+    )
+
+
+def test_reading_uses_band_description_not_common_name() -> None:
+    timestamp = dt(2025, 1, 1)
+    item = _item("scene-1", timestamp, {"unit": "1"})
+    item.assets["red"].extra_fields["eo:bands"] = [
+        {"name": "B04", "common_name": "red", "description": "Surface reflectance"}
+    ]
+
+    loaded = _apply_metadata(
+        [item], _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
+    )
+
+    assert loaded.red.attrs["long_name"] == "Surface reflectance"
+    assert loaded.red.attrs["units"] == "1"
+
+
+@pytest.mark.parametrize("second", [{}, {"scale": 0.0002}])
+def test_disagreeing_packing_drops_with_a_warning(second) -> None:
+    items = [
+        _item("scene-1", dt(2025, 1, 1), {"scale": 0.0001}),
+        _item("scene-2", dt(2025, 1, 2), second),
+    ]
+
+    with pytest.warns(DroppedAttrsWarning, match="scale_factor") as warned:
+        loaded = _apply_metadata(
+            items, _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
+        )
+
+    assert loaded.red.gs.packing is None
+    assert "'scene-2'" in str(warned[0].message)
+
+
+def test_an_item_without_the_asset_drops_its_fields_with_a_warning() -> None:
+    first = _item("scene-1", dt(2025, 1, 1), {"unit": "1"})
+    second = _item("scene-2", dt(2025, 1, 2), {"unit": "1"})
+    del second.assets["red"]
+
+    with pytest.warns(DroppedAttrsWarning, match="units"):
+        loaded = _apply_metadata(
+            [first, second],
+            _collection(),
+            xr.Dataset({"red": (("y", "x"), [[1]])}),
+        )
+
+    assert "units" not in loaded.red.attrs
+
+
+def test_reading_writes_no_packing_when_no_item_publishes_it() -> None:
+    items = [
+        _item("scene-1", dt(2025, 1, 1), {"unit": "1"}),
+        _item("scene-2", dt(2025, 1, 2), {"unit": "1"}),
+    ]
+
+    loaded = _apply_metadata(
+        items, _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
+    )
+
+    assert loaded.red.gs.packing is None
+
+
+def test_reading_drops_a_label_missing_from_one_item() -> None:
+    items = [
+        _item("scene-1", dt(2025, 1, 1), {"unit": "1"}),
+        _item("scene-2", dt(2025, 1, 2), {}),
+    ]
+
+    with pytest.warns(DroppedAttrsWarning, match="units"):
+        loaded = _apply_metadata(
+            items, _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
+        )
+
+    assert "units" not in loaded.red.attrs
+
+
+def test_reading_rejects_an_empty_item_sequence() -> None:
+    with pytest.raises(ValueError, match="at least one item"):
+        _apply_metadata([], _collection(), xr.Dataset({"red": (("y", "x"), [[1]])}))
+
+
+def test_loader_nodata_is_authoritative_over_source_values() -> None:
+    items = [
+        _item("first", dt(2025, 1, 1), {"nodata": 0}),
+        _item("second", dt(2025, 1, 2), {"nodata": 1}),
+    ]
+    loaded = xr.Dataset(
+        {"red": xr.DataArray([[1.0]], dims=("y", "x"), attrs={"nodata": -9999})}
+    )
+
+    loaded = _apply_metadata(items, _collection(), loaded)
+
+    assert loaded.red.gs.nodata == -9999
+
+
+def test_reader_uses_the_selected_band_without_mutating_the_item() -> None:
+    item = _item("multi", dt(2025, 1, 1), {})
+    item.assets["red"].extra_fields = {
+        "raster:bands": [{"unit": "1", "scale": 0.1}, {"unit": "K", "offset": 0}],
+        "eo:bands": [{"description": "Reflectance"}, {"description": "Temperature"}],
+    }
+    before = item.to_dict()
+
+    loaded = _apply_metadata(
+        [item],
+        _collection(),
+        xr.Dataset({"red.1": (("y", "x"), [[1]]), "red.2": (("y", "x"), [[2]])}),
+    )
+
+    assert loaded["red.1"].attrs == {
+        "units": "1",
+        "long_name": "Reflectance",
+        "scale_factor": 0.1,
+    }
+    assert loaded["red.1"].gs.packing == Packing(scale_factor=0.1)
+    assert loaded["red.2"].attrs == {"units": "K", "long_name": "Temperature"}
+    assert item.to_dict() == before
+
+
+def test_loader_packing_overrides_the_agreed_source_packing() -> None:
+    item = _item("scene", dt(2025, 1, 1), {"scale": 0.1, "offset": 2})
+    loaded = xr.Dataset(
+        {"red": xr.DataArray([[1]], dims=("y", "x"), attrs={"scale_factor": 1.0})}
+    )
+
+    loaded = _apply_metadata([item], _collection(), loaded)
+
+    assert loaded.red.gs.packing == Packing(scale_factor=1, add_offset=2)
+
+
+def test_spectral_facts_reach_the_variable() -> None:
+    item = _item("scene", dt(2025, 1, 1), {})
+    item.assets["red"].extra_fields = {
+        "eo:bands": [{"name": "B04", "common_name": "red", "center_wavelength": 0.665}]
+    }
+
+    loaded = _apply_metadata(
+        [item], _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
+    )
+
+    assert loaded.red.gs.spectral == Spectral(
+        common_name="red", center_wavelength=0.665
+    )
+
+
+def test_observations_to_prepared_index_to_reusable_dataset(local_source, tmp_path):
+    source, anchor = local_source
+    raw = source.load(anchor)
+    reflectance = raw.gs.mask_and_scale()
+    derived = reflectance.assign(ndvi=ndvi(reflectance, nir="nir", red="red"))[["ndvi"]]
+    composite = derived.median("time", keep_attrs=True)
+    assert isinstance(composite.ndvi.data, da.Array)
+    assert composite.gs.geobox == anchor.geobox
+    written = composite.gs.to_zarr(tmp_path / "ndvi.zarr")
+
+    with open_raster(written, chunks={}) as reopened:
+        assert isinstance(reopened.ndvi.data, da.Array)
+        assert reopened.gs.geobox == anchor.geobox
+        assert np.isnan(reopened.ndvi.values[0, 0])
+        assert reopened.ndvi.values[1, 1] == pytest.approx((1.1 - 0.2) / (1.1 + 0.2))
+        assert "scale_factor" not in reopened.ndvi.attrs
+    # Preparation leaves the reusable source configuration and packed input intact.
+    assert raw.red.attrs["scale_factor"] == 0.0001
+    assert raw.red.values[0, 1, 1] == 2000
+
+
+def test_property_rename_is_rejected():
+    from geosave.geodata.stac.source import StacSourceConfig
+
+    with pytest.raises(ValueError, match="exact STAC key"):
+        StacSourceConfig(with_properties=[{"key": "eo:cloud_cover", "name": "cloud"}])
+
+
+def test_native_collection_property_does_not_search():
+    from unittest.mock import Mock
+
+    from geosave.geodata.stac.source import StacSource
+
+    collection = stac.create_collection("optical", description="Reflectance")
+    client = Mock()
+    client.collection.return_value = collection
+    source = StacSource(client, collection="optical")
+    assert source.collection is collection
+    client.search_items.assert_not_called()
+
+
+def test_source_properties_fuse_and_publish_through_geoparquet(local_source, tmp_path):
+    from unittest.mock import Mock
+
+    import numpy as np
+    import xarray as xr
+
+    source, anchor = local_source
+    collection = source.collection
+    first = source.search(anchor).gs.to_items()[0]
+    first.properties["eo:cloud_cover"] = 20.0
+    second = first.clone()
+    second.id = "second"
+    second.properties["eo:cloud_cover"] = 40.0
+    client = Mock()
+    client.collection.return_value = collection
+    client.search_items.return_value = [first, second]
+    source.client = client
+    loaded = source.set_config(with_properties=["eo:cloud_cover"]).load(anchor)
+    loaded = loaded.set_coords("eo:cloud_cover")
+    assert loaded["eo:cloud_cover"].dims == ("time",)
+    assert loaded["eo:cloud_cover"].item() == 30.0
+    assert loaded.red.chunks is not None
+    file = loaded.gs.to_netcdf(tmp_path / "property.nc")
+    with xr.open_dataset(file.written["image"].path) as stored:
+        np.testing.assert_equal(stored["eo:cloud_cover"].values, [30.0])
+    scenes = loaded.gs.to_cog(tmp_path / "processed.tif")
+    output = stac.create_collection("processed", description="Processed observations")
+    rows = stac.create_catalog(
+        stac.create_items(scenes, collection=output), collections=[output]
+    )
+    saved = rows.gs.to_geoparquet(tmp_path / "processed.parquet")
+    assert open_vector(saved).gs.to_items()[0].properties["eo:cloud_cover"] == 30.0
+
+
+def test_stac_source_does_not_invent_composite_bounds(local_source, tmp_path):
+    from unittest.mock import Mock
+
+    source, anchor = local_source
+    item = source.search(anchor).gs.to_items()[0]
+    item.properties.update(
+        start_datetime="2025-01-01T00:00:00Z", end_datetime="2025-01-31T23:59:59Z"
+    )
+    collection = source.collection
+    source.client = Mock()
+    source.client.search_items.return_value = [item]
+    source.client.collection.return_value = collection
+    loaded = source.load(anchor)
+    rebuilt = next(stac.create_items(loaded.gs.to_cog(tmp_path / "composite.tif")))
+    assert "start_datetime" not in loaded
+    assert "end_datetime" not in loaded
+    assert "start_datetime" not in rebuilt.properties
+    assert "end_datetime" not in rebuilt.properties

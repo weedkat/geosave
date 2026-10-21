@@ -17,7 +17,7 @@ def publish(
     """Release one checkpoint as an inference model on the Hugging Face Hub."""
     typer.echo(
         "geosave publish is not implemented yet; "
-        "use scripts/publish.py from the segmentation starter.",
+        "use scripts/segmentation/supervised/publish.py from the segmentation starter.",
         err=True,
     )
     raise typer.Exit(1)

@@ -22,6 +22,10 @@ def scope_hover(plot, _):
     renderers carrying that tool's declared fields can answer those hovers.
     """
     for tool in plot.state.select({"type": HoverTool}):
+        tool.point_policy = "follow_mouse"
+        tool.line_policy = "none"
+        tool.limit = 1
+        tool.show_arrow = False
         fields = set()
         for _, expression in tool.tooltips or []:
             for match in re.finditer(r"@(?:\{([^}]+)\}|(\w+))", expression):

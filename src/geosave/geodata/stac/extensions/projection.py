@@ -6,6 +6,7 @@ from typing import Any
 
 import pystac
 from affine import Affine
+from odc.geo import CRS
 from odc.geo.geobox import GeoBox
 from pystac.extensions.projection import AssetProjectionExtension, ProjectionExtension
 
@@ -44,6 +45,13 @@ def from_geobox(grid: GeoBox | None) -> dict[str, Any]:
     return stated
 
 
+def read_crs(asset: pystac.Asset) -> CRS | None:
+    """Read an asset's stated or inherited CRS without requiring a pixel grid."""
+    stated = AssetProjectionExtension(asset)
+    code = stated.code if stated.code is not None else stated.wkt2
+    return None if code is None else CRS(code)
+
+
 def to_geobox(asset: pystac.Asset) -> GeoBox | None:
     """Read the grid an asset's Projection fields state.
 
@@ -61,7 +69,7 @@ def to_geobox(asset: pystac.Asset) -> GeoBox | None:
     stated = AssetProjectionExtension(asset)
     if stated.shape is None or stated.transform is None:
         return None
-    crs = stated.code if stated.code is not None else stated.wkt2
+    crs = read_crs(asset)
     height, width = stated.shape
     return GeoBox((height, width), Affine(*stated.transform[:6]), crs)
 

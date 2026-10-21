@@ -27,11 +27,11 @@ flowchart LR
 
 | Package | Responsibility |
 | --- | --- |
-| `geodata` | Accessors, metadata, I/O, transforms, STAC, sampling, benchmarks, and visualization. |
+| `geodata` | Accessors, metadata, I/O, transforms, STAC, sampling, and visualization. |
 | `model` | Model chains, registry, stages, specifications, and native releases. |
-| `ml` | Lightning tasks, data modules, metrics, builders, transforms, and callbacks. |
+| `ml` | Reusable metrics, builders, losses, transforms, CLI, and callbacks. |
 | `cli` | Workspace creation and task templates. |
-| `templates` | Source files copied into consumer workspaces. |
+| `templates` | Project-owned Lightning Modules, DataModules, Datasets, configs, and scripts copied into consumer workspaces. |
 
 The model package does not import GeoSave's training package. Importing
 `geosave` or `geosave.model.spec` does not load torch. Operations that need it,
@@ -57,6 +57,8 @@ prepares those samples; the Module owns training behavior.
 `ModelSpec` owns raster requirements, preprocessing, input names, context, and
 tensor transforms. Model stages own the network. A native release contains the
 chain and optional spec; a Lightning checkpoint additionally holds training state.
+ModelSpec redesign is on hold until preprocessing/postprocessing code publication
+and execution trust are settled. Training recipes live in templates, not `ml/tasks`.
 
 ## Implementation rules
 
@@ -88,7 +90,7 @@ chain and optional spec; a Lightning checkpoint additionally holds training stat
   metadata distinguishes projected coordinates from latitude and longitude.
 - Keep internal helpers with the package that uses them. Share an implementation
   only when written callers need the same behavior.
-- Generated workspaces compose library APIs. Edit `src/geosave/templates/` to
+- Generated workspaces compose library APIs. Edit `src/templates/` to
   change future starters; a generated workspace belongs to its user.
 
 ## Errors, warnings, and maintenance
@@ -103,6 +105,6 @@ or incomplete coverage. Categories live in `geodata.warnings` and derive from
 GeoSaveWarning. The [error reference](../reference/errors.md) lists them.
 
 Tests mirror `src/geosave/`. Persistence tests check round trips; lazy operations
-check deferred execution as well as computed values. Design proposals, open decisions and
-maintenance records live beside this page: [open decisions](open-decisions.md),
-the [maintenance ledger](maintenance-ledger.md) and [design specs](specs/index.md).
+check deferred execution as well as computed values. Open decisions and active design
+proposals live beside this page: [open decisions](open-decisions.md) and
+[design specs](specs/index.md).

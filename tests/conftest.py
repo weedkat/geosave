@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+from tempfile import TemporaryDirectory
 
 import dask.array as da
 from odc.geo.geobox import GeoBox
@@ -15,6 +17,19 @@ from geosave.model.spec import ModelSpec, RasterRequirement
 
 
 def pytest_configure(config):
+    # Train recipe tests against copied project code, as consumers use it.
+    from geosave.cli.core.templates import get_methods, get_tasks
+    from geosave.cli.core.workspace import add_task, create_workspace
+
+    folder = TemporaryDirectory(prefix="geosave-test-recipes-")
+    root = Path(folder.name)
+    create_workspace(root)
+    for task in get_tasks():
+        for method in get_methods(task):
+            add_task(root, task, method)
+    sys.path.insert(0, str(root))
+    config.add_cleanup(lambda: sys.path.remove(str(root)))
+    config.add_cleanup(folder.cleanup)
     env_file = Path(__file__).parent / ".env"
     if env_file.exists():
         load_dotenv(env_file, override=True)

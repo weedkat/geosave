@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import pytest
+import torch
+from lightning.pytorch import Trainer
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+
+from modules.classification import supervised
+from geosave.model.chain import chain_step
+from tests.templates.tasks.classification.supervised.test_data import Chips as Classes
+from tests.templates.tasks.segmentation.supervised.test_data import (
+    FLIP,
+    _spec,
+)
+
+
+class Classifier(nn.Module):
+    """Average each band over the chip and project the averages to classes."""
+
+    def __init__(self, num_classes: int, bands: int = 2) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.projection = nn.Linear(bands, num_classes)
+
+    @chain_step(head=True)
+    def logits(self, image: torch.Tensor) -> torch.Tensor:
+        return self.projection(image.mean(dim=(-2, -1)))
+
+
+STAGES = {
+    "model": {"class_path": f"{__name__}.Classifier", "init_args": {"num_classes": 3}}
+}
+
+
+def test_defaults_and_class_count() -> None:
+    module = supervised.Module(model_chain=STAGES)
+    module.configure_model()
+
+    assert module.num_classes == 3
+    assert isinstance(module.criterion, nn.CrossEntropyLoss)
+    assert isinstance(module.configure_optimizers(), torch.optim.AdamW)
+
+
+class Uncounted(nn.Module):
+    @chain_step(head=True)
+    def logits(self, image: torch.Tensor) -> torch.Tensor:
+        return image.mean(dim=(-2, -1))
+
+
+def test_a_last_stage_without_a_class_count_is_refused() -> None:
+    module = supervised.Module(
+        model_chain={"model": {"class_path": f"{__name__}.Uncounted"}}
+    )
+
+    with pytest.raises(TypeError, match="Uncounted.*num_classes"):
+        module.configure_model()
+
+
+class _Chips(Dataset):
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int):
+        image = torch.full((2, 4, 4), float(index % 3))
+        return {
+            "inputs": {"image": image},
+            "target": torch.tensor(index % 3),
+        }
+
+
+def test_lightning_fits_validates_and_tests(tmp_path) -> None:
+    module = supervised.Module(model_chain=STAGES, metrics=["accuracy.macro"])
+    trainer = Trainer(
+        accelerator="cpu",
+        max_epochs=1,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        limit_test_batches=1,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+    loader = DataLoader(_Chips(), batch_size=3)
+
+    trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+    fitted = set(trainer.callback_metrics)
+    result = trainer.test(module, dataloaders=loader, verbose=False)
+
+    assert {"train_loss", "val_loss", "val_accuracy_macro"} <= fitted
+    assert 0.0 <= result[0]["test_accuracy_macro"] <= 1.0
+
+
+def test_trainer_consumes_model_ready_samples(tmp_path):
+    data = supervised.DataModule(
+        _spec(), Classes(), Classes(), augmentations=FLIP, batch_size=2, num_workers=0
+    )
+    module = supervised.Module(model_chain=STAGES)
+    trainer = Trainer(
+        accelerator="cpu",
+        fast_dev_run=True,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+    trainer.fit(module, datamodule=data)
+    assert trainer.global_step == 1
+    assert torch.isfinite(trainer.callback_metrics["train_loss"])
+    assert set(Classes()[0]) == {"inputs", "target"}

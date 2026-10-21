@@ -10,8 +10,8 @@ import pytest
 
 from geosave.geodata import stac
 from geosave.geodata.io.vector import stac_json
-
 from tests.geodata.conftest import item_table
+from tests.geodata.stac.conftest import entry
 
 
 @pytest.fixture
@@ -131,3 +131,47 @@ def test_a_catalog_round_trips_through_a_remote_filesystem(rows) -> None:
 
     assert isinstance(root_file, UPath) and root_file.protocol == "memory"
     assert len(list(root.get_items(recursive=True))) == len(rows)
+
+
+def test_json_overwrite_keeps_assets_and_unrelated_files(tmp_path):
+    from geosave.geodata.io.vector import stac_json
+
+    item = entry(None)
+    stac_json.write([item], tmp_path)
+    asset = tmp_path / "pixels.tif"
+    asset.write_bytes(b"raster")
+    notes = tmp_path / "notes.txt"
+    notes.write_text("keep")
+    stac_json.write([item], tmp_path, overwrite=True)
+    assert asset.read_bytes() == b"raster"
+    assert notes.read_text() == "keep"
+
+
+@pytest.mark.parametrize("existing_catalog", [False, True])
+def test_json_refuses_unrelated_destination_collision(tmp_path, existing_catalog):
+    from geosave.geodata.io.vector import stac_json
+
+    if existing_catalog:
+        stac_json.write([entry(None)], tmp_path)
+    second = entry(None)
+    second.id = "second"
+    destination = tmp_path / "second" / "second.json"
+    destination.parent.mkdir()
+    destination.write_text('{"user": "keep"}')
+    with pytest.raises(FileExistsError, match="not owned"):
+        stac_json.write([second], tmp_path, overwrite=True)
+    assert destination.read_text() == '{"user": "keep"}'
+
+
+def test_native_json_preserves_relative_descriptive_links(tmp_path):
+    from geosave.geodata.io.vector import stac_json
+
+    item = entry(None)
+    item.set_self_href(str(tmp_path / "source" / "item.json"))
+    item.add_link(pystac.Link("license", "./license.txt"))
+    root = stac_json.write([item], tmp_path / "published")
+    restored = next(pystac.Catalog.from_file(str(root)).get_items(recursive=True))
+    assert restored.get_single_link("license").get_absolute_href() == str(
+        tmp_path / "source" / "license.txt"
+    )
+    assert item.get_single_link("license").target == "./license.txt"

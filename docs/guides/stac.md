@@ -120,7 +120,7 @@ root_catalog = pystac.Catalog.from_file(catalog)
 items = gs.stac.create_catalog(root_catalog.get_items(recursive=True))
 ```
 
-`items.gs.to_item()` goes the other way, one PySTAC `Item` per row.
+`items.gs.to_items()` goes the other way, one PySTAC `Item` per row.
 `gs.open_vector` reads vector files and Item GeoParquet tables; use PySTAC for
 a static STAC JSON catalog.
 
@@ -215,7 +215,7 @@ query can also select dates, Item IDs, ordering, or a maximum number of Items.
 `load(anchor)` runs the search again; pass the reviewed IDs to `set_query(ids=...)`
 when you need to load that exact selection.
 Pixel access may need separate GDAL credentials or URL signing from the
-catalog search itself; see [remote I/O](../basics/io.md#use-remote-storage).
+catalog search itself; see [remote I/O](../concepts/storage.md#use-remote-storage).
 
 ## Search a remote item table
 
@@ -238,7 +238,7 @@ client = gs.StacClient.open("s3://samples/catalog.parquet", duckdb=session)
 
 The same session searches rows and reads stored Collection metadata directly
 from the table. This configures table access; remote TIFF reads still need
-the [GDAL setup](../basics/io.md#use-remote-storage).
+the [GDAL setup](../concepts/storage.md#use-remote-storage).
 
 GeoSave uses PySTAC for STAC objects, stac-geoparquet for the table format,
 rustac for search, and odc-stac for pixel loading. For a local training-data

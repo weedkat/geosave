@@ -77,7 +77,12 @@ collection, and `to_cog` writes one file per collection, date, and band.
 ```python
 sample = gs.tree({"optical": optical, "label": label})
 scenes = sample.gs.to_cog(root / "s0/{collection}_{time:%Y%m%d}_{band}.tif")
-rows = gs.stac.create_catalog(gs.stac.create_items(scenes, id_format="s0"))
+collections = [
+    gs.stac.create_collection("optical", description="Optical bands"),
+    gs.stac.create_collection("label", description="Land-cover labels"),
+]
+items = gs.stac.create_items(scenes, id_format="s0")
+rows = gs.stac.create_catalog(items, collections=collections)
 rows.gs.to_geoparquet(str(root / "catalog.parquet"))
 rows[["collection", "datetime"]]
 ```
