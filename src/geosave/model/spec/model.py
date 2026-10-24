@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 from pydantic import ConfigDict, Field, JsonValue, model_validator
 import xarray as xr
@@ -20,11 +20,10 @@ from geosave.geodata import stac, tree
 from geosave.geodata.core import GeoAnchor
 from geosave.geodata.io import storage
 from geosave.geodata.io.storage import Location
-from geosave.geodata.transform.warp import Target
+from geosave.geodata.stac.create import ID_FORMAT
 
 if TYPE_CHECKING:
-    import geopandas as gpd
-
+    from geosave.geodata import GeoDataFrame
     from geosave.geodata.core import GeoCatalog
 
 
@@ -123,7 +122,7 @@ class ModelSpec(SpecModel):
                 "Model inputs reference neither a preprocessing result nor a "
                 f"raster: {sorted(unknown)}"
             )
-        # Prepare saves only what the inputs read, so context reads no more.
+        # Context is encoded from what the model inputs read, so it reads no more.
         if self.context is not None and (
             unknown := self.context.inputs - set(self.input_rasters)
         ):
@@ -207,84 +206,42 @@ class ModelSpec(SpecModel):
                 raise
         return {**selected, **self.preprocessing.run(selected)}
 
-    def prepare(
+    def ingest(
         self,
-        raw: gpd.GeoDataFrame,
-        output: Location,
+        anchor: GeoAnchor,
+        path: Location | Mapping[str, Location],
         *,
-        target: Target | None = None,
-        keep: Sequence[str] = (),
-    ) -> UPath:
-        """Preprocess every window of a raw catalog and save what the model reads.
+        id_format: str = ID_FORMAT,
+    ) -> GeoDataFrame[GeoCatalog]:
+        """Load every declared raster on an anchor, save it, and list it as Items.
 
-        Equal-footprint samples are framed as declared by this spec, read on
-        native grids unless target is given, and preprocessed. Model inputs
-        and explicitly kept collections are written under output/<sample>/.
-        The item table goes to `output/catalog.parquet`, this spec beside it.
+        Training and inference ingest alike and get the same table. Pixels are
+        saved as the source publishes them; `preprocess` runs when they are
+        read. Each raster is saved as the collection its spec name says, so
+        `row.gs.to_xarray().gs.rasters` hands `preprocess` the names it reads.
 
         Args:
-            raw: Item table of the raw rasters and the collections kept.
-            output: New folder, as a path, URL, or UPath.
-            target: Explicit alignment target; None keeps native grids.
-            keep: Collections copied through unchanged.
+            anchor: Grid and time every raster is loaded on.
+            path: COG path template, as `DataTree.gs.to_cog` takes it, such as
+                `"data/{collection}/{time:%Y%m%d}_{band}.tif"`.
+            id_format: `GeoAnchor.format` template each Item's id is filled
+                from, as `stac.create_items` takes it.
 
         Returns:
-            The prepared item table's file.
+            Item table, one Item per raster and instant.
 
         Raises:
-            FileExistsError: `output` exists.
-            TypeError: `keep` is given as text.
-            KeyError: A window lacks a declared raster or a kept collection.
+            ValueError: A raster declares no `stac` block, or misses its
+                requirement.
+            FileExistsError: A file the template names exists.
 
         Examples:
-            >>> path = spec.prepare(raw, "data/prepared", keep=["label"])
-            >>> open_vector(path).gs.sample().iloc[0].gs.to_xarray().gs.groups
-            ('image', 'label')
+            >>> items = spec.ingest(anchor, "data/s0/{collection}/{band}.tif")
+            >>> items.gs.sample().iloc[0].gs.to_xarray().gs.groups
+            ('sentinel_2_l2a',)
         """
-        if isinstance(keep, str):
-            raise TypeError(f"keep takes a list of collections, as keep=[{keep!r}]")
-        folder = storage.location(output)
-        if folder.exists():
-            raise FileExistsError(f"{folder} exists; prepare writes a new folder")
-        kept = list(dict.fromkeys(keep))
-        items = []
-        windows = raw.gs.sample()
-        if self.frames is not None:
-            windows = self.frames.cut(windows)
-        for _, row in windows.iterrows():
-            anchor = str(row["id"])
-            rasters = row.gs.to_xarray(target=target).gs.rasters
-            if missing := [name for name in kept if name not in rasters]:
-                raise KeyError(f"Window {anchor!r} lacks {missing}")
-            results = self.preprocess(rasters)
-            groups: dict[str, xr.Dataset] = {
-                name: results[name] for name in self.input_rasters
-            }
-            groups |= {name: rasters[name] for name in kept}
-            templates = {
-                name: _template(folder / anchor, name, group)
-                for name, group in groups.items()
-            }
-            # Windows share grids and dates, so the anchor keeps their ids apart.
-            escaped = anchor.replace("{", "{{").replace("}", "}}")
-            items += stac.create_items(
-                tree(groups).gs.to_cog(templates),
-                id_format=f"{escaped}_{{start:%Y%m%dT%H%M%S}}",
-                datetime=row.gs.timespan,
-            )
-        self.save(folder / self.filename)
-        definitions = raw.gs.collections
-        collections = [
-            definitions[name]
-            if name in definitions
-            else stac.create_collection(name, description=f"Prepared raster {name}")
-            for name in dict.fromkeys(item.collection_id for item in items)
-            if name is not None
-        ]
-        catalog = cast(
-            "GeoCatalog", stac.create_catalog(items, collections=collections).gs
-        )
-        return catalog.to_geoparquet(folder / "catalog.parquet")
+        scenes = tree(self.load_rasters(anchor)).gs.to_cog(path)
+        return stac.create_catalog(stac.create_items(scenes, id_format=id_format))
 
     def model_context(self, rasters: Mapping[str, Any]) -> dict[str, Any]:
         """Encode a sample's rasters with the declared context recipe.
@@ -377,13 +334,3 @@ class ModelSpec(SpecModel):
         """
         payload = storage.location(path).read_text(encoding="utf-8")
         return cls.model_validate(yaml.load(payload, Loader=_Loader))
-
-
-def _template(folder: UPath, name: str, raster: xr.Dataset) -> str:
-    """Spell one prepared group's COG path: a file per band, and per instant when dated.
-
-    One band per file makes each asset one variable, named by its key.
-    """
-    if "time" in raster.dims:
-        return f"{folder}/{name}/{name}_{{time:%Y%m%dT%H%M%S}}_{{band}}.tif"
-    return f"{folder}/{name}/{{band}}.tif"

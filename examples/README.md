@@ -31,7 +31,11 @@ For KHDTK inference:
 ```python
 forest = DynamicWorld(images, chip_size=128, overlap=64)
 loader = DataLoader(forest, batch_size=8)
-batches = trainer.predict(module, dataloaders=loader)
+module.eval()
+batches = []
+with torch.inference_mode():
+    for image in loader:
+        batches.append(module(image.to(module.device)).cpu())
 merged = forest.merge(torch.cat(batches).numpy())
 forest_cover = postprocess(merged, forest.frames)
 ```

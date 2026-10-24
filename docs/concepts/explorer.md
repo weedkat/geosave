@@ -44,12 +44,14 @@ server = catalog.gs.explore().serve()
 ```
 
 This starts a local server at `http://localhost:5006`. In notebooks it runs in a
-background thread and opens a browser tab. In scripts it keeps the process
+background thread, so the cell stays free, and opens a browser tab. Rerunning the
+cell replaces the server the earlier explorer started on that port. In scripts it keeps the process
 running until you press Ctrl+C. Google Colab uses its kernel-port proxy to
 display the served explorer in an iframe; keep the Colab runtime connected.
 Colab support requires its hosted frontend and is not a public deployment.
 
-Use `.serve(port=5007)` if port 5006 is occupied, or `.serve(open=False)` to start
+If another program holds the port, `.serve()` raises `OSError`; pass
+`.serve(port=5007)`. Use `.serve(open=False)` to start
 without opening a tab or iframe. Local connections accept both `localhost` and
 `127.0.0.1`. For remote Jupyter kernels, forward the chosen port to your browser's
-machine. Stop a notebook server with `server.stop()`.
+machine. Stop a notebook server with `explorer.stop()`.

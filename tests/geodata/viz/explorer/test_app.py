@@ -661,10 +661,18 @@ def test_catalog_hover_follows_cursor_and_omits_bookkeeping(catalog):
     viewer.close()
 
 
+@pytest.fixture
+def port():
+    """Return a port nothing listens on."""
+    with socket.socket() as probe:
+        probe.bind(("localhost", 0))
+        return probe.getsockname()[1]
+
+
 @pytest.mark.parametrize("notebook", [False, True])
 @pytest.mark.parametrize("threaded", [None, False, True])
 def test_serve_chooses_threading_for_the_active_environment(
-    scene, monkeypatch, notebook, threaded
+    scene, monkeypatch, notebook, threaded, port
 ):
     from IPython.core import getipython
 
@@ -674,7 +682,7 @@ def test_serve_chooses_threading_for_the_active_environment(
         lambda: SimpleNamespace(kernel=object()) if notebook else None,
     )
     settings = {}
-    handle = object()
+    handle = SimpleNamespace(stop=lambda: None)
 
     def serve(panel, **kwargs):
         settings.update(kwargs)
@@ -683,15 +691,18 @@ def test_serve_chooses_threading_for_the_active_environment(
     monkeypatch.setattr(pn, "serve", serve)
     viewer = Explorer(scene, basemap="None")
     try:
-        assert viewer.serve(threaded=threaded) is handle
+        assert viewer.serve(port=port, threaded=threaded) is handle
         assert settings["threaded"] is (notebook if threaded is None else threaded)
         assert settings["address"] == "localhost"
-        assert settings["websocket_origin"] == ["localhost:5006", "127.0.0.1:5006"]
+        assert settings["websocket_origin"] == [
+            f"localhost:{port}",
+            f"127.0.0.1:{port}",
+        ]
     finally:
         viewer.close()
 
 
-def test_colab_serve_uses_the_proxy_origin_and_iframe(scene, monkeypatch):
+def test_colab_serve_uses_the_proxy_origin_and_iframe(scene, monkeypatch, port):
     from IPython.core import getipython
 
     shell = type(
@@ -700,12 +711,12 @@ def test_colab_serve_uses_the_proxy_origin_and_iframe(scene, monkeypatch):
     monkeypatch.setattr(getipython, "get_ipython", lambda: shell)
     displayed = []
     output = SimpleNamespace(
-        eval_js=lambda code: "https://session-5006.colab.googleusercontent.com/",
+        eval_js=lambda code: f"https://session-{port}.colab.googleusercontent.com/",
         serve_kernel_port_as_iframe=lambda port, **kwargs: displayed.append(port),
     )
     monkeypatch.setitem(sys.modules, "google.colab.output", output)
     settings = {}
-    handle = object()
+    handle = SimpleNamespace(stop=lambda: None)
 
     def serve(panel, **kwargs):
         settings.update(kwargs)
@@ -715,15 +726,74 @@ def test_colab_serve_uses_the_proxy_origin_and_iframe(scene, monkeypatch):
     monkeypatch.setattr(pn, "serve", serve)
     viewer = Explorer(scene, basemap="None")
     try:
-        assert viewer.serve() is handle
+        assert viewer.serve(port=port) is handle
         assert settings["threaded"] is True
         assert settings["show"] is False
         assert (
-            "session-5006.colab.googleusercontent.com" in settings["websocket_origin"]
+            f"session-{port}.colab.googleusercontent.com"
+            in settings["websocket_origin"]
         )
-        assert displayed == [5006]
+        assert displayed == [port]
     finally:
         viewer.close()
+
+
+def _wait_for(port):
+    """Return once a server answers on `port`."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with socket.socket() as sock:
+            if sock.connect_ex(("localhost", port)) == 0:
+                return
+        time.sleep(0.1)
+    raise TimeoutError(f"nothing answers on port {port}")
+
+
+def test_serving_again_on_a_port_replaces_the_earlier_explorer(scene, port):
+    first = Explorer(scene, basemap="None")
+    second = Explorer(scene, basemap="None")
+    try:
+        first.serve(port=port, threaded=True, open=False, verbose=False)
+        _wait_for(port)
+
+        second.serve(port=port, threaded=True, open=False, verbose=False)
+        _wait_for(port)
+
+        assert first.server is None
+        assert Explorer.servers[port] is second
+    finally:
+        first.close()
+        second.close()
+
+
+def test_stop_releases_the_port(scene, port):
+    viewer = Explorer(scene, basemap="None")
+    try:
+        viewer.serve(port=port, threaded=True, open=False, verbose=False)
+        _wait_for(port)
+
+        viewer.stop()
+
+        assert viewer.server is None
+        assert port not in Explorer.servers
+        with socket.socket() as sock:
+            assert sock.connect_ex(("localhost", port)) != 0
+    finally:
+        viewer.close()
+
+
+def test_a_port_another_program_holds_is_refused_in_the_calling_thread(scene):
+    viewer = Explorer(scene, basemap="None")
+    with socket.socket() as blocker:
+        blocker.bind(("localhost", 0))
+        blocker.listen()
+        port = blocker.getsockname()[1]
+        try:
+            with pytest.raises(OSError, match=f"port {port} is in use"):
+                viewer.serve(port=port, threaded=True, open=False, verbose=False)
+            assert viewer.server is None
+        finally:
+            viewer.close()
 
 
 @pytest.mark.slow

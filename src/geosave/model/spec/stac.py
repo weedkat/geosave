@@ -163,7 +163,11 @@ class StacRecipe(SpecModel):
                 continue
             # `set_query` takes CQL2 text and `-field` sorts; the recipe holds
             # their JSON forms, which StacQuery takes as they are.
-            source.config = self.load
+            # The client's own signer, such as Planetary Computer's, stays:
+            # a callable has no YAML form, so the recipe never states one.
+            source.config = self.load.model_copy(
+                update={"patch_url": source.config.patch_url}
+            )
             source.query = self.query.to_query(self.collection)
             return source.load(anchor)
         raise ConnectionError(

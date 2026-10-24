@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 
 import dask.array as da
-import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
@@ -11,17 +9,8 @@ import yaml
 from odc.geo.geobox import GeoBox
 from upath import UPath
 
-from geosave.geodata import (
-    GeoDataTree,
-    GeoCatalog,
-    GeoDataFrame,
-    open_vector,
-    raster,
-    tree,
-)
+from geosave.geodata import GeoCatalog, GeoDataTree, raster, stac
 from geosave.model.spec import CallSpec, ModelSpec, RasterRequirement, Ref
-
-from tests.geodata.conftest import item_table
 
 
 @pytest.mark.parametrize(
@@ -429,14 +418,11 @@ def test_load_rasters_refuses_rasters_without_a_recipe(coordinate_anchor, stac_r
         model.load_rasters(coordinate_anchor)
 
 
-WHEN = datetime(2025, 6, 1, tzinfo=UTC)
-
-
 def doubled(*, data: xr.Dataset) -> xr.Dataset:
     return data * 2
 
 
-def _prepare_spec() -> ModelSpec:
+def _ingest_spec() -> ModelSpec:
     return ModelSpec.model_validate(
         {
             "schema_version": 2,
@@ -452,82 +438,92 @@ def _prepare_spec() -> ModelSpec:
     )
 
 
-def _prepare_optical(index: int) -> xr.Dataset:
-    left = 500_000 + index * 1000
-    grid = GeoBox.from_bbox(
-        (left, 9_000_000, left + 80, 9_000_000 + 80), "EPSG:32748", resolution=10
+GRID = GeoBox.from_bbox(
+    (500_000, 9_000_000, 500_080, 9_000_080), "EPSG:32748", resolution=10
+)
+NIR = np.arange(64, dtype="uint16").reshape(8, 8)
+
+
+def _scene() -> xr.Dataset:
+    optical = raster({"nir": (("y", "x"), da.from_array(NIR))}, GRID)
+    return optical.expand_dims(time=[np.datetime64("2025-06-01T10:30:00")])
+
+
+def _label() -> xr.Dataset:
+    plane = np.full((8, 8), 3, "uint8")
+    label = raster({"label": (("y", "x"), plane)}, GRID)
+    return label.expand_dims(time=[np.datetime64("2025-06-01")])
+
+
+@pytest.fixture
+def loaded(monkeypatch):
+    """Serve `_scene` as every recipe's load and record the anchors asked for."""
+    anchors = []
+
+    def load(spec, anchor):
+        anchors.append(anchor)
+        return {"optical": _scene()}
+
+    monkeypatch.setattr(ModelSpec, "load_rasters", load)
+    return anchors
+
+
+def test_inference_reads_an_ingested_sample_through_preprocess(tmp_path, loaded):
+    spec = _ingest_spec()
+    anchor = _label().gs.anchor
+
+    items = spec.ingest(anchor, f"{tmp_path}/{{collection}}/{{band}}.tif")
+
+    assert loaded == [anchor]
+    rasters = items.gs.sample().iloc[0].gs.to_xarray().gs.rasters
+    assert list(rasters) == ["optical"]
+    image = spec.preprocess(rasters)["image"]
+    np.testing.assert_array_equal(image["nir"].values.squeeze(), 2 * NIR)
+
+
+def test_training_samples_pair_the_ingested_table_with_a_label_table(tmp_path, loaded):
+    label = _label()
+    images = _ingest_spec().ingest(
+        label.gs.anchor, f"{tmp_path}/{{collection}}/{{band}}.tif"
     )
-    plane = np.arange(64, dtype="float32").reshape(8, 8) + 100 * index
-    return raster({"red": (("y", "x"), plane), "nir": (("y", "x"), plane + 0.5)}, grid)
-
-
-def _raw(root) -> GeoDataFrame:
-    """Write two samples, optical beside a label, and return their item table."""
-    tables = []
-    for index in range(2):
-        optical = _prepare_optical(index)
-        label = raster(
-            {"label": (("y", "x"), np.full((8, 8), index, "uint8"))},
-            optical.gs.geobox,
+    labels = stac.create_catalog(
+        stac.create_items(
+            label.gs.to_cog(f"{tmp_path}/label/label.tif"), collection="label"
         )
-        sample = tree({"optical": optical, "label": label})
-        # One file per band, so each asset is one variable named by its key.
-        files = sample.gs.to_cog(f"{root}/s{index}/{{collection}}/{{band}}.tif")
-        tables.append(item_table(files, prefix=f"s{index}", datetime=WHEN))
-    return open_vector(GeoCatalog.concat(tables).gs.to_geoparquet(root / "raw.parquet"))
-
-
-def test_prepared_pixels_are_the_preprocessed_raw_pixels(tmp_path):
-    spec = _prepare_spec()
-
-    path = spec.prepare(_raw(tmp_path / "raw"), tmp_path / "prepared", keep=["label"])
-
-    prepared = open_vector(path)
-    assert sorted(prepared["collection"].unique()) == ["image", "label"]
-    assert ModelSpec.load(tmp_path / "prepared" / ModelSpec.filename) == spec
-    windows = prepared.gs.sample()
-    assert len(windows) == 2
-    assert windows["id"].is_unique
-    rasters = windows.iloc[1].gs.to_xarray().gs.rasters
-    assert list(rasters["image"].data_vars) == ["nir"]
-    np.testing.assert_array_equal(
-        rasters["image"]["nir"].values,
-        2 * _prepare_optical(1)["nir"].values,
     )
-    assert (rasters["label"]["label"].values == 1).all()
+
+    samples = GeoCatalog.concat([images, labels]).gs.sample()
+
+    assert len(samples) == 1
+    rasters = samples.iloc[0].gs.to_xarray().gs.rasters
+    assert sorted(rasters) == ["label", "optical"]
+    assert (rasters["label"]["label"].values == 3).all()
 
 
-def test_pixels_stay_lazy_until_they_are_written(tmp_path, monkeypatch):
-    raw = _raw(tmp_path / "raw")
+def test_ingested_pixels_stay_lazy_until_they_are_written(
+    tmp_path, loaded, monkeypatch
+):
     written = []
     to_cog = GeoDataTree.to_cog
 
     def spy(self, *args, **kwargs):
-        written.append(
-            all(
-                isinstance(r[v].data, da.Array)
-                for r in self.rasters.values()
-                for v in r
-            )
-        )
+        for layer in self.rasters.values():
+            for name in layer.data_vars:
+                written.append(isinstance(layer[name].data, da.Array))
         return to_cog(self, *args, **kwargs)
 
     monkeypatch.setattr(GeoDataTree, "to_cog", spy)
 
-    _prepare_spec().prepare(raw, tmp_path / "prepared", keep=["label"])
+    _ingest_spec().ingest(_label().gs.anchor, f"{tmp_path}/{{collection}}.tif")
 
-    assert written == [True, True]
-
-
-def test_an_existing_output_is_refused(tmp_path):
-    (tmp_path / "prepared").mkdir()
-
-    with pytest.raises(FileExistsError):
-        _prepare_spec().prepare(
-            gpd.GeoDataFrame(), tmp_path / "prepared", keep=["label"]
-        )
+    assert written == [True]
 
 
-def test_keep_given_as_text_is_refused(tmp_path):
-    with pytest.raises(TypeError, match="keep"):
-        _prepare_spec().prepare(gpd.GeoDataFrame(), tmp_path / "prepared", keep="label")
+def test_item_ids_follow_the_given_format(tmp_path, loaded):
+    items = _ingest_spec().ingest(
+        _label().gs.anchor,
+        f"{tmp_path}/{{collection}}.tif",
+        id_format="tile_{start:%Y%m%d}",
+    )
+
+    assert items["id"].tolist() == ["tile_20250601"]

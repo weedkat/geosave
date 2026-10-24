@@ -164,6 +164,25 @@ def test_a_recipe_loads_with_its_own_query_and_load_settings(
     assert loaded.attrs["query"].max_items == 3
 
 
+def test_a_recipe_keeps_the_signer_its_client_loads_with(serve, red, coordinate_anchor):
+    def sign(url):
+        return f"{url}?token"
+
+    serve({"planetary_computer": red}, patch_url=sign)
+    recipe = StacRecipe.model_validate(
+        {
+            "collection": "optical",
+            "endpoints": ["planetary_computer"],
+            "load": {"bands": ["red"]},
+        }
+    )
+
+    loaded = recipe.load_raster(coordinate_anchor)
+
+    assert loaded.attrs["config"].patch_url is sign
+    assert loaded.attrs["config"].bands == ["red"]
+
+
 def test_an_unavailable_endpoint_falls_back_to_the_next(serve, red, coordinate_anchor):
     opened = serve(
         {

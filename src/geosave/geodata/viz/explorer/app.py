@@ -5,10 +5,12 @@ from __future__ import annotations
 import copy
 import html
 import json
+import socket
+import threading
 from collections.abc import Mapping, Sequence
 from functools import partial
 from importlib import import_module
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 import geopandas as gpd
@@ -29,6 +31,9 @@ from geosave.geodata.viz.map import BASEMAPS, frame_bbox, scope_hover
 from geosave.geodata.viz.style import EXPLORER_THEME, MATERIAL_STYLESHEET, get_ramp
 from .raster import RasterLayer
 from .vector import VectorLayer
+
+# Seconds a stopped server thread gets to release its port.
+STOP_TIMEOUT = 5
 
 type GeoData = xr.Dataset | xr.DataArray | gpd.GeoDataFrame
 type Layer = RasterLayer | VectorLayer
@@ -70,6 +75,9 @@ class Explorer(pn.viewable.Viewer):
     Display it in a notebook, or call `.serve()` to launch a web server.
     """
 
+    # Explorers this kernel serves, by port, so serving again replaces them.
+    servers: ClassVar[dict[int, Explorer]] = {}
+
     layers = param.List(default=[])
     selected = param.Parameter(default=None)
     basemap = param.Selector(default="Light", objects=list(BASEMAPS))
@@ -92,6 +100,8 @@ class Explorer(pn.viewable.Viewer):
         hv.Store.set_current_backend("bokeh")
         super().__init__(basemap=basemap or "Light")
         self.height = height
+        self.server = None
+        self.port = None
         self._watchers = []
         self._catalog_watchers = {}
         self._layer_watchers = {}
@@ -340,7 +350,9 @@ class Explorer(pn.viewable.Viewer):
     ):
         """Serve the explorer from a script, notebook, or Google Colab.
 
-        Notebooks run the server in a background thread. Scripts block until
+        Notebooks run the server in a background thread, so the cell stays
+        free. Serving again on a port an explorer of this kernel serves, as
+        rerunning the cell does, replaces that server. Scripts block until
         interrupted. Colab displays the server through its port-proxy iframe.
 
         Args:
@@ -357,12 +369,30 @@ class Explorer(pn.viewable.Viewer):
         Returns:
             Native Panel server or background thread, with a `.stop()` method.
 
+        Raises:
+            ValueError: `port` is outside 1-65535.
+            OSError: Another program listens on `port`.
+
         Examples:
-            >>> server = catalog.gs.explore().serve()
-            >>> server = scene.gs.explore().serve(port=5007)
+            >>> explorer = catalog.gs.explore()
+            >>> server = explorer.serve()
+            >>> explorer.stop()
         """
         if not 1 <= port <= 65535:
             raise ValueError("port must be between 1 and 65535")
+        served = Explorer.servers.get(port)
+        if served is not None:
+            served.stop()
+        # Panel binds inside its server thread, where a failure only prints.
+        with socket.socket() as probe:
+            # Tornado reuses addresses too, so a just-stopped server's port binds.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind((address or "", port))
+            except OSError as error:
+                raise OSError(
+                    f"port {port} is in use by another program; pass another port"
+                ) from error
         try:
             from IPython.core.getipython import get_ipython
         except ImportError:
@@ -400,7 +430,22 @@ class Explorer(pn.viewable.Viewer):
         )
         if output is not None and open:
             output.serve_kernel_port_as_iframe(port, height=self.height + 480)
+        self.server = server
+        self.port = port
+        Explorer.servers[port] = self
         return server
+
+    def stop(self) -> None:
+        """Stop the server `serve` started; nothing happens when none runs."""
+        if self.server is None:
+            return
+        self.server.stop()
+        # A server thread releases its port only once its loop has ended.
+        if isinstance(self.server, threading.Thread):
+            self.server.join(timeout=STOP_TIMEOUT)
+        if Explorer.servers.get(self.port) is self:
+            del Explorer.servers[self.port]
+        self.server = None
 
     @property
     def table(self):
@@ -951,9 +996,10 @@ class Explorer(pn.viewable.Viewer):
         return composed
 
     def close(self):
-        """Release the native pane and table callbacks."""
+        """Stop serving and release the native pane and table callbacks."""
         if self._closed:
             return
+        self.stop()
         self._closed = True
         for watcher in self._watchers:
             watcher.inst.param.unwatch(watcher)

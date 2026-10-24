@@ -5,6 +5,7 @@ import pytest
 import xarray as xr
 
 from geosave.geodata.core import GeoAnchor
+from geosave.geodata.stac.source import StacSourceConfig
 from geosave.model.spec import StacRecipe
 
 stac_module = import_module("geosave.model.spec.stac")
@@ -30,24 +31,26 @@ def stac_recipe():
 
 
 class _Source:
-    def __init__(self, loaded):
+    def __init__(self, loaded, patch_url=None):
         self.loaded = loaded
+        self.config = StacSourceConfig(patch_url=patch_url)
 
     def load(self, anchor):
         return self.loaded.assign_attrs(config=self.config, query=self.query)
 
 
 class _Client:
-    def __init__(self, loaded):
+    def __init__(self, loaded, patch_url=None):
         self.loaded = loaded
+        self.patch_url = patch_url
 
     def source(self, collection):
-        return _Source(self.loaded)
+        return _Source(self.loaded, self.patch_url)
 
 
 @pytest.fixture
 def serve(monkeypatch):
-    def connect(served: dict[str, object]) -> list[str]:
+    def connect(served: dict[str, object], *, patch_url=None) -> list[str]:
         opened = []
 
         def open(endpoint):
@@ -55,7 +58,7 @@ def serve(monkeypatch):
             answer = served[endpoint]
             if isinstance(answer, Exception):
                 raise answer
-            return _Client(answer)
+            return _Client(answer, patch_url)
 
         monkeypatch.setattr(stac_module.StacClient, "open", staticmethod(open))
         return opened
