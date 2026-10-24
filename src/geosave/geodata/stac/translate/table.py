@@ -91,7 +91,9 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
 
     # A filtered table's index is bookkeeping, not an Item property.
     table = pa.table(rows.assign(bbox=boxes).to_arrow(index=False))
-    found = rustac.from_arrow(table)
+    # pandas 3 exports a concatenated table as sliced chunks, which rustac
+    # 0.9 reads past the end of and panics on; one chunk per column it reads.
+    found = rustac.from_arrow(table.combine_chunks())
     return [pystac.Item.from_dict(fields) for fields in found["features"]]
 
 

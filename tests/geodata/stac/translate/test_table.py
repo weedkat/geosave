@@ -78,6 +78,24 @@ def test_filtered_rows_keep_only_the_assets_they_have(scene, label, tmp_path) ->
     assert [list(item.assets) for item in labels] == [["label"]]
 
 
+def test_concatenated_tables_become_the_items_they_came_from(scene, label) -> None:
+    items = _items(scene) + _items(label, "label")
+    # pandas 3 exports a concatenated table as sliced Arrow chunks.
+    rows = GeoCatalog.concat(
+        [
+            stac_table.from_items(_items(scene)),
+            stac_table.from_items(_items(label, "label")),
+        ]
+    )
+
+    restored = stac_table.to_items(rows)
+
+    assert [item.id for item in restored] == [item.id for item in items]
+    assert [sorted(item.assets) for item in restored] == [
+        sorted(item.assets) for item in items
+    ]
+
+
 def test_empty_table_converts_to_no_items():
     assert stac_table.to_items(stac_table.from_items([])) == []
 
