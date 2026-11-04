@@ -1,131 +1,176 @@
-import numpy as np
+"""Sampling an item table into windows of paired time steps, and opening a sample."""
+
 import pytest
 
-from geosave.geodata import open_vector
-from geosave.geodata.core import GeoCatalog, GeoSamples
-from geosave.geodata.io.vector import geoparquet
+from geosave.geodata.core.vector.catalog import GeoCatalog
+from geosave.geodata.warnings import DroppedRowsWarning
 
 
-def test_gs_reads_a_sample_table_through_geosamples(items):
-    assert isinstance(items.gs, GeoCatalog)
-    assert isinstance(items.gs.sample().gs, GeoSamples)
+def read_samples(samples) -> list[list[str]]:
+    """Return each sample's Items, in sample order."""
+    sample_ids = []
+    for rows in samples:
+        sample_ids.append(read_ids(rows["id"]))
+    return sample_ids
 
 
-@pytest.mark.parametrize("reader", [open_vector, geoparquet.open_vector])
-@pytest.mark.parametrize("remote", [False, True])
-def test_a_sample_table_round_trips_with_its_collections(
-    items, tmp_path, bucket, reader, remote, grid
-):
-    chips = items.gs.sample().gs.chip(32, overlap=8, target=grid)
-
-    destination = f"{bucket}/chips.parquet" if remote else tmp_path / "chips.parquet"
-    path = chips.gs.to_geoparquet(destination)
-    restored = reader(path)
-
-    assert isinstance(restored.gs, GeoSamples)
-    assert sorted(restored.gs.collections) == ["dem", "label", "s1", "s2"]
-    for column in ("id", "area", "items", "start_datetime", "proj:code"):
-        assert restored[column].tolist() == chips[column].tolist()
-    assert [list(names) for names in restored["collections"]] == chips[
-        "collections"
-    ].tolist()
-    for column in ("proj:transform", "proj:shape", "pad_widths"):
-        restored_values = [np.array(list(value)).tolist() for value in restored[column]]
-        assert restored_values == chips[column].tolist()
-    original = chips.iloc[4].gs.to_xarray()
-    assert restored.iloc[4].gs.to_xarray().identical(original)
+def read_ids(item_ids) -> list[str]:
+    """Return Item ids without the tile prefix, as `collection date`."""
+    ids = []
+    for item_id in item_ids:
+        collection, _, date = item_id.split("_")
+        ids.append(f"{collection} {date}")
+    return ids
 
 
-def test_a_sample_table_refuses_write_options(items, tmp_path):
-    with pytest.raises(ValueError, match="fixes its own encoding"):
-        items.gs.sample().gs.to_geoparquet(tmp_path / "s.parquet", compression="zstd")
+def test_a_sample_is_the_catalog_rows_at_its_indices(tiles):
+    with pytest.warns(DroppedRowsWarning):
+        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D", window=2)
+
+    rows = samples[0]
+    assert type(rows.gs) is GeoCatalog
+    assert rows["collection"].tolist() == ["s2", "s1", "s2", "s1", "dem"]
+    assert rows.equals(tiles.iloc[samples.indices[0]])
+    assert len(samples) == len(samples.indices)
 
 
-def test_a_sample_table_is_queried_by_the_vector_rules(items, grid):
-    chips = items.gs.sample().gs.chip(25, target=grid)
-    first_chip = chips.iloc[0].gs.anchor.geobox.extent
+def test_a_sample_footprint_is_where_its_items_overlap(tiles):
+    footprints = tiles.gs.sample().footprints
 
-    assert len(chips.gs.query(first_chip, predicate="covers")) == 1
-    assert len(chips.gs.query(when="2023")) == 0
-
-
-def test_a_callers_own_columns_ride_through_frame_and_chip(composites, grid):
-    samples = composites.gs.sample().assign(split="train")
-
-    with pytest.warns(Warning):
-        chips = samples.gs.frame(
-            windows={"s2": {"slots": ["-1M", "0M"]}, "s1": {"slots": ["-1M", "0M"]}}
-        ).gs.chip(32, target=grid)
-
-    assert list(chips.columns[: len(GeoSamples.COLUMNS)]) == list(GeoSamples.COLUMNS)
-    assert set(chips["split"]) == {"train"}
+    assert footprints.geometry.iloc[0].equals(tiles.geometry.iloc[0])
+    assert not footprints.geometry.is_empty.any()
+    assert footprints.crs == tiles.crs
 
 
-def test_concat_preserves_nested_collections_and_round_trips(items, tmp_path):
-    left = items[items["collection"].isin(["label", "s2"])].gs.sample()
-    right = items[items["collection"].isin(["label", "dem"])].gs.sample()
-    combined = GeoSamples.concat([left, right])
+def test_footprints_without_pair_are_one_sample_each(tiles):
+    samples = tiles.gs.sample()
 
-    assert set(combined.gs.collections) == {"label", "s1", "s2", "dem"}
-    restored = open_vector(combined.gs.to_geoparquet(tmp_path / "combined.parquet"))
-    assert set(restored.gs.collections) == {"label", "s1", "s2", "dem"}
-    assert restored.iloc[0].gs.to_xarray()["s2"].dataset.attrs["id"] == "s2"
-    combined.attrs["stac:collections"]["s2"]["description"] = "changed"
-    assert left.attrs["stac:collections"]["s2"]["description"] != "changed"
+    assert samples.footprints["items"].tolist() == [10, 1]
 
 
-def test_concat_keeps_the_first_conflicting_collection_definition(items):
-    from copy import deepcopy
+def test_a_step_pairs_each_item_with_its_nearest_partner(tiles):
+    with pytest.warns(DroppedRowsWarning, match="3 s2 Items have no partner"):
+        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D")
 
-    left = items.gs.sample()
-    right = left.copy()
-    right.attrs = deepcopy(left.attrs)
-    right.attrs["stac:collections"]["s2"]["description"] = "different"
-    combined = GeoSamples.concat([left, right])
-    assert (
-        combined.attrs["stac:collections"]["s2"] == left.attrs["stac:collections"]["s2"]
-    )
+    assert read_samples(samples) == [
+        ["s2 20240105", "s1 20240106", "dem 20240101"],
+        ["s2 20240204", "s1 20240203", "dem 20240101"],
+        ["s2 20240308", "s1 20240309", "dem 20240101"],
+    ]
 
 
-@pytest.mark.parametrize(
-    "method,suffix", [("to_geojson", ".geojson"), ("to_geopackage", ".gpkg")]
-)
-def test_samples_reject_exports_that_lose_collections(items, tmp_path, method, suffix):
-    samples = items.gs.sample()
-    path = tmp_path / ("samples" + suffix)
-    with pytest.raises(ValueError, match="to_geoparquet"):
-        getattr(samples.gs, method)(path)
-    assert not path.exists()
+def test_a_dated_collection_outside_pair_joins_no_sample(tiles):
+    samples = tiles.gs.sample(pair=["s2"])
+
+    for rows in samples:
+        assert "s1" not in set(rows["collection"])
+    assert read_samples(samples)[0] == ["s2 20240105", "dem 20240101"]
 
 
-def test_renamed_geometry_keeps_sample_operations_and_round_trips(
-    items, tmp_path, grid
-):
-    from geosave.geodata.core import GeoSample
+def test_windows_roll_over_steps_like_rolling(tiles):
+    samples = tiles.gs.sample(pair=["s2"], window=3, step=2)
 
-    samples = items.gs.sample().rename_geometry("footprint")
-    assert isinstance(samples.gs, GeoSamples)
-    assert isinstance(samples.iloc[0].gs, GeoSample)
-    assert "s2" in samples.iloc[0].gs.to_xarray().children
-    chips = samples.gs.chip(32, target=grid)
-    assert chips.geometry.name == "footprint"
-    assert isinstance(chips.gs, GeoSamples)
-    assert chips.geometry.iloc[0].equals(
-        chips.iloc[0].gs.anchor.geobox.extent.to_crs("EPSG:4326").geom
-    )
-    restored = open_vector(samples.gs.to_geoparquet(tmp_path / "renamed.parquet"))
-    assert restored.geometry.name == "footprint"
-    assert isinstance(restored.gs, GeoSamples)
+    assert read_samples(samples) == [
+        ["s2 20240105", "s2 20240120", "s2 20240204", "dem 20240101"],
+        ["s2 20240204", "s2 20240308", "s2 20240407", "dem 20240101"],
+    ]
 
 
-def test_frames_preserve_renamed_geometry_and_crs(composites):
-    samples = composites.gs.sample().rename_geometry("footprint").to_crs("EPSG:3857")
-    with pytest.warns(Warning):
-        frames = samples.gs.frame(
-            windows={"s2": {"slots": ["-1M", "0M"]}, "s1": {"slots": ["-1M", "0M"]}}
+def test_freq_slots_are_resample_buckets_filled_by_keep(tiles):
+    last = tiles.gs.sample(pair=["s2"], freq="MS")
+    first = tiles.gs.sample(pair=["s2"], freq="MS", keep="first")
+
+    assert read_samples(last)[0] == ["s2 20240120", "dem 20240101"]
+    assert read_samples(first)[0] == ["s2 20240105", "dem 20240101"]
+
+
+def test_an_empty_bucket_breaks_a_window(tiles):
+    without_february = tiles[~tiles["id"].str.endswith("20240204")]
+
+    with pytest.warns(DroppedRowsWarning, match="windows hold an empty slot"):
+        samples = without_february.gs.sample(pair=["s2"], window=2, freq="MS")
+
+    assert read_samples(samples) == [["s2 20240308", "s2 20240407", "dem 20240101"]]
+
+
+def test_a_monthly_window_of_pairs(tiles):
+    with pytest.warns(DroppedRowsWarning):
+        samples = tiles.gs.sample(
+            pair=["s2", "s1"], tolerance="2D", window=2, freq="MS"
         )
-    assert len(frames) > 0
-    assert frames.geometry.name == "footprint"
-    assert frames.crs == samples.crs
-    assert frames.geometry.notna().all()
-    assert frames.geometry.geom_equals(samples.geometry.iloc[0]).all()
+
+    assert read_samples(samples) == [
+        ["s2 20240105", "s1 20240106", "s2 20240204", "s1 20240203", "dem 20240101"],
+        ["s2 20240204", "s1 20240203", "s2 20240308", "s1 20240309", "dem 20240101"],
+    ]
+
+
+def test_a_footprint_without_a_window_gives_no_sample(tiles):
+    with pytest.warns(DroppedRowsWarning, match="1 footprints hold fewer than 2"):
+        samples = tiles.gs.sample(pair=["s2"], window=2)
+
+    # Tile B holds one scene, so only tile A has windows of two.
+    for rows in samples:
+        for item_id in rows["id"]:
+            assert item_id.split("_")[1] == "300000"
+
+
+def test_window_options_need_pair(tiles):
+    with pytest.raises(ValueError, match="name them with pair"):
+        tiles.gs.sample(window=3)
+
+
+def test_pair_names_existing_collections(tiles):
+    with pytest.raises(KeyError, match="l8"):
+        tiles.gs.sample(pair=["s2", "l8"])
+
+
+@pytest.mark.parametrize("overlap", [0, 1.5])
+def test_overlap_is_a_fraction(tiles, overlap):
+    with pytest.raises(ValueError, match="fraction"):
+        tiles.gs.sample(overlap=overlap)
+
+
+def test_no_complete_window_raises(tiles):
+    with pytest.raises(ValueError, match="no footprint holds 9"):
+        tiles.gs.sample(pair=["s2"], window=9)
+
+
+def test_sample_an_empty_catalog(catalog):
+    samples = catalog.iloc[:0].gs.sample()
+
+    assert len(samples) == 0
+
+
+def test_a_sample_opens_lazily_one_group_per_collection(tiles):
+    with pytest.warns(DroppedRowsWarning):
+        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D", window=2)
+
+    tree = samples[0].gs.to_datatree()
+
+    assert tree.gs.groups == ("s2", "s1", "dem")
+    assert tree["s2"].gs.to_dataset().sizes["time"] == 2
+    assert tree["s1"].gs.to_dataset().sizes["time"] == 2
+    assert tree["s1"].gs.to_dataset().gs.resolution.x == 20
+    assert "time" not in tree["dem"].gs.to_dataset().dims
+    for raster in tree.gs.rasters.values():
+        for variable in raster.data_vars.values():
+            assert variable.chunks is not None
+
+
+def test_a_sample_holds_the_catalog_it_grouped(tiles):
+    samples = tiles.gs.sample(pair=["s2"], window=2)
+    ids = samples[0]["id"].tolist()
+
+    filtered = tiles[tiles["collection"] == "dem"]
+
+    assert len(filtered) == 1
+    assert samples[0]["id"].tolist() == ids
+
+
+def test_samples_of_a_reindexed_catalog_select_by_position(tiles):
+    shuffled = tiles.iloc[::-1].set_index("id", drop=False)
+
+    samples = shuffled.gs.sample(pair=["s2"], window=2)
+
+    assert read_samples(samples)[0] == ["s2 20240105", "s2 20240120", "dem 20240101"]

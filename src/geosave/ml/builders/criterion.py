@@ -35,6 +35,3 @@ def build_criterion(
     configured = CriterionSpec.model_validate(spec)
     factory = configured.resolve(registry, nn.Module)
     return factory(**configured.init_args)
-
-
-__all__ = ["CriterionSpec", "build_criterion"]

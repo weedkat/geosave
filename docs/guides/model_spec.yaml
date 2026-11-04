@@ -1,0 +1,40 @@
+schema_version: 3
+rasters:
+  optical:
+    variables: [red, nir]
+    require_crs: true
+preprocessing:
+  reflectance:
+    call: !ref optical.gs.mask_and_scale
+encoding:
+  image:
+    call: geosave.model.processing.to_tensor
+    kwargs: {raster: !ref reflectance, dims: [band, time, y, x], dtype: float32}
+  center:
+    call: !ref image.mean
+  centered:
+    call: torch.sub
+    kwargs: {input: !ref image, other: !ref center}
+inputs:
+  image: !ref centered
+pixels: [image]
+tensors:
+  image: {shape: [2, 2, height, width], dtype: float32}
+transforms:
+  image:
+    call: geosave.model.processing.normalize
+    kwargs: {value: !ref image, mean: [0, 0], std: [2, 2], dim: -4}
+decoding:
+  scaled:
+    call: torch.mul
+    kwargs: {input: !ref prediction, other: 2}
+  restored:
+    call: torch.add
+    kwargs: {input: !ref scaled, other: !ref center}
+  raster:
+    call: geosave.model.processing.to_raster
+    kwargs:
+      value: !ref restored
+      reference: !ref optical
+      dims: [band, y, x]
+      name: prediction

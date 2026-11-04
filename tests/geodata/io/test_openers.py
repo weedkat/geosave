@@ -7,126 +7,16 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
-from upath import UPath
+import xarray as xr
 
-from geosave.geodata import io, open_vector
-from geosave.geodata.io import geotiff, netcdf, zarr
-from geosave.geodata.io.openers import open_raster, open_tree
-from geosave.geodata.warnings import DroppedAttrsWarning
+from geosave.geodata import open_vector
+from geosave.geodata.io.formats import geotiff
+from geosave.geodata.io.openers import open_raster
 from tests.geodata.conftest import build_raster
-from tests.geodata.conftest import flat
-
-
-def test_a_tiff_on_an_hf_bucket_opens_through_the_s3_gateway(monkeypatch) -> None:
-    opened: list[str] = []
-
-    def open_(path, *args, **kwargs):
-        opened.append(str(path))
-        raise OSError("no network in this test")
-
-    monkeypatch.setattr(io.gdal.rasterio, "open", open_)
-
-    with pytest.raises(OSError, match="no network"):
-        open_raster("hf://buckets/me/samples/forest/a.tif")
-    assert opened == ["s3://me/samples/forest/a.tif"]
 
 
 def _flat():
     return build_raster(times=1).squeeze("time", drop=False)
-
-
-def test_a_directory_holding_no_raster_is_refused(tmp_path: Path) -> None:
-    (tmp_path / "notes.txt").write_text("nothing here")
-
-    with pytest.raises(ValueError, match="holds no layer"):
-        open_tree(tmp_path)
-
-
-def test_two_entries_naming_one_layer_are_refused(tmp_path: Path) -> None:
-    folder = tmp_path / "s1"
-    folder.mkdir()
-    netcdf.write(_flat()[["nir"]], folder / "label.nc")
-    zarr.write(_flat()[["nir"]], folder / "label.zarr")
-
-    with pytest.raises(ValueError, match="'label'"):
-        open_tree(folder)
-
-
-def test_a_directory_of_zarr_layers_opens_one_group_per_store(tmp_path: Path) -> None:
-    folder = tmp_path / "s1"
-    folder.mkdir()
-    zarr.write(_flat()[["nir"]], folder / "label.zarr")
-    zarr.write(build_raster(times=2)[["red"]], folder / "optical.zarr")
-
-    assert open_tree(folder).gs.groups == ("label", "optical")
-
-
-def test_storage_options_reach_a_folder_of_cog_and_zarr_layers(
-    tmp_path: Path,
-) -> None:
-    folder = tmp_path / "s1"
-    folder.mkdir()
-    geotiff.write_cog(_flat()[["red"]], folder / "optical.tif")
-    zarr.write(_flat()[["nir"]], folder / "label.zarr")
-
-    tree = open_tree(folder, storage_options={})
-
-    assert tree.gs.groups == ("label", "optical")
-
-
-@pytest.mark.parametrize("remote", [True, False], ids=["memory", "file-url"])
-def test_a_folder_url_of_zarr_layers_opens_one_group_per_store(
-    bucket: str, tmp_path: Path, remote: bool
-) -> None:
-    folder = f"{bucket}/s1" if remote else (tmp_path / "s1").as_uri()
-    zarr.write(_flat()[["nir"]], f"{folder}/label.zarr")
-    zarr.write(build_raster(times=2)[["red"]], f"{folder}/optical.zarr")
-
-    assert open_tree(folder).gs.groups == ("label", "optical")
-
-
-def test_open_raster_reads_a_remote_upath(bucket: str) -> None:
-    store = UPath(bucket) / "scene.zarr"
-    zarr.write(build_raster()[["red"]], store)
-
-    assert open_raster(store).gs.variables == ("red",)
-
-
-@pytest.mark.parametrize("fail", [False, True])
-def test_directory_reader_owns_opened_layers(tmp_path, monkeypatch, fail):
-    from geosave.geodata.io import openers
-
-    for name in ("a.zarr", "b.zarr"):
-        (tmp_path / name).touch()
-    closed = []
-
-    def read(path, **options):
-        if fail and path.stem == "b":
-            raise ValueError("unreadable layer")
-        raster = _flat().copy()
-        raster.set_close(lambda: closed.append(path.stem))
-        return raster
-
-    monkeypatch.setattr(openers, "open_raster", read)
-    if fail:
-        with pytest.raises(ValueError, match="unreadable"):
-            open_tree(tmp_path)
-        assert closed == ["a"]
-    else:
-        sample = open_tree(tmp_path)
-        assert closed == []
-        sample.close()
-        assert sorted(closed) == ["a", "b"]
-
-
-def test_named_sources_open_one_group_each(tmp_path: Path) -> None:
-    label = geotiff.write_cog(_flat()[["nir"]], tmp_path / "a.tif")
-    optical = zarr.write(build_raster(times=2)[["red"]], tmp_path / "b.zarr")
-
-    sample = open_tree({"label": label, "optical": optical})
-
-    assert sample.gs.groups == ("label", "optical")
-    assert sample.gs.rasters["optical"].sizes["time"] == 2
 
 
 @pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet"])
@@ -151,84 +41,12 @@ def test_a_plain_vector_reads_back_with_its_own_columns(tmp_path, suffix):
     assert sorted(read.columns) == ["class", "geometry"]
 
 
-def test_vectors_open_through_open_vector_and_read_vector_is_gone(tmp_path) -> None:
-    import geopandas as gpd
-    from shapely.geometry import Point
-
-    import geosave as gs
-
-    plots = gpd.GeoDataFrame({"name": ["a"]}, geometry=[Point(0, 0)], crs="EPSG:4326")
-    path = plots.gs.to_geoparquet(tmp_path / "plots.parquet")
-
-    assert gs.open_vector(path)["name"].tolist() == ["a"]
-    assert not hasattr(gs.geodata, "read_vector")
-
-
-def test_open_raster_reads_back_what_to_cog_wrote(tmp_path: Path) -> None:
-    import numpy as np
-
-    scene = build_raster(times=2)
-    paths = flat(scene.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}_{{band}}.tif"))
-
-    restored = open_raster(paths)
-
-    assert restored.gs.variables == ("red", "nir")
-    np.testing.assert_array_equal(restored.red.values, scene.red.values)
-
-
-def test_open_tree_groups_scenes_by_their_collection(tmp_path: Path) -> None:
-    from geosave.geodata import tree
-
-    image = build_raster(times=1)
-    label = image.isel(time=0, drop=True)[["red"]].rename(red="label")
-    scenes = tree({"optical": image, "label": label}).gs.to_cog(
-        {
-            "optical": f"{tmp_path}/optical_{{time:%Y%m%d}}.tif",
-            "label": f"{tmp_path}/label.tif",
-        }
-    )
-
-    assert open_tree(scenes).gs.groups == ("optical", "label")
-
-
-def test_open_tree_refuses_scenes_naming_no_collection(tmp_path: Path) -> None:
-    scenes = build_raster(times=2).gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
-
-    with pytest.raises(ValueError, match="names no collection"):
-        open_tree(scenes)
-
-
-def test_a_tag_the_records_agree_on_survives(tmp_path: Path) -> None:
-    cube = build_raster(times=2).assign_attrs(TIFFTAG_ARTIST="geosave")
-    files = flat(cube.gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif"))
-
-    assert open_raster(files).attrs["TIFFTAG_ARTIST"] == "geosave"
-
-
-def test_a_tag_the_records_state_differently_drops_and_warns(tmp_path: Path) -> None:
-    cube = build_raster(times=2)
-    files = [
-        file
-        for position in range(2)
-        for file in flat(
-            cube.isel(time=[position])
-            .assign_attrs(TIFFTAG_ARTIST=f"artist{position}")
-            .gs.to_cog(f"{tmp_path}/s_{{time:%Y%m%d}}.tif")
-        )
-    ]
-
-    with pytest.warns(DroppedAttrsWarning, match="TIFFTAG_ARTIST"):
-        restored = open_raster(files)
-
-    assert "TIFFTAG_ARTIST" not in restored.attrs
-
-
 def test_a_signed_url_opens_by_the_suffix_of_its_path(monkeypatch) -> None:
     from geosave.geodata.io import openers
 
     opened = []
     monkeypatch.setattr(
-        openers.gdal, "open_raster", lambda source, **options: opened.append(source)
+        openers.rasterio, "open_raster", lambda source, **options: opened.append(source)
     )
     url = "https://host/scene/B02.tif?st=2026-10-11&sig=CXPh%3D"
 
@@ -237,8 +55,33 @@ def test_a_signed_url_opens_by_the_suffix_of_its_path(monkeypatch) -> None:
     assert opened == [url]
 
 
+def test_a_signed_vector_url_preserves_its_query(tmp_path, monkeypatch) -> None:
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    from geosave.geodata.io import openers
+
+    url = "https://host/catalog.parquet?sig=abc%3D"
+    path = tmp_path / "catalog.parquet"
+    gpd.GeoDataFrame(
+        {"class": [2]}, geometry=[Point(1, 3)], crs="EPSG:4326"
+    ).to_parquet(path)
+    original = openers.geoparquet.storage.location
+
+    # Replace remote access while keeping dispatch and GeoParquet decoding real.
+    def local(source, storage_options=None):
+        assert source == url
+        return original(path, storage_options)
+
+    monkeypatch.setattr(openers.geoparquet.storage, "location", local)
+    restored = open_vector(url)
+
+    assert restored["class"].tolist() == [2]
+    assert restored.geometry.iloc[0] == Point(1, 3)
+
+
 def test_a_read_geotiff_names_the_file_it_came_from(tmp_path: Path) -> None:
-    (path,) = flat(build_raster().gs.to_cog(tmp_path / "scene.tif"))
+    (path,) = build_raster().gs.to_cog(tmp_path, path_format="scene.tif")
 
     assert open_raster(path).encoding["source"] == str(path)
 
@@ -282,3 +125,164 @@ def test_unindexed_pixel_raster_needs_no_geographic_id(tmp_path, format):
     saved = getattr(source.gs, f"to_{format}")(tmp_path / f"pixels{suffix}")
     with open_raster(saved) as restored:
         xr.testing.assert_equal(restored, source)
+
+
+def test_open_vector_does_not_read_a_folder(rows, tmp_path) -> None:
+    rows.gs.to_geoparquet(tmp_path / "catalog" / "items.parquet")
+
+    with pytest.raises(ValueError, match="no supported vector format"):
+        open_vector(tmp_path / "catalog")
+
+
+def test_several_files_are_not_one_raster(tmp_path: Path) -> None:
+    files = build_raster(times=2).gs.to_cog(tmp_path)
+
+    with pytest.raises(TypeError, match="to_catalog"):
+        open_raster(files)
+
+
+def test_files_laid_out_across_dates_read_back_through_their_catalog(
+    tmp_path: Path,
+) -> None:
+    scene = build_raster(times=2)
+    rows = scene.gs.to_catalog(tmp_path, collection="s2")
+
+    with rows.gs.to_datatree() as tree:
+        restored = tree["s2"].gs.to_dataset()
+
+        assert sorted(restored.data_vars) == ["nir", "red"]
+        assert restored.sizes["time"] == 2
+        np.testing.assert_array_equal(restored.red.values, scene.red.values)
+
+
+@pytest.mark.parametrize("suffix", [".zarr", ".nc"])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_stored_hierarchy_determines_type_without_computing_pixels(
+    tmp_path, suffix, grouped
+):
+    import dask
+    import dask.array as da
+
+    source = build_raster(times=2)
+    written = xr.DataTree.from_dict({"/scene": source}) if grouped else source
+    path = tmp_path / f"scene{suffix}"
+    if suffix == ".zarr":
+        written.gs.to_zarr(path)
+    else:
+        written.gs.to_netcdf(path)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("Opening computed pixels")
+
+    with dask.config.set(scheduler=refuse):
+        restored = open_raster(path)
+    with restored:
+        assert isinstance(restored, xr.DataTree if grouped else xr.Dataset)
+        dataset = restored["scene"].to_dataset() if grouped else restored
+        assert isinstance(dataset.red.data, da.Array)
+        xr.testing.assert_equal(dataset, source)
+
+
+@pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet"])
+@pytest.mark.parametrize("columns", [[], ["class"]])
+def test_vector_column_selection_retains_geometry_and_filters_bbox(
+    tmp_path, suffix, columns
+):
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    features = gpd.GeoDataFrame(
+        {"class": [1, 2], "other": [3, 4]},
+        geometry=[Point(0, 0), Point(10, 10)],
+        crs=4326,
+    )
+    writer = {
+        ".geojson": features.gs.to_geojson,
+        ".gpkg": features.gs.to_geopackage,
+        ".parquet": features.gs.to_geoparquet,
+    }[suffix]
+    kwargs = {"write_covering_bbox": True} if suffix == ".parquet" else {}
+    saved = writer(tmp_path / f"features{suffix}", **kwargs)
+    result = open_vector(saved, columns=columns, bbox=(-1, -1, 1, 1))
+    assert list(result.columns) == [*columns, "geometry"]
+    assert result.geometry.tolist() == [Point(0, 0)]
+    assert result.crs == features.crs
+
+
+@pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet", ".tif"])
+def test_remote_filesystem_options_work_for_real_reads(tmp_path, bucket, suffix):
+    import geopandas as gpd
+    from shapely.geometry import Point
+    from upath import UPath
+
+    destination = UPath(f"{bucket}/remote{suffix}", skip_instance_cache=True)
+    if suffix == ".tif":
+        source = _flat()
+        local = geotiff.write_cog(source, tmp_path / "scene.tif")
+    else:
+        source = gpd.GeoDataFrame({"class": [2]}, geometry=[Point(1, 3)], crs=4326)
+        writer = {
+            ".geojson": source.gs.to_geojson,
+            ".gpkg": source.gs.to_geopackage,
+            ".parquet": source.gs.to_geoparquet,
+        }[suffix]
+        local = writer(tmp_path / f"scene{suffix}")
+    destination.write_bytes(local.read_bytes())
+    if suffix == ".tif":
+        with open_raster(destination) as restored:
+            np.testing.assert_array_equal(restored.red.compute(), source.red)
+    else:
+        restored = open_vector(
+            str(destination), storage_options={"skip_instance_cache": True}
+        )
+        assert restored.geometry.tolist() == source.geometry.tolist()
+        assert restored["class"].tolist() == [2]
+
+
+def test_hugging_face_repository_raster_uses_explicit_filesystem_options(
+    tmp_path, monkeypatch
+):
+    from contextlib import contextmanager
+    from geosave.geodata.io import rasterio as reader
+
+    source = _flat()
+    local = geotiff.write_cog(source, tmp_path / "scene.tif")
+
+    @contextmanager
+    def download(path):
+        assert path.storage_options["token"] == "test-token"
+        yield local
+
+    monkeypatch.setattr(reader, "localize", download)
+    with open_raster(
+        "hf://datasets/owner/repo/scene.tif", storage_options={"token": "test-token"}
+    ) as restored:
+        np.testing.assert_array_equal(restored.red.compute(), source.red)
+
+
+def test_remote_raster_download_lives_until_close_and_is_removed_on_failure(
+    bucket, tmp_path, monkeypatch
+):
+    from tempfile import TemporaryDirectory
+    from geosave.geodata.io import storage
+
+    folders = []
+
+    def temporary():
+        folder = TemporaryDirectory()
+        folders.append(Path(folder.name))
+        return folder
+
+    local = geotiff.write_cog(_flat(), tmp_path / "scene.tif")
+    remote = storage.location(f"{bucket}/scene.tif")
+    remote.write_bytes(local.read_bytes())
+    monkeypatch.setattr(storage, "TemporaryDirectory", temporary)
+    restored = open_raster(remote)
+    assert folders[0].exists()
+    np.testing.assert_array_equal(restored.red.compute(), _flat().red)
+    restored.close()
+    restored.close()
+    assert not folders[0].exists()
+    with pytest.raises(FileNotFoundError):
+        open_raster(f"{bucket}/missing.tif")
+    assert not folders[1].exists()

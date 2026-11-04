@@ -31,11 +31,10 @@ src/geosave/
 └── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
-├── core/         # `gs` accessors and GeoAnchor; raster/ (dataarray, dataset, datatree, constructors), vector/ (vector, item table, sample table, row)
+├── core/         # `gs` accessors, GeoAnchor and Chips; raster/ (dataarray, dataset, datatree, chips, grid), vector/ (vector base, frame, catalog, sampling)
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
-├── stac/         # extensions/ per schema, translate/ per STAC level, search/, source.py, create.py
-├── sampling/     # join Items into samples, frame, chip, and merge; nothing public
+├── stac/         # extensions/ per schema, catalog/item/asset/band metadata, search/
 ├── transform/    # explicit operations, one module per thing changed: warp, extent, combine, nodata, temporal, color, vector
 └── features/     # spectral indices and masks
 
@@ -56,7 +55,12 @@ Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_fl
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC is organized on two axes. `stac/extensions/` has one module per extension schema and is the only importer of `pystac.extensions`. `stac/translate/` has one module per STAC level, each translating to its xarray counterpart and composing the level below: Collection <-> root ACDD attrs, Item <-> a scene (files of one collection, instant and grid), Asset <-> one file and its variables, band <-> one variable's attrs. Public builders and clients (`create_item`, `StacClient`, `StacTable`, `StacSource`) stay thin over these.
+STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
+`stac/extensions/` has one module per schema and is the only production importer
+of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
+`io.load_dataset` and `io.load_datatree` load selected Items through ODC. Format
+readers/writers live in `io/formats/`, and `io/stac.py` owns raster asset I/O.
+`GeoAnchor` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Design
 
@@ -134,6 +138,18 @@ tests/geodata/core/raster/test_dataset.py
 Persistence changes require round-trip tests.
 
 Operations that promise lazy execution must test that laziness is preserved.
+
+Choose tests from core workflows and meaningful failure modes: wrong values or
+grids, lost metadata, eager reads, broken training, and unusable saved artifacts.
+Each test must add distinct protection beyond the surviving tests. Prefer small
+real examples and representative cases over exhaustive combinations.
+
+Do not add a test just because a method exists. Avoid re-testing dependency
+validation, private helper structure, incidental defaults or layout, exact export
+lists, removed names, and internal call paths. Preserve checks that prevent
+silent data corruption or unintended execution. An intentional contract change
+should update its tests; existing tests are evidence to assess, not a reason to
+preserve an obsolete design.
 
 ## Public API and Docstrings
 

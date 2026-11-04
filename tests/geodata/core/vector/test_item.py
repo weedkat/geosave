@@ -1,18 +1,14 @@
+from __future__ import annotations
+
+
 import dask.array as da
-import pytest
 import xarray as xr
-
-from geosave.geodata.core import GeoItem
-
-
-def test_an_item_row_reads_through_geoitem(items):
-    assert isinstance(items.iloc[0].gs, GeoItem)
 
 
 def test_an_item_row_opens_lazily_on_its_native_grid(items, wide_grid):
     radar_row = items[items["collection"] == "s1"].iloc[0]
 
-    raster = radar_row.gs.to_xarray()
+    raster = radar_row.gs.to_datatree().gs.to_dataset()
 
     assert isinstance(raster, xr.Dataset)
     assert raster.gs.geobox == wide_grid
@@ -20,41 +16,49 @@ def test_an_item_row_opens_lazily_on_its_native_grid(items, wide_grid):
     assert raster.vv.dtype == "uint16"
 
 
-def test_an_item_row_carries_its_collections_acdd(items):
-    raster = items.iloc[0].gs.to_xarray()
+def test_boundary_record_has_an_accessor_but_is_not_a_stac_item():
+    import geopandas as gpd
+    import pytest
+    from shapely.geometry import box
 
-    assert raster.attrs["id"] == items.iloc[0]["collection"]
+    boundary = gpd.GeoDataFrame(
+        {"name": ["area"]}, geometry=[box(0, 0, 1, 1)], crs=4326
+    )
+    record = boundary.iloc[0]
 
-
-def test_an_item_rows_anchor_is_its_grid_over_its_span(items, grid):
-    anchor = items.iloc[1].gs.anchor
-
-    assert anchor.geobox == grid
-    assert str(anchor.timespan[0]) == "2024-03-08 00:00:00"
-
-
-def test_a_row_of_neither_table_has_no_gs_accessor():
-    import pandas as pd
-
-    with pytest.raises(AttributeError, match="item table or a sample table"):
-        pd.Series({"a": 1}).gs  # noqa: B018
+    with pytest.raises(ValueError, match="STAC Item operations need.*to_catalog"):
+        record.gs.to_item()
+    assert not hasattr(boundary["name"], "gs")
+    assert not hasattr(boundary.geometry, "gs")
 
 
-def test_a_timeless_item_reads_without_time_coordinates(grid, tmp_path):
+def test_an_item_row_reads_its_pixels_onto_a_grid(items, wide_grid):
     import numpy as np
 
-    from geosave.geodata import raster
-    from geosave.geodata.warnings import TimelessItemWarning
-    from tests.geodata.conftest import item_table
+    radar_row = items[items["collection"] == "s1"].iloc[0]
 
-    data = raster({"height": (("y", "x"), np.ones(grid.shape, dtype="float32"))}, grid)
-    with pytest.warns(TimelessItemWarning):
-        items = item_table(data.gs.to_cog(str(tmp_path / "dem.tif")), collection="dem")
-    opened = items.iloc[0].gs.to_xarray()
-    assert "time" not in opened.coords
-    assert "start_datetime" not in opened.coords
-    assert "end_datetime" not in opened.coords
-    assert opened.attrs["id"] == "dem"
-    assert isinstance(opened.height.data, da.Array)
-    sample = items.gs.sample().iloc[0].gs.to_xarray()["dem"].dataset
-    assert sample.identical(opened)
+    pixels = radar_row.gs.read_pixels(wide_grid, variables=["vv"])
+
+    assert pixels.odc.geobox == wide_grid
+    stored = (
+        radar_row.gs.to_datatree()
+        .gs.to_dataset()
+        .vv.gs.to_nan()
+        .astype("float32")
+        .values
+    )
+    np.testing.assert_array_equal(pixels.vv.values, stored)
+
+
+def test_a_row_on_mixed_grids_reads_each_grid_as_a_node(tmp_path):
+    from geosave.geodata.stac.catalog import from_items
+    from tests.geodata.io.test_stac import write_mixed_scene
+
+    rows = from_items([write_mixed_scene(tmp_path)])
+
+    scene = rows.iloc[0].gs.to_datatree()
+    tree = rows.gs.to_datatree()
+
+    assert list(scene.gs.rasters) == ["r10m", "r20m"]
+    assert list(tree.gs.rasters) == ["s2/r10m", "s2/r20m"]
+    assert abs(tree["s2"].gs.to_dataset().odc.geobox.resolution.x) == 10

@@ -3,17 +3,17 @@
 from pathlib import Path
 
 import dask.array as da
-from odc.geo.geobox import GeoBox
 import xarray as xr
+from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.raster.create import raster
+import geosave  # noqa: F401  registers the .gs accessors
 from geosave.model.spec import ModelSpec
 
 
 def sample_raster() -> xr.Dataset:
     """Return a small lazy raster with four packed Sentinel-2 bands."""
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
-    optical = raster(
+    optical = xr.Dataset(
         {
             name: (
                 ("y", "x"),
@@ -25,9 +25,8 @@ def sample_raster() -> xr.Dataset:
                 ("B04", 2000),
                 ("B08", 6000),
             )
-        },
-        grid,
-    )
+        }
+    ).gs.write_grid(grid)
     for variable in optical.data_vars.values():
         variable.attrs.update(scale_factor=0.0001, add_offset=0.0)
     return optical

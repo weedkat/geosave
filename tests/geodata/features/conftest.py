@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import raster
+from tests.conftest import build_dataset
 
 BANDS = ("B01", "B02", "B04", "B05", "B07", "B08", "B8A", "B09", "B10", "B11", "B12")
 
@@ -24,7 +24,7 @@ def sentinel(chunks: dict[str, int] | None = None) -> xr.Dataset:
     grid = GeoBox.from_bbox((0, 0, 320, 320), crs="EPSG:32633", resolution=10)
     values = np.random.default_rng(4).uniform(0.1, 0.8, (2, 32, 32)).astype("float32")
     dims = ("time", "y", "x")
-    built = raster(
+    built = build_dataset(
         {band: (dims, values + 0.01 * offset) for offset, band in enumerate(BANDS)}
         | {"SCL": (dims, np.full(values.shape, 4, dtype="uint8"))},
         grid,

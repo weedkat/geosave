@@ -5,7 +5,9 @@ import pytest
 import xarray as xr
 
 from geosave.geodata.core import GeoAnchor
-from geosave.geodata.stac.source import StacSourceConfig
+from geosave.model.spec.stac import StacLoadConfig
+from odc.geo.geobox import GeoBox
+from tests.geodata.conftest import create_test_collection
 from geosave.model.spec import StacRecipe
 
 stac_module = import_module("geosave.model.spec.stac")
@@ -13,13 +15,13 @@ stac_module = import_module("geosave.model.spec.stac")
 
 @pytest.fixture
 def coordinate_anchor():
-    return GeoAnchor.from_coordinates(
-        45,
-        12,
-        4,
-        10,
-        crs="EPSG:32633",
-        timespan="2025-01",
+    return GeoAnchor.from_bbox((12, 45, 12.01, 45.01), timespan="2025-01")
+
+
+@pytest.fixture
+def coordinate_grid(coordinate_anchor):
+    return GeoBox.from_geopolygon(
+        coordinate_anchor.geometry, crs="EPSG:32633", resolution=10
     )
 
 
@@ -30,22 +32,18 @@ def stac_recipe():
     )
 
 
-class _Source:
-    def __init__(self, loaded, patch_url=None):
-        self.loaded = loaded
-        self.config = StacSourceConfig(patch_url=patch_url)
-
-    def load(self, anchor):
-        return self.loaded.assign_attrs(config=self.config, query=self.query)
-
-
 class _Client:
     def __init__(self, loaded, patch_url=None):
         self.loaded = loaded
         self.patch_url = patch_url
+        self.query = None
 
-    def source(self, collection):
-        return _Source(self.loaded, self.patch_url)
+    def collection(self, collection):
+        return create_test_collection(collection, description="Test collection")
+
+    def search_items(self, query):
+        self.query = query
+        return [self]
 
 
 @pytest.fixture
@@ -60,6 +58,13 @@ def serve(monkeypatch):
                 raise answer
             return _Client(answer, patch_url)
 
+        def load(items, *, geobox, collection, **options):
+            client = items[0]
+            return client.loaded.assign_attrs(
+                config=StacLoadConfig(**options), query=client.query
+            )
+
+        monkeypatch.setattr(stac_module, "load_dataset", load)
         monkeypatch.setattr(stac_module.StacClient, "open", staticmethod(open))
         return opened
 
@@ -71,14 +76,3 @@ def red() -> xr.Dataset:
     return xr.Dataset(
         {"red": (("y", "x"), np.zeros((2, 2))), "nir": (("y", "x"), np.ones((2, 2)))}
     )
-
-
-# Raw scenes and monthly composites, for the frame and chip specs.
-from tests.geodata.sampling.conftest import (  # noqa: E402, F401
-    composites,
-    grid,
-    items,
-    radar,
-    sample,
-    wide_grid,
-)

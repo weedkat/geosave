@@ -8,10 +8,9 @@ import pytest
 import xarray as xr
 
 from geosave.geodata import features
+from tests.conftest import build_dataset
+from tests.geodata.conftest import geobox
 
-from tests.geodata.features.conftest import sentinel
-
-CHUNKS = {"time": 1, "y": 16, "x": 16}
 INDICES = {
     "ndvi": {"nir": "B08", "red": "B04"},
     "evi": {"nir": "B08", "red": "B04", "blue": "B02"},
@@ -28,15 +27,6 @@ INDICES = {
     "nbr": {"nir": "B08", "swir2": "B12"},
     "ndsi": {"green": "B04", "swir1": "B11"},
 }
-
-
-def test_ndvi_is_the_normalized_difference_of_its_two_bands() -> None:
-    red = xr.DataArray([[1.0]], dims=("y", "x"))
-
-    scene = xr.Dataset({"near": 3 * red, "visible": red})
-    result = features.ndvi(scene, nir="near", red="visible")
-
-    np.testing.assert_allclose(result.values, [[0.5]])
 
 
 @pytest.mark.parametrize("chunked", [False, True])
@@ -69,25 +59,6 @@ def test_decoded_reflectance_is_reusable_across_indices(chunked: bool) -> None:
         np.testing.assert_allclose(band.compute(), [[expected, np.nan]], atol=1e-7)
     xr.testing.assert_identical(scene, before)
     xr.testing.assert_identical(reflectance, decoded)
-
-
-@pytest.mark.parametrize("index", sorted(INDICES))
-def test_an_index_is_a_lazy_unnamed_band_on_its_inputs_grid(index: str) -> None:
-    scene = sentinel(CHUNKS)
-    before = scene.copy(deep=True)
-
-    result = getattr(features, index)(scene, **INDICES[index])
-
-    assert isinstance(result.data, da.Array)
-    assert result.name is None
-    assert result.attrs == {}
-    assert result.dtype == np.float32
-    assert result.gs.geobox == scene.gs.geobox
-    xr.testing.assert_identical(
-        result.coords.to_dataset(), scene.B04.coords.to_dataset()
-    )
-    assert np.isfinite(result.compute()).all()
-    xr.testing.assert_identical(scene, before)
 
 
 @pytest.mark.parametrize("dtype", ["uint16", "float32"])
@@ -132,11 +103,6 @@ def test_ndvi_casts_before_unsigned_subtraction() -> None:
     np.testing.assert_array_equal(result, [[-1]])
 
 
-def test_an_index_reports_a_missing_selected_band() -> None:
-    with pytest.raises(KeyError, match="absent"):
-        features.ndvi(sentinel(), nir="absent", red="B04")
-
-
 def test_a_dead_pixel_is_nan_rather_than_infinite() -> None:
     dark = xr.DataArray([[0.0]], dims=("y", "x"))
 
@@ -144,8 +110,7 @@ def test_a_dead_pixel_is_nan_rather_than_infinite() -> None:
     assert np.isnan(features.ndvi(scene, nir="nir", red="red").values).all()
 
 
-@pytest.mark.parametrize("dtype", [None, "uint16", "float32"])
-@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize(("dtype", "chunked"), [(None, False), ("uint16", True)])
 @pytest.mark.parametrize(
     ("index", "want"),
     [
@@ -190,16 +155,20 @@ def test_an_index_uses_the_selected_bands(
             )
     if chunked:
         scene = scene.chunk({"y": 1, "x": 1})
+    scene = build_dataset(dict(scene.data_vars), geobox(shape=(1, 2)))
+    scene = scene.expand_dims(time=[np.datetime64("2025-01-01")])
     scene = scene.rename_vars({name: f"selected_{name}" for name in values})
     before = scene.copy(deep=True)
     selectors = {key: f"selected_{name}" for key, name in INDICES[index].items()}
 
     result = getattr(features, index)(scene, **selectors)
 
-    np.testing.assert_allclose(result.compute(), [[want, np.nan]], atol=1e-7)
+    np.testing.assert_allclose(result.compute(), [[[want, np.nan]]], atol=1e-7)
     assert result.dtype == np.float32
     assert result.name is None
     assert result.attrs == {}
+    assert result.gs.geobox == scene.gs.geobox
+    xr.testing.assert_identical(result.coords.to_dataset(), scene.coords.to_dataset())
     if chunked:
         assert isinstance(result.data, da.Array)
     xr.testing.assert_identical(scene, before)

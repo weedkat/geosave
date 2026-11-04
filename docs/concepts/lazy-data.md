@@ -4,14 +4,18 @@ Build a calculation without reading every pixel:
 
 ```python
 import dask.array as da
+import xarray as xr
 
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 pixels = da.arange(16, chunks=4).reshape(4, 4).astype("uint16")
-scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
 subset = scene.isel(y=slice(0, 2), x=slice(0, 2))
 subset
 ```
@@ -22,8 +26,8 @@ Output:
 <xarray.Dataset> Size: 44B
 Dimensions:      (y: 2, x: 2)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 8B dask.array<chunksize=(1, 2), meta=np.ndarray>
@@ -61,8 +65,8 @@ Output:
 <xarray.Dataset> Size: 44B
 Dimensions:      (y: 2, x: 2)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 8B 0 1 4 5
@@ -81,11 +85,11 @@ its result still needs checking for the selected resampling method.
 ## Schedule a write explicitly
 
 Every `to_cog`, `to_zarr` and `to_netcdf` takes `compute=False` and returns
-what it would have returned, with each `Scene` pending:
-`scene.gs.to_zarr(path, compute=False).compute()` writes the store and returns
-the scene written. A pending scene is a Dask collection, so
-`dask.compute(scene.gs.to_cog(template, compute=False))` writes every file in
-one parallel run. Nothing reaches the destination before that.
+one native Dask Delayed:
+`scene.gs.to_zarr("scene.zarr", compute=False).compute()` writes the store and
+returns its UPath, as `to_netcdf` does for its file and `to_cog` for its list of
+files; a tree's `to_zarr` and `to_netcdf` write one store with its groups. Nothing reaches the
+destination before the delayed job runs.
 
 Keep file-backed rasters and trees open until the work that depends on them
 finishes. Close them afterward to release handles. Select the region and

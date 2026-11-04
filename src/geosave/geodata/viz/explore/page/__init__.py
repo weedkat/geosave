@@ -1,0 +1,108 @@
+"""The explorer's page: the sidebar beside the map, and the attribute tables below it."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import panel as pn
+from panel.util.parameters import edit_readonly
+
+from .comparison import create_comparison
+from .theme import EXPLORER_THEME, PAGE_STYLE
+
+if TYPE_CHECKING:
+    from ..explorer import Explorer
+
+# Width of the sidebar, in pixels.
+SIDEBAR_WIDTH = 300
+
+# Pixels the page adds below the map for the attribute tables.
+TABLES_HEIGHT = 480
+
+
+def create_page(explorer: Explorer) -> pn.ui.Page:
+    """Lay out the explorer: basemap, layers, comparison and details beside the map."""
+    page = pn.ui.Page(
+        title="GeoSave",
+        height=explorer.height + TABLES_HEIGHT,
+        sidebar_width=SIDEBAR_WIDTH,
+        sidebar_resizable=True,
+        sizing_mode="stretch_width",
+        theme_config=EXPLORER_THEME,
+        sx=PAGE_STYLE,
+    )
+    # Mirroring global busy state in inline pages can create a notebook
+    # widget feedback loop that starves raster updates.
+    with edit_readonly(page):
+        page.busy = False
+    page.sidebar = [create_sidebar(explorer)]
+    page.main = [
+        pn.ui.Column(
+            explorer.status,
+            explorer.map,
+            explorer.tables,
+            sizing_mode="stretch_width",
+            min_width=300,
+            styles={"flex": "1 1 300px", "min-width": "0"},
+            margin=0,
+        )
+    ]
+    return page
+
+
+def create_sidebar(explorer: Explorer) -> pn.ui.Column:
+    """Stack the basemap, the layer list, the comparison and the selected layer's details."""
+    fit_all = pn.ui.Button(
+        label="Fit visible layers",
+        icon="fullscreen",
+        size="small",
+        variant="text",
+        on_click=lambda _: explorer.fit_visible(),
+        disabled=pn.bind(lambda layers: not layers, explorer.param.layers),
+    )
+    return pn.ui.Column(
+        pn.ui.Select.from_param(
+            explorer.param.basemap,
+            name="Basemap",
+            size="small",
+            sizing_mode="stretch_width",
+            margin=(12, 12, 8, 12),
+        ),
+        create_period_controls(explorer),
+        pn.ui.Divider(),
+        pn.ui.Row(
+            pn.ui.Typography("Layers", variant="subtitle2", margin=(6, 0)),
+            pn.ui.Spacer(sizing_mode="stretch_width"),
+            fit_all,
+            margin=(4, 12, 0, 12),
+            sizing_mode="stretch_width",
+        ),
+        explorer.layer_list,
+        pn.ui.Divider(),
+        create_comparison(explorer.comparison),
+        explorer.details,
+        width=SIDEBAR_WIDTH,
+        min_width=260,
+        scroll=True,
+        height=explorer.height + 350,
+        margin=0,
+    )
+
+
+def create_period_controls(explorer: Explorer) -> pn.ui.Column:
+    """Create the date step and the date slider, shown while a raster has dates."""
+    return pn.ui.Column(
+        pn.ui.Select.from_param(
+            explorer.param.freq, size="small", sizing_mode="stretch_width"
+        ),
+        pn.ui.DiscreteSlider.from_param(
+            explorer.param.period,
+            # Material UI cannot render an empty discrete slider, even hidden.
+            # Param replaces these options when dated layers become available.
+            options=explorer.param.period.objects or {"No dates": None},
+            sizing_mode="stretch_width",
+        ),
+        visible=pn.bind(lambda count: count > 0, explorer.param.period_count),
+        margin=(0, 12, 8, 12),
+        sizing_mode="stretch_width",
+    )

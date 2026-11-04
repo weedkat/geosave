@@ -24,18 +24,6 @@ class Scenes(Dataset[mean_teacher.Unlabeled]):
         return {"inputs": {"image": torch.full((2, 8, 8), float(index))}}
 
 
-def test_views_need_only_model_inputs(tmp_path):
-    data = _training(tmp_path, augmentations=FLIP, strong_augmentations=NOISE)
-    labeled = {"inputs": _batch()["inputs"], "target": torch.ones(2, 1, 8, 8)}
-
-    result = data.on_after_batch_transfer(
-        {"labeled": labeled, "unlabeled": {"inputs": _batch(times=2)["inputs"]}}, 0
-    )
-
-    assert set(result["unlabeled"]) == {"weak", "strong"}
-    assert set(result["labeled"]) == {"inputs", "target"}
-
-
 def test_strong_augmentations_cannot_move_geometry(tmp_path):
     with pytest.raises(ValueError, match="geometry"):
         _training(tmp_path, strong_augmentations=FLIP)

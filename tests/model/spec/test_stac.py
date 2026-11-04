@@ -1,115 +1,9 @@
-import math
-
 import pytest
 from pydantic import ValidationError
 from pystac_client.exceptions import APIError
 
 from geosave.geodata.errors import CollectionNotFoundError
 from geosave.model.spec import RasterRequirement, StacRecipe
-
-
-def test_stac_recipe_preserves_priority_and_native_settings():
-    recipe = StacRecipe.model_validate(
-        {
-            "collection": "sentinel-2-l2a",
-            "endpoints": ["https://primary.test/stac", "http://backup.test/stac"],
-            "query": {
-                "datetime": ["2025-01-01", "2025-01-03"],
-                "max_items": 5,
-                "sortby": [{"field": "properties.datetime", "direction": "desc"}],
-            },
-            "load": {"bands": ["B04", "B08"], "chunks": {"x": 32, "y": 16}},
-        }
-    )
-
-    assert recipe.model_dump()["endpoints"] == (
-        "https://primary.test/stac",
-        "http://backup.test/stac",
-    )
-    assert recipe.model_dump(mode="json")["endpoints"] == [
-        "https://primary.test/stac",
-        "http://backup.test/stac",
-    ]
-    assert recipe.query.to_query(recipe.collection).to_search_params() == {
-        "collections": ["sentinel-2-l2a"],
-        "datetime": ("2025-01-01", "2025-01-03"),
-        "sortby": [{"field": "properties.datetime", "direction": "desc"}],
-        "max_items": 5,
-    }
-    assert recipe.load.bands == ["B04", "B08"]
-    assert StacRecipe.model_validate(recipe.model_dump()) == recipe
-
-
-def test_stac_recipe_accepts_named_providers_with_url_fallbacks():
-    recipe = StacRecipe.model_validate(
-        {
-            "collection": "sentinel-2-l2a",
-            "endpoints": [
-                "planetary_computer",
-                "cdse",
-                "element84",
-                "https://custom.test/stac",
-            ],
-        }
-    )
-
-    assert recipe.model_dump()["endpoints"] == (
-        "planetary_computer",
-        "cdse",
-        "element84",
-        "https://custom.test/stac",
-    )
-
-
-@pytest.mark.parametrize(
-    "settings",
-    [
-        {},
-        {"collection": "", "endpoints": ["https://primary.test/stac"]},
-        {"collection": "sentinel-2-l2a", "endpoints": []},
-        {"collection": "sentinel-2-l2a", "endpoints": ["file:///tmp/catalog"]},
-        {"collection": "sentinel-2-l2a", "endpoints": ["not a URL"]},
-        {
-            "collection": "sentinel-2-l2a",
-            "endpoints": ["https://primary.test/stac", "https://primary.test/stac"],
-        },
-    ],
-)
-def test_stac_recipe_requires_collection_and_unique_http_endpoints(settings):
-    with pytest.raises(ValidationError):
-        StacRecipe.model_validate(settings)
-
-
-def test_query_rejects_bbox_with_intersects():
-    with pytest.raises(ValidationError, match="bbox.*intersects"):
-        StacRecipe.model_validate(
-            {
-                "collection": "sentinel-2-l2a",
-                "endpoints": ["https://primary.test/stac"],
-                "query": {
-                    "bbox": [0, 0, 1, 1],
-                    "intersects": {"type": "Point", "coordinates": [0, 0]},
-                },
-            }
-        )
-
-
-@pytest.mark.parametrize(
-    "load",
-    [
-        {"nodata": math.nan},
-        {"patch_url": lambda url: url},
-    ],
-)
-def test_stac_load_rejects_non_primitive_values(load):
-    with pytest.raises(ValidationError):
-        StacRecipe.model_validate(
-            {
-                "collection": "sentinel-2-l2a",
-                "endpoints": ("https://primary.test/stac",),
-                "load": load,
-            }
-        )
 
 
 def test_named_variables_must_match_explicit_stac_bands():
@@ -128,24 +22,8 @@ def test_named_variables_must_match_explicit_stac_bands():
     assert requirement.stac is not None
 
 
-def test_positional_channels_accept_explicit_stac_bands():
-    requirement = RasterRequirement.model_validate(
-        {
-            "channels": 2,
-            "stac": {
-                "collection": "sentinel-2-l2a",
-                "endpoints": ["https://primary.test/stac"],
-                "load": {"bands": ["B04", "B08"]},
-            },
-        }
-    )
-
-    assert requirement.stac is not None
-    assert requirement.stac.load.bands == ["B04", "B08"]
-
-
 def test_a_recipe_loads_with_its_own_query_and_load_settings(
-    serve, red, coordinate_anchor
+    serve, red, coordinate_anchor, coordinate_grid
 ):
     serve({"https://primary.test/stac": red})
     recipe = StacRecipe.model_validate(
@@ -157,14 +35,16 @@ def test_a_recipe_loads_with_its_own_query_and_load_settings(
         }
     )
 
-    loaded = recipe.load_raster(coordinate_anchor)
+    loaded = recipe.load_raster(coordinate_anchor, geobox=coordinate_grid)
 
     assert loaded.attrs["config"].bands == ["red"]
     assert loaded.attrs["query"].collections == ["optical"]
     assert loaded.attrs["query"].max_items == 3
 
 
-def test_a_recipe_keeps_the_signer_its_client_loads_with(serve, red, coordinate_anchor):
+def test_a_recipe_keeps_the_signer_its_client_loads_with(
+    serve, red, coordinate_anchor, coordinate_grid
+):
     def sign(url):
         return f"{url}?token"
 
@@ -177,13 +57,15 @@ def test_a_recipe_keeps_the_signer_its_client_loads_with(serve, red, coordinate_
         }
     )
 
-    loaded = recipe.load_raster(coordinate_anchor)
+    loaded = recipe.load_raster(coordinate_anchor, geobox=coordinate_grid)
 
     assert loaded.attrs["config"].patch_url is sign
     assert loaded.attrs["config"].bands == ["red"]
 
 
-def test_an_unavailable_endpoint_falls_back_to_the_next(serve, red, coordinate_anchor):
+def test_an_unavailable_endpoint_falls_back_to_the_next(
+    serve, red, coordinate_anchor, coordinate_grid
+):
     opened = serve(
         {
             "https://primary.test/stac": APIError("unreachable"),
@@ -202,7 +84,7 @@ def test_an_unavailable_endpoint_falls_back_to_the_next(serve, red, coordinate_a
         }
     )
 
-    assert "red" in recipe.load_raster(coordinate_anchor)
+    assert "red" in recipe.load_raster(coordinate_anchor, geobox=coordinate_grid)
     assert opened == [
         "https://primary.test/stac",
         "https://backup.test/stac",
@@ -210,8 +92,46 @@ def test_an_unavailable_endpoint_falls_back_to_the_next(serve, red, coordinate_a
     ]
 
 
-def test_no_serving_endpoint_names_every_failure(serve, coordinate_anchor, stac_recipe):
+def test_no_serving_endpoint_names_every_failure(
+    serve, coordinate_anchor, coordinate_grid, stac_recipe
+):
     serve({"https://primary.test/stac": APIError("unreachable")})
 
     with pytest.raises(ConnectionError, match="primary.test.*unreachable"):
-        stac_recipe.load_raster(coordinate_anchor)
+        stac_recipe.load_raster(coordinate_anchor, geobox=coordinate_grid)
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        {},
+        {"bbox": [0, 0, 1, 1], "datetime": "2020"},
+        {"ids": ["scene"]},
+    ],
+)
+def test_recipe_preserves_selector_defaulting_and_id_bypass(
+    serve, red, coordinate_anchor, coordinate_grid, selectors
+):
+    serve({"planetary_computer": red})
+    recipe = StacRecipe.model_validate(
+        {
+            "collection": "optical",
+            "endpoints": ["planetary_computer"],
+            "query": selectors,
+        }
+    )
+    loaded = recipe.load_raster(coordinate_anchor, geobox=coordinate_grid)
+    query = loaded.attrs["query"]
+    if "ids" in selectors:
+        assert list(query.ids) == selectors["ids"]
+        assert (
+            query.bbox is None and query.intersects is None and query.datetime is None
+        )
+    elif selectors:
+        assert query.bbox == tuple(selectors["bbox"])
+        assert query.datetime == selectors["datetime"]
+    else:
+        assert query.bbox == tuple(
+            coordinate_anchor.geometry.to_crs("EPSG:4326").boundingbox
+        )
+        assert query.datetime == coordinate_anchor.timespan

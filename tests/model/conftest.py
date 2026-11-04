@@ -2,13 +2,14 @@ import numpy as np
 import pytest
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import Dataset, raster
+from geosave.geodata import Dataset
+from tests.conftest import build_dataset
 
 
 @pytest.fixture
 def scene() -> Dataset:
     grid = GeoBox.from_bbox((10, 50, 12, 52), "EPSG:4326", shape=(8, 8))
-    return raster(
+    return build_dataset(
         {
             "red": (
                 ("time", *("y", "x")),

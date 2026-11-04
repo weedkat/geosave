@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
-from collections.abc import Callable, Coroutine, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from os import PathLike
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import numpy as np
 from upath import UPath
 from upath.types.storage_options import (
     AzureStorageOptions,
@@ -22,10 +20,6 @@ from upath.types.storage_options import (
     MemoryStorageOptions,
     S3StorageOptions,
 )
-
-if TYPE_CHECKING:
-    from async_geotiff import GeoTIFF
-    from obstore.store import ObjectStore as Store
 
 # The filesystems a catalog or raster commonly lives on, typed as upath states them.
 type StorageOptions = (
@@ -127,7 +121,7 @@ def absolute_location(path: Location) -> str:
     return str(path)
 
 
-def write(
+def write_file(
     path: Location,
     save: Callable[[Path], None],
     *,
@@ -156,7 +150,7 @@ def write(
         ValueError: The suffix is wrong.
 
     Examples:
-        >>> write("plots.parquet", plots.to_parquet, suffixes=(".parquet",))
+        >>> write_file("plots.parquet", plots.to_parquet, suffixes=(".parquet",))
         PosixUPath('plots.parquet')
     """
     destination = location(path, storage_options)
@@ -187,68 +181,24 @@ def write(
     return destination
 
 
-def open_geotiff(
+@contextmanager
+def localize(
     path: Location, storage_options: StorageOptions | None = None
-) -> GeoTIFF:
-    """Open a GeoTIFF where it lives, reading its header only.
+) -> Iterator[Path]:
+    """Yield a local file, downloading a remote source for this context's lifetime.
 
     Args:
-        path: Local path or URL of the file.
-        storage_options: Options of its filesystem; `anon` reads a public
-            bucket without signing.
+        path: Local path or filesystem URL.
+        storage_options: Credentials and connection options for that filesystem.
 
-    Returns:
-        GeoTIFF whose tiles and overviews read on demand.
-
-    Examples:
-        >>> open_geotiff("https://sentinel-cogs.s3.us-west-2.amazonaws.com/.../B04.tif").overviews
+    Yields:
+        Local path. A downloaded copy is removed when the context exits.
     """
-    from async_geotiff import GeoTIFF
-
-    url = absolute_location(location(path, storage_options))
-    if is_local(path):
-        url = Path(url).as_uri()
-    directory, name = url.rsplit("/", 1)
-    return _run(GeoTIFF.open(name, store=create_store(directory, storage_options)))
-
-
-def create_store(url: str, storage_options: StorageOptions | None = None) -> Store:
-    """Return the obstore store reading a directory URL.
-
-    A web URL reads over plain HTTP range requests, even one naming a bucket.
-    A bucket reads unsigned when its options say `anon`, or when GDAL is set
-    to (`AWS_NO_SIGN_REQUEST=YES`), so files open as GDAL opens them.
-
-    Args:
-        url: Directory URL: `file://`, `http(s)://`, `s3://`, `gs://`, `az://`.
-        storage_options: `anon`, and a bucket's `region`.
-    """
-    from obstore.store import HTTPStore, from_url
-
-    if url.startswith(("http://", "https://")):
-        return HTTPStore.from_url(url)
-    options = dict(storage_options or {})
-    if not url.startswith("file://"):
-        if options.pop("anon", False) or os.environ.get("AWS_NO_SIGN_REQUEST") == "YES":
-            options["skip_signature"] = True
-    return from_url(url, **options)
-
-
-def read_coarsest(geotiff: GeoTIFF) -> np.ndarray:
-    """Read a GeoTIFF's smallest overview whole, or the image when it has none.
-
-    Returns:
-        Stored values, `(bands, rows, columns)`.
-    """
-    image = geotiff.overviews[-1] if geotiff.overviews else geotiff
-    return np.asarray(_run(image.read()).data)
-
-
-def _run[T](coroutine: Coroutine[object, object, T]) -> T:
-    """Run a coroutine to its end from code that may already sit in an event loop.
-
-    async-geotiff reads only asynchronously, and a notebook already runs a
-    loop, so the coroutine runs on a thread with a loop of its own.
-    """
-    with ThreadPoolExecutor(1) as pool:
-        return pool.submit(asyncio.run, coroutine).result()
+    source = location(path, storage_options)
+    if is_local(source):
+        yield local_path(source)
+    else:
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / "source"
+            source.fs.get_file(source.path, str(target))
+            yield target

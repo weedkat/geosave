@@ -10,17 +10,17 @@ import rustac
 from pystac.utils import datetime_to_str
 
 from geosave.geodata.errors import CollectionNotFoundError
+from geosave.geodata.io.formats import stac_geoparquet
 from geosave.geodata.io.storage import absolute_location
-from geosave.geodata.io.vector import stac_geoparquet
 
-from .api import StacClient
 from .query import StacQuery
 
 if TYPE_CHECKING:
+    from geosave.geodata import GeoDataFrame
     from geosave.geodata.io.storage import Location
 
 
-class StacTable(StacClient):
+class StacTable:
     """A STAC GeoParquet table searched with rustac, opened by `StacClient.open`.
 
     Item properties are columns of a table, so a sort or filter names them
@@ -35,7 +35,7 @@ class StacTable(StacClient):
         >>> table = StacClient.open("samples/catalog.parquet")
         >>> table.collections()
         {'forest'}
-        >>> source = table.source("forest")
+        >>> items = table.search_items(StacQuery(collections=["forest"]))
     """
 
     def __init__(
@@ -53,6 +53,24 @@ class StacTable(StacClient):
         self._location = absolute_location(path)
         self._patch_url = None
         self._duckdb = duckdb if duckdb is not None else rustac.DuckdbClient()
+
+    @property
+    def patch_url(self) -> None:
+        """Return None; table hrefs have no implicit provider signer."""
+        return None
+
+    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
+        """Return matching Items as a native catalog with Collection metadata."""
+        from geosave.geodata.stac.catalog import from_items
+
+        items = self.search_items(query)
+        identities = dict.fromkeys(
+            item.collection_id for item in items if item.collection_id
+        )
+        collections = []
+        for identity in identities:
+            collections.append(self.collection(identity))
+        return from_items(items, collections=collections)
 
     def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
         """Run one search over the table as pystac Items, for loaders.

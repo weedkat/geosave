@@ -1,7 +1,8 @@
 # From images to training chips
 
 Create a small image and label, save them, then read a spatial chip as tensors.
-This example uses synthetic data and works offline. Read
+This example uses synthetic data and works offline. Install `geosave[ml]`
+for the final tensor conversion. Read
 [Your first raster](first-raster.md) first if xarray rasters and grids are new to you.
 
 The data moves through three forms: pixels in xarray, file metadata in a catalog,
@@ -9,33 +10,36 @@ and selected pixels in PyTorch tensors.
 
 ## 1. Make a sample
 
-An anchor says where and when: a grid of pixels on the ground plus a time span.
+A GeoBox defines the pixel grid. Acquisition dates are coordinates on the raster; a GeoAnchor describes geometry and time for spatial queries.
 
 ```python
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import xarray as xr
 
 import geosave as gs
 
 root = Path(tempfile.mkdtemp())
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=256, resolution=10,
-    crs="EPSG:32633", timespan="2025-01-01",
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 502560, 5002560),
+    crs='EPSG:32633', resolution=10,
 )
 rng = np.random.default_rng(0)
 def pixels(hi):
     return rng.integers(0, hi, (256, 256), dtype="uint16")
 
-optical = gs.raster(
-    {"red": (("y", "x"), pixels(3000)), "nir": (("y", "x"), pixels(3000))},
-    anchor.geobox,
-    nodata=0,
+optical = (
+    xr.Dataset({"red": (("y", "x"), pixels(3000)), "nir": (("y", "x"), pixels(3000))})
+    .gs.write_grid(grid)
+    .gs.write_nodata(0)
 )
-label = gs.raster(
-    {"label": (("y", "x"), pixels(2).astype("uint8"))}, anchor.geobox
-)
+label = xr.Dataset(
+    {"label": (("y", "x"), pixels(2).astype("uint8"))}
+).gs.write_grid(grid)
 optical
 ```
 
@@ -45,16 +49,16 @@ Output:
 <xarray.Dataset> Size: 266kB
 Dimensions:      (y: 256, x: 256)
 Coordinates:
-  * y            (y) float64 2kB 4.989e+06 4.989e+06 ... 4.986e+06 4.986e+06
-  * x            (x) float64 2kB 2.623e+05 2.623e+05 ... 2.648e+05 2.648e+05
+  * y            (y) float64 2kB 5.003e+06 5.003e+06 5.003e+06 ... 5e+06 5e+06
+  * x            (x) float64 2kB 5e+05 5e+05 5e+05 ... 5.025e+05 5.026e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 131kB 1527 2551 2763 1910 ... 1966 1038 1042 561
     nir          (y, x) uint16 131kB 797 813 1662 1534 ... 2028 1189 2057 611
 ```
 
-`gs.raster` returns a plain `xarray.Dataset` with the grid stored as CF/GDAL
-metadata.
+`xr.Dataset` is built as usual; `gs.write_grid` stores the supplied grid on it as
+CF/GDAL metadata.
 
 ## 2. Give each raster a date
 
@@ -70,19 +74,14 @@ label = label.assign_coords(time=day)
 
 ## 3. Group, save, and catalogue
 
-These two rasters share a grid. `gs.tree` groups them without resampling;
-other groups can retain different grids. Here each group becomes a STAC
-collection, and `to_cog` writes one file per collection, date, and band.
+These two rasters share a grid. `to_datatree` makes each one a collection, and
+`xr.merge` groups them without resampling; other collections can retain different
+grids. Each collection becomes a STAC collection, and `to_catalog` writes one file
+per collection, date, and band.
 
 ```python
-sample = gs.tree({"optical": optical, "label": label})
-scenes = sample.gs.to_cog(root / "s0/{collection}_{time:%Y%m%d}_{band}.tif")
-collections = [
-    gs.stac.create_collection("optical", description="Optical bands"),
-    gs.stac.create_collection("label", description="Land-cover labels"),
-]
-items = gs.stac.create_items(scenes, id_format="s0")
-rows = gs.stac.create_catalog(items, collections=collections)
+sample = xr.merge([optical.gs.to_datatree("optical"), label.gs.to_datatree("label")])
+rows = sample.gs.to_catalog(root / "s0", id_format="s0")
 rows.gs.to_geoparquet(str(root / "catalog.parquet"))
 rows[["collection", "datetime"]]
 ```
@@ -90,16 +89,15 @@ rows[["collection", "datetime"]]
 Output:
 
 ```text
-  collection                  datetime
-0    optical 2025-01-01 00:00:00+00:00
-1      label 2025-01-01 00:00:00+00:00
+  collection                   datetime
+0    optical  2025-01-01 00:00:00+00:00
+1      label  2025-01-01 00:00:00+00:00
 ```
 
-`scenes` is a list of `Scene`s, one per collection and date, each mapping asset
-keys to `RasterFile`s. `create_items` builds one Item from each, from the
-headers they carry, reading nothing again and no pixels; `create_catalog` lays
-them out as the item table. The table describes
-the files this call saved; it does not scan the output folder.
+`to_catalog` writes the rasters and reads their actual file metadata to build
+one Item per collection and date. It retains source observation properties
+that the raster format cannot store. The table describes the returned written
+paths; it does not scan the output folder.
 Separate band files give the STAC assets the names `red`, `nir`, and `label`,
 so loading through the catalog retains those variable names.
 
@@ -107,43 +105,40 @@ so loading through the catalog retains those variable names.
 
 ```python
 items = gs.open_vector(str(root / "catalog.parquet"))
-windows = items.gs.sample()   # one sample per shared footprint
-windows = windows.gs.chip(128, target=anchor.geobox)         # split in space
-windows[["proj:shape", "start_datetime", "end_datetime"]]
+samples = items.gs.sample()   # one sample per shared footprint
+opened = samples[0].gs.to_datatree()
+chips = gs.Chips([opened], size=128, resolution=10)
+len(chips)
 ```
 
 Output:
 
 ```text
-   proj:shape start_datetime end_datetime
-0  [128, 128]     2025-01-01   2025-01-01
-1  [128, 128]     2025-01-01   2025-01-01
-2  [128, 128]     2025-01-01   2025-01-01
-3  [128, 128]     2025-01-01   2025-01-01
+4
 ```
 
-The four rows describe 128 × 128 windows on the saved scene. A cut takes a
-table and returns one; it does not read the pixel arrays.
+The four chips cover 128 × 128 windows on the saved scene. Creating their
+layout uses grid metadata and leaves the pixel arrays lazy.
 
 | Step | Input | Output | Execution |
 | --- | --- | --- | --- |
-| Save | Named raster groups in a DataTree | `Scene`s of `RasterFile`s | Computes and writes pixels; captures file headers. |
-| Describe | Saved `Scene`s | Item GeoDataFrame | Uses their headers without reopening files. |
-| Cut | Item/window GeoDataFrame | Window GeoDataFrame | Uses grid, time, and source metadata. |
-| Open | One stack row | DataTree | Builds lazy raster reads on the window grid. |
+| Publish | Named raster groups in a DataTree | Item GeoDataFrame | Writes pixels; reads actual file metadata. |
+| Group | Item GeoDataFrame | Grouped Item rows | Uses footprints, dates and collection names. |
+| Open | One sample group | DataTree | Builds lazy raster reads. |
+| Chip | Raster trees | `Chips` | Calculates windows from grid metadata. |
 | Convert | Raster or tree | Tensor or tensor mapping | Reads the selected pixels. |
 
 ## 5. Read a chip as tensors
 
 ```python
-chip = windows.iloc[0].gs.to_xarray()          # lazy DataTree
-optical = chip["optical"].dataset[["red", "nir"]].gs.mask_and_scale()
-label = chip["label"].dataset[["label"]]
+tree_index, chip = chips[0]          # lazy DataTree
+optical = chip["optical"].gs.to_dataset()[["red", "nir"]].gs.mask_and_scale()
+label = chip["label"].gs.to_dataset()[["label"]]
 tensors = {
     "optical": optical.gs.to_tensor(dtype="float32"),
     "label": label.gs.to_tensor(),
 }
-chip.close()
+opened.close()
 {name: tuple(t.shape) for name, t in tensors.items()}
 ```
 

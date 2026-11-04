@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from geosave.geodata.stac.translate import table as stac_table
-
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -16,8 +14,6 @@ from urllib3.util import Retry
 
 from geosave.geodata.errors import CollectionNotFoundError
 
-from geosave.geodata.stac.source import StacSource
-
 from .query import StacQuery
 
 if TYPE_CHECKING:
@@ -25,6 +21,8 @@ if TYPE_CHECKING:
 
     from geosave.geodata import GeoDataFrame
     from geosave.geodata.io.storage import Location
+
+    from .table import StacTable
 
 CDSE_URL = "https://stac.dataspace.copernicus.eu/v1/"
 PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/"
@@ -34,20 +32,20 @@ type StacProvider = Literal["planetary_computer", "cdse", "element84"]
 
 
 class StacClient:
-    """Search one STAC catalog and build sources on it.
+    """Search one STAC API and inspect its Collections.
 
     Open it with `open`: a built-in provider, a STAC API URL, or a STAC
-    GeoParquet table. All three search and build sources the same way.
+    GeoParquet table. Table endpoints return an independent StacTable.
 
     Args:
         client: Open pystac-client session.
-        patch_url: Called on every asset href when a source loads it, for a
+        patch_url: Called on every asset href when passed to a loader, for a
             catalog whose files need a short-lived signature. Searched hrefs
             stay as the catalog publishes them.
 
     Examples:
         >>> client = StacClient.cdse()
-        >>> source = client.source("sentinel-2-l2a")
+        >>> items = client.search_items(StacQuery(collections=["sentinel-2-l2a"]))
     """
 
     def __init__(
@@ -57,7 +55,7 @@ class StacClient:
 
         Args:
             client: Open pystac-client session.
-            patch_url: Called on every asset href a source loads.
+            patch_url: Called on every asset href a loader reads.
         """
         self._client = client
         self._patch_url = patch_url
@@ -69,7 +67,7 @@ class StacClient:
         endpoint: StacProvider | Location,
         *,
         duckdb: rustac.DuckdbClient | None = None,
-    ) -> StacClient:
+    ) -> StacClient | StacTable:
         """Open a built-in provider, a STAC API by URL, or a GeoParquet table.
 
         Args:
@@ -85,7 +83,7 @@ class StacClient:
             ValueError: `duckdb` is given for an API.
 
         Examples:
-            >>> StacClient.open("element84").source("sentinel-2-l2a")
+            >>> StacClient.open("element84").collection("sentinel-2-l2a")
             >>> StacClient.open("data/catalog.parquet").collections()
             {'forest'}
         """
@@ -118,7 +116,7 @@ class StacClient:
         """Connect to the Microsoft Planetary Computer catalog, signing assets as they load.
 
         Its files need a SAS token that lasts about a day, so searches keep the
-        lasting hrefs a saved table can store, and sources sign each when read.
+        lasting hrefs a saved table can store, and a loader signs each when given patch_url=client.patch_url.
 
         Returns:
             Client for the Planetary Computer STAC API.
@@ -144,21 +142,24 @@ class StacClient:
             query: Query object, or raw search parameters.
 
         Returns:
-            One row per matching Item, read through `gs` as a catalog. Empty
-            where nothing matches. Referenced Collection definitions are attached
-            for publication; their metadata is fetched through `collection`.
+            One row per matching Item, read through `gs` as a catalog,
+            carrying the Collections its rows name, fetched from the service.
+            Empty where nothing matches.
 
         Examples:
             >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
             ['forest_20250601', 'forest_20250611']
         """
+        from geosave.geodata.stac.catalog import from_items
+
         items = self.search_items(query)
-        names = dict.fromkeys(
+        collection_ids = dict.fromkeys(
             item.collection_id for item in items if item.collection_id
         )
-        collections = [self.collection(name) for name in names]
-
-        return stac_table.from_items(items, collections=collections)
+        collections = []
+        for collection_id in collection_ids:
+            collections.append(self.collection(collection_id))
+        return from_items(items, collections=collections)
 
     def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
         """Run one search to completion as pystac Items, for loaders.
@@ -210,29 +211,13 @@ class StacClient:
             self._collections[collection] = found
         return self._collections[collection]
 
-    def source(self, collection: str) -> StacSource:
-        """Build a source for one collection on this catalog.
+    @property
+    def patch_url(self) -> Callable[[str], str] | None:
+        """Return the provider signer to pass to load_dataset/load_datatree.
 
-        The source starts on every default. Narrow it with `set_config` and
-        `set_query`.
-
-        Args:
-            collection: Collection ID. Discover them with `collections`.
-
-        Returns:
-            Source for `collection`.
-
-        Raises:
-            CollectionNotFoundError: `collection` is not on this catalog.
-
-        Examples:
-            >>> source = client.source("sentinel-2-l1c").set_config(bands=["B02"])
+        Search Items retain durable hrefs; the loader signs at read time.
         """
-        self.collection(collection)
-        source = StacSource(self, collection=collection)
-        if self._patch_url is not None:
-            return source.set_config(patch_url=self._patch_url)
-        return source
+        return self._patch_url
 
 
 def _default_io() -> StacApiIO:

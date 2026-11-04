@@ -161,7 +161,7 @@ def to_nan[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
         if value is None:
             return variable
         # The codec compares in the variable's dtype, so the fill is cast to it first.
-        fill = attrs.Nodata(value=np.asarray(value).astype(variable.dtype).item())
+        fill = attrs.Nodata(fill_value=np.asarray(value).astype(variable.dtype).item())
         # Packing read off disk would widen 16-bit variables to float64; mask without it.
         packing = variable.gs.packing
         stamped = attrs.stamp_attrs(variable, fill)
@@ -190,7 +190,7 @@ def unpack[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
         the stored numbers are float32 or integers of 16 bits or fewer, and
         float64 otherwise. Each unpacked variable's packing is dropped from
         attrs, since its values are no longer the stored numbers packing
-        described.
+        decodes.
 
     Raises:
         ValueError: A packed variable holds class codes, or still marks its
@@ -210,7 +210,7 @@ def unpack[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
             raise ValueError(
                 f"{str(variable.name)!r} holds class codes and declares packing, "
                 f"which cannot both be true; drop its Legend or its Packing, "
-                f"whichever does not describe the pixels"
+                f"whichever does not match the pixels"
             )
         fill = variable.gs.nodata
         if fill is not None:

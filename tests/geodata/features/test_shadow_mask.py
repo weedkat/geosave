@@ -9,9 +9,8 @@ import xarray as xr
 from affine import Affine
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import raster
+from tests.conftest import build_dataset
 from geosave.geodata.features import shadow_mask
-
 from tests.geodata.features.conftest import sentinel
 
 CHUNKS = {"time": 1, "y": 16, "x": 16}
@@ -58,7 +57,7 @@ def test_shadow_falls_opposite_the_sun_at_the_grid_resolution() -> None:
     grid = GeoBox.from_bbox((0, 0, 100, 100), crs="EPSG:32633", resolution=20)
     pixels = np.zeros((5, 5), dtype=bool)
     pixels[2, 2] = True
-    mask = raster({"cloud": (("y", "x"), pixels)}, grid)
+    mask = build_dataset({"cloud": (("y", "x"), pixels)}, grid)
 
     # Sun due south: shadow falls north, two 20 m pixels within 40 m.
     result = shadow_mask(mask, cloud="cloud", sun_azimuth=180.0, shadow_distance_m=40)
@@ -94,7 +93,9 @@ def test_shadow_refuses_a_mask_that_is_not_boolean() -> None:
 
 def test_shadow_refuses_a_grid_that_does_not_measure_metres() -> None:
     geographic = GeoBox((4, 4), Affine(0.01, 0, 10, 0, -0.01, 20), "EPSG:4326")
-    mask = raster({"cloud": (("y", "x"), np.ones((4, 4), dtype=bool))}, geographic)
+    mask = build_dataset(
+        {"cloud": (("y", "x"), np.ones((4, 4), dtype=bool))}, geographic
+    )
     unreferenced = xr.Dataset({"cloud": (("y", "x"), np.ones((4, 4), dtype=bool))})
 
     for held in (mask, unreferenced):

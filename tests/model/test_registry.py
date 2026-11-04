@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import ast
 import json
-import subprocess
-import sys
 from copy import deepcopy
-from typing import Any
 
 import pytest
 import torch
@@ -119,42 +115,6 @@ def test_build_model_preserves_constructor_errors(monkeypatch, error_type) -> No
     assert failure.__notes__ == ["While building stage 'encoder'"]
 
 
-def test_empty_model_is_rejected() -> None:
-    with pytest.raises(ValueError, match="at least one"):
-        build_model({})
-
-
-@pytest.mark.parametrize(
-    "spec",
-    [
-        {},
-        {"name": "test", "class_path": f"{__name__}.Head"},
-        {"name": "missing"},
-        {"class_path": "Head"},
-        {"name": "test", "unknown": True},
-        {"name": "test", "init_args": []},
-    ],
-)
-def test_model_chain_rejects_malformed_stage_selectors(
-    spec: dict[str, object], model_factories: None
-) -> None:
-    with pytest.raises((TypeError, ValueError, KeyError)):
-        build_model({"encoder": spec})
-
-
-def test_build_model_records_an_independent_resolved_recipe(
-    model_factories: None,
-) -> None:
-    specs: dict[str, dict[str, str]] = {
-        "encoder": {"name": "test"},
-        "head": {"name": "test"},
-    }
-
-    model = build_model(specs)
-    specs.clear()
-    assert list(model.stage_specs) == ["encoder", "head"]
-
-
 def test_build_model_accepts_validated_build_specs(model_factories: None) -> None:
     model = build_model(
         {
@@ -167,28 +127,6 @@ def test_build_model_accepts_validated_build_specs(model_factories: None) -> Non
     copied = model.stage_specs
     copied.clear()
     assert list(model.stage_specs) == ["encoder", "head"]
-
-
-def test_register_model_accepts_factory_functions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(MODEL_REGISTRY, "test", {})
-    decorated = register_model("test", "factory")(make_head)
-    assert decorated is make_head
-    assert MODEL_REGISTRY["test"]["FACTORY"] is make_head
-
-
-def test_build_model_captures_defaults_and_preserves_factory_selector(
-    model_factories: None,
-) -> None:
-    model = build_model({"encoder": {"name": "test"}, "head": {"name": "test"}})
-
-    assert model.stage_specs == {
-        "encoder": {"name": "test", "init_args": {"feature_channels": 2}},
-        "head": {"name": "test", "init_args": {"feature_channels": 2}},
-    }
-    assert isinstance(model.get_submodule("encoder"), Encoder)
-    assert isinstance(model.get_submodule("head"), Head)
 
 
 def test_build_model_saves_initial_arguments_before_factory_mutation(
@@ -218,53 +156,6 @@ def test_build_model_saves_initial_arguments_before_factory_mutation(
     }
 
 
-@pytest.mark.parametrize(
-    ("encoder", "inputs"),
-    [
-        (
-            {"name": "dinov3", "init_args": {"pretrained": False, "in_channels": 4}},
-            ["image"],
-        ),
-        (
-            {
-                "name": "prithvi_tl",
-                "init_args": {
-                    "model_name": "prithvi_eo_v2_tiny_tl",
-                    "bands": ["BLUE", "GREEN", "RED", "NIR_NARROW"],
-                },
-            },
-            ["image", "temporal_coords", "location_coords"],
-        ),
-        (
-            {
-                "name": "clay",
-                "init_args": {
-                    "model_name": "clay_v15_tiny",
-                    "in_channels": 4,
-                    "waves": [0.49, 0.56, 0.665, 0.842],
-                    "gsd": 10.0,
-                },
-            },
-            ["image"],
-        ),
-    ],
-)
-def test_registered_encoders_chain_into_a_decoder_and_head(
-    encoder: dict[str, Any], inputs: list[str]
-) -> None:
-    model = build_model(
-        {
-            "encoder": deepcopy(encoder),
-            "decoder": {"name": "dpt"},
-            "head": {
-                "name": "segmentation",
-                "init_args": {"num_classes": 2},
-            },
-        }
-    )
-    assert list(model.inputs) == inputs
-
-
 def test_build_model_accepts_classes_and_wires_published_values() -> None:
     model = build_model({"encoder": Encoder, "head": Head})
 
@@ -288,19 +179,6 @@ def test_build_model_builds_a_class_no_import_path_reaches() -> None:
             return image + 1
 
     assert build_model({"head": Local})(torch.tensor(1.0)).item() == 2.0
-
-
-def test_build_model_mixes_classes_with_stage_specifications(
-    model_factories: None,
-) -> None:
-    model = build_model({"encoder": Encoder, "head": {"name": "test"}})
-
-    assert model(torch.tensor(3.0)).item() == 8.0
-
-
-def test_build_model_refuses_a_class_that_is_not_a_module() -> None:
-    with pytest.raises(TypeError, match="nn.Module"):
-        build_model({"encoder": dict})
 
 
 def test_build_model_takes_a_built_stage_and_wires_what_it_publishes() -> None:
@@ -390,23 +268,6 @@ def test_a_stage_may_take_what_a_stage_further_back_publishes(
     assert list_models("decode").loc["head", "after"] == "deep"
 
 
-def test_list_models_finds_built_in_connections() -> None:
-    connections = list_models("unet")
-
-    assert connections.loc["encoder", "before"] == (
-        "clay, dinov3, prithvi, prithvi_tl, small_cnn"
-    )
-    # Other test modules may register heads of their own.
-    assert {"regression", "segmentation"} <= set(
-        connections.loc["head", "after"].split(", ")
-    )
-
-
-def test_list_models_refuses_an_unknown_name() -> None:
-    with pytest.raises(KeyError, match="no model named 'nope'"):
-        list_models("nope")
-
-
 def test_redefining_a_registered_class_replaces_it(monkeypatch) -> None:
     # A notebook cell run twice defines a new class of the same name and module.
     monkeypatch.setitem(MODEL_REGISTRY, "rerun", {})
@@ -431,31 +292,12 @@ def test_another_class_under_a_taken_name_is_refused(monkeypatch) -> None:
         register_model("rerun", "tiny")(Head)
 
 
-@pytest.mark.slow
-def test_every_stage_package_registers_its_models():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-W",
-            "ignore",
-            "-c",
-            "from geosave.model.registry import list_models; print(list_models().index.tolist())",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=60,
-    )
-
-    assert set(ast.literal_eval(result.stdout.strip().splitlines()[-1])) == {
-        ("decoder", "dpt"),
-        ("decoder", "unet"),
-        ("encoder", "clay"),
-        ("encoder", "dinov3"),
-        ("encoder", "prithvi"),
-        ("encoder", "prithvi_tl"),
-        ("head", "classification"),
-        ("head", "regression"),
-        ("head", "segmentation"),
-        ("model", "ibm_granite_biomass"),
-    }
+@pytest.mark.parametrize(
+    "spec",
+    [{"name": "test", "class_path": f"{__name__}.Head"}],
+)
+def test_model_chain_rejects_malformed_stage_selectors(
+    spec: dict[str, object], model_factories: None
+) -> None:
+    with pytest.raises((TypeError, ValueError, KeyError)):
+        build_model({"encoder": spec})

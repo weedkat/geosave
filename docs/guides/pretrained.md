@@ -143,7 +143,7 @@ Save this as `model_spec.yaml` for Sentinel-2 variables corresponding to the
 six pretrained bands:
 
 ```yaml
-schema_version: 2
+schema_version: 3
 rasters:
   optical:
     variables: [B02, B03, B04, B8A, B11, B12]
@@ -152,19 +152,26 @@ rasters:
 preprocessing:
   image:
     call: !ref optical.gs.mask_and_scale
-chips:
-  size: 224
+encoding:
+  tensor:
+    call: geosave.model.processing.to_tensor
+    kwargs: {raster: !ref image, dims: [time, band, y, x]}
+  context:
+    call: geosave.model.stages.encoder.prithvi.model_context
+    kwargs: {raster: !ref image}
 inputs:
-  image: !ref image
-context:
-  call: geosave.model.stages.encoder.prithvi.model_context
-  kwargs: {raster: !ref image}
+  image: !ref tensor
+  temporal_coords: !ref 'context["temporal_coords"]'
+  location_coords: !ref 'context["location_coords"]'
+pixels: [image]
 transforms:
   image:
-    - name: Normalize
-      init_args:
-        mean: [0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363]
-        std: [0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049]
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref image
+      mean: [0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363]
+      std: [0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049]
+      dim: -3
 ```
 
 The normalization uses
@@ -182,98 +189,27 @@ gets a random patch-embedding slice, so check names before building the model.
 All selected variables must already share a spatial grid. Loading or warping
 them onto that grid is explicit; this spec does not resample bands to align them.
 
-Given one already cut 224 × 224 Dataset `scene`, with these variables, a scalar
-acquisition `time`, and a geospatial grid, a direct inference call is:
+Given one already cut 224 × 224 Dataset `scene`, with these variables, a length-one
+acquisition `time` dimension, and a geospatial grid, a direct inference call is:
 
 ```python
-from kornia.augmentation import Normalize
-
 from geosave.model.spec import ModelSpec
 
 spec = ModelSpec.load("model_spec.yaml")
-prepared = spec.preprocess({"optical": scene})
-bound = spec.model_inputs(prepared)
-normalize = Normalize(**spec.transforms["image"][0].init_args)
-image = normalize(bound["image"].gs.to_tensor(dtype="float32").unsqueeze(0))
-inputs = {
-    "image": torch.nan_to_num(image),
-    "temporal_coords": bound["temporal_coords"].unsqueeze(0),
-    "location_coords": bound["location_coords"].unsqueeze(0),
-}
+values = spec.encode(spec.preprocess({"optical": scene}))
+bound = spec.model_inputs(values)
+inputs = {}
+for name, value in bound.items():
+    inputs[name] = value.unsqueeze(0)
+inputs = spec.transform(inputs, batched=True)
+inputs["image"] = torch.nan_to_num(inputs["image"])
 with torch.inference_mode():
     logits = chain(**inputs)
 ```
 
-`model_inputs` derives context from the same prepared chip as the pixels;
-missing time or grid metadata raises. It leaves pixels as xarray objects and
-does not apply `transforms`. The tensor conversion reads their values, and the
-explicit `Normalize` applies the same preparation as training. Track invalid
-pixels separately when interpreting predictions; replacing NaN with zero only
-makes the tensor usable by the network.
-
-For training, your Dataset returns one sample's image and context in
-`Sample["inputs"]`. The DataLoader adds the batch axis, and the segmentation
-DataModule applies `transforms` on the device. Avoid normalizing again inside
-that Dataset. [Training](training.md) shows the complete sample contract;
-[Model inputs](model-spec.md) covers preparation from native rasters.
-
-## Fine-tune or freeze the encoder
-
-```python
-# From a generated segmentation/supervised workspace:
-from modules.segmentation.supervised import Module
-
-module = Module(
-    model_chain=stages,
-    optimizer={
-        "name": "adamw",
-        "init_args": {"lr": 0.001},
-        "groups": {"encoder": {"lr": 0.0001}},
-    },
-)
-```
-
-This task constructs a new chain from the recipe when Lightning calls
-`configure_model`. It fine-tunes the encoder with a smaller learning rate than
-the new decoder and head. The optimizer groups refer to direct chain stages;
-unspecified trainable parameters use the main learning rate.
-
-To train only the decoder and head, use PyTorch's parameter freezing in the
-task's model-construction hook:
-
-```python
-class FrozenEncoder(Module):
-    def configure_model(self):
-        super().configure_model()
-        self.model.encoder.requires_grad_(False)
-
-
-module = FrozenEncoder(model_chain=stages)
-```
-
-The optimizer excludes parameters with `requires_grad=False`. Freezing leaves
-the encoder's learned parameters fixed while gradients train the decoder and
-head. Run this before optimizer construction, as the hook does above. Train
-with `Trainer.fit(module, datamodule=data)` after supplying a Dataset/DataModule
-matching the six-band spec.
-
-## Choose what to save or reload
-
-| Artifact | Contains | Use it for |
-| --- | --- | --- |
-| Pretrained encoder weights | Upstream backbone parameters | Initialize a new task with a new decoder/head |
-| Lightning `.ckpt` | Task weights, hyperparameters, and saved training state | Restore a task or resume a run with `Trainer.fit(..., ckpt_path=...)` |
-| GeoSave release | Chain recipe and weights, with an optional input spec | Reuse the trained model through `AutoModel.from_pretrained` |
-
-Save `module.model` after training with
-[`GeoSaveModel.from_chain`](release.md). The saved recipe initializes the
-architecture with `pretrained=False`, then restores the release's complete
-weights, so loading it does not fetch the original encoder checkpoint.
-Neither a release nor an encoder constructor executes the saved input spec;
-apply the same band selection, physical-value decoding, normalization, and
-context preparation used during training.
-
-See [built-in stages](../reference/model-stages.md) for other encoders and
-decoder/head contracts. Swapping a stage requires compatible tensor names,
-types, channels, and spatial layout; selecting a registered name alone does
-not convert one encoder's input contract into another's.
+Encoding derives pixels and context from the same prepared chip. Missing time
+or grid metadata raises. Tensor conversion reads pixel values; `transform`
+applies the same normalization as training. Track invalid pixels separately when
+interpreting predictions; replacing NaN with zero only makes a tensor usable by
+the network. Include any such replacement in your actual shared recipe when it
+is part of the model's processing contract.

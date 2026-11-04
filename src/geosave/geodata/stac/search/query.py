@@ -9,6 +9,7 @@ from typing import Any, Self
 
 from cql2 import Expr
 
+from geosave.geodata.core.anchor import GeoAnchor
 from geosave.geodata.utils.crs import validate_wgs84_bbox
 
 
@@ -18,8 +19,8 @@ class StacQuery:
 
     Args:
         collections: Collection IDs to search. At least one.
-        ids: Item IDs to fetch directly, bypassing spatial and temporal
-            narrowing. At least one when given.
+        ids: Item IDs to select. At least one when given. Explicit spatial and
+            temporal selectors are retained.
         bbox: WGS84 bounding box `(min_lon, min_lat, max_lon, max_lat)`.
         intersects: GeoJSON geometry to intersect.
         datetime: Instant, ISO 8601 string, or `(start, end)` range.
@@ -83,6 +84,19 @@ class StacQuery:
             "limit": self.limit,
         }
         return {key: value for key, value in params.items() if value is not None}
+
+    def set_anchor(self, anchor: GeoAnchor) -> Self:
+        """Replace spatial and temporal selectors with the anchor's coverage.
+
+        A timeless anchor clears datetime. Other criteria, including IDs,
+        collections, filters and sorting, remain unchanged. This query is unchanged.
+        """
+        return dataclasses.replace(
+            self,
+            bbox=None,
+            intersects=anchor.geometry.to_crs("EPSG:4326").json,
+            datetime=anchor.timespan,
+        )
 
     def set_filter(self, expr: str) -> Self:
         """Add a CQL2 text expression to the filter.

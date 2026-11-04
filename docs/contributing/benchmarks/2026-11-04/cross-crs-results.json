@@ -1,0 +1,102 @@
+{
+  "rows": [
+    {
+      "name": "nearest.plan",
+      "seconds": [
+        0.18292278399894712,
+        0.18308614599663997,
+        0.1838146739974036
+      ],
+      "median_s": 0.18308614599663997,
+      "min_s": 0.18292278399894712,
+      "max_s": 0.1838146739974036,
+      "process_peak_rss_mib": 273.125,
+      "dask_tasks_separate_probe": 0
+    },
+    {
+      "name": "nearest.compute",
+      "seconds": [
+        0.46287439400475705,
+        0.5661268219992053,
+        0.5228992849952192
+      ],
+      "median_s": 0.5228992849952192,
+      "min_s": 0.46287439400475705,
+      "max_s": 0.5661268219992053,
+      "process_peak_rss_mib": 374.25,
+      "raw_mib": 8,
+      "raw_mib_per_s": 15.299313327753246,
+      "dask_tasks_separate_probe": 148
+    },
+    {
+      "name": "bilinear.plan",
+      "seconds": [
+        0.183957292996638,
+        0.18703029800235527,
+        0.18366688799869735
+      ],
+      "median_s": 0.183957292996638,
+      "min_s": 0.18366688799869735,
+      "max_s": 0.18703029800235527,
+      "process_peak_rss_mib": 510.41796875,
+      "dask_tasks_separate_probe": 0
+    },
+    {
+      "name": "bilinear.compute",
+      "seconds": [
+        0.43298420799692394,
+        0.4388009799949941,
+        0.4330898110056296
+      ],
+      "median_s": 0.4330898110056296,
+      "min_s": 0.43298420799692394,
+      "max_s": 0.4388009799949941,
+      "process_peak_rss_mib": 510.41796875,
+      "raw_mib": 8,
+      "raw_mib_per_s": 18.4719192109925,
+      "dask_tasks_separate_probe": 148
+    }
+  ],
+  "reference_comparisons": [
+    {
+      "kernel": "nearest",
+      "eager_vs_reference_different_pixels": 0,
+      "eager_vs_reference_max_error": 0.0,
+      "lazy_vs_eager_different_pixels": 64992,
+      "lazy_vs_eager_max_error": 9940.0,
+      "source_shape": [
+        1024,
+        1024
+      ],
+      "destination_shape": [
+        1461,
+        1457
+      ],
+      "compared_pixels": 2113983,
+      "different_pixels": 64992,
+      "max_absolute_error": 9940.0,
+      "rmse": 716.2078205817756,
+      "nodata_mask_disagreement": 178
+    },
+    {
+      "kernel": "bilinear",
+      "eager_vs_reference_different_pixels": 0,
+      "eager_vs_reference_max_error": 0.0,
+      "lazy_vs_eager_different_pixels": 2088328,
+      "lazy_vs_eager_max_error": 474.0,
+      "source_shape": [
+        1024,
+        1024
+      ],
+      "destination_shape": [
+        1461,
+        1457
+      ],
+      "compared_pixels": 2113983,
+      "different_pixels": 2088328,
+      "max_absolute_error": 474.0,
+      "rmse": 112.9005795193974,
+      "nodata_mask_disagreement": 178
+    }
+  ]
+}

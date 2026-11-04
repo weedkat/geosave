@@ -5,8 +5,8 @@
 Follow the [notebook learning path](examples.md). Start with real image/label
 pairs and a small model, then learn stage composition, feature preparation,
 prediction maps, and acquisition for your own labels. The
-[training guide](guides/training.md) separately shows the library's supervised
-task pair and its sample dictionary contract.
+[training guide](guides/training.md) shows an offline generated Lightning starter and the
+current limitations of the geospatial recipes.
 
 ## What can I use without training a model?
 
@@ -84,11 +84,11 @@ continuous imagery. See [raster grids](concepts/raster-grids.md).
 
 ## Does a catalog contain the imagery? Can I move it?
 
-An Item table stores metadata and asset addresses. Stack rows store source
-selection and target grids. Pixels stay in their source files. Item catalogs
-can use relative hrefs that resolve against the catalog's location; window
-sources retain absolute addresses. Moving a table alone does not move those
-files or provide credentials. See [catalog rules](concepts/catalog-windows.md).
+An Item table stores metadata and asset addresses; pixels stay in their
+source files. Item catalogs can use relative hrefs that resolve against the
+catalog's location. Move the catalog and its asset folders together. Grouped
+samples hold positions in that Item table; recreate them after reading the
+catalog. Moving files does not provide credentials for remote assets. See [catalog rules](concepts/catalog-windows.md).
 
 ## Will GeoSave make my Dataset and train/validation split?
 

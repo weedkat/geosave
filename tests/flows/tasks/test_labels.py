@@ -1,22 +1,23 @@
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pytest
 from odc.geo.geobox import GeoBox
 from shapely.geometry import Point
 
-from geosave.geodata import GeoVector, io
-from geosave.geodata.core.raster.create import raster
+from geosave.geodata import GeoCatalog, io
+from tests.conftest import build_dataset
 from geosave_flows.tasks.labels import find_labels, read_labels
 
 
 def _label(path: Path, *, dated: bool = True) -> Path:
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
-    label = raster({"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))}, grid)
+    label = build_dataset({"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))}, grid)
     if dated:
         label = label.assign_coords(time=np.datetime64("2025-01-15T12:00:00"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    return io.geotiff.write_cog(label, path).path
+    return io.formats.geotiff.write_cog(label, path).path
 
 
 def test_find_labels_preserves_tree_and_removes_only_the_final_suffix(
@@ -43,14 +44,17 @@ def test_a_label_directory_becomes_one_row_per_label(tmp_path: Path) -> None:
 
 def test_a_label_table_keeps_its_caller_columns(tmp_path: Path) -> None:
     root = tmp_path / "labels"
-    labels = GeoVector.from_geometry(
-        Point(0, 0),
-        properties={
-            "id": "a",
-            "assets": {"label": {"href": str(root / "a.tif")}},
-            "quality": 0.97,
-            "surveyor": None,
-        },
+    labels = gpd.GeoDataFrame(
+        [
+            {
+                "id": "a",
+                "assets": {"label": {"href": str(root / "a.tif")}},
+                "quality": 0.97,
+                "surveyor": None,
+            }
+        ],
+        geometry=[Point(0, 0)],
+        crs="EPSG:4326",
     )
 
     read = read_labels(labels.gs.to_geoparquet(tmp_path / "labels.parquet"))
@@ -72,9 +76,11 @@ def test_a_directory_needs_labels(tmp_path: Path) -> None:
 
 
 def test_a_label_table_names_its_label_asset(tmp_path: Path) -> None:
-    plain = GeoVector.from_geometry(Point(0, 0), properties={"id": "a"})
-    other = GeoVector.from_geometry(
-        Point(0, 0), properties={"id": "a", "assets": {"image": {"href": "a.tif"}}}
+    plain = gpd.GeoDataFrame([{"id": "a"}], geometry=[Point(0, 0)], crs="EPSG:4326")
+    other = gpd.GeoDataFrame(
+        [{"id": "a", "assets": {"image": {"href": "a.tif"}}}],
+        geometry=[Point(0, 0)],
+        crs="EPSG:4326",
     )
 
     with pytest.raises(ValueError, match=r"no \['assets'\] column"):
@@ -102,14 +108,17 @@ def test_a_label_table_needs_ids_that_name_one_sample_each(
     tmp_path: Path, ids: list, message: str
 ) -> None:
     root = tmp_path / "labels"
-    table = GeoVector.concat(
+    table = GeoCatalog.concat(
         [
-            GeoVector.from_geometry(
-                Point(0, 0),
-                properties={
-                    "id": name,
-                    "assets": {"label": {"href": str(root / f"{name}.tif")}},
-                },
+            gpd.GeoDataFrame(
+                [
+                    {
+                        "id": name,
+                        "assets": {"label": {"href": str(root / f"{name}.tif")}},
+                    }
+                ],
+                geometry=[Point(0, 0)],
+                crs="EPSG:4326",
             )
             for name in ("a", "b")
         ]

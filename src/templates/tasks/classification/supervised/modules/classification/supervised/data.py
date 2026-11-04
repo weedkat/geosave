@@ -7,7 +7,7 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
-from geosave.ml.transforms import DataKey, ImageAugmenter, InputTransform
+from geosave.ml.transforms import DataKey, ImageAugmenter
 from geosave.model.spec import ModelSpec
 
 
@@ -48,13 +48,14 @@ class DataModule(LightningDataModule):
     spec's transforms in every split, without changing input availability.
 
     Args:
-        spec: Model spec, or its file, declaring `chips`, `inputs`, and
+        spec: Model spec, or its file, declaring `inputs`, `pixels`, and
             `transforms`.
         train: Training dataset.
         val: Validation dataset.
         test: Test dataset. None leaves the test split unavailable.
         augmentations: Kornia augmentations by ``name`` and ``init_args``, run
             on the pixel inputs while training.
+        size: Spatial size used by training augmentation.
         batch_size: Samples per batch.
         num_workers: DataLoader worker processes.
 
@@ -76,6 +77,7 @@ class DataModule(LightningDataModule):
         *,
         test: SampleDataset | None = None,
         augmentations: list[dict[str, Any]] | None = None,
+        size: int | tuple[int, int] = 224,
         batch_size: int = 8,
         num_workers: int = 4,
     ) -> None:
@@ -86,11 +88,7 @@ class DataModule(LightningDataModule):
         self.test_dataset = test
         self.batch_size = batch_size
         self.num_workers = num_workers
-        if self.spec.chips is None:
-            raise ValueError("the model spec declares no chips")
-        size = self.spec.chips.shape
         self.augmenter = ImageAugmenter(augmentations or [], size)
-        self.input_transform = InputTransform(self.spec.transforms, size)
 
     def _loader(self, dataset: SampleDataset, *, shuffle: bool) -> DataLoader[Sample]:
         # A forked worker inherits open rasters and reader threads it cannot use.
@@ -145,7 +143,7 @@ class DataModule(LightningDataModule):
             remains the Dataset/model contract; values are not repaired.
         """
         inputs = dict(batch["inputs"])
-        names = self.spec.pixel_inputs
+        names = self.spec.pixels
         target = batch["target"]
         if self.trainer is not None and self.trainer.training:
             keys: list[DataKey] = ["input" for _ in names]
@@ -154,4 +152,4 @@ class DataModule(LightningDataModule):
                 *(inputs[name] for name in names), target, data_keys=keys
             )
             inputs.update(zip(names, images, strict=True))
-        return {"inputs": self.input_transform(inputs), "target": target}
+        return {"inputs": self.spec.transform(inputs, batched=True), "target": target}

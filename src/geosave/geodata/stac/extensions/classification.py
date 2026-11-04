@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-import pystac
 
+import pystac
 import xarray as xr
 from pystac.extensions.classification import Classification, ClassificationExtension
 from pystac.extensions.raster import RasterBand
@@ -16,8 +16,8 @@ from geosave.geodata.utils.color import parse_color
 _CLASS_NAME = re.compile(r"[0-9A-Za-z_-]+")
 
 
-def from_dataarray(variable: xr.DataArray) -> list[Classification] | None:
-    """Describe a variable's legend as the classes its Raster band lists.
+def build_classes(variable: xr.DataArray) -> list[Classification] | None:
+    """Build the classes a variable's Raster band lists from its legend.
 
     Args:
         variable: Variable as `open_raster` opens it.
@@ -30,7 +30,7 @@ def from_dataarray(variable: xr.DataArray) -> list[Classification] | None:
         ValueError: A class name carries a character the schema refuses.
 
     Examples:
-        >>> [c.name for c in from_dataarray(label.label)]
+        >>> [c.name for c in build_classes(label.label)]
         ['background', 'forest']
     """
     legend = variable.gs.legend
@@ -43,7 +43,7 @@ def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
     """Stamp the legend a Raster band's classes state onto its variable.
 
     Args:
-        variable: Variable the band describes.
+        variable: Variable the band belongs to.
         band: Its Raster band, listing its classes.
 
     Returns:
@@ -93,11 +93,11 @@ def _classes(legend: attrs.Legend) -> list[Classification]:
 
 def write_band(asset: pystac.Asset, band: RasterBand, variable: xr.DataArray) -> None:
     """Attach classes to a band and declare the schema on its owning Item."""
-    if classes := from_dataarray(variable):
+    if classes := build_classes(variable):
         ClassificationExtension.ext(band).apply(classes=classes)
         ClassificationExtension.ext(asset, add_if_missing=True)
 
 
-def read_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
+def stamp_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
     """Read a band's classification fields."""
     return stamp(variable, RasterBand(fields))

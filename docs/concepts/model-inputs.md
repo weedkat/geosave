@@ -6,15 +6,19 @@ the arguments you give the model.
 
 | Declaration | Consumer |
 | --- | --- |
-| `rasters` | `preprocess` selects and validates supplied Datasets; `load_rasters` acquires them first |
-| `preprocessing` | `preprocess` runs the named calls in declaration order |
-| `inputs` | `model_inputs` binds prepared rasters to model argument names |
-| `context` | `model_context` encodes sample metadata; `model_inputs` adds those values |
-| `frames`, `chips` | Explicit frame/chip cuts; training DataModules also read chip dimensions |
-| `transforms` | Training DataModules apply configured Kornia transforms to pixel tensors |
+| `rasters` | `preprocess` selects and validates supplied Datasets |
+| `preprocessing` | Ordered native processing of the supplied sample |
+| `encoding` | Tensor conversion, metadata encoding, and retained inverse state |
+| `inputs` | `model_inputs` binds only the declared arguments |
+| `pixels` | Names the image arguments a training method may augment |
+| `tensors` | `transform` checks sample shape and dtype, including shared symbolic axes |
+| `transforms` | `transform` applies the same calls in training and inference |
+| `decoding` | `decode` processes one prediction with that sample's state |
+| `postprocessing` | `postprocess` processes merged outputs |
 
-The spec's processing methods do not run the model. `model_inputs` does not
-convert raster pixels to tensors or apply `transforms`.
+ModelSpec does not execute the model, choose observations, or lay out chips.
+A stage runs only when invoked. See the [execution guide](../guides/model-spec.md)
+for a complete v3 recipe and the catalog-to-training smoke test.
 
 ## References and calls
 
@@ -99,7 +103,7 @@ rasters:
         chunks: {x: 512, y: 512}
 ```
 
-Call `spec.load_rasters(anchor)` with a `GeoAnchor` to acquire and validate the
+Call `spec.load_rasters(anchor, geobox=grid)` with a `GeoAnchor` to acquire and validate the
 rasters on its grid. Every declared raster needs a `stac` block for this method;
 the ordinary `preprocess` path can use local rasters without recipes.
 
@@ -111,75 +115,51 @@ for native search and loading APIs.
 
 ## Normalize pixel tensors
 
-Add these sections to a spec whose `inputs.image` reads two prepared bands:
-
 ```yaml
-chips:
-  size: 224
-  overlap: 32
-  mode: reflect
-  window: hann
 transforms:
   image:
-    - name: Normalize
-      init_args:
-        mean: [0.15, 0.27]
-        std: [0.19, 0.17]
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref image
+      mean: [0.15, 0.27]
+      std: [0.19, 0.17]
+      dim: -3
 ```
 
-`preprocessing` acts on native rasters, usually before storing prepared data.
-`transforms` declares Kornia operations on pixel tensors. Training DataModules
-apply them after training augmentation, and also in validation and test.
-Per-band normalization applies separately to each temporal frame. Context
-values pass through these pixel transforms unchanged.
+Here image ends in `(band, y, x)`. The explicit negative axis works with or
+without a leading batch or temporal axis. Generated DataModules run
+`spec.transform(inputs, batched=True)` after training augmentation and in
+validation/test. Direct inference calls the same method, using `batched=False`
+for an unbatched sample. Nothing normalizes a model call automatically.
 
-For a direct model call, apply the corresponding tensor transform explicitly:
-
-```python
-from kornia.augmentation import Normalize
-
-normalize = Normalize(mean=[0.15, 0.27], std=[0.19, 0.17])
-image = normalize(image)
-```
-
-Here `image` has shape `(batch, band, y, x)`. A saved model wrapper does not
-automatically apply the spec's transforms. Match the training preparation when
-using a release for inference.
-
-`frames` and `chips` declare window cuts; `prepare` does not apply them.
-Use `spec.frames.cut(windows)` when frames are declared, then
-`spec.chips.cut(windows)` for spatial chips. A merge taper such as `hann` needs
-overlap; use at least two shared pixels for the tapers with zero edge weights.
-
-## Add geospatial context
-
-Prithvi TL and Clay use acquisition time and location alongside image pixels.
-The context recipe reads the prepared raster's metadata.
+## Encode geospatial context
 
 ```yaml
+encoding:
+  image:
+    call: geosave.model.processing.to_tensor
+    kwargs: {raster: !ref reflectance, dims: [time, band, y, x]}
+  context:
+    call: geosave.model.stages.encoder.prithvi.model_context
+    kwargs: {raster: !ref reflectance}
 inputs:
   image: !ref image
-context:
-  call: geosave.model.stages.encoder.prithvi.model_context
-  kwargs: {raster: !ref image}
+  temporal_coords: !ref 'context["temporal_coords"]'
+  location_coords: !ref 'context["location_coords"]'
+pixels: [image]
 ```
 
-| Encoder | Context returned for one sample |
-| --- | --- |
-| `PrithviTL` | `temporal_coords` shaped `(time, 2)`: year and zero-based day of year; `location_coords` shaped `(2,)`: latitude and longitude |
-| `Clay` | `time` shaped `(2,)`: ISO week and hour; `latlon` shaped `(2,)`: latitude and longitude |
+Context can read any declared/prepared raster, including auxiliary metadata
+that is not a pixel input. The same named-value mechanism encodes pixels and
+context; model arguments are explicitly bound. Encode after changing the
+sample's native crop or temporal selection. Never reuse cached context for a
+different sample.
 
-For Clay, use `geosave.model.stages.encoder.clay.model_context` and a raster
-with one acquisition instant. The functions return float32 tensors and read
-time labels and the grid centre, without loading pixels. Missing time or grid
-metadata raises.
+Prithvi returns temporal coordinates `(time, 2)` and location `(2,)`. Clay's
+installed `model_context` returns `time` and `latlon`, both `(2,)`, and requires
+one instant. These functions inspect coordinates, not pixels. Wavelengths and
+GSD remain part of the encoder configuration and must match input semantics.
 
-`spec.model_inputs(rasters)` resolves pixels and adds this context dictionary.
-`spec.model_context(rasters)` can encode it separately, then
-`spec.model_inputs(rasters, context=cached)` reuses it. Context may read only
-roots already read by `inputs`, because `prepare` stores those roots. Context
-keys cannot overwrite pixel input names.
-
-Encode context while the sample still has raster coordinates. Convert the
-pixel rasters to tensors afterwards; batching stacks the context tensors along
-with the pixel tensors.
+Geometry-changing training augmentation still requires a project-specific
+context policy. The generated image augmenters do not update geospatial context
+and assume trailing `(band, y, x)` image axes.

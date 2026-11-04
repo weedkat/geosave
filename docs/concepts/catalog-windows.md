@@ -1,81 +1,63 @@
-# Spatial samples and temporal frames
+# Samples from a catalog
 
 ```python
-samples = items.gs.sample()
-frames = samples.gs.frame(
-    windows={
-        "image": {
-            "slots": ["-3W", "-2W", "-1W"],
-            "reduce": "first",
-            "fill": "interpolate",
-        },
-    },
-    reference="label",
-    stride=1,
-)
-chips = frames.gs.chip(128, resolution=10)
-image = chips.iloc[0].gs.to_xarray()["image"].dataset
+items = gs.open_vector("catalog.parquet")      # one STAC Item per row
+samples = items.gs.sample(pair=["s2", "s1"], tolerance="2D", window=3, freq="MS")
+tree = samples[0].gs.to_datatree()             # DataTree: /s2/r10m, /s2/r20m, /s1/r20m, /dem/r30m
 ```
 
-`sample()` groups equal spatial footprints, retaining every acquisition and
-native grid. It does not select a reference collection or align pixels.
-Containing or overlapping footprints are separate groups.
+An item table follows stac-geoparquet: one Item per row. `sample()` groups those
+Items without opening a file and returns `GeoSamples`: the item table and, for
+each sample, the positions of its rows. Samples may share rows, since a swath
+or a DEM belongs to several, which a pandas GroupBy cannot hold:
 
-## Slots define model time steps
+```text
+items                                          samples.indices
+   id       collection  datetime  geometry     0  [0, 1, 2, 3, 6]
+0  s2_0105  s2          Jan 5     A            1  [2, 3, 4, 5, 6]
+1  s1_0106  s1          Jan 6     A
+2  s2_0204  s2          Feb 4     A            samples[1]  ->  items.iloc[[2, 3, 4, 5, 6]]
+...
+6  dem      dem         -         A
+```
 
-Each collection's `slots` list describes ordered, non-overlapping bins. The
-integer gives the relative position; the unit gives the bin width. At a
-January 15 reference, `-2W` covers January 1–8 and `-1W` January 8–15.
-Starts are included and ends excluded. `0D` covers the day starting at the
-reference instant. An acquisition exactly at the reference is excluded from
-`-1D` and included in `0D`; the clock is not rounded to midnight.
+`samples[i]` is a sample's rows, so it opens, queries and draws as any item
+table does. `samples.footprints` holds each sample's footprint, where its
+Items overlap, and `samples.footprints.gs.explore()` maps them.
 
-Supported units are `s`, `min`, `h`, `D`, `W`, `M` and `Y`. Weeks are seven days;
-months and years are relative calendar offsets. `-1W` is a week-long bin,
-whereas `-7D` is a one-day bin seven days before the reference.
+## How Items are grouped
 
-A reference collection supplies candidate timestamps and the matching
-observation directly; it needs no `windows` entry. With `reference=None`,
-timestamps are the sorted unique union of the requested collections, newest
-first. `stride` counts these candidates before checking completeness. Its
-default is the largest slot count, which does not guarantee non-overlapping
-calendar windows. Timeless collections cannot supply the clock.
+```mermaid
+flowchart TD
+    items["Item table<br/>One Item per row"]
+    footprints["Distinct footprints<br/>Smallest first; one covering overlap of a kept one repeats it"]
+    groups["Group indices<br/>For each footprint, the Items sharing overlap of its area"]
+    windows["Windows — with pair<br/>Each group split into windows of paired Items, timeless Items in every one"]
+    samples["GeoSamples<br/>The item table and each sample's row positions"]
+    tree["samples[i].gs.to_datatree()<br/>Lazy DataTree, /collection/res"]
+    items --> footprints --> groups --> windows --> samples --> tree
+    groups -->|Without pair| samples
+```
 
-## Multiple acquisitions, gaps and composites
+Groups may share Items: a radar swath belongs to every tile it covers, and a
+DEM to every window of its tile. Each step works on the Items' index; only
+`build_samples` lays the rows out.
 
-Each populated bin produces one raster time step. Multiple acquisitions
-require an explicit `reduce` method. `first` and `last` select whole scenes
-in acquisition-time order, preserving their nodata pixels. Other reducers
-use the existing temporal operations, including their categorical-data checks.
+## Pairs and windows
 
-`fill="interpolate"` linearly fills absent interior bins using only populated
-bins in the same collection's requested window. It does not extrapolate,
-fill clouded pixels in existing bins, or read observations outside the window.
-Two slots cannot interpolate a missing endpoint. Remaining structurally
-incomplete frames are omitted with a count warning. Pixel-level missing
-values can remain; framing does not eagerly inspect pixels.
+Each Item of the first `pair` collection is one time step, joined by the nearest
+Item of every other `pair` collection within `tolerance`. `window` consecutive
+steps form one sample, a new one every `step`. With `freq`, a step is a
+`resample` bucket filled by its `keep` pair, and a window holding an empty
+bucket is skipped with a `DroppedRowsWarning`. Dated Items of a collection
+outside `pair` join no sample.
 
-Composite start/end coverage must fit wholly inside a bin. A matching weekly
-composite works directly; a monthly composite crossing a weekly boundary does
-not become weekly data. No implicit temporal clipping or nearest-time matching
-is performed. Persist composite coverage when writing TIFFs and rebuilding
-catalogs from their paths.
+## Reading and persistence
 
-## Lazy reads and persistence
+`samples[i].gs.to_datatree()` opens the selected Item rows lazily, one grid
+node per native grid. `GeoSamples` uses positional indexing with `samples[i]`;
+it is not a GeoDataFrame. To read a single Item from the original table, use
+`items.iloc[i].gs.to_datatree()`. Close opened trees when finished.
 
-Frames remain GeoDataFrame rows. `reference_time` and the row's temporal bounds
-identify the prediction/reference instant. A JSON `frame` column records bin
-bounds, selected Item positions and operations. It survives GeoParquet and
-chipping. Reads execute these operations lazily using the existing temporal
-implementation, returning one Dataset per collection in a DataTree.
-
-Output `time` labels are bin starts, with explicit inclusive
-`start_datetime`/`end_datetime` coordinates. Original acquisitions and coverage
-remain in the row's Items. Reference observations retain their own metadata.
-Chipping declares spatial alignment: supply chip size and resolution to plan a
-local grid in each row's shared source CRS, or supply an explicit target GeoBox.
-Chip reads honour the recorded grid and resampling before temporal assembly.
-Unchipped reads keep native grids by default. Use
-`row.gs.to_xarray(resolution=10)` to align a complete frame on the same local
-grid used by resolution-based chipping, without building a chip index.
-The spatial grid is independent of the temporal clock.
+Persist the item table, not samples, and sample it again after reading;
+sampling reads no pixels.

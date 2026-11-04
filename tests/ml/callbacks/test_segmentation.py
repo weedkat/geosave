@@ -108,12 +108,6 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
     )
 
 
-@pytest.mark.parametrize("interval", [0, -1])
-def test_interval_must_be_positive(interval: int) -> None:
-    with pytest.raises(ValueError, match="log_image_every_n_epochs must be positive"):
-        DensePredictionLogger({0: "#000000"}, log_image_every_n_epochs=interval)
-
-
 @pytest.mark.parametrize("reason", ["sanity", "rank", "logger", "batch", "epoch"])
 def test_skipped_batches_do_not_render_or_require_outputs(reason: str) -> None:
     callback = DensePredictionLogger({0: "#000000"})

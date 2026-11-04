@@ -19,8 +19,8 @@ but spatial operations still need a locatable grid. Unsupported suffixes raise
 
 ```python
 dated = scene.expand_dims(time=[np.datetime64("2025-01-01")])
-items = dated.gs.to_cog(root / "dated/scene_{time:%Y%m%d}.tif")
-[file.name for scene in items for file in scene.files.values()]
+items = dated.gs.to_cog(root / "dated", path_format="scene_{time:%Y%m%d}.tif")
+[file.name for file in items]
 ```
 
 Output:
@@ -29,24 +29,29 @@ Output:
 ['scene_20250101.tif']
 ```
 
-The path template determines how data splits into files. `{time}` writes a
+`to_cog(path, path_format=...)` takes an output directory or URL prefix.
+The relative `path_format` determines the filenames; without it, the accessor
+uses its default filename pattern. Literal braces in `path` stay literal. The template determines how
+data splits into files. `{time}` writes a
 file per date; `{band}` writes a file per band. Bands sharing a file must have
 the same dtype and nodata. For a tree, include `{collection}` to name each
-group. Other fields such as `{prefix}` take caller-supplied keyword values;
-callable values receive each date's raster. A scalar `time` coordinate is
+group. Fill any other fields in the template before passing it. A scalar `time` coordinate is
 accepted for one image. Several dates need distinct paths, or the writer
 raises before writing them.
 
 Existing destinations raise `FileExistsError` by default. Pass `overwrite=True`
 to replace them. The returned paths are the files this call wrote, not an
 inventory of the destination folder.
-Build [STAC Items](../guides/stac.md) from them with `gs.stac.create_items`
-when you need a searchable catalog.
+For a searchable catalog, write with `to_catalog` instead: it writes the same
+files and returns their [STAC Items](../guides/stac.md) as a table.
 
 ## Read a tree
 
 ```python
-sample = gs.open_tree({"optical": files[0], "label": store})
+sample = xr.merge([
+    gs.open_raster(files[0]).gs.to_datatree("optical"),
+    gs.open_raster(store).gs.to_datatree("label"),
+])
 sample
 ```
 
@@ -55,37 +60,33 @@ Output:
 ```text
 <xarray.DataTree>
 Group: /
-│   Dimensions:      (y: 4, x: 4)
-│   Coordinates:
-│     * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-│     * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
-│       spatial_ref  int64 8B 0
 ├── Group: /optical
-│       Dimensions:      (y: 4, x: 4)
-│       Coordinates:
-│           spatial_ref  int64 8B 0
-│           time         datetime64[s] 8B 2025-01-01
-│       Data variables:
-│           red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
-│       Attributes:
-│           TIFFTAG_DATETIME:  2025:01:01 00:00:00
-│           GEOSAVE_DATETIME:  2025-01-01
-│           AREA_OR_POINT:     Area
+│   │   Attributes:
+│   │       AREA_OR_POINT:  Area
+│   └── Group: /optical/r10m
+│           Dimensions:      (y: 4, x: 4)
+│           Coordinates:
+│             * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+│             * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+│               spatial_ref  int64 8B 0
+│           Data variables:
+│               red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
 └── Group: /label
-        Dimensions:      (y: 4, x: 4)
-        Coordinates:
-            spatial_ref  int32 4B ...
-        Data variables:
-            red          (y, x) uint8 16B ...
+    └── Group: /label/r10m
+            Dimensions:      (y: 4, x: 4)
+            Coordinates:
+              * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+              * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+                spatial_ref  int32 4B ...
+            Data variables:
+                red          (y, x) uint8 16B ...
 ```
 
-The mapping names the groups; each value is a raster file or store. This example
-uses the same pixels twice to show the structure. You can also open a folder
-containing one raster file or store per group, or the paths a tree's COG
-writer returns. A tree saved with `.gs.to_zarr(folder)` is a folder with one
-Zarr store per group. A folder names groups by file/store stem, in sorted name
-order; a mapping keeps your names and order. Two folder entries with the same
-stem are ambiguous and raise `ValueError`.
+Native xarray composition names the groups explicitly. A tree saved with
+`.gs.to_zarr("scene.zarr")` or `.gs.to_netcdf("scene.nc")` preserves its
+collection and grid groups; `gs.open_raster(path)` returns a DataTree for such
+stores and a Dataset for root-only stores. Directories and mappings are not
+assembled by the opener. Use catalog loading for assets split across files.
 
 ## Use remote storage
 
@@ -104,15 +105,16 @@ store = scene.gs.to_zarr("s3://my-bucket/scene.zarr", storage_options=options)
 remote = gs.open_raster(store, storage_options=options, chunks={})
 ```
 
-Zarr and GeoParquet use fsspec for remote access. COG, NetCDF, GeoJSON, and
-GeoPackage writes use a local temporary file before uploading. NetCDF reads
-require local files. GeoJSON and GeoPackage readers can use URLs their GDAL
-driver supports, with GDAL credentials.
+Zarr and GeoParquet use filesystem-backed access. COG, NetCDF, GeoJSON, and
+GeoPackage writes stage a local temporary file before uploading. Remote NetCDF,
+GeoJSON, and GeoPackage reads download a temporary copy; NetCDF retains it until
+the returned object closes.
 
-For S3 TIFFs, `storage_options` can supply `key`, `secret`, `token`, `anon`, and
-`client_kwargs` with region or endpoint settings. The reader translates these
-to GDAL's process-wide S3 configuration; a returned `RasterFile`'s `path` also
-carries its storage options. Alternatively configure GDAL before creating reads:
+For remote TIFFs, supplying `storage_options` currently downloads the whole
+file to temporary storage before opening it. The resulting pixels can be lazy,
+but that does not make the download a windowed read. Without these options,
+Rasterio uses GDAL's URL handling and configured environment, which can read
+COG ranges. Choose that path when bounded remote reads matter:
 
 <!-- CREDENTIALS: AWS S3 bucket and access keys -->
 ```python

@@ -9,9 +9,89 @@ import xarray as xr
 
 import geosave.geodata as gd
 from geosave.geodata import GeoDataArray, GeoDataset, GeoDataTree
-from geosave.geodata.core.raster.create import raster
-from tests.geodata.conftest import build_raster, geobox
-from tests.geodata.conftest import flat
+from tests.geodata.conftest import build_raster, flat
+from tests.geodata.conftest import create_test_collection
+from tests.conftest import build_tree
+
+
+def test_to_catalog_writes_current_pixels_with_collection_time_and_band(tmp_path):
+    import geopandas as gpd
+    import geosave as gs
+
+    original = build_raster(times=2)
+    changed = original.copy()
+    changed["red"] = changed.red + 1
+    collection = create_test_collection("s2", description="Reflectance")
+    rows = changed.gs.to_catalog(
+        tmp_path,
+        path_format="{collection}/{time:%Y%m%d}/{band}.tif",
+        collection=collection,
+    )
+    assert isinstance(rows, gpd.GeoDataFrame)
+    assert rows.collection.tolist() == ["s2", "s2"]
+    assert rows.gs.collections["s2"].description == "Reflectance"
+    assert (tmp_path / "s2/20250601/red.tif").is_file()
+    assert (tmp_path / "s2/20250602/nir.tif").is_file()
+    saved = rows.gs.to_geoparquet(tmp_path / "catalog.parquet")
+    restored = gs.open_vector(saved).gs.to_datatree()
+    raster = restored["s2"].gs.to_dataset()
+    assert raster.red.chunks is not None
+    np.testing.assert_array_equal(raster.red.values, changed.red.values)
+    np.testing.assert_array_equal(raster.nir.values, changed.nir.values)
+    assert raster.gs.geobox == changed.gs.geobox
+    restored.close()
+
+
+def test_to_catalog_preserves_tree_groups_on_their_native_grids(tmp_path):
+    tree = build_tree(
+        {"s2": build_raster(), "dem": build_raster(crs="EPSG:32633")}
+    )
+    rows = tree.gs.to_catalog(tmp_path, path_format="{collection}/{band}.tif")
+    restored = rows.gs.to_datatree()
+    assert restored.gs.groups == ("s2", "dem")
+    assert restored["s2"].gs.to_dataset().gs.geobox == tree["s2"].gs.to_dataset().gs.geobox
+    assert restored["dem"].gs.to_dataset().gs.geobox == tree["dem"].gs.to_dataset().gs.geobox
+    restored.close()
+
+
+def test_to_catalog_refuses_unsplit_dates_before_writing(tmp_path):
+    with pytest.raises(ValueError, match="dates"):
+        build_raster(times=2).gs.to_catalog(tmp_path, path_format="scene.tif", collection="s2")
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("suffix", [".nc", ".zarr"])
+def test_to_catalog_refuses_store_templates_before_writing(tmp_path, suffix):
+    with pytest.raises(ValueError, match="to_zarr or to_netcdf"):
+        build_raster(times=2).gs.to_catalog(
+            tmp_path, path_format="{time:%Y%m%d}" + suffix, collection="s2"
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_to_catalog_dataarray_keeps_its_band_name_and_refuses_overwrite(tmp_path):
+    source = build_raster(times=1).red
+    rows = source.gs.to_catalog(tmp_path, path_format="{band}.tif", collection="s2")
+    assert set(rows.iloc[0].assets) == {"red"}
+    with pytest.raises(FileExistsError):
+        source.gs.to_catalog(tmp_path, path_format="{band}.tif", collection="s2")
+
+
+def test_to_catalog_refuses_unlocated_rasters_before_writing(tmp_path):
+    source = xr.Dataset({"red": (("y", "x"), np.ones((2, 2), dtype="float32"))})
+    with pytest.raises(ValueError, match="grid"):
+        source.gs.to_catalog(tmp_path, path_format="scene.tif", collection="s2")
+    assert not list(tmp_path.iterdir())
+
+
+def test_to_catalog_refuses_a_store_beside_cogs_before_writing(tmp_path):
+    tree = build_tree(
+        {"s2": build_raster(), "dem": build_raster(crs="EPSG:32633")}
+    )
+    with pytest.raises(ValueError, match="to_zarr or to_netcdf"):
+        tree.gs.to_catalog(tmp_path, path_format={"s2": "s2.tif", "dem": "dem.nc"})
+    assert not list(tmp_path.iterdir())
+
 
 if TYPE_CHECKING:
 
@@ -36,36 +116,6 @@ def test_raster_accessor_survives_xarray_selection(raster: xr.Dataset) -> None:
     assert geobox.width == 1
 
 
-def test_tree_accessor_reads_settled_structure(tree: xr.DataTree) -> None:
-    assert isinstance(tree.gs, GeoDataTree)
-    assert tree.gs.groups == ("optical", "infrared")
-
-
-def test_every_xarray_accessor_names_its_variables(
-    raster: xr.Dataset, tree: xr.DataTree
-) -> None:
-    assert raster.red.gs.variables == ("red",)
-    assert raster.gs.variables == ("red", "nir")
-    assert tree.gs.variables == ("optical/red", "infrared/nir")
-
-
-def test_unbucketed_time_covers_only_its_own_instants() -> None:
-    raster = build_raster(times=2).assign_coords(
-        time=np.array(
-            ["2025-06-01T10:23:11", "2025-06-11T10:24:02"], dtype="datetime64[ns]"
-        )
-    )
-
-    start, end = raster.gs.timespan
-
-    assert (start.hour, start.minute, start.second) == (10, 23, 11)
-    assert (end.hour, end.minute, end.second) == (10, 24, 2)
-
-
-def test_timeless_raster_has_no_timespan(raster: xr.Dataset) -> None:
-    assert raster.gs.timespan is None
-
-
 def test_times_format_as_a_datetime_index_on_a_raster_and_a_band() -> None:
     raster = build_raster(times=2)
 
@@ -74,42 +124,19 @@ def test_times_format_as_a_datetime_index_on_a_raster_and_a_band() -> None:
     assert raster.red.gs.times.equals(raster.gs.times)
 
 
-def test_timeless_data_has_no_times(raster: xr.Dataset) -> None:
-    assert raster.gs.times is None
-    assert raster.red.gs.times is None
-
-
-def test_times_leave_chunked_pixels_uncomputed() -> None:
-    raster = build_raster(times=2).chunk()
-
-    assert len(raster.gs.times) == 2
-    assert isinstance(raster.red.data, da.Array)
-
-
-def test_geodata_types_are_xarray_at_runtime() -> None:
-    assert gd.DataArray is xr.DataArray
-    assert gd.Dataset is xr.Dataset
-    assert gd.DataTree is xr.DataTree
-
-
 @pytest.mark.parametrize(
     ("labels", "span"),
     [
-        (["2018-12-26"], ("2018-12-26T00:00:00", "2018-12-26T23:59:59.999999")),
-        (["2018-12-01"], ("2018-12-01T00:00:00", "2018-12-01T23:59:59.999999")),
-        (["2018-01-01"], ("2018-01-01T00:00:00", "2018-01-01T23:59:59.999999")),
+        (["2018-12-26"], ("2018-12-26T00:00:00", "2018-12-26T00:00:00")),
+        (["2018-12-26T10:30:31"], ("2018-12-26T10:30:31", "2018-12-26T10:30:31")),
         (
-            ["2018-12-26", "2018-12-27"],
-            ("2018-12-26T00:00:00", "2018-12-27T23:59:59.999999"),
-        ),
-        (
-            ["2018-12-26T10:00:00"],
-            ("2018-12-26T10:00:00", "2018-12-26T10:00:59.999999"),
+            ["2018-12-27", "2018-12-26"],
+            ("2018-12-26T00:00:00", "2018-12-27T00:00:00"),
         ),
     ],
-    ids=["a date", "a month start", "a year start", "two dates", "an hour"],
+    ids=["an instant", "an instant with seconds", "oldest to newest"],
 )
-def test_unbucketed_time_covers_what_its_labels_spell(
+def test_instants_span_from_the_oldest_to_the_newest_label(
     labels: list[str], span: tuple[str, str]
 ) -> None:
     raster = build_raster(times=len(labels)).assign_coords(
@@ -195,40 +222,11 @@ def test_mask_and_scale_decodes_values_and_keeps_the_source(
     xr.testing.assert_identical(source, before)
 
 
-def test_times_reads_a_scalar_time_coordinate() -> None:
-    from tests.geodata.conftest import build_raster
-
-    one_date = build_raster(times=2).isel(time=0)
-
-    assert one_date.gs.times.strftime("%Y%m%d").tolist() == [
-        build_raster(times=2).gs.times[0].strftime("%Y%m%d")
-    ]
-
-
 def test_a_band_read_from_disk_decodes_to_float32(tmp_path) -> None:
     from geosave.geodata import open_raster
 
-    (written,) = flat(build_raster(packed=True).gs.to_cog(f"{tmp_path}/scene.tif"))
+    (written,) = flat(build_raster(packed=True).gs.to_cog(tmp_path, path_format="scene.tif"))
 
     decoded = open_raster(written).gs.mask_and_scale()
 
     assert decoded.red.dtype == np.float32
-
-
-def test_crs_name_stays_short_however_the_crs_was_built() -> None:
-    coded = raster({"red": (("y", "x"), np.zeros((8, 8), "uint16"))}, geobox())
-    named = raster(
-        {
-            "red": (
-                ("y", "x"),
-                np.zeros((8, 8), "uint16"),
-            )
-        },
-        geobox(crs="+proj=laea +lat_0=52 +lon_0=10"),
-    )
-
-    assert coded.gs.crs_name == "EPSG:32633"
-    assert coded.red.gs.crs_name == "EPSG:32633"
-    # A CRS read back off spatial_ref prints its whole WKT, which this refuses to.
-    assert len(str(coded.gs.crs)) > 100
-    assert named.gs.crs_name == "unknown"

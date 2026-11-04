@@ -9,16 +9,21 @@ run it without downloads or accounts. Install GeoSave first using the
 
 ```python
 import numpy as np
+import xarray as xr
+
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 red = np.full((4, 4), 0.25, dtype="float32")
 nir = np.full((4, 4), 0.75, dtype="float32")
-scene = gs.raster(
-    {"red": (("y", "x"), red), "nir": (("y", "x"), nir)}, anchor.geobox
-)
+scene = xr.Dataset(
+    {"red": (("y", "x"), red), "nir": (("y", "x"), nir)}
+).gs.write_grid(grid)
 scene
 ```
 
@@ -28,8 +33,8 @@ Output:
 <xarray.Dataset> Size: 196B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) float32 64B 0.25 0.25 0.25 0.25 ... 0.25 0.25 0.25 0.25
@@ -41,7 +46,8 @@ A raster is an image whose pixels correspond to locations on the ground.
 They represent reflected light in red and near-infrared wavelengths. Real
 satellite images supply these values; here we filled them with simple numbers.
 
-The anchor places the 4 × 4 image around the given latitude and longitude.
+The GeoBox places the 4 × 4 image within the projected bounds above, and
+`write_grid` writes that placement onto the Dataset.
 Each pixel covers 10 × 10 metres. The `y` and `x` coordinates locate the pixel
 centres, and `spatial_ref` records the map coordinate system, called the CRS.
 GeoSave keeps that location information alongside the values.
@@ -62,8 +68,8 @@ array([[0.5, 0.5, 0.5, 0.5],
        [0.5, 0.5, 0.5, 0.5],
        [0.5, 0.5, 0.5, 0.5]], dtype=float32)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 ```
 
@@ -79,8 +85,8 @@ from pathlib import Path
 import tempfile
 
 root = Path(tempfile.mkdtemp())
-files = scene.gs.to_cog(root / "scene.tif")
-opened = gs.open_raster(files)
+files = scene.gs.to_cog(root, path_format="scene.tif")
+opened = gs.open_raster(files[0])
 opened
 ```
 
@@ -90,8 +96,8 @@ Output:
 <xarray.Dataset> Size: 264B
 Dimensions:      (x: 4, y: 4)
 Coordinates:
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
     spatial_ref  int64 8B 0
 Data variables:
     red          (y, x) float32 64B dask.array<chunksize=(4, 4), meta=np.ndarray>
@@ -101,9 +107,8 @@ Attributes:
     AREA_OR_POINT:  Area
 ```
 
-`to_cog` writes a Cloud Optimized GeoTIFF and returns a list of `Scene`s, one per
-date, each mapping an asset key to its `RasterFile`. `open_raster` accepts those
-or a single file path.
+`to_cog` writes Cloud Optimized GeoTIFFs and returns a list of destination
+UPaths. `open_raster` reads one file path. Use a catalog to assemble files across bands or dates.
 The reopened bands are Dask
 arrays: their pixel data loads when you compute, plot, or convert it to tensors.
 Close the dataset with `opened.close()` when finished.

@@ -1,4 +1,4 @@
-"""Build raster Datasets and read them through the `gs` Dataset accessor.
+"""Read raster Datasets through the `gs` Dataset accessor.
 
 Georeferencing is odc-geo's. GeoSave adds only the CF axis semantics odc
 omits, which `write_crs` writes.
@@ -47,8 +47,7 @@ Examples:
 
 from __future__ import annotations
 
-from functools import partial
-from typing import TYPE_CHECKING, Unpack, cast
+from typing import TYPE_CHECKING, Any, Unpack, cast
 
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
@@ -58,42 +57,43 @@ from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
 from geosave.geodata.attrs.groups.gdal import RGB
-
+from geosave.geodata.conventions import (
+    BAND_DIMENSION,
+    CRS_COORDINATE,
+    SPATIAL_DIMENSIONS,
+    TIME_COORDINATE,
+)
+from geosave.geodata.core.raster.grid import name_grid, place_on_grid, write_reference
+from geosave.geodata.conventions import ITEM_ID_FORMAT
 from geosave.geodata.utils.summary import class_percent, statistics
 from geosave.geodata.utils.tensor import as_tensor
 
 from .base import GeoRaster
-from .create import write_cf_axes
-from geosave.geodata.conventions import (
-    BAND_DIMENSION,
-    SPATIAL_DIMENSIONS,
-)
-
 
 if TYPE_CHECKING:
-    from geosave.geodata.utils.color import Palette
-    import torch
+    import pystac
     from collections.abc import Mapping, Sequence
-    from os import PathLike
+
+    import holoviews as hv
+    import torch
     from numpy.typing import DTypeLike
     from odc.geo import SomeCRS
 
-    from geosave.geodata.io.raster.file import Scene, Writer
-    from geosave.geodata.viz.explorer import Explorer, Overlay
-    from geosave.geodata.io.raster.netcdf import (
-        NetCDFEngine,
-        NetCDFWriteOptions,
-    )
-    from geosave.geodata.io.raster.geotiff import COGWriteOptions
-    from geosave.geodata.io.raster.zarr import ZarrWriteOptions
+    from odc.geo.gcp import GCPGeoBox
+
+    from geosave.geodata import DataArray, Dataset, DataTree, GeoDataFrame
+    from geosave.geodata.stac.item import ItemTime
+    from dask.delayed import Delayed
+    from upath import UPath
+    from geosave.geodata.io.formats.geotiff import COGWriteOptions
+    from geosave.geodata.io.formats.netcdf import NetCDFEngine
+    from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
+    from geosave.geodata.io.formats.zarr import ZarrWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
-
-    import holoviews as hv
-
-    from geosave.geodata import DataArray, Dataset
+    from geosave.geodata.utils.color import Palette
+    from geosave.geodata.viz.explore import Explorer
 
 
-@xr.register_dataset_accessor("gs")
 class GeoDataset(GeoRaster["Dataset"]):
     """Read and transform one raster Dataset.
 
@@ -104,8 +104,8 @@ class GeoDataset(GeoRaster["Dataset"]):
         data: Dataset holding one raster.
 
     Examples:
-        >>> ds = source.load(anchor)
-        >>> ds.gs.anchor.geobox.shape
+        >>> ds = io.load_dataset(items, geobox=grid)
+        >>> ds.gs.geobox.shape
         (512, 512)
     """
 
@@ -185,6 +185,51 @@ class GeoDataset(GeoRaster["Dataset"]):
         return {name: self._data[name].gs.spectral for name in self.variables}
 
     @property
+    def stac_collection(self) -> pystac.Collection | None:
+        """Read the STAC Collection this raster was loaded from, None where it states none.
+
+        Examples:
+            >>> io.load_dataset(items, geobox=grid).gs.stac_collection.id
+            'sentinel-2-l2a'
+        """
+        import pystac
+
+        stated = attrs.StacMetadata.from_attrs(self._data.attrs)
+        if stated is None or stated.collection is None:
+            return None
+        return pystac.Collection.from_dict(stated.collection)
+
+    @property
+    def stac_common_properties(self) -> dict[str, Any]:
+        """Read the Item properties every date of this raster shares, empty where none are stated.
+
+        Examples:
+            >>> io.load_dataset(items, geobox=grid).gs.stac_common_properties["platform"]
+            'sentinel-2a'
+        """
+        stated = attrs.StacMetadata.from_attrs(self._data.attrs)
+        return {} if stated is None else dict(stated.common_properties or {})
+
+    @property
+    def stac_properties(self) -> pd.DataFrame:
+        """Read each date's Item properties from the `stac_properties` coordinate.
+
+        Returns:
+            One row per `time` label, one column per property key; a key a
+            date lacks is NaN. Empty where the coordinate is absent.
+
+        Examples:
+            >>> clear = ds.sel(time=ds.gs.stac_properties["eo:cloud_cover"] < 30)
+        """
+        from geosave.geodata.stac.item import read_properties_coordinate
+
+        mappings = read_properties_coordinate(self._data)
+        if not mappings:
+            return pd.DataFrame()
+        labels = np.atleast_1d(self._data[TIME_COORDINATE].values)
+        return pd.DataFrame(mappings, index=pd.DatetimeIndex(labels, name="time"))
+
+    @property
     def acdd(self) -> attrs.ACDD | None:
         """Read what the whole dataset is, None where its root states no ACDD key."""
         return attrs.ACDD.from_attrs(self._data.attrs)
@@ -208,12 +253,39 @@ class GeoDataset(GeoRaster["Dataset"]):
             return attrs.clear_attrs(self._data, attrs.ACDD)
         return attrs.stamp_attrs(self._data, acdd)
 
+    def write_grid(self, geobox: GeoBox | GCPGeoBox) -> Dataset:
+        """Place this raster on a grid: `y` and `x` coordinates and the CRS.
+
+        Rasters are built with xarray's own constructors; this writes what they
+        cannot say themselves, where each pixel sits and what its numbers
+        measure, as `write_nodata` writes what marks an absent pixel.
+
+        Args:
+            geobox: Regular grid, or a grid placed by ground control points.
+
+        Returns:
+            New Dataset whose variables point at the CRS coordinate, its axes
+            carrying CF attrs on a regular grid. Coordinates on other
+            dimensions, such as `time`, are kept.
+
+        Raises:
+            ValueError: A variable's dimensions do not end in `y, x`, their
+                sizes differ from the grid's, or the grid carries no CRS.
+
+        Examples:
+            >>> scene = xr.Dataset({"red": (("time", "y", "x"), red)}, coords={"time": dates})
+            >>> scene.gs.write_grid(grid).gs.geobox == grid
+            True
+        """
+        return cast("Dataset", place_on_grid(self._data, geobox))
+
     def write_crs(self, crs: SomeCRS | None = None) -> Dataset:
-        """Write onto the spatial coordinates what they measure.
+        """Write onto the existing spatial coordinates what they measure.
 
         The grid decides the answer: a projected raster names
         `projection_y_coordinate` and `projection_x_coordinate`, a geographic
-        one `latitude` and `longitude`. No pixel moves; `reproject` does that.
+        one `latitude` and `longitude`. No pixel moves; `reproject` does that,
+        and `write_grid` places a raster that has no coordinates yet.
 
         Args:
             crs: CRS the existing coordinates are in, for a raster that
@@ -226,27 +298,53 @@ class GeoDataset(GeoRaster["Dataset"]):
             axis. Their other attrs are replaced.
 
         Raises:
-            ValueError: The raster carries no locatable grid and `crs` names
-                none, `crs` names no known reference system, or the raster is
-                placed by ground control points rather than a regular grid.
+            ValueError: The raster has no `y`/`x` coordinates, carries no CRS
+                and `crs` names none, `crs` names no known reference system,
+                or the raster is placed by ground control points.
 
         Examples:
             >>> ds.gs.write_crs("EPSG:32633").y.attrs["standard_name"]
             'projection_y_coordinate'
         """
-        result = self._data if crs is None else self._data.odc.assign_crs(crs)
-        geobox = result.gs.geobox
-        if geobox is None:
+        return cast("Dataset", write_reference(self._data, crs))
+
+    def to_datatree(self, collection: str) -> DataTree:
+        """Make this raster one collection's grid node, as `/{collection}/{res}`.
+
+        The node is named after its grid as EOPF names grid groups (`r10m`).
+        This raster's attrs go on the collection node, so the tree's
+        `to_dataset` gives them back. Combine collections, or one
+        collection's grids, with `xr.merge`.
+
+        Args:
+            collection: Name of the collection node.
+
+        Returns:
+            DataTree of one collection node over one grid node.
+
+        Raises:
+            ValueError: The raster sits on no georeferenced grid.
+
+        Examples:
+            >>> tree = xr.merge([scene.gs.to_datatree("s2"), dem.gs.to_datatree("dem")])
+            >>> list(tree.gs.rasters)
+            ['s2/r10m', 'dem/r30m']
+        """
+        geobox = self.geobox
+        if not isinstance(geobox, GeoBox) or geobox.crs is None:
             raise ValueError(
-                "raster carries no locatable grid and no crs was given; pass "
-                "one or assign a CRS first"
+                f"a grid node is named after its grid, and this raster sits on none; "
+                f"place it with gs.write_grid before making it {collection!r}"
             )
-        if not isinstance(geobox, GeoBox):
-            raise ValueError(
-                f"raster is placed by {type(geobox).__name__}, not a regular "
-                f"grid, so its axes measure no CF coordinate"
-            )
-        return write_cf_axes(result, geobox)
+        node = self._data.copy()
+        node.attrs = {}
+        collection_node = xr.Dataset(attrs=dict(self._data.attrs))
+        return cast(
+            "DataTree",
+            xr.DataTree.from_dict(
+                {collection: collection_node, f"{collection}/{name_grid(geobox)}": node}
+            ),
+        )
 
     def write_nodata(
         self,
@@ -416,17 +514,13 @@ class GeoDataset(GeoRaster["Dataset"]):
 
         drawn = {name: colour for colour, name in channels.items()}
         # A band left interpreted would compose a second, stale colour.
-        return self._data.assign(
-            {
-                name: attrs.stamp_attrs(
-                    self._data[name],
-                    attrs.GDALBand.replace(
-                        self._data[name].attrs, colorinterp=drawn.get(name)
-                    ),
-                )
-                for name in self.variables
-            }
-        )
+        bands: dict[str, xr.DataArray] = {}
+        for name in self.variables:
+            band = self._data[name]
+            stated = attrs.GDALBand.from_attrs(band.attrs) or attrs.GDALBand()
+            interpreted = stated.model_copy(update={"colorinterp": drawn.get(name)})
+            bands[name] = attrs.stamp_attrs(band, interpreted)
+        return self._data.assign(bands)
 
     def statistics(self) -> pd.DataFrame:
         """Summarise every variable's present pixels, reading each of them.
@@ -501,7 +595,6 @@ class GeoDataset(GeoRaster["Dataset"]):
         band: str | None = None,
         *,
         rgb: tuple[str, str, str] | None = None,
-        overlay: Overlay | None = None,
         basemap: str | None = None,
         cmap: str | None = None,
         alpha: float = 0.8,
@@ -517,9 +610,7 @@ class GeoDataset(GeoRaster["Dataset"]):
                 else the first band.
             rgb: Variables composed red, green and blue, offered and shown
                 first.
-            overlay: Rasters, GeoDataFrames or item tables drawn on top, such as
-                field boundaries or a prediction; a mapping names each layer.
-            basemap: Basemap under the layers, as `viz.map.BASEMAPS` names it.
+            basemap: Basemap under the layers, as `viz.explore.page.map.BASEMAPS` names it.
                 None uses the light basemap.
             cmap: Colormap of bands without classes.
             alpha: Opacity of this raster over the basemap.
@@ -533,13 +624,13 @@ class GeoDataset(GeoRaster["Dataset"]):
 
         Examples:
             >>> ds.gs.explore()
-            >>> ds.gs.explore("ndvi", overlay=fields, basemap="Imagery")
+            >>> ds.gs.explore("ndvi", basemap="Imagery") * fields
             >>> ds.gs.explore(rgb=("B08", "B04", "B03"))
         """
-        from geosave.geodata.viz.explorer import Explorer, RasterLayer, create_layers
+        from geosave.geodata.viz.explore import Explorer, RasterLayer
 
         layer = RasterLayer(self._data, band, rgb=rgb, cmap=cmap, alpha=alpha)
-        return Explorer(layer, *create_layers(overlay), basemap=basemap)
+        return Explorer(layer, basemap=basemap)
 
     def plot(
         self,
@@ -590,9 +681,6 @@ class GeoDataset(GeoRaster["Dataset"]):
         """
         from geosave.geodata.viz.plot import draw_raster
 
-        band, rgb = self._drawn(band, rgb)
-        place = self.anchor.locate() if xlabel is None else None
-        caption = place.to_address() if place is not None else xlabel
         return draw_raster(
             self._data,
             band,
@@ -601,28 +689,62 @@ class GeoDataset(GeoRaster["Dataset"]):
             clim=clim,
             cols=cols,
             title=title,
-            xlabel=caption,
+            xlabel=xlabel,
         )
 
-    def _drawn(
-        self, band: str | None, rgb: tuple[str, str, str] | None
-    ) -> tuple[str | None, tuple[str, str, str] | None]:
-        """Return the band or composite a drawing names, else the sole variable, else `rgb`."""
-        if band is not None and rgb is not None:
-            raise ValueError("name a band or a composite, not both")
-        if band is None and rgb is None:
-            if len(self.variables) == 1:
-                return self.variables[0], None
-            if self.rgb is None:
-                raise ValueError(
-                    f"this raster holds {list(self.variables)} and records no "
-                    f"composite; name one band, ds.gs.plot('ndvi'), or a "
-                    f"composite, ds.gs.plot(rgb=('B04', 'B03', 'B02')), or record "
-                    f"one with ds.gs.write_rgb('B04', 'B03', 'B02')"
+    def read_pixels(self, geobox: GeoBox) -> Dataset:
+        """Read the pixels inside `geobox`, keeping every n-th before computing.
+
+        Only the window `geobox` overlaps is computed, thinned to about its
+        pixel size; a Dataset holds no overviews, so a coarse `geobox` still
+        computes the chunks under the window.
+
+        Args:
+            geobox: Grid to read onto, such as a map's view.
+
+        Returns:
+            Dataset on `geobox` with the same variables and attrs, float32
+            with nodata and pixels outside the raster as NaN.
+
+        Examples:
+            >>> ds.gs.read_pixels(view).red.shape
+            (600, 900)
+        """
+        from odc.geo.overlap import compute_reproject_roi
+        from odc.geo.roi import roi_is_empty
+        from odc.geo.xr import xr_coords, xr_reproject
+
+        grid = self.geobox
+        if not isinstance(grid, GeoBox):
+            raise ValueError("reading pixels needs a regular georeferenced grid")
+        roi = compute_reproject_roi(grid, geobox)
+
+        # 1. A raster the grid misses is NaN, computed from nothing
+        if roi_is_empty(roi.roi_src):
+            missing = {}
+            for name, variable in self._data.data_vars.items():
+                shape = (*variable.shape[:-2], *geobox.shape)
+                missing[name] = xr.DataArray(
+                    np.full(shape, np.nan, "float32"),
+                    dims=variable.dims,
+                    attrs=variable.attrs,
                 )
-            return None, self.rgb
-        self._targets((band,) if band is not None else cast("tuple[str, ...]", rgb))
-        return band, rgb
+            return cast("Dataset", xr.Dataset(missing, coords=xr_coords(geobox)))
+
+        # 2. The window, every `read_shrink`-th pixel, computed
+        y_window, x_window = roi.roi_src
+        steps = {
+            "y": slice(y_window.start, y_window.stop, roi.read_shrink),
+            "x": slice(x_window.start, x_window.stop, roi.read_shrink),
+        }
+        window = self._data.isel(steps).gs.to_nan().astype("float32").compute()
+
+        # 3. Onto the grid; the source's CRS attrs survive the warp
+        pixels = xr_reproject(window, geobox, resampling="nearest", dst_nodata=np.nan)
+        pixels = pixels.odc.assign_crs(geobox.crs).assign_coords(
+            {CRS_COORDINATE: xr_coords(geobox)[CRS_COORDINATE]}
+        )
+        return cast("Dataset", pixels)
 
     def to_numpy(self, *, dtype: DTypeLike | None = None) -> np.ndarray:
         """Stack every variable this raster carries into one model-input array.
@@ -746,150 +868,212 @@ class GeoDataset(GeoRaster["Dataset"]):
 
     def to_cog(
         self,
-        path: str | PathLike[str],
+        path: Location,
         *,
-        map_scale: float | None = None,
+        path_format: str | None = None,
         overwrite: bool = False,
         compute: bool = True,
         storage_options: StorageOptions | None = None,
         **options: Unpack[COGWriteOptions],
-    ) -> list[Scene]:
-        """Write this raster as Cloud Optimized GeoTIFFs, as its path template names.
+    ) -> list[UPath] | Delayed:
+        """Write this raster as Cloud Optimized GeoTIFFs under the folder `path`.
 
-        The path is a `str.format` template, filled in once per date and band;
-        its fields decide the files:
-
-        - `"out/scene.tif"`: one file holding every band.
-        - `"out/s2_{band}.tif"`: one file per band.
-        - `"out/{time:%Y%m%d}.tif"`: one file per date.
-        - `"out/{time:%Y%m%d}/{band}.tif"`: one file per date and band.
-
-        Two fields are built in: `time`, each file's instant, taking
-        `strftime` directives, and `band`, each file's variable. Anything else
-        goes into the path before it is given, as `f"out/{name}_{{band}}.tif"`.
-
-        A GeoTIFF holds one date, so several dates rendering to one path is
-        an error; bands rendering to one path share a file. The files of one
-        date are one `Scene`, each file an asset keyed by the band it holds,
-        or `"image"` where it holds several.
+        A GeoTIFF holds one grid at one date, so `path_format` lays the raster
+        out: its fields split one axis each, `{time}` into dates, `{band}` into
+        variables. An axis without a field stays whole in one file, which
+        several dates cannot share. Without `path_format` every band of every
+        date is its own file, `{time:%Y%m%dT%H%M%S}/{band}.tif`.
 
         Args:
-            path: Local path or fsspec URL ending in `.tif`.
-            map_scale: Map denominator for TIFF resolution tags.
-            overwrite: Replace existing files.
-            compute: False returns every scene pending, written by one
-                `dask.compute` of the result.
-            storage_options: Options for the filesystem a URL names.
-            **options: COG creation options, as `compress="deflate"`.
+            path: Folder or URL prefix the files go under.
+            path_format: Relative path filled with `str.format`, ending in
+                .tif. `{time}` takes strftime directives.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes all outputs and returns their paths.
+            overwrite: Replace existing destinations.
+            storage_options: Filesystem options merged into the destination UPath.
+            **options: GeoTIFF creation options.
 
         Returns:
-            One scene per date, in time order. `open_raster` and
-            `stac.create_items` take them as they are.
+            Written paths in time then variable order, or one delayed result.
 
         Raises:
-            ValueError: The path does not end in `.tif`, several dates would
-                share a file, `{time}` is named on a raster without dates, or
-                the raster cannot be arranged as COGs.
-            KeyError: The path names a field nothing fills.
-            FileExistsError: A file exists and `overwrite` is false.
+            ValueError: `path` names a file rather than a folder, a path format
+                is not relative, destinations collide, or a raster cannot be
+                one GeoTIFF.
+            KeyError: A path format field has no value.
+            FileExistsError: A destination exists and overwrite is false.
 
         Examples:
-            >>> ds.gs.to_cog("out/{time:%Y%m%d}.tif")
-            [Scene(None, {'image': 20250601.tif}), Scene(None, {'image': 20250611.tif})]
-            >>> ds.gs.to_cog("out/s2_{time:%Y%m%d}_{band}.tif", compress="deflate")[0]
-            Scene(None, {'red': s2_20250601_red.tif, 'nir': s2_20250601_nir.tif})
-            >>> (scenes,) = dask.compute(ds.gs.to_cog("out/{time:%Y%m%d}.tif", compute=False))
+            >>> paths = ds.gs.to_cog("out", path_format="{time:%Y%m%d}_{band}.tif")
         """
-        from geosave.geodata.io.raster.geotiff import write_cog
-        from geosave.geodata.io.raster.layout import layout, save
+        from geosave.geodata.io.formats import geotiff
+        from geosave.geodata.io.paths import expand_paths
         from geosave.geodata.io.storage import location
 
-        plan = layout(self._data, location(path, storage_options))
-        write = partial(write_cog, map_scale=map_scale, overwrite=overwrite, **options)
-        return save(plan, write, compute=compute)
+        files = expand_paths(self._data, location(path, storage_options), path_format)
+        return geotiff.write_files(
+            files, geotiff.write_cog, compute=compute, overwrite=overwrite, **options
+        )
 
     def to_zarr(
         self,
-        destination: Location,
+        path: Location,
         *,
         compute: bool = True,
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[ZarrWriteOptions],
-    ) -> Scene:
-        """Write this raster to Zarr.
+    ) -> UPath | Delayed:
+        """Write this raster as one Zarr store, every date and variable in it.
 
         Args:
-            destination: Output path or fsspec URL ending in `.zarr`.
-            compute: False returns the scene pending, written on `.compute()`.
-            overwrite: Replace an existing destination when true.
-            storage_options: Options for the filesystem a URL names.
+            path: The store, ending in .zarr.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes the store and returns its path.
+            overwrite: Replace an existing store.
+            storage_options: Filesystem options merged into the destination UPath.
             **write_options: Supported xarray Zarr write options.
 
         Returns:
-            One scene holding the store, keyed as `to_cog` keys a file, or pending.
+            Path of the store written, or one delayed result.
 
         Raises:
-            FileExistsError: The destination exists and overwrite is false.
-            TypeError: An option is unsupported.
-            ValueError: The destination is invalid.
+            ValueError: The destination does not end in .zarr.
+            KeyError: An encoding name is no variable of the raster.
+            FileExistsError: The store exists and overwrite is false.
 
         Examples:
             >>> ds.gs.to_zarr("scene.zarr")
-            Scene(None, {'image': scene.zarr})
         """
-        from geosave.geodata.io import zarr
+        from geosave.geodata.io.formats import zarr
 
-        write = partial(zarr.write, overwrite=overwrite, **write_options)
-        return self._save_one(destination, write, storage_options, compute)
+        return zarr.write_zarr(
+            self._data,
+            path,
+            compute=compute,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **write_options,
+        )
 
     def to_netcdf(
         self,
-        destination: Location,
+        path: Location,
         *,
         compute: bool = True,
         engine: NetCDFEngine = "netcdf4",
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[NetCDFWriteOptions],
-    ) -> Scene:
-        """Write this raster to netCDF.
+    ) -> UPath | Delayed:
+        """Write this raster as one netCDF file, every date and variable in it.
 
         Args:
-            destination: Output path or fsspec URL ending in `.nc`, `.nc4`, or
-                `.cdf`.
-            compute: False returns the scene pending, written on `.compute()`.
-            engine: Concrete xarray netCDF writing engine.
-            overwrite: Replace an existing destination when true.
-            storage_options: Options for the filesystem a URL names.
+            path: The file, ending in .nc, .nc4 or .cdf.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes the file and returns its path.
+            engine: Concrete xarray netCDF backend.
+            overwrite: Replace an existing file.
+            storage_options: Filesystem options merged into the destination UPath.
             **write_options: Supported xarray netCDF write options.
 
         Returns:
-            One scene holding the file, keyed as `to_cog` keys a file, or pending.
+            Path of the file written, or one delayed result.
 
         Raises:
-            FileExistsError: The destination exists and overwrite is false.
-            TypeError: An option is unsupported.
-            ValueError: The destination is invalid.
+            ValueError: The destination does not end in a netCDF suffix.
+            KeyError: An encoding name is no variable of the raster.
+            FileExistsError: The file exists and overwrite is false.
+
+        Examples:
+            >>> ds.gs.to_netcdf("scene.nc")
         """
-        from geosave.geodata.io import netcdf
+        from geosave.geodata.io.formats import netcdf
 
-        write = partial(
-            netcdf.write, engine=engine, overwrite=overwrite, **write_options
+        return netcdf.write_netcdf(
+            self._data,
+            path,
+            compute=compute,
+            engine=engine,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **write_options,
         )
-        return self._save_one(destination, write, storage_options, compute)
 
-    def _save_one(
+    def to_catalog(
         self,
-        destination: Location,
-        write: Writer,
-        storage_options: StorageOptions | None,
-        compute: bool,
-    ) -> Scene:
-        """Write this raster whole to one file or store, as one scene."""
-        from geosave.geodata.io.raster.layout import layout, save
-        from geosave.geodata.io.storage import location
+        path: Location,
+        *,
+        path_format: str | None = None,
+        collection: pystac.Collection | str | None = None,
+        id_format: str = ITEM_ID_FORMAT,
+        datetime: ItemTime | None = None,
+        overwrite: bool = False,
+        storage_options: StorageOptions | None = None,
+        **options: Unpack[COGWriteOptions],
+    ) -> GeoDataFrame:
+        """Write this raster's files and return their STAC Items as an item table.
 
-        plan = layout(self._data, location(destination, storage_options))
-        (scene,) = save(plan, write, compute=compute)
-        return scene
+        Each date becomes one Item, its files the assets. The Items are built
+        from this raster: its grid, dates and band attrs, and the STAC
+        metadata `io.load_dataset` records, `stac_common_properties` overlaid
+        with each date's `stac_properties`.
+
+        Args:
+            path: Folder the files go under.
+            path_format: Relative path ending in .tif, as `to_cog` lays it out,
+                and filling `{collection}` too. None writes one file per band
+                and date. Catalog assets are COGs; write a store with
+                `to_zarr` or `to_netcdf`.
+            collection: Collection, or its id, the Items belong to. None
+                takes the `stac_collection` this raster carries, if any.
+            id_format: Item id template filling `lat`, `lon`, `start`, `end`,
+                and for one-grid Items `res`, `width`, `height`, `epsg`.
+            datetime: Date or interval for a raster stating no time.
+            overwrite: Replace files that exist.
+            storage_options: Credentials and connection options for the files.
+            **options: GeoTIFF creation options.
+
+        Returns:
+            Item table, one row per date. The Collection, its extent covering
+            the Items, is in the table's metadata.
+
+        Raises:
+            ValueError: A file does not end in .tif, several dates share a
+                file, or the raster has no locatable grid.
+            FileExistsError: A file exists and `overwrite` is false.
+
+        Examples:
+            >>> scene = io.load_dataset(items, geobox=grid, with_properties=["eo:cloud_cover"])
+            >>> catalog = scene.gs.to_catalog("out", path_format="{time:%Y%m%d}/{band}.tif")
+            >>> catalog["eo:cloud_cover"].tolist()
+            [4.2, 11.0]
+        """
+        import pystac
+
+        from geosave.geodata.io.stac import write_assets
+
+        carried = self.stac_collection
+        if isinstance(collection, pystac.Collection):
+            name, recorded_collection = collection.id, collection
+        elif collection is not None:
+            name = collection
+            recorded_collection = (
+                carried if carried is not None and carried.id == name else None
+            )
+        else:
+            name = None if carried is None else carried.id
+            recorded_collection = carried
+        return write_assets(
+            self._data,
+            path,
+            path_format=path_format,
+            collection=name,
+            collections=[] if recorded_collection is None else [recorded_collection],
+            id_format=id_format,
+            datetime=datetime,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **options,
+        )

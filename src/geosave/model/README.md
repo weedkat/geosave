@@ -85,49 +85,39 @@ result names what it predicts: `classes` for segmentation and classification
 heads, `variables` for regression heads and end-to-end regressors. A release
 wraps the same chain with `GeoSaveModel.from_chain`.
 
-## Geospatial context
-
-```yaml
-# model_spec.yaml
-inputs:
-  image: !ref image
-context:
-  call: geosave.model.stages.encoder.prithvi.model_context
-  kwargs: {raster: !ref image}
-```
+## YAML processing
 
 ```python
-rasters = windows.iloc[position].gs.to_xarray().gs.rasters
-inputs = spec.model_inputs(rasters)
-for name in spec.pixel_inputs:
-    inputs[name] = inputs[name].gs.to_tensor()
+spec = ModelSpec.load("model_spec.yaml")
+values = spec.encode(spec.preprocess({"optical": raster}))
+inputs = spec.transform(spec.model_inputs(values))
+prediction = model(**inputs)
+outputs = spec.decode(prediction, values)
 ```
 
-`inputs` binds prepared raster pixels; `context` references rasters the same
-way and encodes their time labels and grid. Training and inference use the
-same declared function. Encoder-specific `model_context(raster)` functions
-return dictionaries of tensors, read from the raster's `time` coordinate and
-georeferenced grid; neither reads pixels.
+ModelSpec v3 has ordered `preprocessing`, `encoding`, `transforms`, `decoding`,
+and `postprocessing` call stages. Native values and intermediate inverse state
+stay in plain dictionaries. `inputs` binds only model arguments; `pixels` names
+image arguments a training method may augment. Optional tensor shape/dtype
+requirements validate the model boundary. No stage runs automatically when a
+model is called.
 
-| Encoder | Per-sample context |
-| --- | --- |
-| `PrithviTL` | `temporal_coords[T, 2]`: year and zero-based day of year; `location_coords[2]`: latitude, longitude |
-| `Clay` | `time[2]`: ISO week and hour; `latlon[2]`: latitude, longitude |
+Context is a normal named encoding result. For example, call
+`geosave.model.stages.encoder.prithvi.model_context` on the selected raster, then
+bind `context["temporal_coords"]` and `context["location_coords"]` as inputs.
+Encode after selecting the actual spatial/temporal sample. Clay's context
+function returns `time` and `latlon`, and requires one instant. Wavelengths and
+GSD remain explicit encoder configuration.
 
-Missing metadata raises an error. For Clay, cut frames of one instant. Wavelengths and GSD retain explicit encoder constructor defaults; a
-CRS resolution is not assumed to be a distance in metres. Pixel normalization
-remains separate from context encoding.
+Shared tensor normalization is an installed call such as
+`geosave.model.processing.normalize`. Training calls `spec.transform` after
+augmentation, inference calls the same method. The model package imports no
+training package. The caller owns batching, chip layouts, merge policy, and
+metadata semantics for augmentation. `decode` works per sample;
+`postprocess` works on merged outputs, such as argmax after merging logits.
 
-Explicit caching uses the same recipe and native Python arrays or numbers:
-
-```python
-cached = spec.model_context(rasters)
-inputs = spec.model_inputs(rasters, context=cached)
-```
-
-Keep cached context associated with the same sample metadata and encoding recipe.
-If a crop changes the actual input window, update its metadata before encoding
-context. There is no automatic cache lookup or hidden encoder selection.
+See `docs/guides/model-spec.md` and `tests/model/spec/test_processing.py` for the
+complete catalog/training/checkpoint/prediction round trip.
 
 ## Saving and loading native releases
 

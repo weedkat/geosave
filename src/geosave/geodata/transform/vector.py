@@ -10,14 +10,13 @@ import pandas as pd
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.conventions import SPATIAL_DIMENSIONS, TIME_COORDINATE
+from geosave.geodata.conventions import SPATIAL_DIMENSIONS
 
 if TYPE_CHECKING:
     from numpy.typing import DTypeLike
     from odc.geo import CRS
 
     from geosave.geodata import GeoDataFrame
-    from geosave.geodata.core.anchor import GeoAnchor
 
 
 def vectorize(
@@ -60,7 +59,7 @@ def vectorize(
 
 def rasterize(
     vector: gpd.GeoDataFrame,
-    like: GeoAnchor | xr.DataArray | xr.Dataset | xr.DataTree,
+    like: GeoBox | xr.DataArray | xr.Dataset | xr.DataTree,
     *,
     column: str | None = None,
     fill: int | float | bool = 0,
@@ -93,15 +92,15 @@ def rasterize(
         >>> rasterize(fields, scene, column="crop", dtype="uint8").name
         'crop'
     """
-    from geosave.geodata.core.raster.create import array
-
     geobox = _read_burn_grid(like)
     frame = _validate_geometries(vector).to_crs(cast("CRS", geobox.crs))
     if column is None:
         pixels = _burn_presence(frame, geobox, fill, all_touched)
     else:
         pixels = _burn_column(frame, geobox, column, fill, dtype, all_touched)
-    raster = array(pixels, geobox, dims=SPATIAL_DIMENSIONS).rename(column or "mask")
+    raster = xr.DataArray(
+        pixels, dims=SPATIAL_DIMENSIONS, name=column or "mask"
+    ).gs.write_grid(geobox)
     return _assign_target_coords(raster, like)
 
 
@@ -203,12 +202,11 @@ def _polygonize(
 
 
 def _read_burn_grid(
-    like: GeoAnchor | xr.DataArray | xr.Dataset | xr.DataTree,
+    like: GeoBox | xr.DataArray | xr.Dataset | xr.DataTree,
 ) -> GeoBox:
     """Read the exact grid geometries burn onto."""
-    from geosave.geodata.core.anchor import GeoAnchor
 
-    geobox = like.geobox if isinstance(like, GeoAnchor) else like.gs.geobox
+    geobox = like if isinstance(like, GeoBox) else like.gs.geobox
     if not isinstance(geobox, GeoBox) or geobox.crs is None:
         raise ValueError("rasterize target carries no regular grid CRS")
     return geobox
@@ -322,19 +320,18 @@ def _burn(
 
 
 def _assign_target_coords(
-    raster: xr.DataArray, like: GeoAnchor | xr.DataArray | xr.Dataset | xr.DataTree
+    raster: xr.DataArray, like: GeoBox | xr.DataArray | xr.Dataset | xr.DataTree
 ) -> xr.DataArray:
     """Take the target's own coordinates, or date the raster by its anchor."""
-    from geosave.geodata.core.anchor import GeoAnchor
 
-    if isinstance(like, GeoAnchor):
-        if like.timespan is None:
-            return raster
-        # A raster's date is one instant, so a span is dated by where it starts.
-        return raster.assign_coords({TIME_COORDINATE: np.datetime64(like.timespan[0])})
+    if isinstance(like, GeoBox):
+        return raster
 
     # Sliced coordinates drift by float error, so take the target's own to align.
-    target = like.dataset if isinstance(like, xr.DataTree) else like
+    # A tree's grid nodes share the grid it burns on, and its root holds none.
+    target = (
+        next(iter(like.gs.rasters.values())) if isinstance(like, xr.DataTree) else like
+    )
     coords = {}
     for dim in SPATIAL_DIMENSIONS:
         coords[dim] = target.coords[dim]

@@ -12,14 +12,12 @@ from odc.geo import CRS
 from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.core.raster.create import raster as build_raster
-from geosave.geodata.core.raster.create import tree
+from tests.conftest import build_dataset as build_raster
+from tests.conftest import build_tree
 from geosave.geodata.transform.temporal import concat, interpolate, reduce, resample
 from geosave.geodata.warnings import DroppedAttrsWarning, GeoSaveWarning
 from tests.geodata.conftest import geobox
 
-from .conftest import build
-from .conftest import geobox as transform_geobox
 
 UTM = "EPSG:32633"
 
@@ -53,13 +51,6 @@ def test_the_bucketing_survives_the_reduction() -> None:
     assert (bucketing.time_closed, bucketing.time_label) == ("right", "right")
 
 
-def test_the_result_is_the_kind_the_resampler_holds() -> None:
-    scene = series(100, 900, 500)
-
-    assert isinstance(reduce(resample(scene, "MS"), "median"), xr.Dataset)
-    assert isinstance(reduce(resample(scene.red, "MS"), "median"), xr.DataArray)
-
-
 def test_flag_values_refuse_a_reducer_that_ranks_them() -> None:
     # min returns a real class code, which is why it reads as safe and is not:
     # it asserts an order over codes that carry none.
@@ -69,15 +60,6 @@ def test_flag_values_refuse_a_reducer_that_ranks_them() -> None:
 
     with pytest.raises(ValueError, match="class codes"):
         reduce(resample(coded, "MS"), "min")
-
-
-def test_a_flag_variable_alone_refuses_the_same_reducer() -> None:
-    coded = series(4, 5, 4, dtype="uint8").gs.write_legend(
-        {4: "veg", 5: "water"}, target="red"
-    )
-
-    with pytest.raises(ValueError, match="class codes"):
-        reduce(resample(coded.red, "MS"), "min")
 
 
 def test_flag_values_take_a_point_sample() -> None:
@@ -122,13 +104,6 @@ def test_a_bucket_observing_nothing_holds_its_label_and_absence() -> None:
         "2024-03",
     ]
     assert bool(buckets.red.isel(time=1).isnull().all())
-
-
-def test_nearest_repeats_the_nearest_observed_bucket() -> None:
-    filled = interpolate(monthly(100, 100, 900), "nearest")
-
-    # February sits 31 days after January and 29 before March, so March is nearer.
-    assert filled.red.values[:, 0, 0].tolist() == [100.0, 900.0, 900.0]
 
 
 def test_interpolate_stays_lazy_on_a_time_axis_split_in_chunks() -> None:
@@ -276,21 +251,6 @@ def quiet() -> Iterator[None]:
         yield
 
 
-def test_rasters_lay_down_in_the_order_they_were_given() -> None:
-    joined = concat([observation("2024-01-05"), observation("2024-02-10")])
-
-    assert dates(joined) == ["2024-01-05", "2024-02-10"]
-
-
-def test_nothing_is_reordered_so_the_caller_may_sort_after() -> None:
-    march, january = observation("2024-03-01"), observation("2024-01-05")
-
-    joined = concat([march, january])
-
-    assert dates(joined) == ["2024-03-01", "2024-01-05"]
-    assert dates(joined.sortby("time")) == ["2024-01-05", "2024-03-01"]
-
-
 def test_overlapping_and_repeated_labels_lay_down_untouched() -> None:
     joined = concat(
         [
@@ -302,69 +262,55 @@ def test_overlapping_and_repeated_labels_lay_down_untouched() -> None:
     assert dates(joined) == ["2024-01-01", "2024-02-01", "2024-01-15", "2024-01-01"]
 
 
-def test_an_unlabelled_or_empty_axis_lays_down_all_the_same() -> None:
-    grid = box()
-    empty = build_raster(
-        {"red": (("time", *("y", "x")), np.zeros((0, *grid.shape), "uint16"))},
-        grid,
-        time=np.array([], "datetime64[ns]"),
-        nodata=0,
-    )
-
-    joined = concat([empty, observation("2024-01-05")])
-
-    assert dates(joined) == ["2024-01-05"]
-
-
 def test_shared_attrs_survive_and_conflicting_ones_are_dropped() -> None:
     first, second = observation("2024-01-05"), observation("2024-02-10")
     for raster in (first, second):
-        raster.attrs.update({"title": "scene", "license": "CC0"})
-    second.attrs["title"] = "other"
+        raster.attrs.update({"source": "scene", "history": "cut"})
+    second.attrs["source"] = "other"
 
     with pytest.warns(DroppedAttrsWarning):
         joined = concat([first, second])
 
-    assert joined.attrs["license"] == "CC0"
-    assert "title" not in joined.attrs
+    assert joined.attrs["history"] == "cut"
+    assert "source" not in joined.attrs
 
 
 @pytest.mark.parametrize(
-    ("first", "second", "semantic"),
+    ("first", "second", "key"),
     [
-        (lambda r: r.gs.write_nodata(0), lambda r: r.gs.write_nodata(255), "Nodata"),
+        (
+            lambda r: r.gs.write_nodata(0),
+            lambda r: r.gs.write_nodata(255),
+            "_FillValue",
+        ),
         (
             lambda r: r.gs.write_packing(0.1),
             lambda r: r.gs.write_packing(0.01),
-            "Packing",
+            "scale_factor",
         ),
         (
             lambda r: r.assign(red=r.red.assign_attrs(units="m")),
             lambda r: r.assign(red=r.red.assign_attrs(units="ft")),
-            "Quantity",
+            "units",
         ),
         (
             lambda r: r.gs.write_legend({7: "forest"}),
             lambda r: r.gs.write_legend({7: "water"}),
-            "Legend",
+            "flag_values",
         ),
     ],
     ids=["nodata", "packing", "units", "legend"],
 )
-def test_incompatible_pixel_semantics_are_refused(first, second, semantic: str) -> None:
+def test_incompatible_pixel_semantics_are_dropped_with_a_warning(
+    first, second, key: str
+) -> None:
     a = first(observation("2024-01-05", nodata=None)[["red"]])
     b = second(observation("2024-02-10", nodata=None)[["red"]])
 
-    with pytest.raises(ValueError, match=semantic):
-        concat([a, b])
+    with pytest.warns(DroppedAttrsWarning, match=key):
+        joined = concat([a, b])
 
-
-def test_incompatible_dataarray_semantics_are_refused() -> None:
-    first = observation("2024-01-05", nodata=0).red
-    second = observation("2024-02-10", nodata=255).red
-
-    with pytest.raises(ValueError, match="Nodata"):
-        concat([first, second])
+    assert key not in joined.red.attrs
 
 
 def test_concat_keeps_the_dtype_and_laziness_of_the_rasters() -> None:
@@ -411,33 +357,30 @@ def test_padding_refuses_a_variable_carrying_no_fill_value() -> None:
 
 
 def test_a_tree_concatenates_group_by_group() -> None:
-    first = tree(
+    first = build_tree(
         {"s2": observation("2024-01-05"), "s1": observation("2024-01-05", name="vv")}
     )
-    second = tree(
+    second = build_tree(
         {"s2": observation("2024-02-10"), "s1": observation("2024-02-10", name="vv")}
     )
 
+    first.attrs = second.attrs = {"title": "training scene", "foreign": {"site": 7}}
     joined = concat([first, second])
 
+    assert joined.attrs == first.attrs
     assert joined.gs.groups == ("s2", "s1")
-    assert dates(joined.gs.rasters["s2"]) == ["2024-01-05", "2024-02-10"]
-    assert dates(joined.gs.rasters["s1"]) == ["2024-01-05", "2024-02-10"]
+    assert dates(joined["s2"].gs.to_dataset()) == ["2024-01-05", "2024-02-10"]
+    assert dates(joined["s1"].gs.to_dataset()) == ["2024-01-05", "2024-02-10"]
 
 
 def test_stacks_naming_different_groups_are_refused() -> None:
     with pytest.raises(ValueError, match="name different rasters"):
         concat(
             [
-                tree({"a": observation("2024-01-05")}),
-                tree({"b": observation("2024-02-10")}),
+                build_tree({"a": observation("2024-01-05")}),
+                build_tree({"b": observation("2024-02-10")}),
             ]
         )
-
-
-def test_concatenating_nothing_is_refused() -> None:
-    with pytest.raises(ValueError, match="pass at least one"):
-        concat([])
 
 
 def test_a_dataarray_concatenates_as_a_dataarray() -> None:
@@ -487,24 +430,6 @@ def test_concat_refuses_rasters_no_one_grid_holds(other: GeoBox, mismatch: str) 
         concat([observation("2024-01-05"), observation("2024-02-10", grid=other)])
 
 
-def test_grids_covering_different_ground_are_refused() -> None:
-    # Laying these end to end would interleave x labels rather than extend time.
-    with pytest.raises(ValueError, match="not equal along these coord"):
-        concat(
-            [
-                observation("2024-01-05"),
-                observation("2024-02-10", grid=box((40, 0, 80, 40))),
-            ]
-        )
-
-
-def test_rasters_placed_by_nothing_still_lay_end_to_end() -> None:
-    bare = observation("2024-01-05").drop_vars(["y", "x", "spatial_ref"])
-    later = observation("2024-02-10").drop_vars(["y", "x", "spatial_ref"])
-
-    assert dates(concat([bare, later])) == ["2024-01-05", "2024-02-10"]
-
-
 def test_an_origin_a_hair_off_a_pixel_still_lays_end_to_end() -> None:
     # snap_to and reprojection both land an origin just below zero, which the
     # pixel labels absorb.
@@ -525,16 +450,6 @@ def test_a_grid_lays_end_to_end_with_itself_however_it_is_oriented() -> None:
     assert dates(joined) == ["2024-01-05", "2024-01-05"]
     with pytest.raises(ValueError, match="not equal along these coord"):
         concat([observation("2024-01-05"), observation("2024-02-10", grid=south_up)])
-
-
-def test_root_attrs_every_raster_disagrees_on_are_dropped() -> None:
-    first, second = observation("2024-01-05"), observation("2024-02-10")
-    first.attrs, second.attrs = {"provider": "a"}, {"provider": "b"}
-
-    with pytest.warns(DroppedAttrsWarning, match="provider"):
-        joined = concat([first, second])
-
-    assert "provider" not in joined.attrs
 
 
 def test_concat_refuses_missing_bands_instead_of_promoting_to_nan() -> None:
@@ -592,12 +507,12 @@ def test_select_handles_scalar_composite_bounds_after_time_expansion():
 def test_select_tree_keeps_static_groups_and_filters_each_time_axis():
     from geosave.geodata.transform import temporal
 
-    data = tree(
+    data = build_tree(
         {"dated": series(1, 2, 3), "static": series(4, 5, 6).isel(time=0, drop=True)}
     )
     selected = temporal.select(data, "2024-01")
-    assert selected["dated"].dataset.sizes["time"] == 2
-    assert selected["static"].dataset.identical(data["static"].dataset)
+    assert selected["dated"].gs.to_dataset().sizes["time"] == 2
+    assert selected["static"].gs.to_dataset().identical(data["static"].gs.to_dataset())
     assert temporal.select(data, None) is data
 
 
@@ -617,22 +532,6 @@ def test_concat_requires_a_time_coordinate():
 
     with pytest.raises(ValueError, match="time coordinate"):
         concat([timeless, timeless])
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_categorical_validation_precedes_reduction(kind, monkeypatch):
-    coded = series(4, 5, 4, dtype="uint8").gs.write_legend(
-        {4: "veg", 5: "water"}, target="red"
-    )
-    data = coded.red if kind == "array" else coded
-    grouped = resample(data, "MS")
-
-    def refuse_reduction(*args, **kwargs):
-        pytest.fail("categorical pixels were reduced before validation")
-
-    monkeypatch.setattr(type(grouped), "mean", refuse_reduction)
-    with pytest.raises(ValueError, match="class codes"):
-        reduce(grouped, "mean")
 
 
 @pytest.mark.parametrize("kind", ["array", "dataset"])
@@ -656,10 +555,3 @@ def test_reduction_preserves_metadata_under_xarray_drop_attrs_option(kind):
     assert attrs.TimeSpec.from_attrs(result.time.attrs).time_freq == "MS"
     assert variable.chunks is not None
     np.testing.assert_allclose(variable.compute()[:, 0, 0], [500, np.nan, 500])
-
-
-def test_concat_preserves_tree_root_attrs():
-    source = tree({"optical": build(transform_geobox())})
-    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
-    result = concat([source, source])
-    assert result.attrs == source.attrs

@@ -106,24 +106,24 @@ class ModelChain(nn.Module):
         return heads if heads else produced
 
     def __repr__(self) -> str:
-        """Describe the chain's inputs, routed methods, and PyTorch module tree.
+        """Summarize the chain's inputs, routed methods, and PyTorch module tree.
 
         Returns:
             Text showing required input types, stage execution order, and
             outputs. Optional stage parameters are marked with `?`.
         """
 
-        def describe(values: dict[str, type], mark: str = "") -> list[str]:
+        def format_names(values: dict[str, type], mark: str = "") -> list[str]:
             return [f"{name}{mark}: {type_name(kind)}" for name, kind in values.items()]
 
-        lines = [f"inputs: {', '.join(describe(self._inputs))}", "", "data flow:"]
+        lines = [f"inputs: {', '.join(format_names(self._inputs))}", "", "data flow:"]
         for step in self._steps:
             method = step.method
-            arguments = describe(method.inputs) + describe(method.optional_inputs, "?")
+            arguments = format_names(method.inputs) + format_names(method.optional_inputs, "?")
             output = (
                 type_name(method.result_type)
                 if method.head
-                else f"{{{', '.join(describe(method.outputs))}}}"
+                else f"{{{', '.join(format_names(method.outputs))}}}"
             )
             lines.append(
                 f"  {step.stage}: {step.name}({', '.join(arguments)}) -> {output}"

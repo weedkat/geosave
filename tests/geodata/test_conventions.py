@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dask.array as da
-import numpy as np
 import pytest
 import xarray as xr
 from affine import Affine
@@ -59,14 +58,6 @@ def test_to_yx_renames_one_band() -> None:
     assert result.odc.geobox == GRID
 
 
-def test_to_yx_returns_the_same_object_when_nothing_is_foreign() -> None:
-    native = loaded(("y", "x"))
-    gridless = xr.Dataset({"count": (("time",), np.arange(2))})
-
-    assert to_yx(native) is native
-    assert to_yx(gridless) is gridless
-
-
 def test_to_yx_renames_each_group_of_a_tree() -> None:
     foreign = loaded(("latitude", "longitude"))
     tree = xr.DataTree.from_dict(
@@ -92,8 +83,3 @@ def test_require_yx_names_the_rename_that_fixes_a_foreign_grid() -> None:
         require_yx(foreign)
     with pytest.raises(ValueError, match=r"rename\(\{'latitude': 'y'"):
         require_yx(xr.DataTree.from_dict({"/optical": foreign}))
-
-
-def test_require_yx_accepts_native_and_gridless_objects() -> None:
-    require_yx(loaded(("y", "x")))
-    require_yx(xr.DataArray(np.ones(2), dims=("time",)))

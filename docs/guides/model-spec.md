@@ -1,183 +1,209 @@
-# Declare and prepare model inputs
+# Execute a model processing recipe
 
-ModelSpec is under active development in Alpha. This guide describes the
-current implementation; its API and preparation pattern may change. To learn
-model development with plain Python preparation, start with the
-[notebooks](../examples.md).
+```python
+spec = ModelSpec.load("model_spec.yaml")
+prepared = spec.preprocess({"optical": raster})
+values = spec.encode(prepared)
+inputs = spec.transform(spec.model_inputs(values))
+prediction = model(**inputs)
+outputs = spec.decode(prediction, values)
+```
 
-## Describe the raster a model reads
+ModelSpec v3 keeps processing in YAML and executes installed Python operations.
+Native xarray values remain available until an explicit tensor conversion reads
+pixels. Every invocation returns plain mappings; the spec does not cache sample
+state or execute the model.
 
-Save this as `model_spec.yaml`:
+## Declare preparation and encoding
 
 ```yaml
-schema_version: 2
+schema_version: 3
 rasters:
   optical:
     variables: [red, nir]
-    coordinates: [x, y]
+    coordinates: [time, y, x]
     require_crs: true
 preprocessing:
-  image:
+  reflectance:
     call: !ref optical.gs.mask_and_scale
+encoding:
+  image:
+    call: geosave.model.processing.to_tensor
+    kwargs:
+      raster: !ref reflectance
+      dims: [band, time, y, x]
+      dtype: float32
 inputs:
   image: !ref image
+pixels: [image]
+tensors:
+  image:
+    shape: [2, time, height, width]
+    dtype: float32
+transforms:
+  image:
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref image
+      mean: [0.15, 0.27]
+      std: [0.19, 0.17]
+      dim: -4
 ```
 
-The model needs red and near-infrared bands, in that order, on a georeferenced
-grid. `optical` names the supplied raster. Preprocessing decodes its stored
-nodata, scale, and offset into physical values and names the result `image`.
-`inputs.image` binds that result to the model argument `image`.
+The example model takes unbatched `(band, time, y, x)` inputs. Dataset variables
+become bands in the order selected by `rasters.optical.variables`. The explicit
+`dims` controls tensor conversion; it is not inferred from an encoder name.
+The normalizer uses the band axis `-4`, which remains the band axis after a
+DataLoader adds a leading batch dimension. A model expecting `(time, band, y, x)`
+uses that dimension order, `[time, 2, height, width]`, and `dim: -3` instead.
+
+Numeric shape entries constrain sizes. Symbolic entries must agree across all
+constrained inputs in one call. `null` leaves an axis independent. Dtype and
+shape are checked before and after `transform`; conversion belongs in encoding.
+For a DataLoader batch, call `spec.transform(inputs, batched=True)`.
+
+`pixels` explicitly names the inputs that generated training methods may augment
+as images. It does not declare that arbitrary geometry changes are valid for a
+model with spatial context. The current generated augmenters expect trailing
+`(band, y, x)` axes; use that encoding layout for their image augmentation, or
+provide a method-specific augmenter for a different layout.
+
+## Keep the execution boundaries explicit
+
+| Method | Scope and result |
+| --- | --- |
+| `preprocess(rasters)` | Validate/select a supplied sample and run native operations; return selected rasters plus named results |
+| `encode(prepared)` | Explicitly construct tensors/context; retain supplied and newly computed values |
+| `model_inputs(values)` | Bind only the model's named arguments; intermediate state stays outside the call |
+| `transform(inputs, batched=False)` | Shared input operations after optional training augmentation; return the original argument names with updated values |
+| `decode(prediction, values)` | Process one unbatched model output using that same sample's retained state |
+| `postprocess(prediction)` | Process merged outputs, for example choosing classes after merging logits |
+
+Loading validates references and stage order without importing call targets.
+Execution invokes installed Python code and is not a sandbox. A model artifact
+needs the recipe, fitted parameters/state, and compatible installed dependencies.
+Save the resolved recipe with the training run; loading weights alone does not
+recover an editable workspace's former recipe.
+
+The sample must already have sufficient spatial and temporal support. The caller
+chooses source observations, temporal windows, target grids, interpolation,
+neighborhood halos, and chip layout. ModelSpec does not move calls across these
+boundaries. For example, scene-level percentile normalization must run over the
+scene, and a terrain derivative needs its neighborhood before the final crop.
+
+## Share training and inference processing
+
+A project Dataset returns `spec.model_inputs(spec.encode(prepared))`. The
+DataLoader batches those arguments. The generated DataModule performs training
+augmentation and then calls `spec.transform(inputs, batched=True)` in every split.
+Inference calls the same transform method. There is no separate inference
+normalizer and no model-to-training import dependency.
+
+Encoding returns state associated with exactly one sample. If cropping or frame
+selection changes that sample, encode the changed native sample. Geometry-changing
+augmentation cannot silently make location/GSD/time context valid; the project
+method must update the context or disallow that augmentation. CutMix, for example,
+may have no single meaningful geographic center.
+
+## Retain per-sample inverse state
+
+A recipe can retain an intermediate mean without passing it to the model:
+
+```yaml
+encoding:
+  image:
+    call: geosave.model.processing.to_tensor
+    kwargs: {raster: !ref reflectance, dims: [band, time, y, x]}
+  center:
+    call: !ref image.mean
+  centered:
+    call: torch.sub
+    kwargs: {input: !ref image, other: !ref center}
+inputs:
+  image: !ref centered
+# After a model predicts a single output band on the input grid:
+decoding:
+  restored:
+    call: torch.add
+    kwargs: {input: !ref prediction, other: !ref center}
+  raster:
+    call: geosave.model.processing.to_raster
+    kwargs:
+      value: !ref restored
+      reference: !ref optical
+      dims: [band, y, x]
+      name: prediction
+```
+
+This fragment assumes no further scaling of the model output. If input/output
+normalization includes scaling, declare its inverse before restoring the center.
+Decoding receives the values retained for this chip, even if other chips were
+encoded in between. `to_raster` rejects an output whose spatial shape differs
+from the reference grid; it does not guess a model's stride or valid interior.
+It preserves grid placement, not input units, class names, packing, or nodata.
+Declare output metadata explicitly. For a lower-resolution output, supply a
+reference with its actual output grid.
+
+For segmentation, merge logits before selecting classes:
+
+```yaml
+postprocessing:
+  classes:
+    call: !ref prediction.argmax
+    kwargs: {dim: band}
+```
 
 ```python
-from geosave.model.spec import ModelSpec
-
-spec = ModelSpec.load("model_spec.yaml")
+# Add one full logit array per chip, using the chip's global index.
+chips.add(index, logits)
+merged = chips.merge()
+classes = spec.postprocess(merged[0])["classes"]
 ```
 
-Loading validates the declaration without importing or running its calls. The
-spec describes data preparation; model architecture is configured separately
-through [model stages](models.md).
+A model returning several outputs can bind them through ordinary mapping keys in
+its decoding recipe. The caller decides which decoded values are merged and can
+supply a mapping of merged outputs to `postprocess`.
 
-`rasters` checks and selects the supplied data; it does not rename bands or
-reproject them to meet a requirement. `preprocessing` holds the explicit calls
-that change pixels. `inputs` maps their results to the chain's argument names.
-Only `schema_version` and `rasters` are required to load a spec; this example
-also declares preparation and a model input so it can supply a model call.
+## Run the end-to-end check
 
-## Prepare a raster in memory
+[Download the tested recipe](model_spec.yaml). It encodes a two-band, two-date
+sample, retains a per-sample center, and restores a single-band regression output.
+The tests load this exact file.
 
-Here is a small raster with packed reflectance values. The same `preprocess`
-call works with a Dataset opened from GeoTIFF, Zarr, or STAC.
+[The executable workflow test](https://github.com/weedkat/geosave/blob/main/tests/model/spec/test_processing.py)
+creates two dated packed rasters, writes COGs and a GeoParquet catalog, samples
+them, chips them, trains a tiny temporal regressor through a generated Lightning
+DataModule, reloads its checkpoint and recipe, restores predictions using each
+chip's mean, merges them, and reopens the saved output catalog. It compares the
+result with independent NumPy arithmetic and checks laziness before encoding.
 
-```python
-import numpy as np
-from odc.geo.geobox import GeoBox
-
-import geosave as gs
-
-grid = GeoBox.from_bbox(
-    (500_000, 9_000_000, 500_040, 9_000_040),
-    "EPSG:32748",
-    resolution=10,
-)
-scene = gs.raster({
-    "red": (("y", "x"), np.full((4, 4), 1000, dtype="uint16")),
-    "nir": (("y", "x"), np.full((4, 4), 3000, dtype="uint16")),
-}, grid)
-for name in scene.data_vars:
-    scene[name].attrs["scale_factor"] = 0.0001
-
-prepared = spec.preprocess({"optical": scene})
-prepared["image"]
+```bash
+uv run pytest tests/model/spec/test_processing.py
 ```
 
-```text
-<xarray.Dataset> Size: 196B
-Dimensions:      (y: 4, x: 4)
-Coordinates:
-  * y            (y) float64 32B 9e+06 9e+06 9e+06 9e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32748
-Data variables:
-    red          (y, x) float32 64B ...
-    nir          (y, x) float32 64B ...
-```
+## Migrating v2 recipes
 
-Red is now 0.1 and near-infrared is 0.3. The coordinates and CRS remain with
-the Dataset. Selection and this preprocessing preserve Dask laziness when the
-source is lazy. A declared preprocessing operation can still require eager
-work; choose its behavior explicitly.
+- Set `schema_version: 3`.
+- Replace `context:` with a named call in `encoding:`. Bind its returned keys in
+  `inputs`, alongside explicitly encoded image tensors.
+- Declare augmented argument names in `pixels`.
+- Replace Kornia `name/init_args` entries in `transforms` with ordered calls.
+  Fixed normalization uses `geosave.model.processing.normalize` and an explicit axis.
+- Put training augmentation `size` in the DataModule config. There is no `chips`
+  field in ModelSpec. Sampling and `Chips` remain explicit geodata operations.
+- Replace `InputTransform` calls with `spec.transform`, stating `batched=True`
+  when the DataLoader has added a batch axis.
 
-## Turn prepared pixels into a model tensor
+Existing generated workspaces are copied project code; regenerate or migrate
+that code explicitly. Existing trained weights retain their original band order
+and normalization statistics.
 
-```python
-inputs = spec.model_inputs(prepared)
-image = inputs["image"].gs.to_tensor(dtype="float32").unsqueeze(0)
-image.shape
-```
+## Catalog materialization
 
-```text
-torch.Size([1, 2, 4, 4])
-```
-
-`model_inputs` binds names to prepared rasters and adds declared context.
-Raster inputs remain xarray objects until you call `to_tensor`. This call
-reads the pixels, stacks variables in their selected order, and the
-`unsqueeze(0)` adds one batch dimension. With time as its only nonspatial axis,
-a raster becomes `(time, band, y, x)` before batching. Other nonspatial axes
-retain their order; the model must support that layout.
-
-Feed `image` into the two-band chain from [Build and use a model](models.md):
-`chain(image=image)`. For a DataLoader, your dataset performs the raster-to-tensor
-conversion per sample and batching adds the batch dimension. See
-[Training](training.md) for the dataset and DataModule contracts.
-
-The stages run at different times:
-
-| Call | Takes | Returns or applies |
-| --- | --- | --- |
-| `spec.preprocess(rasters)` | Named raw xarray Datasets | Selected rasters and explicit preprocessing results |
-| `spec.model_inputs(prepared)` | Named prepared rasters | Pixel inputs as xarray objects, plus declared context tensors |
-| `raster.gs.to_tensor()` | One selected raster | Pixel tensor; this reads lazy data |
-| The DataModule's batch-transfer hook | A collated tensor batch | Training augmentation, then `spec.transforms` in every split |
-
-`model_inputs` binds prepared values without rerunning preprocessing or raster
-validation. `preprocess` and `model_inputs` also leave `transforms` for the
-DataModule or your own inference code to apply. A direct model call needs that
-same tensor normalization. [Pretrained weights](pretrained.md) shows an image
-input with time/location context and explicit inference normalization.
-
-## Save prepared inputs for repeated training
-
-`prepare` reads windows from a raw item table and writes the preprocessed model
-inputs. Labels stay beside them. To try it with the raster above, first create
-a matching label and a raw catalog:
-
-```python
-from datetime import UTC, datetime
-
-label = gs.raster({
-    "label": (("y", "x"), np.zeros((4, 4), dtype="uint8")),
-}, grid)
-scenes = gs.tree({"optical": scene, "label": label}).gs.to_cog(
-    "data/raw/{collection}/{band}.tif"
-)
-raw = gs.stac.create_catalog(
-    gs.stac.create_items(scenes, id_format="sample", datetime=datetime(2025, 6, 1, tzinfo=UTC))
-)
-
-catalog_path = spec.prepare(raw, "data/prepared", keep=["label"])
-catalog = gs.open_vector(catalog_path)
-```
-
-`{band}` creates a file per variable. Each single-band STAC asset is named
-after that variable, so catalog reads keep `red` and `nir` as the spec expects.
-
-`prepare` groups equal-footprint Items and applies the declared frames. For each sample, it
-selects the declared rasters, runs preprocessing, and saves the raster roots
-read by `inputs`. Here those are `image` and the explicitly retained label.
-It writes COG assets, `catalog.parquet`, and `model_spec.yaml` into a new output
-folder. Choose a fresh path on subsequent runs; an existing output folder
-raises `FileExistsError`.
-
-```python
-windows = catalog.gs.sample()
-sample = windows.iloc[0].gs.to_xarray()
-inputs = spec.model_inputs(sample.gs.rasters)
-image = inputs["image"].gs.to_tensor(dtype="float32").unsqueeze(0)
-sample.close()
-```
-
-The prepared catalog holds physical values, so bind its inputs directly.
-`prepare` already ran preprocessing; do not rerun it on the prepared rasters.
-`keep=["another_collection"]` copies additional collections through unchanged.
-
-Temporal frames and spatial chips are separate cuts after preparation. Add a
-`chips` section for a training DataModule, then cut windows with
-`spec.chips.cut(windows, target=grid)`. [Catalogs and cuts](catalogs-and-cuts.md) explains
-sample tables, lazy reads, and frame/chip construction.
-
-Continue with [model input contracts](../concepts/model-inputs.md) for optional
-metadata requirements, STAC acquisition, tensor normalization, and geospatial
-context. The [spec reference](../reference/model-spec.md) lists the public
-fields and methods.
+The existing `ingest`/`prepare` convenience methods remain available during this
+iteration. `prepare` now selects collection nodes from nested catalog trees and
+requires an exact common grid unless the caller supplies an alignment target.
+It persists raster roots consumed before encoding, not arbitrary encoded state.
+Recipes producing non-raster intermediates should use the in-memory execution
+path. Automatic processing-scope inference and general intermediate persistence
+are not implemented.

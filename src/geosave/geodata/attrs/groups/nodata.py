@@ -19,65 +19,59 @@ class Nodata(AttrsGroup):
     CF's is written, which odc and rioxarray read too.
 
     Attributes:
-        value: Stored value marking absence.
+        fill_value: Stored value marking absence.
 
     Raises:
-        ValueError: The two aliases name different values, or the band's
-            dtype cannot hold the value.
+        ValueError: The attrs state `_FillValue` and `nodata` with different
+            values.
 
     Examples:
         >>> ds["B04"].gs.nodata
         0
     """
 
-    REFUSE_CONFLICT = True
-
-    value: Decoded[int | float] = Field(
+    fill_value: Decoded[int | float] = Field(
         validation_alias=AliasChoices("_FillValue", "nodata"),
         serialization_alias="_FillValue",
     )
 
+    def check_dtype(self, dtype: np.dtype) -> None:
+        """Refuse a fill that `dtype` would store as another number.
+
+        A pixel is masked when it equals the fill, so the fill must survive
+        being stored. A float rounds it to its precision, which still matches
+        its own pixels, but overflows a value past its range to inf. An integer
+        stores it exactly or as another number: -1 wraps to 65535 on uint16,
+        and NaN has no integer at all.
+
+        Raises:
+            ValueError: The fill does not fit `dtype`.
+        """
+        with np.errstate(invalid="ignore", over="ignore"):
+            stored = np.asarray(self.fill_value).astype(dtype)
+        if dtype.kind == "f":
+            changed = bool(np.isinf(stored)) and not np.isinf(self.fill_value)
+        else:
+            changed = stored != self.fill_value
+        if changed:
+            raise ValueError(
+                f"The nodata value {self.fill_value!r} does not fit this {dtype} band: "
+                f"it would be stored as {stored.item()!r}, so the wrong pixels would "
+                f"be masked. Choose a nodata value the band can hold, or convert the "
+                f"band to a wider dtype first."
+            )
+
     @model_validator(mode="before")
     @classmethod
-    def _one_value(cls, data: Any) -> Any:
-        """Refuse two aliases that name different values."""
+    def _check_fill_values_consistent(cls, data: Any) -> Any:
+        """Refuse attrs whose `_FillValue` and `nodata` hold different fill values."""
         if not isinstance(data, dict) or not {"_FillValue", "nodata"} <= data.keys():
             return data
         cf, odc = decode(data["_FillValue"]), decode(data["nodata"])
         if not equivalent(cf, odc):
             raise ValueError(
-                f"_FillValue {cf!r} and nodata {odc!r} disagree; "
-                f"they name one nodata, so write one with gs.write_nodata"
+                f"The attrs give _FillValue as {cf!r} but nodata as {odc!r}, and both "
+                f"name the same thing. Keep one of them, or set both to the same "
+                f"value; gs.write_nodata(value) rewrites them consistently."
             )
         return data
-
-    def check_dtype(self, dtype: np.dtype) -> None:
-        """Refuse a fill a variable of `dtype` cannot store as this number.
-
-        A pixel is masked when it equals the fill, so the fill must survive
-        being stored. A float variable rounds it to its precision, which still
-        matches its own pixels, but overflows a value past its range to inf.
-        An integer variable stores it exactly or as another number: -1 wraps
-        to 65535 on uint16, and NaN has no integer at all.
-
-        Args:
-            dtype: Dtype of the variable the fill is written onto.
-
-        Raises:
-            ValueError: The variable would store another number.
-
-        Examples:
-            >>> Nodata(value=-1).check_dtype(np.dtype("uint16"))
-            ValueError: -1 is no uint16 value; a uint16 variable stores it as 65535
-        """
-        with np.errstate(invalid="ignore", over="ignore"):
-            stored = np.asarray(self.value).astype(dtype)
-        if dtype.kind == "f":
-            changed = bool(np.isinf(stored)) and not np.isinf(self.value)
-        else:
-            changed = stored != self.value
-        if changed:
-            raise ValueError(
-                f"{self.value!r} is no {dtype} value; a {dtype} variable stores "
-                f"it as {stored.item()!r}"
-            )

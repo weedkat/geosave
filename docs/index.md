@@ -17,7 +17,7 @@ import geosave as gs
 
 image = gs.open_raster("scene.tif")
 ndvi = gs.features.ndvi(image, nir="nir", red="red").rename("ndvi")
-ndvi.gs.to_cog("ndvi.tif")
+ndvi.gs.to_cog("output", path_format="ndvi.tif")
 ```
 
 This calculates a vegetation index and saves a new image on the same grid.

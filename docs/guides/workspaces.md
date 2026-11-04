@@ -48,13 +48,16 @@ classes are local implementations you can edit, using reusable GeoSave helpers.
 FixMatch and Mean Teacher include a local supervised base in their own package.
 Changing that base does not change a separate supervised recipe.
 
-Implement the geospatial Dataset stubs and supply data before fitting. The default
+The geospatial recipes use ModelSpec v3 and an explicit DataModule `size`.
+See [training setup](training.md#geospatial-recipes). Implement the Dataset stubs
+and supply data before fitting. The default
 encoder uses pretrained weights and can download them. See each method's README
 for target shapes and method requirements.
 
 `main.py` uses `GeosaveCLI`, a LightningCLI subclass. Each run saves its effective
 configuration under `artifacts/<model_name>/version_N/`. `.gitignore` excludes
-local environment files, data, and training artifacts.
+local environment files, data, and checkpoint files. Add `artifacts/` to your
+project ignore rules if you also want to exclude logs and saved configurations.
 
 ```bash
 cd landcover

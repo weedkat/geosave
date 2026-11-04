@@ -88,3 +88,21 @@ when cached weights or a small offline model can verify the contract.
 After a public API change, refresh the inventory, update the activity example
 that calls it, and rerun the relevant smoke check. The docs workflow builds on
 Python source changes and checks both reference freshness and rendered coverage.
+
+## Keep one current explanation
+
+The README is a short entry point; working tutorials belong in guides. Keep
+one canonical explanation of each public contract and link to it from concepts
+and reference pages. Replace fragile full object representations with the values,
+shapes, or metadata that teach the result when editing an example.
+
+Separate runnable offline examples from fragments requiring local classes,
+credentials, or remote assets. A migration blocker belongs beside the affected
+command, with a working route where available; generated API coverage cannot
+catch a broken cross-package workflow.
+
+Review plans and specs against the implementation before presenting them as
+current directions. Preserve unresolved decisions and useful rationale, but
+retire completed task lists once their remaining constraints are recorded in
+the architecture or open-decisions page. The
+[2026-11-04 review](review-2026-11-04.md) records the current audit and validation limits.

@@ -2,13 +2,13 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pystac
+import pytest
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
-import pytest
 
-from geosave.geodata.stac import StacClient, StacQuery
 from geosave.geodata.errors import CollectionNotFoundError
+from geosave.geodata.stac import StacClient, StacQuery
 
 
 def test_wrapping_a_client_preserves_its_transport():
@@ -54,18 +54,6 @@ def test_another_api_error_is_not_a_missing_collection(monkeypatch):
         StacClient(native).collection("busy")
 
 
-@pytest.mark.parametrize("provider", ["planetary_computer", "cdse", "element84"])
-def test_named_provider_uses_its_stac_client_constructor(monkeypatch, provider):
-    expected = object()
-    monkeypatch.setattr(
-        StacClient,
-        provider,
-        classmethod(lambda cls: expected),
-    )
-
-    assert StacClient.open(provider) is expected
-
-
 def _offering(native: Client, collection: str) -> Client:
     found = pystac.Collection(
         collection,
@@ -79,17 +67,6 @@ def _offering(native: Client, collection: str) -> Client:
     )
     native.get_collection = lambda _name: found
     return native
-
-
-def test_a_client_hands_its_url_patch_to_every_source():
-    def sign(href: str) -> str:
-        return f"{href}?token"
-
-    native = _offering(Client(id="local", description="Local catalog"), "forest")
-
-    source = StacClient(native, patch_url=sign).source("forest")
-
-    assert source.config.patch_url is sign
 
 
 def test_planetary_computer_signs_when_loading_not_when_searching(monkeypatch):
@@ -107,7 +84,7 @@ def test_planetary_computer_signs_when_loading_not_when_searching(monkeypatch):
 
     # Searched hrefs stay unsigned, so a saved table outlives the day-long token.
     assert "modifier" not in opened
-    assert client.source("s2").config.patch_url is planetary_computer.sign
+    assert client.patch_url is planetary_computer.sign
 
 
 def _item(name: str, cloud: float | None) -> pystac.Item:
@@ -146,7 +123,7 @@ def test_search_attaches_only_returned_collections(monkeypatch):
     found = client.search(StacQuery(collections=["s2", "absent"]))
 
     assert list(found.gs.collections) == ["s2"]
-    found.attrs["stac:collections"]["s2"]["description"] = "changed"
+    found.attrs["stac-geoparquet"]["collections"]["s2"]["description"] = "changed"
     assert client.collection("s2").description == "Rows"
 
 

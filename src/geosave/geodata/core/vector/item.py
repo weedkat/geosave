@@ -1,85 +1,136 @@
-"""The `gs` accessor of one item-table row: one STAC Item, read as a Dataset."""
+"""Read one spatial catalog record from a pandas Series."""
 
 from __future__ import annotations
+from typing import TYPE_CHECKING, Any, cast
+import pandas as pd
+from shapely.geometry.base import BaseGeometry
 
-from typing import TYPE_CHECKING, cast
-
-import geopandas as gpd
+from geosave.geodata.stac.catalog import FOOTER_KEY
 
 if TYPE_CHECKING:
-    import pandas as pd
+    from collections.abc import Sequence
+
     import pystac
-
-    from geosave.geodata import Dataset
+    from odc.geo.geobox import GeoBox
+    from geosave.geodata import Dataset, DataTree
     from geosave.geodata.core.anchor import GeoAnchor
-    from geosave.geodata.io.raster.stac import ChunkSpec
 
 
-class GeoItem:
-    """Read one row of an item table: one STAC Item.
+class GeoCatalogItem:
+    """Read one spatial catalog record, optionally holding STAC assets.
+
+    A Series represents a record when it carries a geometry field. It does
+    not inherit its parent GeoDataFrame's CRS. STAC conversion and raster
+    loading require the additional Item fields.
 
     Args:
-        row: One row of an item table, in WGS84 as item tables are.
+        row: Spatial record with a `geometry` field; STAC records use WGS84.
 
     Examples:
         >>> row = items.iloc[0]
         >>> row.gs.anchor.timespan
         (datetime.datetime(2024, 3, 8, 0, 0), datetime.datetime(2024, 3, 8, 0, 0))
-        >>> row.gs.to_xarray()
+        >>> row.gs.to_datatree().gs.to_dataset()
         <xarray.Dataset> Dimensions: (y: 50, x: 70) Data variables: red
     """
 
     def __init__(self, row: pd.Series) -> None:
-        """Bind the accessor to one Item row."""
+        """Bind a spatial record; ordinary field columns have no accessor."""
+        if "geometry" not in row.index or (
+            row["geometry"] is not None
+            and not isinstance(row["geometry"], BaseGeometry)
+        ):
+            raise AttributeError("gs reads a spatial record with a geometry field")
         self._row = row
 
     @property
-    def anchor(self) -> GeoAnchor | None:
-        """Return the stated grid and span, or warn and return None without a grid."""
+    def anchor(self) -> GeoAnchor:
+        """Return STAC geometry and time without opening assets.
+
+        A standalone STAC row must use WGS84. For projected or generic rows,
+        select a one-row GeoDataFrame to retain its CRS and use its gs.anchor.
+        """
         from geosave.geodata.core.anchor import GeoAnchor
-        from geosave.geodata.stac.translate import item as stac_item
+        from geosave.geodata.stac import item as stac_item
 
         item = self.to_item()
-        grid = stac_item.read_grid(item)
-        return None if grid is None else GeoAnchor(grid, stac_item.read_timespan(item))
+        if item.geometry is None:
+            raise ValueError("the Item has no geographic geometry")
+        return GeoAnchor.from_geometry(
+            item.geometry, timespan=stac_item.read_timespan(item)
+        )
 
     def to_item(self) -> pystac.Item:
         """Build the pystac Item this row states.
 
         Returns:
             New Item holding the row's assets and properties.
+
+        Raises:
+            ValueError: The record lacks the required STAC Item fields.
         """
-        from geosave.geodata.stac.translate import table as stac_table
+        from geosave.geodata.stac.catalog import to_item
 
-        row_table = gpd.GeoDataFrame([self._row], geometry="geometry", crs="EPSG:4326")
-        (item,) = stac_table.to_items(row_table)
-        return item
+        return to_item(self._row)
 
-    def to_xarray(self, *, chunks: ChunkSpec = {}) -> Dataset:
-        """Open the Item as a lazy xarray Dataset, on its native grid and dates.
+    def read_pixels(
+        self, geobox: GeoBox, *, variables: Sequence[str] | None = None
+    ) -> Dataset:
+        """Read the row's pixels inside `geobox`, each file from the overview it needs.
 
         Args:
-            chunks: File-opening chunk sizes. An empty mapping uses native
-                Dask chunks; ``"auto"`` chooses sizes; None disables Dask.
+            geobox: Grid to read onto, such as a map's view.
+            variables: Variables to read. None reads every data asset.
 
         Returns:
-            Dataset of the Item's variables, named and described as STAC
-            states them, its root carrying the Collection's ACDD attrs when
-            the table holds the Collection's definition.
+            Dataset on `geobox`, float32 with nodata as NaN.
+
+        Raises:
+            KeyError: A requested variable is not in the row.
 
         Examples:
-            >>> items.iloc[0].gs.to_xarray().gs.variables
-            ('red',)
+            >>> row.gs.read_pixels(view, variables=["red"]).red.shape
+            (600, 900)
         """
-        from geosave.geodata.io.raster.stac import open_raster
+        from geosave.geodata.io.stac import read_scene_pixels
+
+        return cast("Dataset", read_scene_pixels(self.to_item(), geobox, variables))
+
+    def to_datatree(self, **options: Any) -> DataTree:
+        """Open the Item lazily as a scene tree, one node per grid, at its date.
+
+        Args:
+            **options: Forwarded to each asset's GDAL reader, such as
+                `chunks` or `mask_and_scale`.
+
+        Returns:
+            DataTree of grid nodes (`r10m`, `r20m`), each a Dataset of the
+            variables on that grid, named and attributed as STAC states them,
+            with the Item's properties on its `stac_properties` coordinate.
+            The root carries the Collection, where the table holds it, and
+            the extension schemas as `StacMetadata` attrs, so `to_catalog`
+            writes the scene as this row does. Closing it closes every file.
+
+        Raises:
+            ValueError: A file has no grid, in itself or in its asset.
+
+        Examples:
+            >>> scene = items.iloc[0].gs.to_datatree()
+            >>> list(scene.gs.rasters)
+            ['r10m', 'r20m']
+            >>> scene.gs.to_dataset().gs.variables
+            ('red', 'swir')
+        """
+        import pystac
+
+        from geosave.geodata.io.stac import open_scene
+        from geosave.geodata.stac.item import build_stac_metadata
 
         item = self.to_item()
-        collection_fields = self._row.attrs.get("stac:collections", {})
-        return cast(
-            "Dataset",
-            open_raster(
-                [item],
-                chunks=chunks,
-                collection_fields=collection_fields.get(item.collection_id),
-            ),
-        )
+        # pandas carries the table's footer onto each of its rows.
+        stored = self._row.attrs.get(FOOTER_KEY, {}).get("collections", {})
+        fields = stored.get(item.collection_id)
+        collection = None if fields is None else pystac.Collection.from_dict(fields)
+        scene = open_scene(item, **options)
+        scene.attrs.update(build_stac_metadata([item], collection).to_attrs())
+        return cast("DataTree", scene)

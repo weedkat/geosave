@@ -1,13 +1,13 @@
 """Measure real COG byte ranges, computed chunks and glyph-only changes.
 
 Run `uv run python scripts/measure_explorer.py`. Fixture creation is excluded
-from display timings. Output is JSON Lines; browser latency is measured by
-`tests/geodata/viz/explorer/test_app.py` separately.
+from display timings. Output is JSON Lines; these are Python timings and raw array sizes, not browser latency or wire bytes.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +19,7 @@ import dask.array as da
 from bokeh.document import Document
 from bokeh.models import GlyphRenderer, ImageRGBA
 import geopandas as gpd
+import holoviews as hv
 import numpy as np
 import rasterio
 import xarray as xr
@@ -30,8 +31,11 @@ from shapely.geometry import Point
 
 import geosave  # noqa: F401
 from geosave.geodata.io import open_raster
-from geosave.geodata.viz.explorer import Explorer, RasterLayer, VectorLayer
-from geosave.geodata.viz.explorer.raster import read_window
+from geosave.geodata.viz.explore import Explorer, RasterLayer, VectorLayer
+from geosave.geodata.viz.explore.mercator import DEFAULT_VIEW_SHAPE, create_view
+from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.item import create_item
+from geosave.geodata.io.storage import location
 
 
 def serve_range(path, connection):
@@ -80,6 +84,7 @@ def serve_range(path, connection):
 
 def measure():
     """Print measured work for synthetic but full-size source rasters."""
+    hv.extension("bokeh")
     size = int(os.environ.get("GEOSAVE_PROOF_SIZE", "8192"))
     grid = GeoBox.from_bbox(
         (-1000000, 5000000, -900000, 5100000), crs=3857, shape=(size, size), tight=True
@@ -127,7 +132,15 @@ def measure():
             return values
 
         try:
-            data = open_raster(f"http://127.0.0.1:{port}/image.tif")
+            url = f"http://127.0.0.1:{port}/image.tif"
+            data = open_raster(url)
+            item = create_item(
+                {"image": (location(url), data)},
+                id_format="benchmark",
+                datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            )
+            row = from_items([item]).iloc[0]
+            cog = RasterLayer(data, row=row, name="COG")
             requests = read_requests()
             print(
                 json.dumps(
@@ -143,13 +156,13 @@ def measure():
             for label, bounds in [
                 ("COG overview", (-1000000, 5000000, -900000, 5100000)),
                 ("COG zoom", (-980000, 5020000, -970000, 5030000)),
+                ("COG return", (-1000000, 5000000, -900000, 5100000)),
             ]:
                 requests.clear()
                 tasks = []
                 start = perf_counter()
                 with Callback(pretask=lambda key, *_: tasks.append(key)):
-                    read_window(
-                        data,
+                    cog.read_view_pixels(
                         GeoBox.from_bbox(
                             bounds, crs=3857, shape=(450, 650), tight=True
                         ),
@@ -192,12 +205,13 @@ def measure():
                 ("computed overview", (-1000000, -900000), (5000000, 5100000)),
                 ("computed zoom", (-980000, -970000), (5020000, 5030000)),
                 ("computed nearby pan", (-979500, -969500), (5020500, 5030500)),
+                ("computed return", (-1000000, -900000), (5000000, 5100000)),
             ]:
                 source_reads.clear()
                 tasks = []
                 start = perf_counter()
                 with Callback(pretask=lambda key, *_: tasks.append(key)):
-                    layer.render(x_range, y_range)
+                    layer.draw(create_view(x_range, y_range, DEFAULT_VIEW_SHAPE))
                 print(
                     json.dumps(
                         {
@@ -216,10 +230,9 @@ def measure():
                 crs=3857,
             )
             vector = VectorLayer(fields)
-            cog = RasterLayer(data, name="COG")
             viewer = Explorer(layer, cog, vector, basemap="None")
             document = Document()
-            root = viewer.map.get_root(document)
+            root = viewer.__panel__().get_root(document)
             document.add_root(root)
             images = {
                 renderer.data_source
@@ -231,7 +244,10 @@ def measure():
             def record_image(event):
                 if event.model in images and getattr(event, "attr", None) == "data":
                     updates.append(
-                        sum(np.asarray(image).nbytes for image in event.model.data["image"])
+                        sum(
+                            np.asarray(image).nbytes
+                            for image in event.model.data["image"]
+                        )
                     )
 
             document.on_change(record_image)
@@ -242,7 +258,7 @@ def measure():
                 tasks = []
                 start = perf_counter()
                 with Callback(pretask=lambda key, *_: tasks.append(key)):
-                    raster.stretch = (5, 95)
+                    raster.stretch_percentiles = (5, 95)
                     raster.clim = (0.1, 1.5)
                 requests = read_requests()
                 print(
@@ -285,12 +301,12 @@ def measure():
             )
             updates.clear()
             tasks.clear()
-            left, right = viewer._ranges.x_range
-            bottom, top = viewer._ranges.y_range
+            left, right = viewer.map.ranges.x_range
+            bottom, top = viewer.map.ranges.y_range
             dx, dy = (right - left) * 0.01, (top - bottom) * 0.01
             start = perf_counter()
             with Callback(pretask=lambda key, *_: tasks.append(key)):
-                viewer._ranges.event(
+                viewer.map.ranges.event(
                     x_range=(left + dx, right + dx), y_range=(bottom + dy, top + dy)
                 )
             print(

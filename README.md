@@ -1,142 +1,91 @@
-# geosave
+# GeoSave
 
-GeoSave is a Python library for geospatial data preparation and Lightning-based
-model development. Work with native xarray rasters and GeoDataFrames, preserve
-geospatial metadata, prepare training chips, and compose ordinary PyTorch models.
+GeoSave is an Alpha Python library for geospatial data preparation and
+Lightning-based model development. Work with native xarray rasters and
+GeoDataFrames, preserve their geospatial metadata, and prepare model inputs
+without replacing the ecosystem's objects.
 
-Use the library directly, or create an editable workspace with run configurations
-and your own Dataset. Install `geosave[flows]` to use the optional Prefect ingestion jobs through
-`geosave_flows`.
+## Install
 
-Visit official Documentation : <https://weedkat.github.io/geosave-engine/>
-
-## Features
-
-- **Geospatial core.** CF-conformant `xr.Dataset` rasters and named
-  `xr.DataTree` groups that can retain their native grids, plus `GeoDataFrame` vectors, use `.gs` accessors.
-  Persistence covers Zarr, NetCDF, GeoTIFF/COG, GeoJSON, GeoPackage and
-  GeoParquet; raster work stays lazy until you compute.
-- **STAC catalogs.** Items are built from the files a writer saved and stored as
-  stac-geoparquet item tables, searchable with rustac.
-- **Cuts.** Frames and chips are tables of windows; each row reads itself as a
-  lazy tree.
-- **Model chains and releases.** Registered encoders (DINOv3, Prithvi,
-  Prithvi-TL, Clay), decoders (DPT, UNet) and heads compose into one
-  `ModelChain`, released as a Transformers model with its `model_spec.yaml`.
-- **Lightning training.** Task and method pairs of `LightningModule` and
-  `LightningDataModule` in `ml/`, run through `LightningCLI`.
-- **MLflow.** Set `MLFLOW_TRACKING_URI` and training also logs to MLflow.
-- **Editable workspaces.** `geosave create` hands you real files; no base class
-  is required.
-
-## Installations
-
-Requires Python 3.12+.
+Requires Python 3.12 or newer:
 
 ```bash
 pip install geosave
-# or
-uv add geosave
 ```
 
-Training, Hub releases, Prefect flows and cloud paths are extras;
-`pip install "geosave[all]"` installs everything the examples use.
+Add `geosave[ml]` for tensors and training, `geosave[hub]` for native model
+releases, `geosave[flows]` for Prefect ingestion, or `geosave[cloud]` for S3
+and Google Cloud filesystems. See the [installation guide](docs/install.md).
 
-Want the rolling dev build (rebuilt on every push to `main`) instead of the
-latest stable tag:
-
-```bash
-pip install --pre --index-url https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ geosave
-```
-
-Working on GeoSave itself (clone + `uv sync`), or installing an
-exact dev build off a GitHub release — see the
-[documentation](https://weedkat.github.io/geosave-engine/).
-
-## Learn geospatial AI
-
-Follow one land-cover segmentation project through the notebooks:
-
-| Start with | Learn | Result |
-| --- | --- | --- |
-| [0 · Basics](examples/00_basics.ipynb) | Open real image/label pairs and train a small model with Lightning. | Validation metrics and a prediction on the label's grid. |
-| [1 · Model](examples/01_model.ipynb) | Compose and swap model stages, then train a registered recipe. | ModelChain and comparable TensorBoard runs. |
-| [2 · Build a dataset](examples/02_sources.ipynb) | Fetch imagery for an anchor, a label or a shape, and build a catalog. | Image/label pairs and a GeoParquet catalog. |
-| [3 · Inputs](examples/03_inputs.ipynb) | Add features, declare them in a model spec, cut chips, and train with GeoSave's Module and DataModule. | A best checkpoint, prediction maps, and a saved GeoTIFF. |
-
-Clone the repository and run `uv sync`, then open the notebooks with its `.venv`
-kernel. The notebooks share a prepared dataset downloaded on first use;
-notebook 2 also reads imagery from Planetary Computer, and notebook 3 starts
-from the dataset it saves. See the
-[examples guide](docs/examples.md) for requirements and next steps.
-
-## Create a workspace
-
-```bash
-uv run geosave create my-project
-cd my-project
-```
-
-`geosave create` prompts for a task and then a training method. For scripts,
-use `geosave create my-project --task segmentation --method supervised`, or
-`--task blank` for shared startup only. Inside a workspace, use
-`geosave add-task --task segmentation --method fixmatch` to add another editable
-recipe without changing the first.
-
-## Generated Workspace
-
-```text
-my-project/
-├── artifacts/     # checkpoints, logs, saved configs (created by training)
-├── configs/       # LightningCLI YAML configs
-├── data/          # project datasets
-├── modules/       # editable project modules
-├── notebooks/
-├── scripts/
-├── .env.example   # CDSE credentials placeholders; copy to .env
-├── .gitignore
-└── main.py        # LightningCLI entry point — do not need to touch this
-```
-
-## A first look in Python
+## Start with a raster
 
 ```python
 import numpy as np
+import xarray as xr
+from odc.geo.geobox import GeoBox
+
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=64, resolution=10, crs="EPSG:32633"
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040), crs="EPSG:32633", resolution=10
 )
-pixels = np.random.default_rng(0).integers(1, 3000, (64, 64), dtype="uint16")
-scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
-scene
+scene = xr.Dataset({
+    "red": (("y", "x"), np.full((4, 4), 0.25, dtype="float32")),
+    "nir": (("y", "x"), np.full((4, 4), 0.75, dtype="float32")),
+}).gs.write_grid(grid)
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+paths = ndvi.gs.to_cog("output", path_format="ndvi.tif")
 ```
 
-Output:
+Every NDVI pixel is `0.5`; the output retains the image's grid. The writer's
+first argument is a directory, and `path_format` names the file. Existing files
+raise unless replacement is explicitly requested.
 
-```text
-<xarray.Dataset> Size: 9kB
-Dimensions:      (y: 64, x: 64)
-Coordinates:
-  * y            (y) float64 512B 4.988e+06 4.988e+06 ... 4.987e+06 4.987e+06
-  * x            (x) float64 512B 2.632e+05 2.632e+05 ... 2.639e+05 2.639e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 8kB 1528 2551 2763 1911 2521 ... 65 818 2788 735
+Follow [your first raster](docs/first-raster.md) for a complete offline round
+trip, then [images to training chips](docs/quickstart.md). File-backed rasters
+can stay lazy until an operation needs their pixels.
+
+## Train an editable starter
+
+```bash
+pip install 'geosave[ml]'
+geosave create demo --task lightning --method boilerplate
+cd demo
+python main.py fit --config configs/lightning-boilerplate.yaml \
+  --trainer.accelerator cpu --trainer.devices 1 --trainer.max_epochs 1
 ```
 
-The [quickstart](docs/quickstart.md) continues from pixels to model-ready
-tensors, offline.
+The starter supplies project-owned Dataset, DataModule, and LightningModule
+files. Reusable builders, metrics, losses, transforms, and callbacks live in
+GeoSave. Geospatial task recipes currently have a ModelSpec migration blocker;
+see [training status](docs/guides/training.md#geospatial-recipes).
+
+## Find the next step
+
+- [Documentation](https://weedkat.github.io/geosave-engine/): guides and API reference.
+- [Catalogs and samples](docs/guides/catalogs-and-cuts.md): publish imagery,
+  group Item rows, and cut lazy raster trees into chips.
+- [Training workspaces](docs/guides/workspaces.md): generate and customize code.
+- [Model releases](docs/guides/release.md): save registered chains, weights,
+  and optional preprocessing declarations.
+- [Notebook examples](docs/examples.md): a land-cover project using real data;
+  these require downloads and are separate from the offline starters.
+- [Project review](docs/contributing/review-2026-11-04.md): current findings and
+  prioritized implementation recommendations.
 
 ## Development
 
 ```bash
 uv sync
-uv run pytest                    # fast tests
-uv run pytest -m integration     # network tests
+uv run pytest                    # excludes slow and integration tests
+uv run pytest -m integration     # external-service tests
 uv run pytest -m slow
 uv run ruff check .
 uv run pre-commit run --all-files
-uv run zensical build            # documentation, written to site/
+uv run zensical build
 ```
+
+Read [architecture](docs/contributing/architecture.md) and
+[documentation maintenance](docs/contributing/documentation.md) before changing
+public behavior or guides. Edit `src/templates/` to change future generated
+workspaces; existing projects own their copied code.

@@ -24,7 +24,6 @@ from odc.geo.geom import BoundingBox, Geometry
 from odc.geo.xr import rasterize, xr_coords
 
 from geosave.geodata.conventions import SPATIAL_DIMENSIONS
-from geosave.geodata.core.raster.datatree import map_groups
 from geosave.geodata.transform import nodata
 
 # Numpy's pad modes, less "wrap": a chip never reads the far edge a wrap needs.
@@ -66,9 +65,12 @@ def crop[T: xr.DataArray | xr.Dataset | xr.DataTree](
         >>> crop(scene, other.gs.bounds)
     """
     if isinstance(data, xr.DataTree):
-        return cast(
-            "T", map_groups(data, lambda raster: crop(raster, region, mask=mask))
-        )
+
+        def crop_node(raster: xr.Dataset) -> xr.Dataset:
+            # Collection nodes hold no pixels to crop.
+            return crop(raster, region, mask=mask) if raster.data_vars else raster
+
+        return cast("T", data.map_over_datasets(crop_node))
 
     crs = data.gs.crs
     if crs is None:
@@ -132,9 +134,12 @@ def pad[T: xr.DataArray | xr.Dataset | xr.DataTree](
         Shape2d(x=288, y=288)
     """
     if isinstance(data, xr.DataTree):
-        return cast(
-            "T", map_groups(data, lambda raster: pad(raster, widths, mode=mode))
-        )
+
+        def pad_node(raster: xr.Dataset) -> xr.Dataset:
+            # Collection nodes hold no pixels to pad.
+            return pad(raster, widths, mode=mode) if raster.data_vars else raster
+
+        return cast("T", data.map_over_datasets(pad_node))
 
     (top, bottom), (left, right) = widths
     # Padding nothing would still promote integers to hold xarray's NaN fill.

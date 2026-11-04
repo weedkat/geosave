@@ -16,7 +16,7 @@ RGB = (ColorInterp.red.name, ColorInterp.green.name, ColorInterp.blue.name)
 class GDALBand(AttrsGroup):
     """Name the variable one raster band holds, and how GDAL draws it.
 
-    GDAL's band description carries CF's `long_name`, which describes the
+    GDAL's band description carries CF's `long_name`, which names the
     pixels rather than identifying them, so a band carries its variable name
     as its own metadata item.
 

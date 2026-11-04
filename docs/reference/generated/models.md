@@ -95,6 +95,18 @@ fields appear as attributes, including their annotated types and defaults.
         - validate_selector
         - resolve
 
+::: geosave.model.processing.normalize
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.to_raster
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.to_tensor
+    options:
+      show_root_full_path: true
+
 ::: geosave.model.registry.MODEL_REGISTRY
     options:
       show_root_full_path: true
@@ -199,28 +211,25 @@ fields appear as attributes, including their annotated types and defaults.
         - schema_version
         - rasters
         - preprocessing
-        - frames
-        - chips
+        - encoding
         - inputs
-        - context
+        - pixels
+        - tensors
         - transforms
-        - pixel_inputs
+        - decoding
+        - postprocessing
         - input_rasters
         - load_rasters
         - preprocess
+        - ingest
         - prepare
-        - model_context
+        - encode
         - model_inputs
+        - transform
+        - decode
+        - postprocess
         - save
         - load
-
-::: geosave.model.spec.model.TransformSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - name
-        - init_args
 
 ::: geosave.model.spec.rasters.AttrsRequirement
     options:
@@ -259,6 +268,14 @@ fields appear as attributes, including their annotated types and defaults.
         - attrs
         - select_raster
 
+::: geosave.model.spec.stac.Bands
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.stac.ChunkSize
+    options:
+      show_root_full_path: true
+
 ::: geosave.model.spec.stac.QueryConfig
     options:
       show_root_full_path: true
@@ -281,6 +298,31 @@ fields appear as attributes, including their annotated types and defaults.
       members:
         - field
         - direction
+
+::: geosave.model.spec.stac.StacGroupby
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.stac.StacLoadConfig
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - bands
+        - groupby
+        - chunks
+        - resampling
+        - dtype
+        - nodata
+        - fail_on_error
+        - with_properties
+        - stac_cfg
+        - pool
+        - progress
+        - patch_url
+        - preserve_original_order
+        - exact_property_names
+        - to_load_kwargs
 
 ::: geosave.model.spec.stac.StacRecipe
     options:
@@ -306,28 +348,14 @@ fields appear as attributes, including their annotated types and defaults.
         - validate_inputs
         - run
 
-::: geosave.model.spec.windows.ChipsSpec
+::: geosave.model.spec.tensors.TensorRequirement
     options:
       show_root_full_path: true
       filters: []
       members:
-        - size
-        - resolution
-        - overlap
-        - mode
-        - window
         - shape
-        - cut
-
-::: geosave.model.spec.windows.FramesSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - windows
-        - reference
-        - stride
-        - cut
+        - dtype
+        - validate_tensor
 
 ::: geosave.model.stages.decoder.dpt.DPT
     options:

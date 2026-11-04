@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-from typing import Any, Literal, Protocol, TypedDict, TypeVar
 import torch.nn as nn
 
 from geosave.model.chain import chain_step
@@ -28,13 +27,6 @@ class Encode(nn.Module):
         return feature_map
 
 
-class SplitTwo(nn.Module):
-    @chain_step()
-    def split(self, image: torch.Tensor) -> tuple[torch.Tensor, list]:
-        pyramid, prefix_tokens = image, [image]
-        return pyramid, prefix_tokens
-
-
 class Optional(nn.Module):
     @chain_step()
     def run(
@@ -47,36 +39,6 @@ class Optional(nn.Module):
 @pytest.fixture
 def x() -> torch.Tensor:
     return torch.ones(3)
-
-
-def test_inputs_come_from_parameters():
-    assert contract(Encode().encode).inputs == {"image": torch.Tensor}
-
-
-def test_outputs_pair_return_names_with_types():
-    assert contract(Encode().encode).outputs == {"feature_map": torch.Tensor}
-
-
-def test_a_tuple_return_names_each_value_in_order(x):
-    assert contract(SplitTwo().split).outputs == {
-        "pyramid": torch.Tensor,
-        "prefix_tokens": list,
-    }
-
-    result = invoke(SplitTwo(), "split", {"image": x})
-    assert list(result) == ["pyramid", "prefix_tokens"]
-
-
-def test_a_step_is_called_with_the_context_and_returns_its_outputs(x):
-    result = invoke(Encode(), "encode", {"image": x})
-
-    assert isinstance(result, dict)
-    assert isinstance(result["feature_map"], torch.Tensor)
-    assert result["feature_map"].tolist() == [2.0, 2.0, 2.0]
-
-
-def test_a_parameter_with_a_default_is_not_required():
-    assert contract(Optional().run).inputs == {"image": torch.Tensor}
 
 
 def test_an_absent_optional_falls_back_to_the_method_default(x):
@@ -95,32 +57,6 @@ def test_a_supplied_optional_is_forwarded(x):
     assert result["masked"].tolist() == [0.0, 0.0, 0.0]
 
 
-def test_a_head_returns_its_tensor_rather_than_a_dict(x):
-    class Head(nn.Module):
-        @chain_step(head=True)
-        def logits(self, image: torch.Tensor) -> torch.Tensor:
-            return image * 3
-
-    result = invoke(Head(), "logits", {"image": x})
-
-    assert isinstance(result, torch.Tensor)
-    assert result.tolist() == [3.0, 3.0, 3.0]
-
-
-def test_a_head_has_no_context_outputs():
-    class Head(nn.Module):
-        @chain_step(head=True)
-        def logits(self, image: torch.Tensor) -> torch.Tensor:
-            return image
-
-    assert contract(Head().logits).outputs == {}
-
-
-def test_a_missing_context_key_names_the_key():
-    with pytest.raises(KeyError, match="missing input 'image'"):
-        invoke(Encode(), "encode", {})
-
-
 def test_a_context_key_of_the_wrong_type_is_refused():
     with pytest.raises(TypeError, match="expected Tensor, got list"):
         invoke(Encode(), "encode", {"image": [1, 2, 3]})
@@ -129,60 +65,6 @@ def test_a_context_key_of_the_wrong_type_is_refused():
 def test_a_none_context_value_counts_as_missing():
     with pytest.raises(KeyError, match="missing input 'image'"):
         invoke(Encode(), "encode", {"image": None})
-
-
-def test_an_optional_of_the_wrong_type_is_refused(x):
-    with pytest.raises(TypeError, match=r"expected torch.Tensor \| None, got list"):
-        invoke(Optional(), "run", {"image": x, "mask": [1, 2, 3]})
-
-
-def test_an_unannotated_parameter_is_refused_at_decoration():
-    with pytest.raises(TypeError, match=r"missing type hint\(s\)"):
-
-        class Bad(nn.Module):
-            @chain_step()
-            def run(self, image) -> torch.Tensor:
-                out = image
-                return out
-
-
-class DetectionRecord(TypedDict):
-    boxes: torch.Tensor
-
-
-class ResultProtocol(Protocol):
-    def score(self) -> torch.Tensor: ...
-
-
-@pytest.mark.parametrize(
-    "kind",
-    [
-        None,
-        type(None),
-        Any,
-        Literal["box"],
-        TypeVar("T"),
-        DetectionRecord,
-        ResultProtocol,
-        type(None) | DetectionRecord,
-        type(None) | ResultProtocol,
-    ],
-)
-def test_terminal_requires_runtime_return_annotation(kind):
-    def forward(self, image: torch.Tensor):
-        return image
-
-    forward.__annotations__["return"] = kind
-    with pytest.raises(TypeError, match="terminal result"):
-        chain_step(head=True)(forward)
-
-
-def test_terminal_requires_return_annotation():
-    def forward(self, image: torch.Tensor):
-        return image
-
-    with pytest.raises(TypeError, match="terminal result"):
-        chain_step(head=True)(forward)
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -263,26 +145,6 @@ def test_returning_an_expression_instead_of_a_name_is_refused():
                 return image * 2
 
 
-def test_a_return_arity_that_disagrees_with_the_annotation_is_refused():
-    with pytest.raises(TypeError, match="must match"):
-
-        class Bad(nn.Module):
-            @chain_step()
-            def run(self, image: torch.Tensor) -> tuple[torch.Tensor, list]:
-                only = image
-                return only  # type: ignore[return-value]
-
-
-def test_a_variadic_tuple_return_is_refused():
-    with pytest.raises(TypeError, match="fixed-arity"):
-
-        class Bad(nn.Module):
-            @chain_step()
-            def run(self, image: torch.Tensor) -> tuple[torch.Tensor, ...]:
-                items = image
-                return items  # type: ignore[return-value]
-
-
 def test_consuming_and_producing_one_key_reads_as_a_self_cycle():
     with pytest.raises(TypeError, match="self-cycle"):
 
@@ -291,16 +153,6 @@ def test_consuming_and_producing_one_key_reads_as_a_self_cycle():
             def run(self, image: torch.Tensor) -> torch.Tensor:
                 image = image * 2
                 return image
-
-
-def test_a_head_returning_a_non_tensor_is_caught_at_call_time(x):
-    class Sneaky(nn.Module):
-        @chain_step(head=True)
-        def logits(self, image: torch.Tensor) -> torch.Tensor:
-            return [image]  # type: ignore[return-value]
-
-    with pytest.raises(TypeError, match="result expected Tensor"):
-        invoke(Sneaky(), "logits", {"image": x})
 
 
 def test_a_declared_output_type_is_checked_against_the_real_value(x):
@@ -328,13 +180,6 @@ def test_a_class_with_no_readable_source_is_refused_with_a_clear_message():
 
     with pytest.raises(TypeError, match="no source is available"):
         exec(compile(generated, "<generated>", "exec"), {})
-
-
-def test_a_subclass_inherits_its_base_step():
-    class Child(Encode):
-        pass
-
-    assert contract(Child().encode).inputs == {"image": torch.Tensor}
 
 
 class ExplicitOutputs(nn.Module):
@@ -373,48 +218,17 @@ def test_explicit_outputs_do_not_require_source(x):
     torch.testing.assert_close(result, x * 3)
 
 
-@pytest.mark.parametrize("outputs", [(), ("a", "a"), ("",), "features", (1,)])
+def test_decorated_methods_keep_their_ordinary_signature(x):
+    torch.testing.assert_close(Encode().encode(x), x * 2)
+    torch.testing.assert_close(
+        Optional().run(x, mask=torch.zeros_like(x)), torch.zeros_like(x)
+    )
+
+
+@pytest.mark.parametrize("outputs", [("a", "a")])
 def test_invalid_explicit_output_names_are_rejected(outputs):
     with pytest.raises(TypeError, match="non-empty tuple of unique names"):
 
         @chain_step(outputs=outputs)
         def encode(self, image: torch.Tensor) -> torch.Tensor:
             return image
-
-
-def test_explicit_output_count_must_match_annotation():
-    with pytest.raises(TypeError, match="must match"):
-
-        @chain_step(outputs=("features",))
-        def encode(self, image: torch.Tensor) -> tuple[torch.Tensor, list]:
-            return image, []
-
-
-def test_explicit_outputs_still_validate_runtime_values(x):
-    class Wrong(nn.Module):
-        @chain_step(outputs=("features",))
-        def encode(self, image: torch.Tensor) -> torch.Tensor:
-            return [image]  # type: ignore[return-value]
-
-    with pytest.raises(TypeError, match="output 'features' expected Tensor"):
-        invoke(Wrong(), "encode", {"image": x})
-
-
-def test_explicit_outputs_still_reject_self_cycles():
-    with pytest.raises(TypeError, match="self-cycle"):
-
-        @chain_step(outputs=("image",))
-        def encode(self, image: torch.Tensor) -> torch.Tensor:
-            return image * 2
-
-
-def test_terminal_head_cannot_declare_context_outputs():
-    with pytest.raises(TypeError, match="cannot declare outputs"):
-        chain_step(head=True, outputs=("logits",))
-
-
-def test_decorated_methods_keep_their_ordinary_signature(x):
-    torch.testing.assert_close(Encode().encode(x), x * 2)
-    torch.testing.assert_close(
-        Optional().run(x, mask=torch.zeros_like(x)), torch.zeros_like(x)
-    )

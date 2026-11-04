@@ -1,4 +1,4 @@
-"""Datetime ranges and raster time-axis bucketing."""
+"""Datetime parsing, calendar calculations, and the spans vector rows state."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from datetime import datetime as dt
 from datetime import timedelta, timezone
 from typing import Literal
 
+import numpy as np
+import pandas as pd
 from pandas.tseries.frequencies import to_offset
 
 DateRange = tuple[dt, dt]
@@ -262,3 +264,67 @@ def parse_stem_dates(stem: str) -> DateRange | None:
     if not covered:
         return None
     return min(start for start, _ in covered), max(end for _, end in covered)
+
+
+# Columns a vector row dates itself by, as STAC names them.
+ROW_TIME_COLUMNS = ("datetime", "start_datetime", "end_datetime")
+
+
+def read_row_spans(rows: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Read each row's first and last instant as naive UTC.
+
+    A row states `datetime`, or `start_datetime` and `end_datetime`. A missing
+    bound falls back to `datetime`; without either it stays NaT, which reads
+    as open.
+
+    Args:
+        rows: Vector rows with any of the STAC time columns.
+
+    Returns:
+        Start instants and end instants, indexed as `rows`.
+
+    Examples:
+        >>> starts, ends = read_row_spans(items)
+        >>> starts.dt.strftime("%Y-%m-%d").tolist()
+        ['2024-03-08', '2024-03-28']
+    """
+    no_instants = pd.Series(pd.NaT, index=rows.index, dtype="datetime64[ns]")
+    instants_by_column = {}
+    for column in ROW_TIME_COLUMNS:
+        if column in rows:
+            stamps = pd.to_datetime(rows[column], utc=True, format="mixed")
+            instants_by_column[column] = stamps.dt.tz_convert(None)
+    nominal_instants = instants_by_column.get("datetime", no_instants)
+    start_instants = instants_by_column.get("start_datetime", nominal_instants)
+    end_instants = instants_by_column.get("end_datetime", nominal_instants)
+    return (
+        start_instants.fillna(nominal_instants),
+        end_instants.fillna(nominal_instants),
+    )
+
+
+def find_overlapping(
+    start_instants: pd.Series, end_instants: pd.Series, timespan: DateRange
+) -> np.ndarray:
+    """Mark the spans sharing at least one instant with `timespan`.
+
+    Both spans are closed; a NaT bound is open, so an undated span overlaps
+    every timespan.
+
+    Args:
+        start_instants: First instant of each span, naive UTC.
+        end_instants: Last instant of each span, naive UTC.
+        timespan: Closed interval, naive UTC.
+
+    Returns:
+        Boolean mask in span order.
+
+    Examples:
+        >>> find_overlapping(starts, ends, (datetime(2024, 3, 20), datetime(2024, 4, 1)))
+        array([False,  True, False])
+    """
+    first_instant = pd.Timestamp(timespan[0])
+    last_instant = pd.Timestamp(timespan[1])
+    starts_before_end = start_instants.isna() | (start_instants <= last_instant)
+    ends_after_start = end_instants.isna() | (end_instants >= first_instant)
+    return (starts_before_end & ends_after_start).to_numpy()

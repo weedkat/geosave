@@ -18,12 +18,3 @@ def test_template_discovery_ignores_caches(tmp_path, monkeypatch):
     assert templates.get_tasks() == ["lightning", "segmentation"]
     assert templates.get_methods("segmentation") == ["supervised", "fixmatch"]
     assert templates.get_methods("unknown") == []
-
-
-def test_source_templates_are_siblings_of_library_packages():
-    from pathlib import Path
-
-    root = Path(__file__).parents[3]
-    assert templates.TEMPLATES_DIR == root / "src/templates"
-    assert (templates.COMMON_DIR / "main.py").is_file()
-    assert templates.describe("segmentation", "supervised")

@@ -64,11 +64,3 @@ fields appear as attributes, including their annotated types and defaults.
 ::: geosave_flows.tasks.labels.read_labels
     options:
       show_root_full_path: true
-
-::: geosave_flows.tasks.sample.SampleFormat
-    options:
-      show_root_full_path: true
-
-::: geosave_flows.tasks.sample.write_sample
-    options:
-      show_root_full_path: true

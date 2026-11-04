@@ -22,9 +22,105 @@ from geosave.geodata.core import GeoAnchor
 from geosave.geodata.errors import CollectionNotFoundError
 from geosave.geodata.stac.search.api import StacClient, StacProvider
 from geosave.geodata.stac.search.query import StacQuery
-from geosave.geodata.stac.source import StacSourceConfig
+from collections.abc import Callable
+from dataclasses import replace
+from odc.geo.geobox import GeoBox
+from odc.stac.model import PropertyLoadRequest
+from pydantic import BaseModel
+from geosave.geodata.io.odc import load_dataset
+from geosave.geodata.transform.warp import Resampling
 
 from .base import SpecModel, Text
+
+
+Bands = list[str] | tuple[str, ...]
+StacGroupby = Literal["solar_day", "id", "time"]
+ChunkSize = int | Literal["auto"]
+
+
+def _default_chunks() -> dict[str, ChunkSize]:
+    """Return the default spatial Dask chunks."""
+    return {"x": 1024, "y": 1024}
+
+
+class StacLoadConfig(BaseModel):
+    """How one source loads its pixels.
+
+    Attributes:
+        bands: Band names to load. None loads whatever the matched items
+            publish.
+        groupby: How odc-stac groups scenes along the time axis.
+        chunks: Dask chunk sizes for the spatial dims. None loads eagerly.
+        resampling: Resampling odc-stac applies, one mode or one per band.
+            None keeps each asset's default.
+        dtype: Output dtype. None keeps each collection's own.
+        nodata: Nodata value, paired with `dtype`. None keeps each asset's own.
+        fail_on_error: False skips a scene that fails to read instead of
+            raising.
+        with_properties: Item properties that differ between dates, recorded
+            on the `stac_properties` coordinate: property keys, or odc-stac
+            request mappings with `key` and optional `dtype` (`"str"` for
+            text), `nodata` and `fuser`, e.g. `("view:sun_azimuth",
+            "eo:cloud_cover")`. A supplied `name` must equal `key`.
+        stac_cfg: Per-collection band overrides odc-stac applies, correcting
+            nodata, dtype, or asset aliases a catalog publishes wrongly.
+        pool: Reader threads odc-stac uses. None takes its default.
+        progress: Progress bar odc-stac reports reads through. None is silent.
+        patch_url: Called on every asset href before it is read, for a catalog
+            whose URLs need signing at load time.
+        preserve_original_order: True keeps the matched items in search order
+            rather than sorting them by time.
+
+    Examples:
+        >>> StacLoadConfig(bands=["B04", "B08"], with_properties=["eo:cloud_cover"])
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
+
+    bands: Bands | None = None
+    groupby: StacGroupby = "solar_day"
+    chunks: dict[str, ChunkSize] | None = Field(default_factory=_default_chunks)
+    resampling: Resampling | dict[str, Resampling] | None = None
+    dtype: str | None = None
+    nodata: float | None = None
+    fail_on_error: bool = True
+    with_properties: tuple[str | dict[str, Any], ...] | None = None
+    stac_cfg: dict[str, Any] | None = None
+    pool: int | None = None
+    progress: Any | None = None
+    patch_url: Callable[[str], str] | None = None
+    preserve_original_order: bool = False
+
+    @model_validator(mode="after")
+    def exact_property_names(self) -> Self:
+        """Keep STAC property identity in coordinate names."""
+        for request in PropertyLoadRequest.from_user_input(self.with_properties or ()):
+            if request.name is not None and request.name != request.key:
+                raise ValueError(
+                    "with_properties must keep the exact STAC key as its name"
+                )
+        return self
+
+    def to_load_kwargs(self) -> dict[str, Any]:
+        """Return native odc-stac settings.
+
+        Returns:
+            New keyword mapping for `odc.stac.load`, omitting unset options
+            except `chunks=None`, which explicitly requests eager loading.
+            Property requests are emitted as a list.
+        """
+        options = self.model_dump(exclude_none=True)
+        # None explicitly selects eager loading; ODC otherwise chooses its default.
+        options["chunks"] = self.chunks
+        if self.with_properties is not None:
+            requests = []
+            for request in self.with_properties:
+                fields = {"key": request} if isinstance(request, str) else dict(request)
+                # ODC sanitizes names by default; its native name option preserves the key.
+                fields["name"] = fields["key"]
+                requests.append(fields)
+            options["with_properties"] = requests
+        return options
 
 
 class SortConfig(SpecModel):
@@ -85,7 +181,7 @@ class QueryConfig(SpecModel):
 
 
 class StacRecipe(SpecModel):
-    """Describe how to find and load one raster from STAC.
+    """State how to find and load one raster from STAC.
 
     Attributes:
         collection: STAC collection identifier.
@@ -98,7 +194,7 @@ class StacRecipe(SpecModel):
     collection: Text
     endpoints: Annotated[tuple[StacProvider | HttpUrl, ...], Field(min_length=1)]
     query: QueryConfig = Field(default_factory=QueryConfig)
-    load: StacSourceConfig = Field(default_factory=StacSourceConfig)
+    load: StacLoadConfig = Field(default_factory=StacLoadConfig)
 
     @field_serializer("endpoints")
     def _serialize_endpoints(self, endpoints: tuple[HttpUrl, ...]) -> tuple[str, ...]:
@@ -107,7 +203,7 @@ class StacRecipe(SpecModel):
     @field_validator("load", mode="before")
     @classmethod
     def _validate_primitive_load(cls, value: Any) -> Any:
-        if isinstance(value, StacSourceConfig):
+        if isinstance(value, StacLoadConfig):
             value = value.model_dump()
 
         def lists(item: Any) -> Any:
@@ -122,7 +218,7 @@ class StacRecipe(SpecModel):
         ).validate_python(lists(value), strict=True)
 
     @field_serializer("load")
-    def _serialize_load(self, load: StacSourceConfig) -> dict[str, JsonValue]:
+    def _serialize_load(self, load: StacLoadConfig) -> dict[str, JsonValue]:
         """Serialize native load settings as portable primitive values."""
         return load.model_dump(mode="json")
 
@@ -133,17 +229,18 @@ class StacRecipe(SpecModel):
             raise ValueError("endpoints must not contain duplicate URLs")
         return self
 
-    def load_raster(self, anchor: GeoAnchor, /) -> xr.Dataset:
+    def load_raster(self, anchor: GeoAnchor, /, *, geobox: GeoBox) -> xr.Dataset:
         """Load a lazy raster on an anchor from the first endpoint serving it.
 
         An endpoint that cannot be reached, or does not publish the
         collection, passes to the next; a failure while loading does not.
 
         Args:
-            anchor: Grid and datetime window to load.
+            anchor: Geographic extent and datetime window to search.
+            geobox: Exact output grid.
 
         Returns:
-            The collection on the anchor's grid, as `StacSource.load` reads it.
+            The collection on the supplied grid, as `io.load_dataset` reads it.
 
         Raises:
             ConnectionError: No endpoint serves the collection; the message
@@ -151,25 +248,31 @@ class StacRecipe(SpecModel):
             AnchorFetchError: The search matched no items.
 
         Examples:
-            >>> recipe.load_raster(anchor).gs.variables
+            >>> recipe.load_raster(anchor, geobox=grid).gs.variables
             ('B04', 'B08')
         """
         failures = []
         for endpoint in self.endpoints:
             try:
-                source = StacClient.open(str(endpoint)).source(self.collection)
+                client = StacClient.open(str(endpoint))
+                collection = client.collection(self.collection)
             except (APIError, CollectionNotFoundError) as error:
                 failures.append(f"{endpoint}: {error}")
                 continue
-            # `set_query` takes CQL2 text and `-field` sorts; the recipe holds
-            # their JSON forms, which StacQuery takes as they are.
-            # The client's own signer, such as Planetary Computer's, stays:
-            # a callable has no YAML form, so the recipe never states one.
-            source.config = self.load.model_copy(
-                update={"patch_url": source.config.patch_url}
-            )
-            source.query = self.query.to_query(self.collection)
-            return source.load(anchor)
+            query = self.query.to_query(self.collection)
+            # Recipes fill missing selectors; explicit IDs bypass target filters.
+            if query.ids is None:
+                if query.bbox is None and query.intersects is None:
+                    query = replace(
+                        query,
+                        bbox=tuple(anchor.geometry.to_crs("EPSG:4326").boundingbox),
+                    )
+                if query.datetime is None:
+                    query = replace(query, datetime=anchor.timespan)
+            items = client.search_items(query)
+            options = self.load.to_load_kwargs()
+            options["patch_url"] = client.patch_url
+            return load_dataset(items, geobox=geobox, collection=collection, **options)
         raise ConnectionError(
             f"no endpoint serves {self.collection!r}: " + "; ".join(failures)
         )

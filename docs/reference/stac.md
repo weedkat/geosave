@@ -1,4 +1,4 @@
-# STAC items and sources
+# STAC Items, discovery and metadata
 
 These APIs create item tables from saved files, search catalogs, and load imagery.
 See [Search and load STAC data](../guides/stac.md).
@@ -7,10 +7,11 @@ See [Search and load STAC data](../guides/stac.md).
 
 ## Item table accessor
 
-An item table is still a GeoDataFrame. Its `rows.gs` accessor selects the STAC
-writer automatically and includes Collection metadata. Spatial methods follow
-the [vector accessor](vectors.md); GeoJSON and GeoPackage writes are refused
-because those formats cannot preserve the catalog encoding.
+An item table is a GeoDataFrame with the same `GeoCatalog` accessor as ordinary
+features. `to_geoparquet` selects STAC encoding from the catalog's metadata,
+retaining Collection definitions and portable asset references. The same method
+writes ordinary feature tables with GeoPandas encoding. See the
+[catalog API](catalog.md) for publication, grouping and metadata requirements.
 
 ::: geosave.geodata.core.vector.catalog.GeoCatalog
     options:
@@ -18,52 +19,49 @@ because those formats cannot preserve the catalog encoding.
       members:
         - collections
         - concat
-        - to_item
+        - sample
         - to_geoparquet
-        - to_stac_json
-        - to_geojson
-        - to_geopackage
+        - to_items
 
 ## Extensions
 
-Each extension module translates one PySTAC value to the xarray value it
-describes and back; the band translator composes them for an attached Asset.
+Each extension module builds one PySTAC value from an xarray variable and
+stamps it back onto one; the band translator composes them for an attached Asset.
 
 ::: geosave.geodata.stac.extensions.projection
     options:
-      members: [from_geobox, to_geobox]
+      members: [build_fields, read_geobox]
 
 ::: geosave.geodata.stac.extensions.raster
     options:
-      members: [from_dataarray, stamp]
+      members: [build_band, stamp]
 
 ::: geosave.geodata.stac.extensions.eo
     options:
-      members: [from_dataarray, stamp]
+      members: [build_band, stamp]
 
 ::: geosave.geodata.stac.extensions.classification
     options:
-      members: [from_dataarray, stamp]
+      members: [build_classes, stamp]
 
 ## STAC levels and their GeoSave counterparts
 
-A Collection is a Dataset's root ACDD attrs, an Item a `Scene`, an Asset a
-`RasterFile`, and a band one variable's attrs.
+A Collection, and the properties all of a raster's Items share, live in the
+root `StacMetadata` attrs; each date's Item properties live on the
+`stac_properties` coordinate. An Item describes one observation, an Asset a
+saved raster, and a band one variable. Translators work with native Datasets
+and asset paths.
 
-::: geosave.geodata.stac.translate.collection
+::: geosave.geodata.attrs.StacMetadata
+
+::: geosave.geodata.stac.item
     options:
-      members: [read_attrs]
+      members: [create_item, check_single_date, stamp_properties_coordinate, read_properties_coordinate, select_item_properties, read_timespan, read_instant, read_variable_names, stamp_item_time, TIMELESS]
 
-::: geosave.geodata.stac.translate.item
+::: geosave.geodata.stac.asset
     options:
-      members: [from_scene, read_timespan, read_instant, read_grid, read_variable_names, assign_time, TIMELESS]
+      members: [build_asset]
 
-::: geosave.geodata.stac.translate.asset
-    options:
-      members: [from_file]
+::: geosave.geodata.stac.band
 
-::: geosave.geodata.attrs.ACDD
-
-::: geosave.geodata.stac.translate.band
-
-::: geosave.geodata.stac.translate.table
+::: geosave.geodata.stac.catalog

@@ -1,0 +1,98 @@
+[
+  {
+    "phase": "COG metadata",
+    "requests": 1,
+    "bytes": 16384,
+    "file_bytes": 1332110
+  },
+  {
+    "phase": "COG overview",
+    "seconds": 0.15543241599516477,
+    "requests": 1,
+    "bytes": 81920,
+    "dask_tasks": 0
+  },
+  {
+    "phase": "COG zoom",
+    "seconds": 0.12658157899568323,
+    "requests": 6,
+    "bytes": 186567,
+    "dask_tasks": 0
+  },
+  {
+    "phase": "COG return",
+    "seconds": 0.0004194749999442138,
+    "requests": 0,
+    "bytes": 0,
+    "dask_tasks": 0
+  },
+  {
+    "phase": "computed overview",
+    "seconds": 1.1967919410017203,
+    "source_chunks": 512,
+    "source_bytes": 134217728,
+    "dask_tasks": 3590
+  },
+  {
+    "phase": "computed zoom",
+    "seconds": 0.34693424699798925,
+    "source_chunks": 16,
+    "source_bytes": 4194304,
+    "dask_tasks": 115
+  },
+  {
+    "phase": "computed nearby pan",
+    "seconds": 0.0016584810000495054,
+    "source_chunks": 0,
+    "source_bytes": 0,
+    "dask_tasks": 0
+  },
+  {
+    "phase": "computed return",
+    "seconds": 0.036376162999658845,
+    "source_chunks": 0,
+    "source_bytes": 0,
+    "dask_tasks": 0
+  },
+  {
+    "phase": "computed contrast",
+    "seconds": 0.5438030600053025,
+    "source_chunks": 0,
+    "http_bytes": 0,
+    "dask_tasks": 0,
+    "image_updates": 2,
+    "image_bytes": 13707848
+  },
+  {
+    "phase": "COG contrast",
+    "seconds": 0.740883775994007,
+    "source_chunks": 0,
+    "http_bytes": 0,
+    "dask_tasks": 0,
+    "image_updates": 2,
+    "image_bytes": 13707848
+  },
+  {
+    "phase": "opacity and vector color",
+    "seconds": 0.2728892090017325,
+    "source_chunks": 0,
+    "http_bytes": 0,
+    "dask_tasks": 0,
+    "image_updates": 0,
+    "image_bytes": 0
+  },
+  {
+    "phase": "cached map pan",
+    "seconds": 0.09619245999783743,
+    "dask_tasks": 0,
+    "image_updates": 0,
+    "image_bytes": 0
+  },
+  {
+    "phase": "hidden raster pan",
+    "seconds": 0.06516330399608705,
+    "source_chunks": 0,
+    "http_bytes": 0,
+    "dask_tasks": 0
+  }
+]

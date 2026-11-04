@@ -4,11 +4,15 @@ Give a label raster its class names and a missing-data value:
 
 ```python
 import numpy as np
+import xarray as xr
 
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 codes = np.array([
     [0, 0, 1, 1],
@@ -16,7 +20,7 @@ codes = np.array([
     [1, 1, 2, 2],
     [1, 2, 2, 255],
 ], dtype="uint8")
-labels = gs.raster({"label": (("y", "x"), codes)}, anchor.geobox, nodata=255)
+labels = xr.Dataset({"label": (("y", "x"), codes)}).gs.write_grid(grid).gs.write_nodata(255)
 labels = labels.gs.write_legend(
     {0: "background", 1: "forest", 2: "water"}, target="label"
 )
@@ -32,8 +36,8 @@ array([[  0,   0,   1,   1],
        [  1,   1,   2,   2],
        [  1,   2,   2, 255]], dtype=uint8)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Attributes:
     _FillValue:     255
@@ -93,12 +97,12 @@ Some files store integers and describe the physical values with a scale and
 offset. Decode before using those values in your own calculations:
 
 ```python
-stored = gs.array(
-    np.array([[0, 1000], [2000, 3000]], dtype="uint16"),
-    anchor.geobox[:2, :2],
-    dims=("y", "x"),
-    nodata=0,
-).gs.write_packing(scale_factor=0.0001)
+stored = (
+    xr.DataArray(np.array([[0, 1000], [2000, 3000]], dtype="uint16"), dims=("y", "x"))
+    .gs.write_grid(grid[:2, :2])
+    .gs.write_nodata(0)
+    .gs.write_packing(scale_factor=0.0001)
+)
 reflectance = stored.gs.mask_and_scale()
 reflectance.compute()
 ```
@@ -110,8 +114,8 @@ Output:
 array([[       nan, 0.09999999],
        [0.19999999, 0.29999998]], dtype=float32)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int32 4B 32633
 ```
 
@@ -142,8 +146,8 @@ array([[  0,   0,   1,   1],
        [  1,   1,   2,   2],
        [  1,   2,   2, 255]], dtype=uint8)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Attributes:
     _FillValue:     255

@@ -34,26 +34,19 @@ Reading preserves the file's columns; it does not add a training split or ID.
 ## Create a grid for the features
 
 ```python
-anchor = gs.GeoAnchor.from_geometry(fields.gs.footprint, resolution=10)
-anchor.geobox
+from odc.geo.geobox import GeoBox
+
+anchor = fields.gs.anchor
+grid = GeoBox.from_geopolygon(anchor.geometry, crs="EPSG:32633", resolution=10)
 ```
 
-Output:
-
-```text
-GeoBox((13, 9), Affine(10.0, 0.0, 263550.0,
-       0.0, -10.0, 4987450.0), CRS('EPSG:32633'))
-```
-
-An anchor describes a raster grid and an optional time range. Here GeoSave
-chooses a local projected CRS so `resolution=10` is in metres. The grid covers
-the field footprint. For another raster's exact grid, pass that raster to
-`rasterize` directly.
+The anchor retains the feature union and any recognized STAC time coverage.
+The GeoBox separately specifies output pixels. Its CRS determines resolution units.
 
 ## Turn features into pixels
 
 ```python
-mask = fields.gs.rasterize(anchor)
+mask = fields.gs.rasterize(grid)
 mask
 ```
 
@@ -86,7 +79,7 @@ these pixels immediately. `all_touched=True` includes every pixel touched by a
 geometry instead.
 
 To burn a column's values, use
-`fields.gs.rasterize(anchor, column="class", dtype="uint8", fill=0)`.
+`fields.gs.rasterize(grid, column="class", dtype="uint8", fill=0)`.
 The fill value is used outside the features; choose it separately from the
 valid class codes.
 

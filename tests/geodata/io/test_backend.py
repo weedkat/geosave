@@ -6,38 +6,16 @@ from pathlib import Path
 
 import dask
 import dask.array as da
-import numpy as np
 import pytest
 import xarray as xr
 
-from geosave.geodata import open_raster, open_tree, tree
-
+from geosave.geodata import open_raster
+from tests.conftest import build_tree
 from tests.geodata.conftest import build_raster
-from tests.geodata.conftest import flat
 
 
 def _refuse(*args, **kwargs):
     raise AssertionError("pixels were computed")
-
-
-@pytest.mark.parametrize("write", ["to_zarr", "to_netcdf"])
-def test_the_engine_opens_what_read_raster_opens(tmp_path: Path, write: str) -> None:
-    path = getattr(build_raster(times=2, packed=True).gs, write)(
-        tmp_path / ("scene.zarr" if write == "to_zarr" else "scene.nc")
-    )
-
-    with xr.open_dataset(path, engine="geosave") as opened, open_raster(path) as ours:
-        assert opened.identical(ours)
-        assert opened.gs.geobox == ours.gs.geobox
-
-
-def test_the_engine_joins_the_files_of_one_raster(tmp_path: Path) -> None:
-    source = build_raster(times=2)
-    paths = flat(source.gs.to_cog(f"{tmp_path}/forest_{{time:%Y%m%d}}.tif"))
-
-    with xr.open_dataset(list(paths), engine="geosave") as opened:
-        assert dict(opened.sizes) == {"time": 2, "y": 2, "x": 2}
-        np.testing.assert_array_equal(opened.red, source.red)
 
 
 def test_the_engine_stays_lazy_and_forwards_reader_options(tmp_path: Path) -> None:
@@ -62,19 +40,33 @@ def test_the_engine_drops_named_variables(tmp_path: Path) -> None:
 
 
 def test_the_engine_opens_a_tree_as_a_tree(tmp_path: Path) -> None:
-    sample = tree({"optical": build_raster(times=2), "dem": build_raster()})
-    sample.gs.to_zarr(tmp_path / "s0")
+    sample = build_tree({"optical": build_raster(times=2), "dem": build_raster()})
+    store = sample.gs.to_zarr(tmp_path / "s0.zarr")
 
-    with xr.open_datatree(tmp_path / "s0", engine="geosave") as opened:
-        assert opened.identical(open_tree(tmp_path / "s0"))
+    with xr.open_datatree(store, engine="geosave") as opened:
+        assert opened.identical(open_raster(store))
         assert sorted(opened.children) == ["dem", "optical"]
 
 
 def test_the_engine_claims_no_file_unasked(tmp_path: Path) -> None:
-    (file,) = build_raster().gs.to_netcdf(tmp_path / "scene.nc").written.values()
-    path = file.path
+    path = build_raster().gs.to_netcdf(tmp_path / "scene.nc")
 
     with xr.open_dataset(path) as opened:
         assert "gs" not in opened.encoding.get("engine", "")
     assert "geosave" in xr.backends.list_engines()
     assert not xr.backends.list_engines()["geosave"].guess_can_open(path)
+
+
+@pytest.mark.parametrize("suffix", [".nc", ".zarr"])
+def test_xarray_controls_chunking_when_using_the_geosave_engine(tmp_path, suffix):
+    source = build_raster()
+    path = tmp_path / f"scene{suffix}"
+    if suffix == ".nc":
+        source.gs.to_netcdf(path)
+    else:
+        source.gs.to_zarr(path)
+    with xr.open_dataset(path, engine="geosave", chunks=None) as opened:
+        assert not isinstance(opened.red.data, da.Array)
+    with xr.open_dataset(path, engine="geosave", chunks={}) as opened:
+        assert isinstance(opened.red.data, da.Array)
+        xr.testing.assert_equal(opened, source)

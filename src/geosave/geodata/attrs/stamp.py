@@ -20,7 +20,7 @@ def stamp_attrs[X: xr.DataArray | xr.Dataset](obj: X, value: AttrsGroup) -> X:
         Shallow copy of the object with replaced attrs; pixels are not copied.
 
     Examples:
-        >>> stamp_attrs(ds["B04"], Nodata(value=0)).attrs["_FillValue"]
+        >>> stamp_attrs(ds["B04"], Nodata(fill_value=0)).attrs["_FillValue"]
         0
         >>> stamp_attrs(ds, ACDD(title="Forest")).attrs["title"]
         'Forest'

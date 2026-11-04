@@ -6,8 +6,8 @@ object's attrs and `attrs.stamp_attrs` writes it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self
+from collections.abc import Mapping
+from typing import Annotated, Any, ClassVar, Self
 
 import numpy as np
 import orjson
@@ -18,9 +18,6 @@ from pydantic import (
     ConfigDict,
 )
 from xarray.core.utils import equivalent
-
-if TYPE_CHECKING:
-    pass
 
 
 def decode(value: object) -> object:
@@ -50,23 +47,23 @@ type Decoded[T] = Annotated[T, BeforeValidator(decode)]
 class AttrsGroup(BaseModel):
     """A set of attr keys read and written as one validated value.
 
-    Every subclass joins its parsed values through `combine_values`. Its keys
-    are its fields' names, aliases, or alias choices.
+    A group only knows its own keys and how to read and write itself. Joining
+    many objects' attrs, and what to do on a conflict, belongs to
+    `attrs.combine`, which keeps a group whole or drops it.
 
     Attributes:
         KEYS: Every key the group reads; stamping replaces all of them.
-        REFUSE_CONFLICT: Whether `combine_attrs` raises when every input
-            states the group but not alike, as pixels with two nodata values
-            mean different things. Otherwise it leaves the group out and warns.
-            `intersect` never refuses.
     """
 
     # Groups are values; the other keys of an attrs mapping are none of theirs.
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     KEYS: ClassVar[tuple[str, ...]] = ()
-    REFUSE_CONFLICT: ClassVar[bool] = False
 
+    # Pydantic calls this once a subclass's fields exist; `__init_subclass__`
+    # runs too early to see them. A field may be stored under an alias, such as
+    # a CF or GDAL attr name, or under several (`AliasChoices`), so `KEYS` is
+    # the attr names the group reads, not the Python field names.
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
@@ -107,64 +104,6 @@ class AttrsGroup(BaseModel):
         """
         return cls.model_validate(dict(attrs)) if cls.is_stated_in(attrs) else None
 
-    @classmethod
-    def replace(cls, attrs: Mapping[Any, Any], **fields: Any) -> Self:
-        """Read the group from attrs with some fields changed.
-
-        Args:
-            attrs: Attribute mapping stating the group, or none of it.
-            **fields: Field names mapped to their new values; None clears one.
-
-        Returns:
-            The changed group; one whose fields are all unset writes no attrs.
-
-        Raises:
-            ValueError: The changed group is invalid.
-
-        Examples:
-            >>> attrs.stamp_attrs(band, GDALBand.replace(band.attrs, colorinterp="red"))
-        """
-        stated = cls.from_attrs(attrs)
-        current = {} if stated is None else stated.model_dump()
-        return cls.model_validate(current | fields)
-
-    @classmethod
-    def intersect_values(cls, values: Sequence[Self | None]) -> Self | None:
-        """Keep the value every object states alike.
-
-        Override it where a group's parts are independent facts.
-
-        Args:
-            values: Each object's value for the group, None where it states none.
-
-        Returns:
-            The shared value, or None where any object states none or they differ.
-        """
-        first = values[0]
-        return first if all(value == first for value in values) else None
-
-    @classmethod
-    def combine_values(cls, values: Sequence[Self | None]) -> Self | None:
-        """Join parsed values, refusing conflicts according to the group's policy.
-
-        Args:
-            values: Each input's group, None where it states none.
-
-        Returns:
-            Shared value, or None when absent or different across inputs.
-
-        Raises:
-            ValueError: `REFUSE_CONFLICT` is set and every input states a different value.
-        """
-        joined = cls.intersect_values(values)
-        if cls.REFUSE_CONFLICT and None not in values and joined is None:
-            stated = sorted({repr(value) for value in values})
-            raise ValueError(
-                f"the inputs joined state {cls.__name__} differently: {stated}; "
-                f"align it before joining them"
-            )
-        return joined
-
     def to_attrs(self) -> dict[str, Any]:
         """Return the attrs this value writes; a field at its default or None writes none.
 
@@ -178,6 +117,8 @@ class AttrsGroup(BaseModel):
             by_alias=True, mode="json", exclude_defaults=True, exclude_none=True
         )
 
+    # Defining `__eq__` makes a group unhashable on purpose: NaN equals NaN here
+    # but hashes by identity, and a dict-valued field cannot hash at all.
     def __eq__(self, other: object) -> bool:
         """Compare the attrs each group writes, treating NaN as equal to NaN.
 
@@ -195,5 +136,3 @@ class AttrsGroup(BaseModel):
         return mine.keys() == theirs.keys() and all(
             equivalent(mine[key], theirs[key]) for key in mine
         )
-
-    __hash__ = BaseModel.__hash__

@@ -73,7 +73,7 @@ class DataModule(supervised.DataModule):
     strong augmentations must keep geometry, so weak-view pseudo-labels fit.
 
     Args:
-        spec: Model spec, or its file, declaring `chips`, `inputs`, and
+        spec: Model spec, or its file, declaring `inputs`, `pixels`, and
             `transforms`.
         train: Labeled training dataset returning a `supervised.Sample`.
         val: Validation dataset returning a `supervised.Sample`.
@@ -85,6 +85,7 @@ class DataModule(supervised.DataModule):
             the strong view, such as ``RandomGaussianNoise``.
         cutmix: Probability a labeled sample gets a box of its batch neighbour.
         ignore_index: Label of pixels an augmentation invented.
+        size: Spatial size used by training augmentation.
         batch_size: Samples per batch, labeled and unlabeled alike.
         num_workers: DataLoader worker processes per loader.
 
@@ -113,6 +114,7 @@ class DataModule(supervised.DataModule):
         strong_augmentations: list[dict[str, Any]] | None = None,
         cutmix: float = 0.0,
         ignore_index: int = 255,
+        size: int | tuple[int, int] = 224,
         batch_size: int = 8,
         num_workers: int = 4,
     ) -> None:
@@ -124,13 +126,13 @@ class DataModule(supervised.DataModule):
             augmentations=augmentations,
             cutmix=cutmix,
             ignore_index=ignore_index,
+            size=size,
             batch_size=batch_size,
             num_workers=num_workers,
         )
         self.unlabeled_dataset = unlabeled
-        assert self.spec.chips is not None
         self.strong_augmenter = ImageAugmenter(
-            strong_augmentations or [], self.spec.chips.shape, photometric=True
+            strong_augmentations or [], size, photometric=True
         )
 
     def train_dataloader(self) -> dict[str, DataLoader]:
@@ -169,19 +171,19 @@ class DataModule(supervised.DataModule):
         labeled = super().on_after_batch_transfer(batch["labeled"], dataloader_idx)
 
         inputs = dict(batch["unlabeled"]["inputs"])
-        names = self.spec.pixel_inputs
+        names = self.spec.pixels
         keys: list[DataKey] = ["input"] * len(names)
 
         # Draw shared spatial augmentation once before splitting the views.
         images = self.augmenter(*(inputs[name] for name in names), data_keys=keys)
         tensors = (images,) if isinstance(images, torch.Tensor) else images
         inputs.update(zip(names, tensors, strict=True))
-        weak = self.input_transform(inputs)
+        weak = self.spec.transform(inputs, batched=True)
 
         images = self.strong_augmenter(
             *(inputs[name] for name in names), data_keys=keys
         )
         tensors = (images,) if isinstance(images, torch.Tensor) else images
         inputs.update(zip(names, tensors, strict=True))
-        strong = self.input_transform(inputs)
+        strong = self.spec.transform(inputs, batched=True)
         return {"labeled": labeled, "unlabeled": {"weak": weak, "strong": strong}}

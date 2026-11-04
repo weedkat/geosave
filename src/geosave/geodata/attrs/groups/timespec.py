@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime as dt, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
+from pydantic import model_validator
 
 from geosave.geodata.utils.datetime import (
     DateRange,
@@ -29,73 +30,66 @@ class TimeSpec(AttrsGroup):
 
     Attributes:
         time_freq: Cadence, any pandas offset alias such as `"5D"` or `"MS"`.
-        time_closed: Which bucket edge pandas treated as inclusive.
-        time_label: Which bucket edge names the bucket.
+        time_closed: Which bucket edge pandas treated as inclusive. Omit it to
+            take pandas' default for `time_freq`.
+        time_label: Which bucket edge names the bucket, resolved the same way.
         time_origin: Timestamp the edge grid was phased from, or a strategy
             name like `"start_day"`.
         time_offset: Shift added on top of `time_origin`.
 
+    Raises:
+        ValueError: pandas doesn't know `time_freq`.
+
     Examples:
+        >>> attrs.TimeSpec(time_freq="ME").time_closed
+        'right'
         >>> attrs.TimeSpec.from_attrs(monthly.time.attrs).time_freq
         'MS'
-        >>> monthly.gs.timespan
-        (datetime.datetime(2024, 1, 1, 0, 0), datetime.datetime(2024, 3, 31, 23, 59, 59, 999999))
+        >>> attrs.TimeSpec(time_freq="MS").bounds(monthly.time.values)[0]
+        (datetime.datetime(2024, 1, 1, 0, 0), datetime.datetime(2024, 1, 31, 23, 59, 59, 999999))
     """
 
-    # Axes cut on different cadences join as instants.
-
     time_freq: Freq
-    time_closed: Literal["left", "right"]
-    time_label: Literal["left", "right"]
+    # None only until validation resolves them from `time_freq`; never after.
+    time_closed: Literal["left", "right"] | None = None
+    time_label: Literal["left", "right"] | None = None
     time_origin: str | dt = "start_day"
     time_offset: str | timedelta | None = None
 
+    @model_validator(mode="before")
     @classmethod
-    def from_resample(
-        cls,
-        freq: Freq,
-        *,
-        closed: Literal["left", "right"] | None = None,
-        label: Literal["left", "right"] | None = None,
-        origin: str | dt = "start_day",
-        offset: str | timedelta | None = None,
-    ) -> TimeSpec:
-        """Record the bucket grid a resample call cuts, on pandas' own defaults.
+    def _resolve_edge_rules(cls, data: Any) -> Any:
+        """Fill `time_closed` and `time_label` the way pandas resolves them for `time_freq`.
 
-        Args:
-            freq: Any pandas offset alias, e.g. `"5D"`, `"MS"`.
-            closed: Which bucket edge is inclusive. None resolves as pandas
-                does: a period-end alias such as `"ME"` closes on the right,
-                every other alias on the left.
-            label: Which bucket edge names the bucket, resolved the same way.
-            origin: Timestamp the edge grid is phased from, or a strategy name.
-            offset: Shift added on top of `origin`.
-
-        Returns:
-            TimeSpec holding the resolved call.
+        pandas closes and labels a period-end alias such as `"ME"` on the right
+        and every other alias on the left. Resolving them here records the grid
+        that was cut, so it can be reproduced from the attrs alone.
 
         Raises:
-            ValueError: pandas doesn't know `freq`.
+            ValueError: pandas doesn't know `time_freq`.
         """
-        alias = freq_offset(freq)
-        closed, label = edge_rules(alias, closed, label)
-        return cls(
-            time_freq=alias,
-            time_closed=closed,
-            time_label=label,
-            time_origin=origin,
-            time_offset=offset,
+        if not isinstance(data, dict) or "time_freq" not in data:
+            return data
+        alias = freq_offset(data["time_freq"])
+        closed, label = edge_rules(
+            alias, data.get("time_closed"), data.get("time_label")
         )
+        return {
+            **data,
+            "time_freq": alias,
+            "time_closed": closed,
+            "time_label": label,
+        }
 
-    def bounds(self, labels: np.ndarray) -> np.ndarray:
-        """Return the half-open `[start, end)` edges of the bucket each label names.
+    def bounds(self, labels: np.ndarray) -> list[DateRange]:
+        """Return the first and last instant of the bucket each label names.
 
         Args:
             labels: The `time` coordinate, a scalar one holding its one label.
 
         Returns:
-            `(len(labels), 2)` `datetime64[us]` array, row `i` holding label
-            `i`'s bucket start and next edge.
+            One `(start, end)` per label, both inclusive. A bucket's closing
+            edge opens the next one, so `end` stops one microsecond short of it.
 
         Raises:
             ValueError: pandas doesn't know this spec's `time_freq`.
@@ -104,25 +98,12 @@ class TimeSpec(AttrsGroup):
         index = pd.DatetimeIndex(np.atleast_1d(labels))
         # time_offset already sits in `labels`; consecutive edges stay one step apart.
         step = to_offset(self.time_freq)
-        low, high = (
-            (index - step, index)
-            if self.time_label == "right"
-            else (index, index + step)
-        )
-        return np.stack(
-            [low.to_numpy("datetime64[us]"), high.to_numpy("datetime64[us]")], axis=1
-        )
-
-    def timespan(self, labels: np.ndarray) -> DateRange:
-        """Return the inclusive period `labels` cover under this spec.
-
-        Args:
-            labels: The `time` coordinate.
-
-        Returns:
-            First and last covered instant.
-        """
-        edges = self.bounds(labels)
-        # The closing edge opens the next bucket, so back off one instant.
-        last = edges[:, 1].max() - np.timedelta64(1, "us")
-        return edges[:, 0].min().astype(object), last.astype(object)
+        if self.time_label == "right":
+            starts, next_starts = index - step, index
+        else:
+            starts, next_starts = index, index + step
+        ends = next_starts - pd.Timedelta(1, "us")
+        bounds = []
+        for start, end in zip(starts, ends):
+            bounds.append((start.to_pydatetime(), end.to_pydatetime()))
+        return bounds

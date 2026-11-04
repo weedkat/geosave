@@ -8,8 +8,8 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import features, raster
-
+from geosave.geodata import features
+from tests.conftest import build_dataset
 from tests.geodata.features.conftest import sentinel
 
 CHUNKS = {"time": 1, "y": 16, "x": 16}
@@ -186,7 +186,7 @@ def test_cdi_cloud_mask_is_the_same_across_chunk_edges() -> None:
 def test_cdi_missing_pixels_have_local_chunk_independent_effects(missing) -> None:
     grid = GeoBox.from_bbox((0, 0, 640, 640), crs="EPSG:32633", resolution=10)
     noise = np.random.default_rng(6).uniform(0.1, 0.8, (64, 64)).astype("float32")
-    source = raster(
+    source = build_dataset(
         {
             "b07": (("y", "x"), np.full((64, 64), 0.3, dtype="float32")),
             "b08": (("y", "x"), noise),

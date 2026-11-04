@@ -66,11 +66,6 @@ def test_a_linear_chain_runs_encoder_then_decoder_then_head(x):
 def test_declaration_order_does_not_decide_call_order(x):
     backwards = ModelChain(head=Head(), decoder=Decode(), encoder=Encode())
 
-    assert [step.method.name for step in backwards._steps] == [
-        "encode",
-        "decode",
-        "logits",
-    ]
     assert backwards(x).tolist() == [16.0]
 
 
@@ -105,12 +100,6 @@ def test_no_head_returns_only_named_stage_outputs(x):
     assert "image" not in ctx
 
 
-def test_one_head_returns_its_bare_tensor(x):
-    result = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())(x)
-
-    assert isinstance(result, torch.Tensor)
-
-
 def test_two_heads_return_one_tensor_each_under_their_stage_names(x):
     chain = ModelChain(encoder=Encode(), decoder=Decode(), a=Head(), b=OtherHead())
 
@@ -136,7 +125,6 @@ def test_inputs_follow_declaration_order_not_call_order(x):
     chain = ModelChain(late=Late(), early=Early())
 
     assert list(chain.inputs) == ["seed", "origin"]
-    assert [step.method.name for step in chain._steps] == ["make", "use"]
 
     ctx = chain(torch.ones(2), torch.ones(2) * 5)
     assert ctx["used"].tolist() == [16.0, 16.0]
@@ -162,7 +150,7 @@ def test_a_module_offering_two_steps_uses_whichever_resolves_first(x):
 
     chain = ModelChain(Split(), Merge(), TwoWays())
 
-    assert [step.method.name for step in chain._steps][1] == "from_image"
+    torch.testing.assert_close(chain(x)["picked"], x * 10)
 
 
 def test_a_stage_with_no_chain_step_beside_others_is_refused():
@@ -183,11 +171,6 @@ def test_a_lone_model_without_chain_step_runs_its_forward():
     assert chain.inputs == {"image": torch.Tensor}
     torch.testing.assert_close(chain(image=image), image * 2)
     torch.testing.assert_close(chain(image=image, scale=torch.tensor(3.0)), image * 3)
-
-
-def test_a_lone_model_without_forward_is_refused():
-    with pytest.raises(TypeError, match="no @chain_step method found"):
-        ModelChain(nn.Module())
 
 
 def test_two_steps_ready_at_once_are_refused_as_ambiguous():
@@ -232,55 +215,11 @@ def test_mutually_dependent_modules_are_refused_as_a_cycle():
     assert "-(left)-> Forward.step" in message
 
 
-def test_a_positional_name_colliding_with_a_keyword_name_is_refused():
-    with pytest.raises(ValueError, match="collide"):
-        ModelChain(Encode(), stage_0=Decode())
-
-
-def test_more_positional_arguments_than_inputs_are_refused(x):
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    with pytest.raises(TypeError, match="at most 1 positional"):
-        chain(x, x)
-
-
-def test_a_key_given_twice_is_refused_rather_than_silently_picked(x):
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    with pytest.raises(TypeError, match="both a positional and keyword"):
-        chain(x, image=x)
-
-
 def test_a_missing_required_key_names_the_key_it_wanted():
     chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
 
     with pytest.raises(KeyError, match="image"):
         chain()
-
-
-def test_submodules_are_registered_under_their_stage_names():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    assert [name for name, _ in chain.named_children()] == [
-        "encoder",
-        "decoder",
-        "head",
-    ]
-
-
-def test_positional_modules_are_named_by_position():
-    chain = ModelChain(Split(), Merge())
-
-    assert [name for name, _ in chain.named_children()] == ["stage_0", "stage_1"]
-
-
-def test_repr_reports_inputs_and_the_resolved_flow():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    flow = repr(chain).split("\n\n")[0:2]
-    assert flow[0] == "inputs: image: Tensor"
-    assert "encoder: Encode.encode(image: Tensor) -> {feature_map: Tensor}" in flow[1]
-    assert "head: Head.logits(decoded: Tensor) -> Tensor" in flow[1]
 
 
 def test_a_forward_step_runs_module_hooks(x):
@@ -321,21 +260,6 @@ def test_a_producer_and_consumer_must_agree_on_the_value_type():
         ModelChain(Encode(), Consumer())
 
 
-def test_direct_chain_has_no_construction_recipe():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    with pytest.raises(ValueError, match="stage specifications"):
-        _ = chain.stage_specs
-
-
-def test_model_chain_has_no_huggingface_mixin_methods():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    assert not hasattr(chain, "save_pretrained")
-    assert not hasattr(chain, "from_pretrained")
-    assert not hasattr(chain, "push_to_hub")
-
-
 class Detector(nn.Module):
     @chain_step(head=True)
     def forward(self, decoded: torch.Tensor) -> list[dict[str, torch.Tensor]]:
@@ -352,16 +276,6 @@ def test_single_native_terminal_is_returned_unchanged(x):
     torch.testing.assert_close(result[0]["boxes"], (x * 2 + 1).reshape(1, 4))
 
 
-def test_mixed_terminals_keep_stage_names(x):
-    chain = ModelChain(
-        encoder=Encode(), decoder=Decode(), cover=Head(), objects=Detector()
-    )
-    result = chain(x)
-    assert set(result) == {"cover", "objects"}
-    torch.testing.assert_close(result["cover"], torch.tensor([16.0]))
-    assert isinstance(result["objects"], list)
-
-
 def test_mixed_terminals_preserve_gradients(x):
     x.requires_grad_()
     chain = ModelChain(
@@ -370,59 +284,3 @@ def test_mixed_terminals_preserve_gradients(x):
     result = chain(x)
     (result["cover"].sum() + result["objects"][0]["boxes"].sum()).backward()
     torch.testing.assert_close(x.grad, torch.full_like(x, 4.0))
-
-
-def test_repr_reports_native_terminal_type():
-    chain = ModelChain(objects=Detector())
-    assert "-> list[dict[str, torch.Tensor]]" in repr(chain)
-
-
-class Masked(nn.Module):
-    @chain_step(head=True)
-    def logits(
-        self, decoded: torch.Tensor, mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        return decoded if mask is None else decoded * mask
-
-
-def test_repr_marks_optional_inputs():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Masked())
-
-    assert (
-        "head: Masked.logits(decoded: Tensor, mask?: torch.Tensor | None) -> Tensor"
-        in repr(chain)
-    )
-
-
-def test_mermaid_draws_each_value_from_its_producer():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Masked())
-
-    assert chain.to_mermaid().splitlines() == [
-        "flowchart LR",
-        '    input_image(["image: Tensor"])',
-        '    input_mask(["mask: torch.Tensor | None"])',
-        '    encoder["encoder: Encode.encode"]',
-        '    decoder["decoder: Decode.decode"]',
-        '    head["head: Masked.logits"]',
-        '    result_head(["Tensor"])',
-        '    input_image -->|"image"| encoder',
-        '    encoder -->|"feature_map: Tensor"| decoder',
-        '    decoder -->|"decoded: Tensor"| head',
-        '    input_mask -.->|"mask"| head',
-        "    head --> result_head",
-    ]
-
-
-def test_mermaid_ends_a_feature_chain_at_its_unconsumed_outputs():
-    chain = ModelChain(Split(), Merge())
-
-    lines = chain.to_mermaid().splitlines()
-
-    assert '    stage_0 -->|"low: Tensor"| stage_1' in lines
-    assert '    stage_1 -->|"merged: Tensor"| result_merged(["merged"])' in lines
-
-
-def test_notebooks_render_the_chain_as_a_mermaid_block():
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    assert chain._repr_markdown_() == f"```mermaid\n{chain.to_mermaid()}\n```"

@@ -193,7 +193,7 @@ class ImageAugmenter(torch.nn.Module):
             raise ValueError("The first input must be an image.")
 
         # Joint geometry folds time into channels; normalization folds it into
-        # the batch instead, in InputTransform.
+        # the batch instead, in the model recipe transforms.
         shapes = {}
         masks = []
         for index, (tensor, key) in enumerate(zip(inputs, keys, strict=True)):

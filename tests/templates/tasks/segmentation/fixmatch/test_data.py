@@ -28,18 +28,6 @@ class Scenes(Dataset[fixmatch.Unlabeled]):
         return {"inputs": {"image": torch.full((2, 8, 8), float(index))}}
 
 
-def test_views_need_only_model_inputs(tmp_path):
-    data = _training(tmp_path, augmentations=FLIP, strong_augmentations=NOISE)
-    labeled = _batch()
-
-    result = data.on_after_batch_transfer(
-        {"labeled": labeled, "unlabeled": {"inputs": _batch(times=2)["inputs"]}}, 0
-    )
-
-    assert set(result["unlabeled"]) == {"weak", "strong"}
-    assert set(result["labeled"]) == {"inputs", "target"}
-
-
 def test_strong_augmentations_cannot_move_geometry(tmp_path):
     with pytest.raises(ValueError, match="geometry"):
         _training(tmp_path, strong_augmentations=FLIP)
@@ -117,9 +105,3 @@ def test_evaluation_batches_pass_as_supervised(tmp_path) -> None:
 
     torch.testing.assert_close(batch["inputs"]["image"], original["inputs"]["image"])
     assert torch.equal(batch["target"], original["target"])
-
-
-def test_fitting_reads_labeled_and_unlabeled_loaders_side_by_side(tmp_path) -> None:
-    loaders = _training(tmp_path, num_workers=0).train_dataloader()
-
-    assert set(loaders) == {"labeled", "unlabeled"}

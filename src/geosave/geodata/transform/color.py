@@ -21,7 +21,7 @@ def colorize(variable: xr.DataArray) -> xr.DataArray:
         class names is absent on every channel.
 
     Raises:
-        ValueError: The variable lists no classes, or a class carries no colour.
+        ValueError: The variable lists no classes.
 
     Examples:
         >>> colorize(ds["landcover"]).sizes["band"]

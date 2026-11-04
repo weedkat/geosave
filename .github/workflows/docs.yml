@@ -9,6 +9,8 @@ on:
       - "src/geosave/**/*.py"
       - "src/geosave_flows/**/*.py"
       - "scripts/api_reference.py"
+      - "scripts/opener_docstrings.py"
+      - "scripts/references/storage-options.txt"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/docs.yml"
@@ -38,6 +40,9 @@ jobs:
 
       - name: Check public API reference freshness
         run: uv run python scripts/api_reference.py --check
+
+      - name: Check opener docstring freshness
+        run: uv run python scripts/opener_docstrings.py --check
 
       - name: Build site
         run: uv run zensical build

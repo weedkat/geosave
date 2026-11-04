@@ -1,22 +1,18 @@
-import inspect
-from importlib import import_module
-
 import numpy as np
-from prefect import Flow
 import pytest
+from prefect import Flow
 
-from geosave.geodata.core.raster.create import raster
-from geosave.geodata import io
+from geosave.geodata import attrs, io, open_vector
+from tests.conftest import build_dataset
 from geosave.model.spec import ModelSpec, RasterRequirement, StacRecipe
-from geosave_flows.configs import CoordinateAnchorConfig, RasterAnchorConfig
 from geosave_flows import ingest
-
-ingest_module = import_module("geosave_flows.ingest")
+from geosave_flows.configs import CoordinateAnchorConfig, RasterAnchorConfig
+from tests.geodata.conftest import create_test_collection
 
 
 def model_spec(tmp_path, url):
     return ModelSpec(
-        schema_version=2,
+        schema_version=3,
         rasters={
             "optical": RasterRequirement(
                 variables=("red", "nir"),
@@ -33,13 +29,27 @@ def model_spec(tmp_path, url):
     ).save(tmp_path / "model_spec.yaml")
 
 
-def test_ingest_writes_one_sample_folder_from_a_raster_anchor(tmp_path, stac_server):
-    url, requests, anchor = stac_server
-    label = raster(
+def _dated(geobox, name: str, collection: str) -> object:
+    """Serve one dated raster on the requested grid, as a STAC load gives it."""
+    plane = np.ones(tuple(geobox.shape), dtype="uint16")
+    raster = build_dataset({name: (("y", "x"), plane)}, geobox).expand_dims(
+        time=[np.datetime64("2025-01-15")]
+    )
+    described = create_test_collection(collection, description=f"{collection} source")
+    described.links = []
+    metadata = attrs.StacMetadata(
+        collection=described.to_dict(include_self_link=False, transform_hrefs=False)
+    )
+    return attrs.stamp_attrs(raster, metadata)
+
+
+def test_ingest_writes_one_catalog_from_a_raster_anchor(tmp_path, stac_server):
+    url, requests, anchor, geobox = stac_server
+    label = build_dataset(
         {"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
-        anchor.geobox,
+        geobox,
     ).assign_coords(time=np.datetime64("2025-01-15"))
-    label_path = io.geotiff.write_cog(label, tmp_path / "label.tif")
+    label_path = io.formats.geotiff.write_cog(label, tmp_path / "label.tif")
     output = tmp_path / "raw"
 
     result = ingest.fn(
@@ -49,17 +59,18 @@ def test_ingest_writes_one_sample_folder_from_a_raster_anchor(tmp_path, stac_ser
     )
 
     assert isinstance(ingest, Flow)
-    assert result == str(output)
+    assert result == str(output / "catalog.parquet")
     assert requests == [["optical"]]
-    assert sorted(path.name for path in output.iterdir()) == ["optical.zarr"]
-    with io.open_tree(output, chunks="auto") as opened:
-        assert opened.gs.groups == ("optical",)
-        assert opened.gs.geobox == anchor.geobox
+    catalog = open_vector(result)
+    assert sorted(catalog["collection"].unique()) == ["optical"]
+    assert list(catalog.gs.collections) == ["optical"]
+    scene = catalog.iloc[0].gs.to_datatree().gs.to_dataset()
+    assert scene.gs.geobox == geobox
 
 
-def test_ingest_loads_every_model_raster_recipe(tmp_path, monkeypatch) -> None:
+def test_ingest_lists_every_model_raster_in_one_catalog(tmp_path, monkeypatch) -> None:
     spec = ModelSpec(
-        schema_version=2,
+        schema_version=3,
         rasters={
             "optical": RasterRequirement(
                 variables=("red",),
@@ -75,19 +86,14 @@ def test_ingest_loads_every_model_raster_recipe(tmp_path, monkeypatch) -> None:
             ),
         },
     ).save(tmp_path / "model_spec.yaml")
-    captured = {}
 
-    def load(model, anchor):
-        for requirement in model.rasters.values():
-            captured[requirement.variables[0]] = requirement.stac.collection
-        return {"optical": "red", "elevation": "dem"}
-
-    def write(rasters, output, **options):
-        assert rasters == {"optical": "red", "elevation": "dem"}
-        return str(output)
+    def load(model, anchor, *, geobox):
+        return {
+            "optical": _dated(geobox, "red", "optical"),
+            "elevation": _dated(geobox, "dem", "dem"),
+        }
 
     monkeypatch.setattr(ModelSpec, "load_rasters", load)
-    monkeypatch.setattr(ingest_module, "write_sample", write)
 
     result = ingest.fn(
         anchor=CoordinateAnchorConfig(
@@ -97,13 +103,16 @@ def test_ingest_loads_every_model_raster_recipe(tmp_path, monkeypatch) -> None:
         spec=str(spec),
     )
 
-    assert result == str(tmp_path / "raw")
-    assert captured == {"red": "optical", "dem": "dem"}
+    catalog = open_vector(result)
+    assert sorted(catalog["collection"]) == ["elevation", "optical"]
+    # Each raster's source Collection is kept under the raster's own name.
+    assert sorted(catalog.gs.collections) == ["elevation", "optical"]
+    assert catalog.gs.collections["elevation"].description == "dem source"
 
 
 def test_ingest_refuses_rasters_without_a_stac_block(tmp_path):
     spec = ModelSpec(
-        schema_version=2,
+        schema_version=3,
         rasters={
             "optical": RasterRequirement(variables=("red",)),
             "elevation": RasterRequirement(variables=("dem",)),
@@ -127,7 +136,7 @@ def test_ingest_refuses_rasters_without_a_stac_block(tmp_path):
 @pytest.mark.slow
 def test_ingest_run_opens_a_json_anchor(tmp_path, prefect_server, monkeypatch) -> None:
     spec = ModelSpec(
-        schema_version=2,
+        schema_version=3,
         rasters={
             "optical": RasterRequirement(
                 variables=("red",),
@@ -139,14 +148,11 @@ def test_ingest_run_opens_a_json_anchor(tmp_path, prefect_server, monkeypatch) -
     ).save(tmp_path / "model_spec.yaml")
     shapes = []
 
-    def load(model, anchor):
-        shapes.append(tuple(anchor.geobox.shape))
-        return {"optical": "red"}
+    def load(model, anchor, *, geobox):
+        shapes.append(tuple(geobox.shape))
+        return {"optical": _dated(geobox, "red", "optical")}
 
     monkeypatch.setattr(ModelSpec, "load_rasters", load)
-    monkeypatch.setattr(
-        ingest_module, "write_sample", lambda rasters, output, **options: output
-    )
 
     result = ingest(
         anchor={
@@ -160,17 +166,17 @@ def test_ingest_run_opens_a_json_anchor(tmp_path, prefect_server, monkeypatch) -
         spec=str(spec),
     )
 
-    assert result == str(tmp_path / "raw")
+    assert result == str(tmp_path / "raw" / "catalog.parquet")
     assert shapes == [(4, 4)]
 
 
 def test_ingest_refuses_an_existing_output(tmp_path, stac_server):
-    url, requests, anchor = stac_server
-    label = raster(
+    url, requests, anchor, geobox = stac_server
+    label = build_dataset(
         {"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
-        anchor.geobox,
+        geobox,
     ).assign_coords(time=np.datetime64("2025-01-15"))
-    label_path = io.geotiff.write_cog(label, tmp_path / "label.tif")
+    label_path = io.formats.geotiff.write_cog(label, tmp_path / "label.tif")
     (tmp_path / "raw").mkdir()
 
     with pytest.raises(FileExistsError):
@@ -180,6 +186,4 @@ def test_ingest_refuses_an_existing_output(tmp_path, stac_server):
             spec=str(model_spec(tmp_path, url)),
         )
 
-
-def test_ingest_takes_no_catalog_argument() -> None:
-    assert "catalog" not in inspect.signature(ingest.fn).parameters
+    assert requests == []

@@ -11,14 +11,6 @@ Prefect flows run complete jobs from validated inputs. They ship as
 
 ::: geosave_flows.ingest
 
-## Write a sample
-
-::: geosave_flows.tasks.sample
-    options:
-      members:
-        - write_sample
-        - SampleFormat
-
 ## Label files
 
 ::: geosave_flows.tasks.labels

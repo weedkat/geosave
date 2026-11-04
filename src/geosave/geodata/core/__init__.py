@@ -1,31 +1,25 @@
 """Public geodata core: the `gs` accessors of rasters and vectors, and GeoAnchor."""
 
+
 from .anchor import GeoAnchor
+from .raster.chips import Chips
 from .raster.dataarray import GeoDataArray
 from .raster.dataset import GeoDataset
 from .raster.datatree import GeoDataTree
+from .vector.item import GeoCatalogItem
 from .vector.catalog import GeoCatalog
-from .vector.accessors import FrameAccessor, RowAccessor  # noqa: F401  registers `gs`
-from .vector.item import GeoItem
-from .vector.sample import GeoSample
 from .vector.samples import GeoSamples
-from .vector.vector import GeoVector
 
-# After the accessors, which import the `raster` package this name would shadow.
-from .raster.create import RasterVariable, array, raster, tree  # noqa: E402
+# isort: split
+from . import register as _register  # noqa: F401 registers native .gs accessors
 
 __all__ = [
+    "Chips",
     "GeoAnchor",
     "GeoDataArray",
     "GeoDataset",
     "GeoDataTree",
-    "RasterVariable",
-    "GeoVector",
     "GeoCatalog",
+    "GeoCatalogItem",
     "GeoSamples",
-    "GeoItem",
-    "GeoSample",
-    "array",
-    "raster",
-    "tree",
 ]

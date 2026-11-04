@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from math import isfinite
 
-import xarray as xr
 import pystac
+import xarray as xr
 from pystac.extensions.raster import (
     DataType,
     NoDataStrings,
@@ -16,8 +16,8 @@ from pystac.extensions.raster import (
 import geosave.geodata.attrs as attrs
 
 
-def from_dataarray(variable: xr.DataArray) -> RasterBand:
-    """Describe one variable as the Raster band storing it.
+def build_band(variable: xr.DataArray) -> RasterBand:
+    """Build the Raster band storing one variable.
 
     Args:
         variable: Variable as `open_raster` opens it, holding stored values.
@@ -27,7 +27,7 @@ def from_dataarray(variable: xr.DataArray) -> RasterBand:
         Its band: `data_type`, `nodata`, `scale` and `offset`, and `unit`.
 
     Examples:
-        >>> from_dataarray(scene.red).scale
+        >>> build_band(scene.red).scale
         0.0001
     """
     packing = variable.gs.packing
@@ -47,11 +47,11 @@ def from_dataarray(variable: xr.DataArray) -> RasterBand:
 def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
     """Stamp the packing and unit a Raster band states onto its variable.
 
-    `data_type` and `nodata` describe the file, which states them itself
+    `data_type` and `nodata` are the file's, which states them itself
     when opened, so neither is stamped.
 
     Args:
-        variable: Variable the band describes.
+        variable: Variable the band belongs to.
         band: Its band.
 
     Returns:
@@ -78,7 +78,7 @@ def write_asset(asset: pystac.Asset, bands: list[RasterBand]) -> None:
     RasterExtension.ext(asset, add_if_missing=True).bands = bands
 
 
-def read_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
+def stamp_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
     """Read core or extension band metadata."""
     return stamp(
         variable,

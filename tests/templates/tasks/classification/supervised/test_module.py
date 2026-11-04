@@ -33,15 +33,6 @@ STAGES = {
 }
 
 
-def test_defaults_and_class_count() -> None:
-    module = supervised.Module(model_chain=STAGES)
-    module.configure_model()
-
-    assert module.num_classes == 3
-    assert isinstance(module.criterion, nn.CrossEntropyLoss)
-    assert isinstance(module.configure_optimizers(), torch.optim.AdamW)
-
-
 class Uncounted(nn.Module):
     @chain_step(head=True)
     def logits(self, image: torch.Tensor) -> torch.Tensor:

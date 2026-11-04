@@ -35,6 +35,6 @@ def get_methods(task: str) -> list[str]:
     return methods
 
 
-def describe(task: str, method: str) -> str:
+def read_method_description(task: str, method: str) -> str:
     """Return the method description shown during selection."""
     return (TASKS_DIR / task / method / "description.txt").read_text().strip()

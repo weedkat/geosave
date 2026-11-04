@@ -1,24 +1,28 @@
 # Raster grids
 
-Use an existing raster as the reference when placing new pixel values:
+Place new pixel values on an existing raster's grid with `write_grid`:
 
 ```python
 import numpy as np
+import xarray as xr
 
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
-scene = gs.raster(
-    {"red": (("y", "x"), np.arange(16, dtype="uint16").reshape(4, 4))},
-    anchor.geobox,
-    nodata=65535,
+scene = (
+    xr.Dataset({"red": (("y", "x"), np.arange(16, dtype="uint16").reshape(4, 4))})
+    .gs.write_grid(grid)
+    .gs.write_nodata(65535)
 )
-prediction = gs.raster(
-    {"label": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
-    scene,
-    nodata=255,
+prediction = (
+    xr.Dataset({"label": (("y", "x"), np.ones((4, 4), dtype="uint8"))})
+    .gs.write_grid(scene.gs.geobox)
+    .gs.write_nodata(255)
 )
 prediction
 ```
@@ -29,8 +33,8 @@ Output:
 <xarray.Dataset> Size: 84B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
@@ -48,16 +52,15 @@ Two 256 × 256 arrays can cover different locations or resolutions.
 To combine their pixels spatially, they need the same CRS, transform, and
 shape. Even rasters in the same CRS can have offset pixel centres.
 
-`gs.raster(variables, reference)` places supplied values on the reference
-coordinates. It does not reproject those values. For an xarray reference,
-coordinates on the dimensions used by the new variables pass on unchanged.
-Existing coordinate labels that disagree are rejected rather than silently
-realigned. Always declare dimensions ending in `y, x`.
+`write_grid(geobox)` places supplied values on a grid's coordinates. It does not
+reproject those values: pixels must be as large as the grid, and dimensions must
+end in `y, x`, or it refuses. Coordinates on other dimensions, such as `time`,
+are set with xarray's own constructor and kept.
 
-Same-name variables inherit the reference's band attrs; each supplied variable's
-own attrs override them. Dataset attrs are not copied as a record of how the
-new raster was produced. Use a different variable name or explicit attrs when
-the values have different semantics.
+Nothing is copied from the raster the grid came from, neither its band attrs nor
+its Dataset attrs, since they would not describe how the new raster was
+produced. Write what the new values mean with `write_nodata`, `write_legend` and
+the other `write_*` methods.
 
 ## Change a grid explicitly
 
@@ -72,8 +75,8 @@ Output:
 <xarray.Dataset> Size: 212B
 Dimensions:      (y: 6, x: 8)
 Coordinates:
-  * y            (y) float64 48B 45.0 45.0 45.0 45.0 45.0 45.0
-  * x            (x) float64 64B 12.0 12.0 12.0 12.0 12.0 12.0 12.0 12.0
+  * y            (y) float64 48B 45.15 45.15 45.15 45.15 45.15 45.15
+  * x            (x) float64 64B 15.0 15.0 15.0 15.0 15.0 15.0 15.0 15.0
     spatial_ref  int32 4B 4326
 Data variables:
     red          (y, x) uint16 96B 65535 65535 65535 65535 ... 65535 65535 65535
@@ -108,10 +111,21 @@ not perform this alignment.
 
 `isel(y=..., x=...)` selects pixel positions. `.gs.crop(region)` also masks
 pixels outside a geometry, using nodata. Neither operation changes resolution.
-A catalog window has its own grid; `.gs.to_xarray()` places each source on that
-grid, slicing an aligned source and reprojecting a different one.
+A catalog window's rows open with `.gs.to_datatree()` on their native grids,
+one grid node per pixel size (`/s2/r10m`, `/s2/r20m`); `tree["s2"].gs.to_dataset()`
+brings a collection's nodes onto one of its grids, and `.gs.align(target=...)`
+reprojects onto another.
 
 Reprojection can be lazy for Dask inputs, but interpolation and nodata behavior
 depend on the resampling backend. Check a small representative area before
 running a large job. See [transforms](../reference/transforms.md),
 [rasters](../reference/rasters.md), and [large data](../guides/large-data.md).
+
+## Measured lazy-warp limitation
+
+The current lazy cross-CRS warp can differ numerically from the eager path on
+the same target grid. A synthetic nearest/bilinear comparison, timings, and
+reproduction scripts are in the [performance review](../contributing/benchmarks/2026-11-04/index.md#cross-crs-performance-and-numerical-comparison).
+Choose and validate the resampling behavior your data needs; a correct output
+shape and CRS do not by themselves prove equivalent pixels. The review does
+not recommend silently computing a whole raster to hide this limitation.

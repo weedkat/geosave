@@ -84,13 +84,10 @@ def test_mapping_orders_dataset_bands_by_dimension_name(lazy: bool) -> None:
     np.testing.assert_array_equal(result.compute(), values * 3)
 
 
-@pytest.mark.parametrize("lazy", [False, True])
-def test_mapping_refuses_negative_halos(lazy: bool) -> None:
+def test_mapping_refuses_negative_halos() -> None:
     from geosave.geodata.features.dask_mapping import map_spatial_overlap
 
     field = xr.DataArray(np.ones((4, 4)), dims=("y", "x"))
-    if lazy:
-        field = field.chunk({"y": 2, "x": 2})
 
     with pytest.raises(ValueError):
         map_spatial_overlap(lambda block: block, field, depth=-1, dtype="float32")

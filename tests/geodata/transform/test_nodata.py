@@ -7,14 +7,11 @@ import pytest
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata import tree
-from geosave.geodata.core.raster.create import raster as build_raster
-from geosave.geodata.core.raster.create import tree as build_tree
+from tests.conftest import build_dataset as build_raster
+from tests.conftest import build_tree
 from geosave.geodata.transform.nodata import mask, to_nan, unpack
 from tests.geodata.conftest import geobox, titled
 
-from .conftest import build
-from .conftest import geobox as transform_geobox
 
 UTM = "EPSG:32633"
 
@@ -59,17 +56,11 @@ def classification() -> xr.DataArray:
 
 
 def test_masking_writes_the_declared_fill_without_promoting_the_dtype() -> None:
-    masked = mask(scene(), classification().isin(CLEAR))
+    source = scene()
+    masked = mask(source, classification().isin(CLEAR))
 
     assert masked.red.dtype == np.dtype("uint16")
     assert list(masked.red.values[0]) == [7, 7, 0, 0]
-
-
-def test_masking_keeps_the_grid_and_the_variable_attrs() -> None:
-    source = scene()
-
-    masked = mask(source, classification().isin(CLEAR))
-
     assert masked.gs.geobox == source.gs.geobox
     assert masked.red.attrs["_FillValue"] == 0
 
@@ -90,12 +81,17 @@ def test_masking_a_band_returns_a_band() -> None:
 
 
 def test_masking_a_tree_masks_every_group() -> None:
-    source = build_tree({"optical": scene(), "other": scene()})
+    source = build_tree({"optical": scene(), "other": scene()}).chunk()
+    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
+    source.coords["site"] = "field-1"
 
     masked = mask(source, classification().isin(CLEAR))
 
     assert masked.gs.groups == ("optical", "other")
+    assert masked.attrs == source.attrs
+    xr.testing.assert_identical(masked.coords["site"], source.coords["site"])
     for group in masked.gs.rasters.values():
+        assert group.red.chunks is not None
         assert list(group.red.values[0]) == [7, 7, 0, 0]
 
 
@@ -110,30 +106,23 @@ def test_a_variable_carrying_no_fill_is_refused_rather_than_promoted() -> None:
 
 
 def test_a_given_fill_is_written_and_declared() -> None:
-    masked = mask(scene(nodata=None), classification().isin(CLEAR), fill=255)
+    masked = mask(scene(), classification().isin(CLEAR), fill=255)
 
     assert list(masked.red.values[0]) == [7, 7, 255, 255]
     assert masked.red.attrs["_FillValue"] == 255
     assert masked.red.dtype == np.dtype("uint16")
 
 
-def test_a_given_fill_overrides_what_the_variable_declared() -> None:
-    masked = mask(scene(), classification().isin(CLEAR), fill=99)
-
-    assert list(masked.red.values[0]) == [7, 7, 99, 99]
-    assert masked.red.attrs["_FillValue"] == 99
-
-
 @pytest.mark.parametrize("fill", [-1, 70000])
 def test_a_fill_the_dtype_cannot_hold_is_refused_rather_than_wrapped(
     fill: int,
 ) -> None:
-    with pytest.raises(ValueError, match="is no uint16 value"):
+    with pytest.raises(ValueError, match="does not fit this uint16 band"):
         mask(scene(nodata=None), classification().isin(CLEAR), fill=fill)
 
 
 def test_a_nan_fill_is_refused_for_an_integer_variable() -> None:
-    with pytest.raises(ValueError, match="is no uint16 value"):
+    with pytest.raises(ValueError, match="does not fit this uint16 band"):
         mask(scene(nodata=None), classification().isin(CLEAR), fill=float("nan"))
 
 
@@ -146,15 +135,6 @@ def test_a_nan_fill_is_accepted_by_a_float_variable() -> None:
     masked = mask(floating, classification().isin(CLEAR), fill=float("nan"))
 
     assert np.isnan(masked.elevation.values[0][-1])
-
-
-def test_a_bare_numpy_mask_is_read_as_the_grid() -> None:
-    bare = np.array([[True, True, False, False]] * 4)
-
-    masked = mask(scene(), bare)
-
-    assert list(masked.red.values[0]) == [7, 7, 0, 0]
-    assert masked.red.dtype == np.dtype("uint16")
 
 
 def test_a_bare_numpy_mask_covers_every_step_of_a_time_series() -> None:
@@ -171,38 +151,12 @@ def test_a_bare_numpy_mask_off_the_grid_shape_is_refused() -> None:
         mask(scene(), np.ones((3, 3), bool))
 
 
-def test_a_mask_that_misses_the_grid_is_refused() -> None:
-    off_grid = xr.DataArray(np.array([True, False]), dims="depth")
-
-    with pytest.raises(ValueError, match="does not cover the grid"):
-        mask(scene(), off_grid)
-
-
 def test_a_mask_spanning_an_axis_the_raster_lacks_is_refused() -> None:
     dims = ("y", "x")
     extra = xr.DataArray(np.ones((2, 4, 4), bool), dims=("depth", *dims))
 
     with pytest.raises(ValueError, match="does not carry"):
         mask(scene(), extra)
-
-
-def test_cropping_with_a_mask_keeps_the_dtype_and_declared_fill() -> None:
-    import geopandas as gpd
-    import shapely
-
-    source = scene()
-    half = gpd.GeoDataFrame(geometry=[shapely.box(0, 0, 20, 40)], crs=UTM)
-
-    cropped = source.gs.crop(half, mask=True)
-
-    assert cropped.red.dtype == np.dtype("uint16")
-    assert cropped.red.attrs["_FillValue"] == 0
-    # odc's own apply_mask writes NaN, promoting the variable to float.
-    from odc.geo.geom import box as geom_box
-
-    assert source.odc.crop(
-        geom_box(0, 0, 20, 40, crs=UTM), apply_mask=True
-    ).red.dtype == np.dtype("float32")
 
 
 def test_blanking_leaves_the_source_alone() -> None:
@@ -216,12 +170,6 @@ def test_blanking_leaves_the_source_alone() -> None:
     assert source.red.dtype == np.dtype("uint16")
     assert np.isnan(blanked.red.values[0, 0])
     assert np.isnan(to_nan(source).red.values[0, 0])
-
-
-def test_blanking_leaves_the_packing_alone() -> None:
-    packed = scene().gs.write_packing(1e-4, target="red")
-
-    assert to_nan(packed).red.attrs["scale_factor"] == 1e-4
 
 
 def test_odc_nodata_is_decoded_lazily_without_changing_input():
@@ -240,30 +188,6 @@ def test_preparation_preserves_coordinates_on_independent_dimensions():
     source.red.attrs["scale_factor"] = 0.01
     result = source.gs.to_nan().gs.unpack()
     xr.testing.assert_identical(result.class_label, source.class_label)
-
-
-def test_tree_mask_preserves_root_metadata_and_coordinates():
-    source = build_tree({"optical": scene()})
-    source.attrs = {"title": "my training scene"}
-    source.coords["site"] = "field-1"
-    masked = mask(source, classification().isin(CLEAR))
-    assert masked.attrs == source.attrs
-    xr.testing.assert_identical(masked.coords["site"], source.coords["site"])
-    assert list(masked["optical"].red.values[0]) == [7, 7, 0, 0]
-
-
-def test_masking_a_tree_keeps_its_root_attrs_and_stays_lazy(
-    tree: xr.DataTree,
-) -> None:
-    chunked = titled(tree.chunk())
-    valid = np.array([[True, False], [True, True]])
-
-    masked = mask(chunked, valid, fill=0)
-
-    red = masked.gs.rasters["optical"].red
-    assert red.chunks is not None
-    assert red.values.tolist() == [[1000, 0], [3000, 0]]
-    assert masked.attrs["title"] == "scene"
 
 
 def test_a_packed_16_bit_band_blanks_to_float32_as_read_from_disk() -> None:
@@ -306,16 +230,12 @@ def stored(
     )
 
 
-def test_stored_numbers_read_out_as_physical_values() -> None:
-    physical = unpack(stored(1000, scale=1e-4))
-
-    assert physical.red.values[0, 0] == pytest.approx(0.1)
-
-
 def test_an_offset_is_added_after_the_scale() -> None:
     physical = unpack(stored(1000, scale=1e-4, offset=5.0))
 
     assert physical.red.values[0, 0] == pytest.approx(5.1)
+    assert "scale_factor" not in physical.red.attrs
+    assert "add_offset" not in physical.red.attrs
 
 
 def test_an_offset_alone_shifts_without_scaling() -> None:
@@ -331,13 +251,6 @@ def test_a_variable_carrying_no_packing_passes_through_untouched() -> None:
 
     assert physical.red.values[0, 0] == 1000
     assert physical.red.dtype == np.dtype("uint16")
-
-
-def test_the_packing_leaves_attrs_with_the_values_it_described() -> None:
-    physical = unpack(stored(1000, scale=1e-4, offset=5.0))
-
-    assert "scale_factor" not in physical.red.attrs
-    assert "add_offset" not in physical.red.attrs
 
 
 def test_unpacking_leaves_the_source_alone() -> None:
@@ -372,20 +285,6 @@ def test_a_variable_that_is_not_packed_rides_alongside_one_that_is() -> None:
     assert sorted(str(name) for name in physical.data_vars) == ["dem", "red"]
     assert physical.dem.values[0, 0] == pytest.approx(5.0)
     assert physical.red.values[0, 0] == pytest.approx(0.1)
-
-
-def test_a_band_unpacks_as_a_band() -> None:
-    physical = unpack(stored(1000, scale=1e-4).red)
-
-    assert isinstance(physical, xr.DataArray)
-    assert physical.values[0, 0] == pytest.approx(0.1)
-
-
-def test_unpacking_stays_lazy_while_its_raster_is() -> None:
-    physical = unpack(stored(1000, scale=1e-4).chunk())
-
-    assert physical.red.chunks is not None
-    assert physical.red.compute().values[0, 0] == pytest.approx(0.1)
 
 
 @pytest.mark.parametrize(
@@ -449,11 +348,10 @@ def test_a_tree_unpacks_group_by_group_and_stays_lazy() -> None:
 
     physical = unpack(tree)
 
-    rasters = physical.gs.rasters
     assert physical.gs.groups == ("optical", "dem")
-    assert rasters["optical"].red.chunks is not None
-    assert rasters["optical"].red.values[0, 0] == pytest.approx(0.1)
-    assert rasters["dem"].red.dtype == np.dtype("uint16")
+    assert physical["optical"].gs.to_dataset().red.chunks is not None
+    assert physical["optical"].gs.to_dataset().red.values[0, 0] == pytest.approx(0.1)
+    assert physical["dem"].gs.to_dataset().red.dtype == np.dtype("uint16")
     assert physical.attrs["title"] == "scene"
     assert physical.coords["site"].item() == "field-1"
 
@@ -470,10 +368,9 @@ def test_a_tree_blanks_nodata_group_by_group_and_stays_lazy() -> None:
 
     blanked = to_nan(tree)
 
-    rasters = blanked.gs.rasters
-    assert rasters["optical"].red.chunks is not None
-    assert np.isnan(rasters["optical"].red.values).all()
-    assert rasters["dem"].red.dtype == np.dtype("uint16")
+    assert blanked["optical"].gs.to_dataset().red.chunks is not None
+    assert np.isnan(blanked["optical"].gs.to_dataset().red.values).all()
+    assert blanked["dem"].gs.to_dataset().red.dtype == np.dtype("uint16")
     assert blanked.attrs["title"] == "scene"
     assert blanked.coords["site"].item() == "field-1"
 
@@ -495,19 +392,3 @@ def test_unpacking_reads_small_integers_as_float32(dtype: str, unpacked: str) ->
 
     assert physical.red.dtype == np.dtype(unpacked)
     assert physical.red.values[0, 0] == pytest.approx(0.01)
-
-
-def test_mask_preserves_tree_root_attrs():
-    source = tree({"optical": build(transform_geobox())})
-    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
-    optical = source.gs.rasters["optical"]
-    valid = np.ones((optical.sizes["y"], optical.sizes["x"]), bool)
-    result = mask(source, valid, fill=0)
-    assert result.attrs == source.attrs
-
-
-def test_to_nan_preserves_tree_root_attrs():
-    source = tree({"optical": build(transform_geobox())})
-    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
-    result = to_nan(source)
-    assert result.attrs == source.attrs

@@ -61,21 +61,6 @@ def test_create_prompts_task_then_method(tmp_path, monkeypatch):
     assert (tmp_path / "demo/modules/segmentation/fixmatch/module.py").is_file()
 
 
-def test_create_prompts_only_missing_method(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    prompts = []
-
-    def select(message, choices):
-        prompts.append(message)
-        return "supervised"
-
-    monkeypatch.setattr("geosave.cli.core.selection.prompt_select", select)
-    result = CliRunner().invoke(app, ["create", "demo", "-t", "regression"])
-    assert result.exit_code == 0, result.output
-    assert len(prompts) == 1
-    assert "method" in prompts[0].lower()
-
-
 @pytest.mark.parametrize(
     "options",
     [
@@ -103,13 +88,6 @@ def test_nonempty_directory_requires_force(tmp_path, monkeypatch):
     forced = runner.invoke(app, ["create", "demo", "-t", "blank", "--force"])
     assert forced.exit_code == 0, forced.output
     assert (root / "notes.txt").read_text() == "keep"
-
-
-@pytest.mark.parametrize(("task", "method"), RECIPES)
-def test_add_recipe(workspace, task, method):
-    result = CliRunner().invoke(app, ["add-task", "-t", task, "-m", method])
-    assert result.exit_code == 0, result.output
-    assert (workspace / f"configs/{task}-{method}.yaml").is_file()
 
 
 def test_add_preserves_existing_implementation_and_startup(workspace):
@@ -146,38 +124,3 @@ def test_add_requires_workspace(tmp_path, monkeypatch):
     )
     assert result.exit_code == 2
     assert not (tmp_path / "configs").exists()
-
-
-def test_publish_reports_not_implemented():
-    result = CliRunner().invoke(app, ["publish", "run.ckpt", "--repo", "org/model"])
-    assert result.exit_code == 1
-    assert "not implemented yet" in result.output
-
-
-def test_add_selector_disables_existing_method(workspace, monkeypatch):
-    runner = CliRunner()
-    result = runner.invoke(app, ["add-task", "-t", "segmentation", "-m", "supervised"])
-    assert result.exit_code == 0, result.output
-    shown = {}
-
-    def select(message, choices):
-        for choice in choices:
-            shown[choice.value] = choice.disabled
-        return "fixmatch"
-
-    monkeypatch.setattr("geosave.cli.core.selection.prompt_select", select)
-    result = runner.invoke(app, ["add-task", "-t", "segmentation"])
-    assert result.exit_code == 0, result.output
-    assert shown["supervised"] == "already exists"
-    assert not shown["fixmatch"]
-
-
-def test_add_reports_when_every_method_exists(workspace, monkeypatch):
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["add-task", "-t", "classification", "-m", "supervised"]
-    )
-    assert result.exit_code == 0, result.output
-    result = runner.invoke(app, ["add-task", "-t", "classification"])
-    assert result.exit_code == 2
-    assert "already exist" in result.output

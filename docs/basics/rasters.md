@@ -4,17 +4,21 @@ Build a small image with two named bands:
 
 ```python
 import numpy as np
+import xarray as xr
 
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 red = np.arange(1, 17, dtype="uint16").reshape(4, 4)
-scene = gs.raster(
-    {"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)},
-    anchor.geobox,
-    nodata=0,
+scene = (
+    xr.Dataset({"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)})
+    .gs.write_grid(grid)
+    .gs.write_nodata(0)
 )
 scene
 ```
@@ -25,8 +29,8 @@ Output:
 <xarray.Dataset> Size: 132B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
@@ -66,8 +70,8 @@ array([[ 1,  2,  3,  4],
        [ 9, 10, 11, 12],
        [13, 14, 15, 16]], dtype=uint16)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Attributes:
     _FillValue:  0
@@ -87,8 +91,8 @@ Output:
 <xarray.Dataset> Size: 52B
 Dimensions:      (y: 2, x: 2)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 8B 1 2 5 6
@@ -115,8 +119,8 @@ Output:
 <xarray.Dataset> Size: 196B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
@@ -157,7 +161,11 @@ for layers, catalogs, performance and serving.
 
 ```python
 prediction = np.ones((4, 4), dtype="uint8")
-labels = gs.raster({"label": (("y", "x"), prediction)}, scene, nodata=255)
+labels = (
+    xr.Dataset({"label": (("y", "x"), prediction)})
+    .gs.write_grid(scene.gs.geobox)
+    .gs.write_nodata(255)
+)
 labels
 ```
 
@@ -167,16 +175,16 @@ Output:
 <xarray.Dataset> Size: 84B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B 32633
 Data variables:
     label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 ```
 
-Passing `scene` as the reference places the prediction on the same grid.
-Dimensions must be named and end in `y, x`. For one `DataArray`, use
-`gs.array(prediction, scene, dims=("y", "x"), nodata=255)`.
+`write_grid(scene.gs.geobox)` places the prediction on the same grid. Dimensions
+must be named and end in `y, x`, and the pixels must be as large as the grid. A
+`DataArray` takes the same step: `xr.DataArray(prediction, dims=("y", "x")).gs.write_grid(scene.gs.geobox)`.
 
 ## Prepare an image tensor
 
@@ -201,7 +209,7 @@ place model outputs later. Time series, mixed dtypes and masking are covered in
 Use named groups when inputs have different variables or time coordinates:
 
 ```python
-sample = gs.tree({"optical": scene, "label": labels})
+sample = xr.merge([scene.gs.to_datatree("optical"), labels.gs.to_datatree("label")])
 sample
 ```
 
@@ -210,30 +218,35 @@ Output:
 ```text
 <xarray.DataTree>
 Group: /
-│   Dimensions:      (y: 4, x: 4)
-│   Coordinates:
-│     * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-│     * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
-│       spatial_ref  int32 4B 32633
 ├── Group: /optical
-│       Dimensions:      (y: 4, x: 4)
-│       Coordinates:
-│           spatial_ref  int32 4B 32633
-│       Data variables:
-│           red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
-│           nir          (y, x) uint16 32B 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-│           ndvi         (y, x) float32 64B 0.6667 0.5 0.4 ... 0.125 0.1176 0.1111
+│   └── Group: /optical/r10m
+│           Dimensions:      (y: 4, x: 4)
+│           Coordinates:
+│             * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+│             * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+│               spatial_ref  int32 4B 32633
+│           Data variables:
+│               red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+│               nir          (y, x) uint16 32B 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+│               ndvi         (y, x) float32 64B 0.6667 0.5 0.4 ... 0.125 0.1176 0.1111
 └── Group: /label
-        Dimensions:      (y: 4, x: 4)
-        Coordinates:
-            spatial_ref  int32 4B 32633
-        Data variables:
-            label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+    └── Group: /label/r10m
+            Dimensions:      (y: 4, x: 4)
+            Coordinates:
+              * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+              * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+                spatial_ref  int32 4B 32633
+            Data variables:
+                label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 ```
 
-A tree is an xarray `DataTree` with one `Dataset` per group.
-`sample["optical"].to_dataset()` retrieves a raster, and
-`sample.gs.to_tensor()` returns a dictionary of tensors keyed by group name.
+A tree is an xarray `DataTree` of collections, each holding one `Dataset` per
+grid, named after its pixel size as ESA's EOPF products name theirs (`r10m`,
+`r20m`). `to_datatree("optical")` makes a Dataset its collection's grid node, and `xr.merge` joins collections
+or one collection's grids.
+`sample["optical"].gs.to_dataset()` converts one collection to a raster,
+bringing its grid nodes onto its finest grid, and `sample.gs.to_tensor()`
+returns a dictionary of tensors keyed by grid node path (`"optical/r10m"`).
 
 Continue with [raster grids](../concepts/raster-grids.md) for CRS, alignment,
 and resampling, or [large rasters](../guides/large-data.md) for lazy processing.

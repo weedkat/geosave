@@ -1,14 +1,15 @@
-"""Reverse geocoding backed by OpenStreetMap Nominatim."""
+"""Place search and reverse geocoding backed by OpenStreetMap Nominatim."""
 
 from __future__ import annotations
 
 import functools
 import re
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from geopy.location import Location
+    from odc.geo.geom import BoundingBox
 
 from geosave.geodata.utils.crs import validate_wgs84_coordinate
 
@@ -198,3 +199,58 @@ def _request_nominatim_address(
         return None
     address = location.raw.get("address", {})
     return {str(key): str(value) for key, value in address.items()}
+
+
+def search_places(query: str, limit: int = 5) -> dict[str, BoundingBox]:
+    """Find places by name, each with its extent in WGS84.
+
+    Nominatim's usage policy allows about one request a second and forbids
+    search-as-you-type, so call this on a submitted query. Results are cached
+    per query. Network and service failures return no places.
+
+    Args:
+        query: Place name or address, such as "Malang, Indonesia".
+        limit: Most places to return, best match first.
+
+    Returns:
+        {"<Nominatim display name>": extent in EPSG:4326}
+
+    Examples:
+        >>> places = search_places("Malang")
+        >>> next(iter(places))
+        'Malang, East Java, Java, Indonesia'
+    """
+    from odc.geo.geom import BoundingBox
+
+    query = query.strip()
+    if not query:
+        return {}
+    places = {}
+    for name, (south, north, west, east) in _request_nominatim_places(query, limit):
+        places[name] = BoundingBox(west, south, east, north, crs="EPSG:4326")
+    return places
+
+
+@functools.lru_cache(maxsize=64)
+def _request_nominatim_places(
+    query: str, limit: int
+) -> tuple[tuple[str, tuple[float, float, float, float]], ...]:
+    """Ask Nominatim for places named `query`, as (name, south-north-west-east)."""
+    from geopy.exc import GeopyError
+    from geopy.geocoders import Nominatim
+
+    try:
+        # Geopy types its sentinel defaults too narrowly for these arguments.
+        client: Any = Nominatim(user_agent="geosave")
+        locations: list[Location] | None = client.geocode(
+            query, exactly_one=False, limit=limit, timeout=5, language="en"
+        )
+    except GeopyError:
+        return ()
+    places = []
+    for location in locations or []:
+        south, north, west, east = (
+            float(value) for value in location.raw["boundingbox"]
+        )
+        places.append((location.raw["display_name"], (south, north, west, east)))
+    return tuple(places)

@@ -1,0 +1,114 @@
+Storage options:
+    Options are merged with a source UPath's options. Omitted values use the
+    installed filesystem backend's defaults and credential discovery. Install
+    the corresponding fsspec backend for cloud protocols. These are synchronous
+    openers: leave asynchronous=False. protocol and chain_parser are forbidden.
+    NetCDF, GeoJSON and GeoPackage download remote files; NetCDF retains its
+    temporary copy until close(). Zarr and GeoParquet use filesystem reads.
+    Rasterio downloads a temporary file when storage_options are supplied; without
+    options it uses GDAL's URL handling and configured environment. HF bucket
+    URLs without options use the existing S3 gateway configuration.
+
+    Common filesystem keys (where supported by the selected backend):
+        use_listings_cache (bool): Cache directory listings.
+        listings_expiry_time (float | None): Listing lifetime in seconds.
+        max_paths (int | None): Maximum cached directory listings.
+        skip_instance_cache (bool): Construct a fresh filesystem instance.
+        asynchronous (bool): Must remain False for these synchronous readers.
+        loop (AbstractEventLoop | None): Event loop for asynchronous backends.
+        batch_size (int | None): Maximum concurrent bulk filesystem operations.
+
+    S3 / S3-compatible (s3://):
+        anon (bool): Use anonymous requests rather than discovered credentials.
+        key, secret, token (str | None): Access key, secret, session token.
+        username, password (str | None): Aliases for key and secret.
+        endpoint_url (str | None): Custom S3 service endpoint.
+        use_ssl (bool): Use HTTPS unless overridden by the endpoint URL.
+        client_kwargs (dict | None): Arguments to the botocore client, including
+            region_name (str), endpoint_url (str), verify (bool | str CA path),
+            aws_access_key_id, aws_secret_access_key, aws_session_token (str).
+        config_kwargs (dict | None): Botocore Config arguments, including
+            connect_timeout, read_timeout (float seconds), max_pool_connections
+            (int), signature_version (str), retries (dict: mode (str),
+            max_attempts or total_max_attempts (int)), s3 (dict:
+            addressing_style ("auto", "virtual", "path"), payload_signing_enabled
+            (bool), use_accelerate_endpoint (bool)).
+        s3_additional_kwargs (dict | None): S3 operation arguments such as
+            RequestPayer ("requester") and ExpectedBucketOwner (str).
+        session (AioSession | None): Existing aiobotocore session.
+        requester_pays (bool): Acknowledge requester-pays access.
+        default_block_size (int | None): Read-ahead block size in bytes.
+        default_fill_cache (bool): Fill intervening cache blocks on seeking.
+        default_cache_type (str): fsspec cache, for example "readahead" or "none".
+        max_concurrency (int): Concurrent multipart transfers.
+        fixed_upload_size (bool): Use fixed multipart upload sizes; write-only.
+        version_aware (bool): Enable object-version access.
+        cache_regions (bool): Cache bucket regions.
+
+    Google Cloud Storage (gs://, gcs://):
+        project (str): Billing project.
+        access (str): "read_only", "read_write", or "full_control" OAuth scope.
+        token (str | dict | None): Credential path/dictionary, or "anon",
+            "google_default", "cache", "browser", "cloud"; None discovers it.
+        block_size (int | None): Read block size in bytes.
+        consistency (str): "none", "size", or "md5" transfer checking.
+        cache_timeout (float | None): Listing cache lifetime in seconds.
+        requests_timeout, timeout (float | None): Backend request timeouts.
+        requester_pays (bool | str): Enable requester pays, optionally a project.
+        session_kwargs (dict | None): aiohttp ClientSession options, including
+            headers (dict[str, str]), auth (BasicAuth), timeout (ClientTimeout),
+            trust_env (bool), connector (BaseConnector).
+        endpoint_url (str | None): Custom storage endpoint.
+        check_connection (bool | None): Backend initial connectivity check.
+        default_location (str | None): New bucket location; irrelevant to reads.
+        version_aware (bool): Enable object generation access.
+
+    Azure (az://, abfs://):
+        account_name, account_key (str | None): Storage account credentials.
+        connection_string (str | None): Complete Azure connection string.
+        credential (str | AsyncTokenCredential | None): SAS or token credential.
+        sas_token (str | None): Shared access signature.
+        anon (bool | None): Anonymous access or backend credential discovery.
+        client_id, client_secret, tenant_id (str | None): Service principal.
+        account_host (str | None): Custom account host.
+        location_mode (str): "primary" or "secondary" service endpoint.
+        blocksize (int): Transfer block size in bytes.
+        default_fill_cache (bool): Fill cache blocks between seeks.
+        default_cache_type (str): fsspec read cache implementation.
+        max_concurrency (int | None): Concurrent transfers.
+        timeout (int | None): Server-side timeout in seconds.
+        connection_timeout, read_timeout (int | None): Client timeouts in seconds.
+        version_aware (bool): Enable blob version access.
+        assume_container_exists (bool | None): Skip container existence checks.
+
+    HTTP / HTTPS:
+        block_size (int | None): Read block size; zero streams without seeking.
+            Random-access raster/Parquet readers need a seekable source.
+        simple_links (bool): Include bare URL-like links in directory listings.
+        same_scheme (bool): Restrict listed links to the source URL scheme.
+        cache_type (str): fsspec read cache, such as "bytes" or "readahead".
+        cache_options (dict | None): Selected cache's constructor options;
+            the bytes cache supports trim (bool). Other keys
+            depend on cache_type and are backend extensions.
+        client_kwargs (dict | None): aiohttp ClientSession options, including
+            headers (dict[str, str]) for authorization, auth (BasicAuth),
+            timeout (ClientTimeout), trust_env (bool), connector (BaseConnector).
+        get_client (callable | None): Async client factory.
+        encoded (bool): Preserve an already encoded URL, including signed URLs.
+
+    Hugging Face (hf://):
+        token (str | None): Hub access token; None uses configured credentials.
+        endpoint (str | None): Hub endpoint.
+        block_size (int | None): Read block size in bytes; zero streams.
+
+    Local (plain paths, file://, local://):
+        auto_mkdir (bool): Backend option for creating write parent directories;
+            irrelevant to reads. Local paths use native filesystem handling.
+
+    Memory (memory://):
+        No protocol-specific keys; storage lives in the current process.
+
+    Nested dictionaries remain backend extension points, not closed GeoSave
+    schemas. The named nested keys above cover common connection settings;
+    additional SDK keys depend on the installed backend version. A filesystem
+    may reject options unsupported by its implementation.

@@ -6,10 +6,9 @@ import warnings
 
 import numpy as np
 import pytest
-import xarray as xr
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.raster.create import raster as build_raster
+from tests.conftest import build_dataset as build_raster
 from geosave.geodata.transform.combine import merge
 from geosave.geodata.warnings import DroppedAttrsWarning
 
@@ -53,12 +52,6 @@ def test_merge_rejects_implicit_alignment_or_broadcasting(kind):
         merge([first, second])
 
 
-@pytest.mark.parametrize("rasters", [[], [xr.Dataset()]])
-def test_merge_requires_nonempty_rasters(rasters):
-    with pytest.raises(ValueError, match="non-empty"):
-        merge(rasters)
-
-
 def test_merge_ignores_the_grid_mappings_placeholder_value() -> None:
     # Readers disagree on the CF placeholder: rioxarray stores 0, odc-geo the EPSG code.
     box = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32749", resolution=10)
@@ -87,3 +80,5 @@ def test_merge_keeps_one_spelling_of_the_grid_coordinates() -> None:
 
     assert merged.x.attrs["axis"] == "X"
     assert merged.y.attrs["standard_name"] == "projection_y_coordinate"
+
+

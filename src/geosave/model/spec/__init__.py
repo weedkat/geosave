@@ -2,9 +2,9 @@
 
 from .base import Name, SpecModel, Text
 from .call import CallSpec, CallValue, Ref
-from .windows import FramesSpec, ChipsSpec
-from .model import ModelSpec, TransformSpec
+from .model import ModelSpec
 from .stage import StageSpec
+from .tensors import TensorRequirement
 from .rasters import (
     AttrsRequirement,
     FieldRequirement,
@@ -17,7 +17,6 @@ __all__ = [
     "CallSpec",
     "CallValue",
     "FieldRequirement",
-    "FramesSpec",
     "ModelSpec",
     "Name",
     "QueryConfig",
@@ -28,6 +27,5 @@ __all__ = [
     "StacRecipe",
     "SortConfig",
     "Text",
-    "ChipsSpec",
-    "TransformSpec",
+    "TensorRequirement",
 ]

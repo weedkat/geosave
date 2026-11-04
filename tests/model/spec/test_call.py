@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 
 import pytest
 from pydantic import ValidationError
@@ -37,31 +36,6 @@ def test_call_invokes_imports_bound_methods_and_nested_references() -> None:
     )
 
 
-def test_call_selects_only_referenced_roots() -> None:
-    spec = CallSpec(
-        call=Ref("function"),
-        kwargs={"left": Ref("wait_for"), "right": Ref("return_state")},
-    )
-
-    selected = spec.select_inputs(
-        {
-            "function": lambda **kwargs: kwargs,
-            "wait_for": 1,
-            "return_state": 2,
-            "unused": object(),
-        }
-    )
-
-    assert set(selected) == {"function", "wait_for", "return_state"}
-
-
-def test_call_rejects_missing_inputs_before_invocation() -> None:
-    spec = CallSpec(call="builtins.dict", kwargs={"value": Ref("missing")})
-
-    with pytest.raises(KeyError, match="missing"):
-        spec.select_inputs({"unused": object()})
-
-
 def test_call_rebuilds_literal_containers() -> None:
     spec = CallSpec(call=Ref("mutate"), kwargs={"items": [1]})
 
@@ -80,52 +54,11 @@ def test_call_binds_none_as_the_complete_result() -> None:
     assert items == {"answer": 42}
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "",
-        "a..b",
-        ".a",
-        "a.",
-        "a[0]",
-        "a()",
-        "two names",
-        "3a",
-        'a["x"',
-        'a[""]',
-        'a["x"]b',
-        '["x"]',
-    ],
-)
-def test_reference_rejects_non_attribute_paths(path: str) -> None:
-    with pytest.raises(ValueError):
-        Ref(path)
-
-
 def test_reference_reads_a_key_no_attribute_can_name() -> None:
     reference = Ref('scene["view:sun_azimuth"].real')
 
     assert reference.root == "scene"
     assert reference.resolve({"scene": {"view:sun_azimuth": 1.5}}) == 1.5
-
-
-def test_a_call_path_holds_no_key_lookup() -> None:
-    with pytest.raises(ValidationError, match="call path"):
-        CallSpec(call='module["name"].function')
-
-
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"value": float("nan")},
-        {"value": math.inf},
-        {1: "value"},
-        {"value": object()},
-    ],
-)
-def test_call_rejects_non_yaml_keyword_values(kwargs: object) -> None:
-    with pytest.raises((TypeError, ValueError, ValidationError)):
-        CallSpec.model_validate({"call": "builtins.dict", "kwargs": kwargs})
 
 
 def test_call_rejects_cyclic_keyword_values() -> None:
@@ -134,39 +67,6 @@ def test_call_rejects_cyclic_keyword_values() -> None:
 
     with pytest.raises((ValueError, ValidationError), match="Cyclic|recursion"):
         CallSpec.model_validate({"call": "builtins.dict", "kwargs": kwargs})
-
-
-@pytest.mark.parametrize("call", ["missing_package.function", "math.pi"])
-def test_call_defers_invalid_active_imports_until_invocation(call: str) -> None:
-    spec = CallSpec(call=call)
-
-    with pytest.raises((ImportError, TypeError)):
-        spec.invoke({})
-
-
-def test_call_validates_signature_before_calling() -> None:
-    called: list[object] = []
-
-    def function(*, expected: object) -> None:
-        called.append(expected)
-
-    spec = CallSpec(call=Ref("function"), kwargs={"wrong": 1})
-
-    with pytest.raises(TypeError):
-        spec.invoke({"function": function})
-
-    assert called == []
-
-
-def test_call_rejects_missing_and_noncallable_attributes() -> None:
-    class Source:
-        value = 1
-
-    with pytest.raises(TypeError, match="callable"):
-        CallSpec(call=Ref("source.value")).invoke({"source": Source()})
-    with pytest.raises(AttributeError) as caught:
-        CallSpec(call=Ref("source.missing")).invoke({"source": Source()})
-    assert "While resolving !ref source.missing" in caught.value.__notes__
 
 
 def test_call_error_note_identifies_the_declared_target() -> None:

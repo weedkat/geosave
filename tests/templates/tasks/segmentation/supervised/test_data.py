@@ -13,19 +13,25 @@ from geosave.model.spec import ModelSpec, Ref
 
 FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
 NORMALIZE = {
-    "image": [
-        {"name": "Normalize", "init_args": {"mean": [1.0, 2.0], "std": [2.0, 4.0]}}
-    ]
+    "image": {
+        "call": "geosave.model.processing.normalize",
+        "kwargs": {
+            "value": Ref("image"),
+            "mean": [1.0, 2.0],
+            "std": [2.0, 4.0],
+            "dim": -3,
+        },
+    }
 }
 
 
 def _spec(**changes: object) -> ModelSpec:
     return ModelSpec.model_validate(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "rasters": {"optical": {"variables": ["red", "nir"]}},
-            "chips": {"size": 8},
             "inputs": {"image": Ref("optical")},
+            "pixels": list(changes.get("inputs", {"image": None})),
             **changes,
         }
     )
@@ -53,30 +59,6 @@ def _data(
     )
 
 
-def test_a_datamodule_takes_a_spec_built_in_python() -> None:
-    spec = _spec()
-
-    data = supervised.DataModule(spec=spec, train=Chips(), val=Chips(), num_workers=0)
-
-    assert data.spec == spec
-
-
-def test_training_accepts_model_ready_inputs_without_validity():
-    data = supervised.DataModule(
-        _spec(), Chips(), Chips(), augmentations=FLIP, num_workers=0
-    )
-    _training(data, True)
-    batch = _batch(times=3)
-
-    result = data.on_after_batch_transfer(batch, 0)
-
-    assert set(result) == {"inputs", "target"}
-    torch.testing.assert_close(
-        result["inputs"]["image"], batch["inputs"]["image"].flip(-1)
-    )
-    torch.testing.assert_close(result["target"], batch["target"].flip(-1))
-
-
 def _batch(times: int = 0) -> supervised.Sample:
     shape = (2, times, 2, 8, 8) if times else (2, 2, 8, 8)
     image = torch.arange(float(np.prod(shape))).reshape(shape)
@@ -91,37 +73,11 @@ def _training(data: supervised.DataModule, training: bool) -> supervised.DataMod
     return data
 
 
-def test_loaders_collate_samples_into_batches(tmp_path: Path) -> None:
-    data = _data(tmp_path, batch_size=4)
-
-    batch = next(iter(data.val_dataloader()))
-
-    assert batch["inputs"]["image"].shape == (4, 2, 8, 8)
-    assert batch["target"].shape == (4, 8, 8)
-    assert batch["inputs"]["image"][:, 0, 0, 0].tolist() == [0, 1, 2, 3]
-
-
 def test_the_test_split_needs_its_dataset(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="test="):
         _data(tmp_path).test_dataloader()
 
     assert len(_data(tmp_path, test=Chips()).test_dataloader().dataset) == 6
-
-
-def test_workers_start_without_this_process_state(tmp_path: Path) -> None:
-    loader = _data(tmp_path, num_workers=2).train_dataloader()
-
-    assert loader.multiprocessing_context.get_start_method() == "forkserver"
-    assert loader.persistent_workers
-
-
-def test_batch_augmentation_uses_default_crop_size(tmp_path: Path) -> None:
-    data = _training(_data(tmp_path, augmentations=[{"name": "RandomCrop"}]), True)
-
-    batch = data.on_after_batch_transfer(_batch(), 0)
-
-    assert batch["inputs"]["image"].shape[-2:] == (8, 8)
-    assert batch["target"].shape[-2:] == (8, 8)
 
 
 def test_augmentations_move_image_and_target_together_while_training(

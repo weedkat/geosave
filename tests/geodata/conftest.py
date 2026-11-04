@@ -12,41 +12,108 @@ from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
 from geosave.geodata import configure_gdal
-from geosave.geodata.core.raster.create import raster as build
-from geosave.geodata.core.raster.create import tree as build_tree
+from geosave.geodata.stac.catalog import from_items
+from tests.conftest import build_dataset as build
+from tests.conftest import build_tree
 from geosave.geodata.io import storage
 
 
-def flat(scenes):
-    """Return the files of every scene a writer returned, in order."""
-    return [file for scene in scenes for file in scene.written.values()]
+def flat(paths):
+    """Flatten a native raster/group path inventory in its declared order."""
+    from collections.abc import Mapping
+    from os import PathLike
+    from upath import UPath
+
+    if isinstance(paths, (str, PathLike, UPath)):
+        return [paths]
+    values = paths.values() if isinstance(paths, Mapping) else paths
+    result = []
+    for value in values:
+        result.extend(flat(value))
+    return result
 
 
-def item_table(scenes, *, id=None, prefix=None, **options):
-    """Catalog the scenes a writer returned as an item table, one Item each.
+def create_file_items(
+    files,
+    *,
+    id_format="{start:%Y%m%dT%H%M%S}_{lat:.4f}_{lon:.4f}",
+    collection=None,
+    datetime=None,
+):
+    """Yield the Items of files already written, describing each file where it is.
 
-    Each Item is named `id`, else its first file's stem, under `prefix/` where
-    one is given. An undated scene takes the span the dated ones cover unless
-    `datetime` is given.
+    `files` is a path, a sequence of paths grouped into one Item per date, or
+    asset keys mapped to paths of one Item.
     """
+    from collections.abc import Mapping
+    from os import PathLike
+
+    import pystac
+    from upath import UPath
+
+    from geosave.geodata import open_raster
+    from geosave.geodata.io.storage import location
+    from geosave.geodata.stac.item import create_item
+    from geosave.geodata.io.stac import group_files_by_date
+
+    name = collection.id if isinstance(collection, pystac.Collection) else collection
+    if isinstance(files, Mapping):
+        observations = [
+            {key: (location(path), open_raster(path)) for key, path in files.items()}
+        ]
+    else:
+        paths = [files] if isinstance(files, (str, PathLike, UPath)) else list(files)
+        opened = {location(path): open_raster(path) for path in paths}
+        observations = group_files_by_date(opened)
+    for observation in observations:
+        yield create_item(
+            observation, id_format=id_format, collection=name, datetime=datetime
+        )
+
+
+def create_test_collection(collection_id, *, description, **fields):
+    """Return a Collection spanning the globe and all time, for fixture tables."""
+    import pystac
+
+    extent = pystac.Extent(
+        pystac.SpatialExtent([[-180.0, -90.0, 180.0, 90.0]]),
+        pystac.TemporalExtent([[None, None]]),
+    )
+    return pystac.Collection(collection_id, description, extent, **fields)
+
+
+def item_table(paths, *, id=None, prefix=None, **options):
+    """Describe native writer results with fixture-specific Item ids."""
+    from collections.abc import Mapping
     from datetime import UTC
+    from pathlib import PurePath
+    from geosave.geodata import open_raster
 
-    from geosave.geodata import stac
-
-    scenes = list(scenes)
-    spans = [f.header.gs.timespan for f in flat(scenes) if f.header.gs.timespan]
+    spans = []
+    for path in flat(paths):
+        with open_raster(path) as raster:
+            if raster.gs.timespan is not None:
+                spans.append(raster.gs.timespan)
     if spans and "datetime" not in options:
         start = min(start for start, _ in spans).replace(tzinfo=UTC)
-        options["datetime"] = (start, max(end for _, end in spans).replace(tzinfo=UTC))
+        end = max(end for _, end in spans).replace(tzinfo=UTC)
+        options["datetime"] = (start, end)
+    selected = options.pop("collection", None)
+    groups = paths if isinstance(paths, Mapping) else {selected: paths}
     items = []
-    for scene in scenes:
-        name = id or next(iter(scene.written.values())).path.stem
-        name = name if prefix is None else f"{prefix}/{name}"
-        items.append(next(stac.create_items(scene, id_format=name, **options)))
-    return stac.create_catalog(
+    for collection, files in groups.items():
+        for item in create_file_items(
+            files, collection=collection, id_format=id or "fixture", **options
+        ):
+            name = (
+                item.id if id else PurePath(next(iter(item.assets.values())).href).stem
+            )
+            item.id = name if prefix is None else f"{prefix}/{name}"
+            items.append(item)
+    return from_items(
         items,
         collections=[
-            stac.create_collection(key, description=key)
+            create_test_collection(key, description=key)
             for key in dict.fromkeys(item.collection_id for item in items)
             if key is not None
         ],
@@ -130,7 +197,9 @@ def grid() -> GeoBox:
 def scene(grid):
     """Two dates of two uint16 bands with a fill value."""
     times = pd.to_datetime(["2025-06-01", "2025-06-11"])
-    cube = np.arange(2 * 64 * 64, dtype="uint16").reshape(2, 64, 64)
+    cube = np.arange(2 * grid.height * grid.width, dtype="uint16").reshape(
+        2, *grid.shape
+    )
     data = build(
         {"red": (("time", "y", "x"), cube), "nir": (("time", "y", "x"), cube + 1)},
         grid,
@@ -144,34 +213,49 @@ def scene(grid):
 @pytest.fixture
 def label(grid):
     """One timeless uint8 class plane on the same grid."""
-    return build({"label": (("y", "x"), np.ones((64, 64), dtype="uint8"))}, grid)
+    return build({"label": (("y", "x"), np.ones(grid.shape, dtype="uint8"))}, grid)
 
 
-def cog_template(root, name: str, *, dated: bool) -> str:
+def cog_template(name: str, *, dated: bool) -> str:
     """Spell, as a `to_cog` template, the layout one raster's files are expected in.
 
     A dated raster is a folder named after it holding one file per instant; an
     undated one is one file.
     """
     if dated:
-        return f"{root}/{name}/{name}_{{time:%Y%m%dT%H%M%S}}.tif"
-    return f"{root}/{name}.tif"
+        return f"{name}/{name}_{{time:%Y%m%dT%H%M%S}}.tif"
+    return f"{name}.tif"
 
 
-def tree_templates(sample, root) -> dict[str, str]:
-    """Give every group of a tree its `cog_template` under `root`."""
-    return {
-        name: cog_template(root, name, dated="time" in raster.dims)
-        for name, raster in sample.gs.rasters.items()
-    }
+def tree_templates(sample) -> dict[str, str]:
+    """Give every group of a tree its `cog_template` relative to the destination."""
+    templates = {}
+    for name in sample.gs.groups:
+        raster = sample[name].gs.to_dataset()
+        templates[name] = cog_template(name, dated="time" in raster.dims)
+    return templates
+
+
+def write_collection_cogs(tree, root, templates=None) -> dict[str, list]:
+    """Write each collection of a tree as COGs, keyed by collection, as `item_table` takes them."""
+    templates = templates or tree_templates(tree)
+    files = {}
+    for name in tree.gs.groups:
+        files[name] = (
+            tree[name].gs.to_dataset().gs.to_cog(root, path_format=templates[name])
+        )
+    return files
 
 
 def read_items(rows):
-    """Read an item table's files as one raster, as a window reads one collection."""
-    from geosave.geodata.io.raster.stac import open_raster
-    from geosave.geodata.stac.translate.table import to_items
+    """Read one collection's rows as one raster: each a scene, joined along time."""
+    from geosave.geodata.io.stac import open_scene
+    from geosave.geodata.transform.temporal import concat
 
-    return open_raster(to_items(rows))
+    scenes = []
+    for entry in rows.gs.to_items():
+        scenes.append(open_scene(entry).gs.to_dataset())
+    return concat(scenes) if len(scenes) > 1 else scenes[0]
 
 
 def titled(obj, title: str = "scene"):
@@ -203,7 +287,7 @@ def geobox(*, crs: str = "EPSG:32633", shape: tuple[int, int] = (8, 8)) -> GeoBo
 @pytest.fixture
 def rows(scene, label, tmp_path):
     sample = build_tree({"optical": scene, "label": label})
-    saved = sample.gs.to_cog(tree_templates(sample, tmp_path / "s0"))
+    saved = write_collection_cogs(sample, tmp_path / "s0")
     return item_table(saved, prefix="s0")
 
 

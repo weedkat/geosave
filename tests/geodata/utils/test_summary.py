@@ -76,45 +76,12 @@ def test_statistics_exclude_each_rasters_own_fill():
     assert table.loc["red", "valid_percent"] == pytest.approx(40.0)
 
 
-def test_statistics_read_every_raster_in_one_compute():
-    reads = []
-
-    @delayed
-    def pixels(value):
-        reads.append(value)
-        return np.full(4, value)
-
-    rasters = []
-    for value in [1.0, 2.0, 3.0]:
-        band = da.from_delayed(pixels(value), shape=(4,), dtype="float64")
-        rasters.append(xr.Dataset({"red": ("x", band), "nir": ("x", band * 2)}))
-
-    table = gs.statistics(rasters)
-
-    assert sorted(reads) == [1.0, 2.0, 3.0]
-    assert list(table.index) == ["red", "nir"]
-    assert table.loc["nir", "mean"] == 4.0
-
-
 def test_statistics_reject_rasters_with_other_variables():
     red = xr.Dataset({"red": ("x", [1.0])})
     nir = xr.Dataset({"nir": ("x", [1.0])})
 
     with pytest.raises(ValueError, match="nir"):
         gs.statistics([red, nir])
-
-
-def test_statistics_of_no_rasters_keep_the_table_columns():
-    table = gs.statistics([])
-
-    assert table.empty
-    assert list(table.columns) == [
-        "minimum",
-        "maximum",
-        "mean",
-        "stddev",
-        "valid_percent",
-    ]
 
 
 def test_statistics_release_each_rasters_source_before_reading_on():

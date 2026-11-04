@@ -6,6 +6,9 @@ from typing import Annotated, Literal, Self
 from pydantic import Field, PositiveInt, model_validator
 
 from geosave.geodata.core import GeoAnchor
+from odc.geo.geobox import GeoBox
+from odc.geo.geom import BoundingBox
+from geosave.geodata.utils.crs import select_grid_crs
 from geosave.geodata import io
 
 from .base import ConfigModel
@@ -32,15 +35,26 @@ class CoordinateAnchorConfig(ConfigModel):
     crs: str | None = None
     timespan: str | tuple[str, str] | None = None
 
-    def open(self) -> GeoAnchor:
+    def open(self) -> tuple[GeoAnchor, GeoBox]:
         """Build the configured native anchor.
 
         Returns:
-            GeoAnchor with the configured pixel grid and temporal coverage.
+            Geographic anchor and exact configured pixel grid.
         """
-        return GeoAnchor.from_coordinates(
-            **self.model_dump(exclude={"kind"}, exclude_none=True)
+        point = GeoAnchor.from_coordinates(self.latitude, self.longitude).geometry
+        crs = select_grid_crs(point, self.crs)
+        x, y = point.to_crs(crs).coords[0]
+        height, width = (
+            (self.shape, self.shape) if isinstance(self.shape, int) else self.shape
         )
+        half_x, half_y = width * self.resolution / 2, height * self.resolution / 2
+        grid = GeoBox.from_bbox(
+            BoundingBox(x - half_x, y - half_y, x + half_x, y + half_y, crs=crs),
+            crs,
+            shape=(height, width),
+            anchor="edge",
+        )
+        return GeoAnchor.from_geometry(grid.extent, timespan=self.timespan), grid
 
 
 class GeoJSONAnchorConfig(ConfigModel):
@@ -80,17 +94,22 @@ class GeoJSONAnchorConfig(ConfigModel):
             raise ValueError("GeoJSON anchor needs shape or resolution")
         return self
 
-    def open(self) -> GeoAnchor:
+    def open(self) -> tuple[GeoAnchor, GeoBox]:
         """Read the geometry and build its native anchor.
 
         Returns:
-            GeoAnchor covering the file's footprint with configured padding,
-            grid sizing, CRS, and temporal coverage.
+            Geographic anchor and the configured covering grid.
         """
-        return GeoAnchor.from_geometry(
-            io.open_vector(self.path).gs.footprint,
-            **self.model_dump(exclude={"kind", "path"}, exclude_none=True),
+        geometry = io.open_vector(self.path).gs.footprint
+        crs = select_grid_crs(geometry, self.crs)
+        grid = GeoBox.from_bbox(
+            geometry.to_crs(crs).boundingbox.buffered(self.pad),
+            crs,
+            resolution=self.resolution,
+            shape=self.shape,
+            anchor="edge",
         )
+        return GeoAnchor.from_geometry(grid.extent, timespan=self.timespan), grid
 
 
 class RasterAnchorConfig(ConfigModel):
@@ -104,15 +123,15 @@ class RasterAnchorConfig(ConfigModel):
     kind: Literal["raster"]
     path: str | Path
 
-    def open(self) -> GeoAnchor:
+    def open(self) -> tuple[GeoAnchor, GeoBox]:
         """Read the raster's native anchor.
 
         Returns:
-            GeoAnchor using the raster's existing grid and temporal coverage.
+            Geographic anchor and the raster's existing pixel grid.
             The raster is closed after its metadata is read.
         """
         with io.open_raster(self.path) as raster:
-            return raster.gs.anchor
+            return raster.gs.anchor, raster.gs.geobox
 
 
 AnchorConfig = Annotated[

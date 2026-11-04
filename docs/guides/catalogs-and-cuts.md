@@ -1,199 +1,164 @@
 # Build catalogs and read samples
 
-Save monthly images and a season's labels, then describe their files in an
-item table:
+Raster publication returns a native GeoDataFrame. Its rows describe the
+assets written by the path format:
 
 ```python
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pystac
+import xarray as xr
 
 import geosave as gs
 
 root = Path(tempfile.mkdtemp())
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=128, resolution=10,
-    crs="EPSG:32633", timespan="2025-01-01",
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500320, 5000320),
+    crs='EPSG:32633', resolution=10,
 )
-months = pd.date_range("2025-01-01", periods=4, freq="MS")
-rng = np.random.default_rng(0)
-optical = gs.raster(
-    {"red": (("time", "y", "x"), rng.integers(1, 3000, (4, 128, 128), dtype="uint16"))},
-    anchor.geobox, nodata=0, time=months,
+dates = pd.date_range("2025-01-01", periods=3, freq="MS")
+optical = (
+    xr.Dataset(
+        {"red": (("time", "y", "x"), np.ones((3, 32, 32), dtype="uint16"))},
+        coords={"time": dates},
+    )
+    .gs.write_grid(grid)
+    .gs.write_nodata(0)
 )
-labels = gs.raster(
-    {"label": (("y", "x"), rng.integers(0, 3, (128, 128), dtype="uint8"))},
-    anchor.geobox,
+# Any extent will do: to_catalog sets it to cover the Items it writes.
+everywhere = pystac.Extent(
+    pystac.SpatialExtent([[-180, -90, 180, 90]]), pystac.TemporalExtent([[None, None]])
 )
-season = (datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 4, 30, 23, 59, 59, tzinfo=UTC))
-optical_items = gs.stac.create_items(
-    optical.gs.to_cog(root / "s0/optical_{time:%Y%m}.tif"),
-    collection="optical", id_format="s0_optical_{start:%Y%m}",
+collection = pystac.Collection("optical", "Monthly imagery", everywhere)
+items = optical.gs.to_catalog(
+    root, path_format="{collection}/{time:%Y%m%d}/{band}.tif", collection=collection
 )
-label_items = gs.stac.create_items(
-    labels.gs.to_cog(root / "s0/label.tif"),
-    collection="label", id_format="s0_label", datetime=season,
-)
-rows = gs.stac.create_catalog(
-    [*optical_items, *label_items],
-    collections=[gs.stac.create_collection(name, description=name) for name in ("optical", "label")],
-)
-items = gs.open_vector(rows.gs.to_geoparquet(root / "catalog.parquet"))
-items[["id", "collection"]]
+items[["id", "collection", "datetime"]]
 ```
 
-Output:
+`{collection}` uses the supplied collection id. `{time}` splits dates and
+`{band}` splits variables; omitting `{band}` keeps compatible bands together.
+The same path collision checks as `to_cog` reject filename collisions before writing.
+A DataTree uses its collection names for `{collection}` and can take a mapping
+of collection names to path formats when dated and undated collections need
+different paths. A collection on several grids, such as Sentinel-2's 10 m and
+20 m bands, publishes one Item per date whose assets come from every grid, each
+stating its own grid in `proj:*`; `{band}` or `{res}` keeps the grids' files apart.
 
-```text
-                  id collection
-0  s0_optical_202501    optical
-1  s0_optical_202502    optical
-2  s0_optical_202503    optical
-3  s0_optical_202504    optical
-4           s0_label      label
-```
+Catalog assets are COGs, so path formats end in `.tif`; a Zarr or netCDF store is
+written whole with `to_zarr` or `to_netcdf`. A catalog Item represents one
+observation or composite, so multi-date publication needs `{time}`.
 
-Each row of the item table is one STAC Item: files of one collection on one
-grid, dated by an instant or a span. `items.iloc[0].gs.to_xarray()` opens one
-Item lazily on its native grid.
-
-| Step | One row describes |
-| --- | --- |
-| Item table | One Item and its date or span. |
-| `items.gs.sample()` | All observations sharing a spatial footprint, grouped by collection. |
-| `samples.gs.frame(windows={"optical": {"slots": ["-1M", "0M"]}})` | Two consecutive months of a sample. |
-| `frames.gs.chip(64, target=anchor.geobox, overlap=16)` | One pixel window on the supplied grid. |
-
-No step opens a file; each reads Item metadata only. `frame` and `chip` give
-the same rows in either order.
-
-## Group observations sharing a footprint
+## Persist the Item table
 
 ```python
-samples = items.gs.sample()
-samples.iloc[0].gs.to_xarray()
+path = items.gs.to_geoparquet(root / "catalog.parquet")
+items = gs.open_vector(path)
 ```
 
-The four images and season label share a footprint, so they form one sample.
-Each collection keeps its native grid and dates. Sampling does not align grids,
-match dates or open files. Different footprints remain separate samples,
-including containing or partly overlapping footprints.
+The writer retains Collection definitions, updates their extents, and stores
+asset hrefs relative to the catalog so a folder can move with its assets.
+Ordinary features and Item catalogs both use `gs.to_geoparquet(...)`. The
+frame's `stac-geoparquet` metadata selects the STAC encoder. Invalid catalog
+metadata or missing Item fields raise instead of silently losing information.
 
-Image-only inference uses the same operation:
+Every catalog row comes from a raster `to_catalog` wrote, or from a saved
+catalog opened with `gs.open_vector`. A raster loaded from STAC carries its
+Collection and Item properties, so its catalog keeps them; see
+[STAC](stac.md#preserve-properties-and-collection-definitions).
+
+## Group samples
 
 ```python
-optical_samples = items[items.collection == "optical"].gs.sample()
-optical_frames = optical_samples.gs.frame(windows={"optical": {"slots": ["-1M", "0M"]}})
+samples = items.gs.sample(pair=["optical"], window=2, freq="MS")
+trees = []
+for rows in samples:
+    trees.append(rows.gs.to_datatree())
 ```
 
-No target rows are needed to define the timeline.
+Sampling groups Items without opening pixels. Each distinct footprint gathers
+the Items sharing at least `overlap` of its area, so a swath joins every tile
+it covers. `pair` names the collections forming a time step; `tolerance`
+controls nearest-date matching. `window` and `step` select sequences of those
+steps. With `freq`, each time slot is a resampling bucket. Timeless Items, such
+as a DEM, join each window of their footprint.
 
-## Request temporal bins
+The result is a `GeoSamples`: the item table and, in `samples.indices`, the
+row positions of each sample. `samples[i]` is that sample's rows of the item
+table, so `samples[i].gs.to_datatree()` opens a lazy DataTree, `/{collection}/{res}`:
+each collection holds one grid node per native pixel size (`r10m`, `r20m`),
+retaining native grids and dates. Reading one Item row with
+`items.iloc[0].gs.to_datatree()` opens its scene's grid nodes; `.gs.to_dataset()`
+converts a scene, or one collection `tree["s2"]`, to one Dataset on its finest
+grid, or on `res="r20m"` with `resampling="average"`.
+`samples.footprints` holds each sample's footprint and Item count;
+`samples.footprints.gs.explore()` maps them, and `samples[i].gs.explore()` maps
+one sample's rows, whose raster column opens each row's raster. Persist the
+Item catalog and sample it again after reading.
+
+## Choose the reading grid
+
+`rows.gs.to_datatree()` preserves original asset grids. Successive Items of a
+collection must agree on their grid nodes, coordinates and variables so they
+can concatenate exactly. Geographic overlap alone does not imply that their
+pixels align. An accepted temporal sample can therefore fail native opening
+when one acquisition is shifted.
+
+For a selected **single collection** with differing grids, choose a native
+GeoBox and use the existing explicit-grid loader:
 
 ```python
-frames = samples.gs.frame(
-    windows={"optical": {"slots": ["-1M", "0M"], "reduce": "first"}},
-    stride=1,
+# Reuse this guide's optical rows and grid; choose another grid deliberately
+# when aligning your own acquisitions.
+selected = samples[0]
+aligned = gs.io.load_dataset(
+    selected.gs.to_items(),
+    geobox=grid,
+    resampling="nearest",
+    groupby="time",
+    chunks={},
 )
-frames[["reference_time", "start_datetime", "end_datetime"]]
 ```
 
-Each optical acquisition timestamp anchors a candidate frame, newest first.
-The two slots cover the preceding and current relative calendar month.
-`first` selects the earliest whole acquisition in each bin; missing bins
-omit the frame with a warning. NaN pixels do not affect eligibility.
-A composite must fit wholly inside its requested bin.
+This operation explicitly aligns observations; ODC owns the reads and
+resampling. `groupby="time"` keeps distinct acquisition timestamps rather than
+using the loader's default solar-day grouping. Select each collection
+separately for a multi-collection sample, and choose an appropriate kernel for
+its variables. Categorical labels require a categorical-safe choice.
+Close `aligned` and the opened trees when finished.
 
-To anchor inputs to labels, set `reference="label"`; that reference observation
-is attached without a separate slot declaration. Without a reference, only
-collections in `windows` supply candidate timestamps. Unrequested dated
-collections are not implicitly joined. Timeless auxiliary rasters stay attached.
-See the [temporal contract](../concepts/catalog-windows.md) for reduction,
-interpolation and interval boundaries.
+A shared swath's full extent can exceed the sample's geographic Region.
+`Chips` currently uses the union of the opened tree's grids, so two Regions
+sharing one swath can receive identical oversized layouts. Pass an explicitly
+selected/cropped tree to Chips; do not assume sampling cropped the assets.
+The [review](../contributing/review-2026-11-04.md#24-preserve-region-support-across-sampling-loading-and-chip-layout)
+records the missing Region handoff. Interval-only composite Items also have a
+[current sampling limitation](../contributing/review-2026-11-04.md#25-interpret-composite-intervals-consistently-during-sampling):
+they may be mistaken for timeless Items. Do not rely on their temporal pairing
+until that implementation is corrected.
 
-## Cut space into chips
-
-Supply `target=grid` to choose the pixel lattice. `grid` is an explicit GeoBox. Its
-CRS, resolution and pixel alignment apply over every frame's footprint;
-its original extent does not limit inference to the training location.
-Alternatively, supply `resolution=10` to build a local grid in each row's
-shared source CRS, with pixel edges snapped to multiples of that resolution.
-Resolution is in CRS units; different rows may use different CRSs. If a row's
-sources disagree on CRS, supply an explicit target grid. Do not combine target
-and resolution. Existing chips can omit both to reuse their recorded grid.
+## Cut raster chips
 
 ```python
-chips = frames.gs.chip(64, target=anchor.geobox, overlap=16)
-chips[["start_datetime", "proj:shape", "pad_widths"]].head(3)
+chips = gs.Chips(trees, size=16, resolution=10, overlap=4)
+tree_index, chip = chips[0]
 ```
 
-Output:
+`Chips` lays out raster trees and opens requested chips lazily. `tree_index`
+identifies the input sample. Supply per-chip model outputs with
+`chips.add(index, output)` and reconstruct output rasters with `chips.merge()`.
+Chipping and merging belong to raster trees, independent of the GDF.
 
-```text
-  start_datetime proj:shape          pad_widths
-0     2025-01-01   [64, 64]  [[24, 0], [24, 0]]
-1     2025-01-01   [64, 64]   [[24, 0], [0, 0]]
-2     2025-01-01   [64, 64]   [[24, 0], [0, 8]]
-```
-
-With overlap, a halo keeps the sample's border away from chip edges, so a
-chip may reach past the sample. `pad_widths` counts those pixels; reading fills
-them as `pad_mode` says, `reflect` by default.
-Chipping records metadata only. `row.gs.to_xarray()` aligns the selected
-rasters onto the recorded chip grid before combining observations in time.
-The chip call can record per-variable resampling, for example
-`resampling={"*": "nearest", "optical/red": "bilinear"}`. Nearest is the default
-and preserves categorical labels.
-Merging reconstructs the full layout grid stored in the chips, which can
-differ from any source grid.
-
-## Open one sample
+See the [catalog API](../reference/catalog.md) for the public interface and
+[model input guide](model-spec.md) for preprocessing contracts.
 
 ```python
-tree = chips.iloc[0].gs.to_xarray()
-tree["optical"].dataset.red
+aligned.close()
+for tree in trees:
+    tree.close()
 ```
-
-Output:
-
-```text
-<xarray.DataArray 'red' (time: 2, y: 64, x: 64)> dask.array<chunksize=(1, 40, 40)>
-```
-
-Every collection uses the chip's grid, retaining the Items selected by framing.
-A collection with a coarser source grid is resampled lazily to the requested
-pixel size. The label, static over the frame, reads without a `time` dimension.
-Unchipped samples and frames still keep native grids unless explicitly aligned.
-
-## Save samples for another process
-
-```python
-saved = gs.open_vector(chips.gs.to_geoparquet(root / "chips.parquet"))
-sorted(saved.gs.collections)
-```
-
-Output:
-
-```text
-['label', 'optical']
-```
-
-A sample table is plain GeoParquet; its Collection definitions sit in the
-file's `geosave:collections` metadata, as an item table's sit under
-`stac-geoparquet`. The Items inside a sample carry absolute asset addresses,
-so the files must stay where they are.
-
-## Maintain and merge
-
-Append a batch with `gs.GeoCatalog.concat([old, new])`, then write the whole
-table with `overwrite=True`. Collection definitions merge by id; the first
-definition of each id is kept.
-
-`frames.gs.merge(chips, outputs, bands=[...], taper="hann")` puts chip outputs
-back on each frame's grid. Chips record their parent's spatial key and match
-its time span, so nested chips remain distinct after reordering or persistence.
-Parent and chip row labels must be unique, and chip grids must occupy the
-parent's pixel lattice. See the [catalog reference](../reference/catalog.md).

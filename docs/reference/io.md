@@ -1,6 +1,6 @@
 # Readers, writers, and format options
 
-Use `gs.open_raster`, `gs.open_tree`, and `gs.open_vector` to select a reader
+Use `gs.open_raster` and `gs.open_vector` to select a reader
 from a path. Use a format module when you need format-specific options.
 See [Read and save data](../basics/io.md) for complete examples.
 
@@ -12,9 +12,11 @@ Omitted keys use the GeoSave defaults described in the entry, then the native
 backend's defaults. For example, GeoSave's Zarr reader defaults `consolidated`
 to `False`, while CF decoding and store layout follow its raster contract.
 
-Use the backend references for option meanings, native defaults, and encoding
-details. GeoSave's options classes describe the subset accepted by its readers
-and writers.
+The convenience opener docstrings include every supported format option and
+the storage option reference for IDE help. Backend links provide further
+details about extension dictionaries and version-specific SDK options.
+Regenerate literal docstrings with `python scripts/opener_docstrings.py`;
+use `--check` to detect drift.
 
 | Format | Read options | Write options |
 | --- | --- | --- |
@@ -30,35 +32,49 @@ and writers.
     options:
       members:
         - open_raster
-        - open_tree
         - open_vector
 
 ## Saved raster files
 
-Writers return `Scene`s: the files of one collection at one instant, keyed by
-asset, each a `RasterFile` carrying its path and pixel-free header. A scene is
-one observation; native Items load real files through `io.raster.stac.open_raster`.
+Format writers return a UPath. Dataset/DataArray `to_cog` returns a list of
+paths; `to_zarr` and `to_netcdf` also return lists of paths. DataTree writers return group
+dictionaries. With `compute=False`, writers return one native Dask Delayed.
+STAC publication requires one observation per Item. `to_catalog` writes and
+describes actual files while retaining source observation properties.
 
-::: geosave.geodata.io.raster.file.Scene
+The catalog table remains in memory until saved with `catalog.gs.to_geoparquet`.
+Item metadata and identities are checked before writing raster assets.
 
-::: geosave.geodata.io.raster.file.RasterFile
-
-## Layout, writing and reading
-
-::: geosave.geodata.io.raster.layout
+::: geosave.geodata.io.stac
     options:
       members:
-        - layout
-        - save
+        - write_assets
 
-::: geosave.geodata.io.raster.assemble
+## Path formats and raster combination
+
+::: geosave.geodata.io.paths
     options:
       members:
-        - open_raster
+        - default_path_format
+        - expand_paths
+        - split_by_collection
+        - split_by_res
+        - split_by_time
+        - split_by_band
+
+::: geosave.geodata.io.formats.geotiff
+    options:
+      members:
+        - write_files
+
+::: geosave.geodata.transform.combine
+    options:
+      members:
+        - merge
 
 ## GeoTIFF and GDAL
 
-::: geosave.geodata.io.raster.gdal
+::: geosave.geodata.io.rasterio
     options:
       members:
         - open_raster
@@ -66,25 +82,24 @@ one observation; native Items load real files through `io.raster.stac.open_raste
         - RasterioOpenOptions
         - hf_to_s3
 
-::: geosave.geodata.io.raster.geotiff
+::: geosave.geodata.io.formats.geotiff
     options:
       members:
         - write_cog
-        - write_gtiff
+        - write_geotiff
         - write_header
         - GeoTIFFWriteOptions
         - COGWriteOptions
         - GTiffWriteOptions
 
-::: geosave.geodata.attrs.groups.tiff.GeoTIFFTags
 
 ## Zarr
 
-::: geosave.geodata.io.raster.zarr
+::: geosave.geodata.io.formats.zarr
     options:
       members:
-        - open_raster
-        - write
+        - open_zarr
+        - write_zarr
         - ZarrOpenOptions
         - ZarrWriteOptions
         - ZarrChunkSpec
@@ -92,11 +107,11 @@ one observation; native Items load real files through `io.raster.stac.open_raste
 
 ## NetCDF
 
-::: geosave.geodata.io.raster.netcdf
+::: geosave.geodata.io.formats.netcdf
     options:
       members:
-        - open_raster
-        - write
+        - open_netcdf
+        - write_netcdf
         - NetCDFOpenOptions
         - NetCDFWriteOptions
         - NetCDFEngine
@@ -105,59 +120,53 @@ one observation; native Items load real files through `io.raster.stac.open_raste
 
 ## Vendor products
 
-::: geosave.geodata.io.raster.safe
-    options:
-      members:
-        - open_raster
-        - open_tree
+SAFE loading is not implemented.
 
 ## GeoParquet
 
-::: geosave.geodata.io.vector.geoparquet
+::: geosave.geodata.io.formats.geoparquet
     options:
       members:
-        - open_vector
-        - write
+        - open_geoparquet
+        - write_geoparquet
         - GeoParquetOpenOptions
         - GeoParquetWriteOptions
 
 ## GeoJSON
 
-::: geosave.geodata.io.vector.geojson
+::: geosave.geodata.io.formats.geojson
     options:
       members:
-        - open_vector
-        - write
+        - open_geojson
+        - write_geojson
         - GeoJSONOpenOptions
         - GeoJSONWriteOptions
-        - driver_read_options
 
 ## GeoPackage
 
-::: geosave.geodata.io.vector.geopackage
+::: geosave.geodata.io.formats.geopackage
     options:
       members:
-        - open_vector
-        - write
+        - open_geopackage
+        - write_geopackage
         - GeoPackageOpenOptions
         - GeoPackageWriteOptions
 
 ## STAC GeoParquet
 
-::: geosave.geodata.io.vector.stac_geoparquet
+::: geosave.geodata.io.formats.stac_geoparquet
     options:
       members:
-        - write
+        - write_stac_geoparquet
         - read_collections
         - resolve_asset_hrefs
         - parse_collections
 
-## Static STAC JSON
 
-::: geosave.geodata.io.vector.stac_json
+::: geosave.geodata.io.formats._geopandas
     options:
       members:
-        - write
+        - unpack_engine_options
 
 ## Locations and storage
 
@@ -170,6 +179,12 @@ one observation; native Items load real files through `io.raster.stac.open_raste
         - is_local
         - local_path
         - absolute_location
-        - write
+        - write_file
 
-::: geosave.geodata.io.raster.stac
+::: geosave.geodata.io.stac
+
+## Load selected STAC Items
+
+::: geosave.geodata.io.odc
+    options:
+      members: [load_dataset, load_datatree, StacLoadOptions]

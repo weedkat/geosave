@@ -1,101 +1,79 @@
-"""Build raster trees and read them through the `gs` DataTree accessor.
+"""Read raster trees through the `gs` DataTree accessor.
 
-A tree is a flat DataTree holding one raster per group, a group being as many
-variables as one grid can hold. What the root carries says whether the groups
-are co-registered, and `GeoDataTree.align` is what puts them there.
+A tree holds collections, and each collection its grid nodes: one Dataset
+per grid, named after ESA's EOPF products (`r10m`, `r20m`). Data that cannot
+align, such as one collection's 10 m and 20 m bands, sits in sibling nodes.
+What the root carries says whether every grid node is co-registered, and
+`GeoDataTree.align` is what puts them there.
 
 Examples:
-    Co-registered, so the grid sits at the root and the groups inherit it::
+    Co-registered, so every grid node shares one grid and `gs.geobox` reads it::
 
-        >>> scene = tree({"sentinel-2-l2a": optical, "dem": dem})
-        /                       y, x, spatial_ref   shared by both groups
-        ├── /sentinel-2-l2a     red, nir            (time, y, x)
-        └── /dem                elevation           (y, x)
+        >>> scene = xr.merge([optical.gs.to_datatree("sentinel-2-l2a"), dem.gs.to_datatree("dem")])
+        /
+        ├── /sentinel-2-l2a
+        │   └── /r10m                red, nir            (time, y, x)
+        └── /dem
+            └── /r10m                elevation           (y, x)
+        >>> scene.gs.geobox == optical.gs.geobox
+        True
 
-    Native resolutions, so the root holds nothing and each group keeps its
-    own grid::
+    Native resolutions, so each grid node keeps its own grid and `gs.geobox` is
+    None::
 
-        >>> sentinel = tree({"r10": bands_10m, "r20": bands_20m})
+        >>> sentinel = xr.merge([bands_10m.gs.to_datatree("s2"), bands_20m.gs.to_datatree("s2")])
         >>> sentinel.gs.geobox is None
         True
+        >>> sentinel["s2"].gs.to_dataset().gs.resolution.x
+        10.0
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import partial
-from upath import UPath
-from typing import TYPE_CHECKING, Literal, Unpack, cast, overload
+from typing import TYPE_CHECKING, Unpack, cast
 
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import pandas as pd
 import xarray as xr
 from odc.geo.geobox import GeoBox
+from upath import UPath
 
+from geosave.geodata.conventions import ITEM_ID_FORMAT
 from geosave.geodata.transform import warp
 
-from .create import tree
 from .base import GeoRaster
 
 if TYPE_CHECKING:
-    from geosave.geodata.io.raster.geotiff import COGWriteOptions
-    import torch
-    from collections.abc import Callable
-
-    from geosave.geodata.io.raster.file import Scene, Writer
     import holoviews as hv
     import numpy as np
+    import torch
     from numpy.typing import DTypeLike
+    from odc.geo import SomeResolution
 
-    from geosave.geodata.io.raster.netcdf import (
-        NetCDFEngine,
-        NetCDFWriteOptions,
-    )
+    from geosave.geodata import Dataset, DataTree, GeoDataFrame
+    from geosave.geodata.stac.item import ItemTime
+    from geosave.geodata.core.anchor import GeoAnchor
+    from dask.delayed import Delayed
+    from geosave.geodata.io.formats.geotiff import COGWriteOptions
+    from geosave.geodata.io.formats.netcdf import NetCDFEngine
+    from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
+    from geosave.geodata.io.formats.zarr import ZarrWriteOptions
+    from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.transform.warp import Resampling
     from geosave.geodata.utils.datetime import DateRange
 
-    from odc.geo import SomeResolution
-    from geosave.geodata import DataTree, Dataset
-    from geosave.geodata.io.raster.zarr import ZarrWriteOptions
-    from geosave.geodata.io.storage import Location, StorageOptions
 
-    from geosave.geodata.core.anchor import GeoAnchor
-
-
-def map_groups(
-    data: xr.DataTree, change: Callable[[xr.Dataset], xr.Dataset]
-) -> DataTree:
-    """Apply one change to every group, keeping the tree's own attrs.
-
-    The tree is rebuilt rather than mapped over, so a change that moves the
-    grid still leaves a root that matches its groups.
-
-    Args:
-        data: Tree to change.
-        change: Returns the changed raster for one group.
-
-    Returns:
-        New tree of the changed groups, in the same order, carrying the
-        root attrs `data` carried.
-
-    Examples:
-        >>> map_groups(scene, lambda raster: raster.isel(x=slice(0, 16))).gs.groups
-        ('sentinel-2-l2a', 'dem')
-    """
-    changed = tree({name: change(raster) for name, raster in data.gs.rasters.items()})
-    changed.attrs = dict(data.attrs)
-    return changed
-
-
-@xr.register_datatree_accessor("gs")
 class GeoDataTree(GeoRaster["DataTree"]):
     """Read and persist one raster-tree DataTree.
 
-    The root carries the tree's own attrs; each group's raster carries its
-    own, read through `rasters["<group>"].gs`.
+    The root carries the tree's own attrs, a collection node its STAC
+    metadata, and each grid node's raster its own, read through
+    `rasters["<collection>/<res>"].gs`.
 
     Args:
-        data: Flat DataTree whose direct children are raster Datasets.
+        data: DataTree of collections over grid nodes, `/{collection}/{res}`,
+            or a scene tree whose children are grid nodes.
 
     Examples:
         >>> scene.gs.groups
@@ -106,16 +84,16 @@ class GeoDataTree(GeoRaster["DataTree"]):
 
     @property
     def groups(self) -> tuple[str, ...]:
-        """Return raster group names in tree order.
+        """Return the collection names in tree order, or a scene's grid node names.
 
         Returns:
-            Direct child group names.
+            Direct child names.
         """
         return tuple(self._data.children)
 
     @property
     def variables(self) -> tuple[str, ...]:
-        """Name every grouped data variable in tree order."""
+        """Name every grid node's data variable by its path, as `"s2/r10m/red"`."""
         return tuple(
             f"{group}/{variable}"
             for group, raster in self.rasters.items()
@@ -167,58 +145,136 @@ class GeoDataTree(GeoRaster["DataTree"]):
 
     @property
     def anchor(self) -> GeoAnchor:
-        """Read exact spatial and temporal coverage.
+        """Return the union of leaf footprints and their temporal envelope.
 
-        Returns:
-            Anchor over the shared grid and everything the groups jointly
-            cover in time, which names the tree's centroid and place and
-            formats both into a filename.
-
-        Raises:
-            ValueError: The groups do not share a grid.
-
-        Examples:
-            >>> scene.gs.anchor.format("{lat:.2f}N_{lon:.2f}E_{start:%Y%m%d}")
-            '50.90N_26.40E_20250601'
+        Different grids need no alignment. This inspects metadata without
+        reading pixels; missing geographic coverage raises ValueError.
         """
         from geosave.geodata.core.anchor import GeoAnchor
 
-        geobox = self.geobox
-        if not isinstance(geobox, GeoBox):
-            raise ValueError(
-                f"{type(self._data).__name__} publishes no grid at its root, so "
-                f"nothing names the ground it covers; align its groups onto one "
-                f"grid with gs.align first"
-            )
-        return GeoAnchor(geobox, timespan=self.timespan)
+        if not self._data.children:
+            return self._data.to_dataset(inherit="all_coords").gs.anchor
+        geometries = []
+        for raster in self.rasters.values():
+            geometries.append(raster.gs.anchor.geometry)
+        if not geometries:
+            raise ValueError("an empty tree has no geographic coverage")
+        geometry = geometries[0]
+        for member in geometries[1:]:
+            geometry = geometry.union(member.to_crs(geometry.crs))
+        return GeoAnchor(geometry, timespan=self.timespan)
 
     @property
     def rasters(self) -> dict[str, Dataset]:
-        """Read every group as a raster Dataset.
+        """Read every grid node as a raster Dataset, keyed by its path.
 
         Returns:
             {
-                group name: that group's raster, carrying the grid and time
-                    coordinates it inherits from the root,
+                grid node path, as `"s2/r10m"`: that node's raster, carrying
+                    the grid and time coordinates it inherits from above,
             }
 
         Examples:
-            Rebuild a tree to add a group:
+            Rebuild a tree to add a collection:
 
-            >>> tree({**scene.gs.rasters, "ndvi": ndvi}).gs.groups
+            >>> list(scene.gs.rasters)
+            ['sentinel-2-l2a/r10m', 'dem/r10m']
+            >>> xr.merge([scene, ndvi.gs.to_datatree("ndvi")]).gs.groups
             ('sentinel-2-l2a', 'dem', 'ndvi')
-            >>> tree({**scene.gs.rasters, "labels": labels}).gs.groups
-            ('sentinel-2-l2a', 'dem', 'labels')
         """
-        # .dataset would return a DatasetView whose attrs still write through here.
-        return {
-            name: cast(
-                "Dataset", self._data.children[name].to_dataset(inherit="all_coords")
+        # Grid nodes are the leaves: a collection node holds none of their pixels.
+        rasters = {}
+        for node in self._data.leaves:
+            if node is self._data:
+                continue
+            path = node.relative_to(self._data)
+            # .dataset would return a DatasetView whose attrs still write through here.
+            rasters[path] = cast("Dataset", node.to_dataset(inherit="all_coords"))
+        return rasters
+
+    def _read_collection_metadata(self, name: str) -> Dataset:
+        """Return a pixel-free Dataset carrying a collection's attrs over its first grid node's."""
+        node = self._data[name]
+        first = node if not node.children else next(iter(node.leaves))
+        return cast("Dataset", xr.Dataset(attrs={**first.attrs, **node.attrs}))
+
+    def to_dataset(
+        self,
+        *,
+        res: str | None = None,
+        resampling: Resampling | Mapping[str, Resampling] = "nearest",
+    ) -> Dataset:
+        """Convert one collection to one Dataset on one of its grids.
+
+        A collection's grid nodes are one grid at several zoom levels: one CRS,
+        origin and extent, pixel sizes in whole-number ratios. Every node is
+        warped onto the chosen one, then their variables join. Up to a finer
+        grid `"nearest"` repeats each pixel; down to a coarser one `"average"`
+        takes each block's mean and `"mode"` its most common value.
+
+        Args:
+            res: The grid node every node is brought onto, as `"r20m"`. None
+                takes the finest, the first on a tie, which keeps every value.
+            resampling: One GDAL kernel, or one per variable with `"*"` for
+                the rest, as `warp.reproject` takes.
+
+        Returns:
+            Dataset of every grid node's variables on the chosen grid, with
+            the attrs every node shares after taking those of its collection.
+
+        Raises:
+            ValueError: The tree holds several collections, or a node does not
+                nest in the chosen grid, which `align` reprojects instead.
+            KeyError: `res` names no grid node.
+
+        Examples:
+            >>> tree["s2"].gs.to_dataset().gs.resolution.x
+            10.0
+            >>> tree["s2"].gs.to_dataset(res="r20m", resampling="average").gs.resolution.x
+            20.0
+        """
+        from geosave.geodata.transform.combine import merge
+
+        # A grid node is a Dataset already.
+        if not self._data.children:
+            return cast("Dataset", self._data.to_dataset(inherit="all_coords"))
+
+        # 1. One collection: every child is a grid node
+        collections = []
+        for name, child in self._data.children.items():
+            if child.children:
+                collections.append(name)
+        if collections:
+            raise ValueError(
+                f"the tree holds collections {collections}; convert one, as "
+                f"tree[{collections[0]!r}].gs.to_dataset()"
             )
-            for name in self.groups
-        }
 
-    @overload
+        # 2. The grid every node is brought onto
+        rasters = self.rasters
+        if res is None:
+            res = min(
+                rasters, key=lambda name: abs(rasters[name].odc.geobox.resolution.x)
+            )
+        elif res not in rasters:
+            raise KeyError(f"{res!r} is no grid node; the nodes are {list(rasters)}")
+        target = rasters[res].odc.geobox
+
+        # 3. Each node onto it, carrying the attrs of this node above it
+        nodes = []
+        for name, raster in rasters.items():
+            grid = raster.odc.geobox
+            if not _nests(grid, target):
+                raise ValueError(
+                    f"{name} does not nest in {res}: no whole-number zoom of one "
+                    f"grid gives the other; reproject it with "
+                    f"gs.align(target=...) before converting"
+                )
+            if grid != target:
+                raster = warp.reproject(raster, target, resampling=resampling)
+            nodes.append(raster.assign_attrs({**self._data.attrs, **raster.attrs}))
+        return merge(nodes)
+
     def align(
         self,
         *,
@@ -226,85 +282,53 @@ class GeoDataTree(GeoRaster["DataTree"]):
         extent: warp.Extent = "match",
         resampling: Resampling | Mapping[str, Resampling] = "nearest",
         resolution: SomeResolution | warp.Native | None = None,
-        inplace: Literal[False] = False,
-    ) -> DataTree: ...
+    ) -> DataTree:
+        """Warp every grid node onto one grid.
 
-    @overload
-    def align(
-        self,
-        *,
-        target: warp.Target,
-        extent: warp.Extent = "match",
-        resampling: Resampling | Mapping[str, Resampling] = "nearest",
-        resolution: SomeResolution | warp.Native | None = None,
-        inplace: Literal[True],
-    ) -> None: ...
-
-    def align(
-        self,
-        *,
-        target: warp.Target,
-        extent: warp.Extent = "match",
-        resampling: Resampling | Mapping[str, Resampling] = "nearest",
-        resolution: SomeResolution | warp.Native | None = None,
-        inplace: bool = False,
-    ) -> DataTree | None:
-        """Warp every group onto one grid, which the root then publishes.
-
-        A tree whose groups sit on their own grids names no shared axes, so
-        nothing can index them together. This is what brings them onto one,
-        after which `isel` on `y` and `x` cuts every group at once.
+        Grid nodes on their own grids share no axes, so nothing indexes them
+        together. Once aligned they share one grid, which `gs.geobox` reads,
+        and one `isel` on `y` and `x` cuts every node at once.
 
         Args:
             target: Grid to align onto, a raster already on one, or a CRS.
-                Required. Select a group when a reference tree has different grids.
-            extent: Ground the aligned groups cover. `"union"` reaches every
-                group, holding fill where one does not; `"intersection"` drops
+                Required. Select a grid node when a reference tree has
+                different grids.
+            extent: Ground the aligned nodes cover. `"union"` reaches every
+                node, holding fill where one does not; `"intersection"` drops
                 every edge outside the ground they all cover; `"match"` adopts
                 the reference's own.
             resampling: One GDAL kernel for every variable, or a mapping naming
-                each variable's own as `"<group>/<variable>"`, which `"*"`
-                answers the rest of. Pixels move only where a group does not
-                already sit on the grid they align onto.
-            resolution: Pixel size every group lands at. None takes the
-                reference's own, so the tree comes out co-registered and
-                publishes its grid. `"native"` keeps each group's instead, so
-                the groups cover one extent on nesting grids and the root stays
-                bare, so each group is read on its own through `gs.rasters`.
-            inplace: Warp into this tree rather than returning a new one.
+                each variable's own as `"<collection>/<variable>"`, which `"*"`
+                answers the rest of. Pixels move only where a node does not
+                already sit on the grid it aligns onto.
+            resolution: Pixel size every node lands at. None takes the
+                reference's own. `"native"` keeps each node's instead, so the
+                nodes cover one extent on nesting grids.
 
         Returns:
-            New DataTree whose groups share one exact GeoBox, or cover one
-            extent at their own pixel sizes under `"native"`, or None when
-            `inplace` is set.
+            New DataTree whose grid nodes share one exact GeoBox, or cover one
+            extent at their own pixel sizes under `"native"`.
 
         Raises:
             KeyError: A `resampling` mapping names neither a variable nor `"*"`.
-            ValueError: A group sits on no locatable grid, `target` names no
+            ValueError: A node sits on no locatable grid, `target` names no
                 grid or CRS, `extent` names no ground, `"intersection"` leaves
                 none in common, or `resampling` would blend class codes.
 
         Examples:
-            A group names its grid by the raster it is, since a bare string is
-            read as a CRS:
+            A grid node names its grid by the raster it is, since a bare
+            string is read as a CRS:
 
-            >>> sentinel.gs.geobox is None
-            True
-            >>> onto = sentinel.gs.rasters["r10"]
-            >>> sentinel.gs.align(target=onto, extent="intersection").gs.resolution.x
+            >>> onto = sentinel.gs.rasters["s2/r10m"]
+            >>> aligned = sentinel.gs.align(target=onto, extent="intersection")
+            >>> aligned.gs.resolution.x
             10.0
+            >>> aligned.isel(y=slice(0, 256), x=slice(0, 256)).gs.geobox.shape
+            Shape2d(x=256, y=256)
 
             Imagery and labels in one tree warp with different kernels:
 
             >>> scene.gs.align(target=imagery, resampling={"*": "bilinear", "labels/mask": "mode"})
-
-            Aligning in place publishes the grid, so one `isel` cuts every
-            group:
-
-            >>> sentinel.gs.align(target=onto, inplace=True)
-            >>> chip = sentinel.isel(y=slice(0, 256), x=slice(0, 256))
-            >>> chip.gs.geobox.shape
-            Shape2d(x=256, y=256)
         """
         (aligned,) = warp.align(
             [self._data],
@@ -313,17 +337,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
             resampling=resampling,
             resolution=resolution,
         )
-        if not inplace:
-            return aligned
-
-        # A child disagreeing with the root is refused, so the root's grid goes first.
-        self._data.dataset = xr.Dataset(attrs=dict(self._data.attrs))
-        for name in aligned.gs.groups:
-            self._data[name] = aligned[name]
-        self._data.dataset = xr.Dataset(
-            coords=aligned.dataset.coords, attrs=dict(self._data.attrs)
-        )
-        return None
+        return aligned
 
     def plot(self, *, cols: int = 1, xlabel: str | None = None) -> hv.Layout:
         """Draw every group down the page.
@@ -344,7 +358,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
         Raises:
             ValueError: A group names nothing to draw; name its channels with
                 `gs.write_rgb` first or plot it alone with
-                `tree["<group>"].to_dataset().gs.plot()`.
+                `tree["<collection>"].gs.to_dataset().gs.plot()`.
 
         Examples:
             >>> hv.save(scene.gs.plot(), "scene.png")
@@ -352,8 +366,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
         import holoviews as hv
 
         panels: list[hv.Element] = []
-        for name in self.groups:
-            raster = self._data.children[name].to_dataset(inherit="all_coords")
+        for name, raster in self.rasters.items():
             place = raster.gs.anchor.locate() if xlabel is None else None
             where = place.to_address() if place is not None else xlabel
             caption = f"{name}\n{where}" if where else name
@@ -378,7 +391,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
 
         Returns:
             {
-                group name: array shaped `(*axes, band, y, x)`,
+                grid node path: array shaped `(*axes, band, y, x)`,
             }
 
         Raises:
@@ -405,7 +418,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
 
         Returns:
             {
-                group name: tensor shaped `(*axes, band, y, x)`,
+                grid node path: tensor shaped `(*axes, band, y, x)`,
             }
 
         Raises:
@@ -425,162 +438,218 @@ class GeoDataTree(GeoRaster["DataTree"]):
 
     def to_cog(
         self,
-        path: Location | Mapping[str, Location],
+        path: Location,
         *,
-        map_scale: float | None = None,
+        path_format: str | Mapping[str, str] | None = None,
         overwrite: bool = False,
         compute: bool = True,
         storage_options: StorageOptions | None = None,
         **options: Unpack[COGWriteOptions],
-    ) -> list[Scene]:
-        """Write every layer as Cloud Optimized GeoTIFFs, as its path template names.
+    ) -> list[UPath] | Delayed:
+        """Write the tree as Cloud Optimized GeoTIFFs under the folder `path`.
 
-        Each layer is written as `Dataset.gs.to_cog` writes a raster, with one
-        more field, `collection`, naming the layer. Layers whose dates differ,
-        as a dated image beside an undated elevation model, take a template
-        each.
+        A GeoTIFF holds one grid at one date, so `path_format` lays the tree
+        out: `{collection}` splits the collections, `{res}` a collection's grid
+        nodes, `{time}` dates and `{band}` variables. A field left out keeps its
+        axis in one file, which several collections, grids or dates cannot
+        share. Without `path_format` every band of every date is its own file,
+        `{collection}/{time:%Y%m%dT%H%M%S}/{band}.tif`, which needs no `{res}`
+        since band names are unique within a collection.
 
         Args:
-            path: One template for every layer, as `"out/{collection}.tif"`, or
-                layer names mapped to their own templates.
-            map_scale: Map denominator used to write pixels per centimetre in
-                every file.
-            overwrite: Replace files that already exist.
-            compute: False returns every scene pending, written by one
-                `dask.compute` of the result.
-            storage_options: Options for the filesystem a URL names.
-            **options: COG creation options.
+            path: Folder or URL prefix the files go under.
+            path_format: Relative path filled with `str.format`, ending in
+                .tif, or one per collection. `{time}` takes strftime directives.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes all outputs and returns their paths.
+            overwrite: Replace existing destinations.
+            storage_options: Filesystem options merged into the destination UPath.
+            **options: GeoTIFF creation options.
 
         Returns:
-            The scenes of every layer, layers in order, each naming its layer
-            as its `collection`.
+            Written paths in collection, grid, time then variable order, or one
+            delayed result.
 
         Raises:
-            ValueError: Two groups would share a file, a group without dates
-                is given `{time}`, a template mapping misses a group, or a
-                group cannot be written as `Dataset.gs.to_cog` explains.
-            KeyError: A template names a field nothing fills.
-            FileExistsError: A file exists and `overwrite` is false.
+            ValueError: `path` names a file rather than a folder, a path format
+                misses a field the tree needs, as `{res}` for two grids sharing
+                a band name, or a raster cannot be one GeoTIFF.
+            KeyError: A path format field has no value.
+            FileExistsError: A destination exists and overwrite is false.
 
         Examples:
-            >>> scene.gs.to_cog(
-            ...     {"sentinel-2-l2a": "out/s2_{time:%Y%m%d}.tif", "dem": "out/dem.tif"}
-            ... )
+            >>> paths = tree.gs.to_cog("out", path_format="{collection}/{res}/{time:%Y%m%d}_{band}.tif")
         """
-        from geosave.geodata.io.raster.geotiff import write_cog
+        from geosave.geodata.io.formats import geotiff
+        from geosave.geodata.io.paths import expand_paths
+        from geosave.geodata.io.storage import location
 
-        write = partial(write_cog, map_scale=map_scale, overwrite=overwrite, **options)
-        return self._save(path, write, storage_options, compute)
+        files = expand_paths(self._data, location(path, storage_options), path_format)
+        return geotiff.write_files(
+            files, geotiff.write_cog, compute=compute, overwrite=overwrite, **options
+        )
 
     def to_zarr(
         self,
-        destination: Location,
+        path: Location,
         *,
         compute: bool = True,
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[ZarrWriteOptions],
-    ) -> list[Scene]:
-        """Write every group as its own Zarr store named after the group.
+    ) -> UPath | Delayed:
+        """Write the tree as one Zarr store with a group per collection and grid node.
 
         Args:
-            destination: Directory or fsspec URL the stores are written into.
-            compute: False returns every store pending, written by one
-                `dask.compute` of the result.
-            overwrite: Replace stores that already exist.
-            storage_options: Options for the filesystem a URL names.
-            **write_options: Supported xarray Zarr write options, applied to
-                every group.
+            path: The store, ending in .zarr.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes the store and returns its path.
+            overwrite: Replace an existing store.
+            storage_options: Filesystem options merged into the destination UPath.
+            **write_options: Supported xarray Zarr write options; `encoding` is keyed by variable name and reaches every node holding it.
 
         Returns:
-            One scene per group, in order, holding its store and naming the
-            group as its `collection`.
+            Path of the store written, or one delayed result.
 
         Raises:
-            FileExistsError: A store exists and `overwrite` is false.
-            TypeError: An option is unsupported.
+            ValueError: The destination does not end in .zarr.
+            KeyError: An encoding name is no variable of the tree.
+            FileExistsError: The store exists and overwrite is false.
 
         Examples:
-            >>> sample.gs.to_zarr("samples/s0")
-            [Scene('optical', {'image': optical.zarr}), Scene('label', {'image': label.zarr})]
+            >>> open_raster(tree.gs.to_zarr("scene.zarr")).gs.groups
         """
-        from geosave.geodata.io import zarr
+        from geosave.geodata.io.formats import zarr
 
-        write = partial(zarr.write, overwrite=overwrite, **write_options)
-        return self._save(
-            self._per_group(destination, ".zarr", storage_options), write, None, compute
+        return zarr.write_zarr(
+            self._data,
+            path,
+            compute=compute,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **write_options,
         )
 
     def to_netcdf(
         self,
-        destination: Location,
+        path: Location,
         *,
         compute: bool = True,
         engine: NetCDFEngine = "netcdf4",
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[NetCDFWriteOptions],
-    ) -> list[Scene]:
-        """Write every group as its own netCDF file named after the group.
+    ) -> UPath | Delayed:
+        """Write the tree as one netCDF file with a group per collection and grid node.
 
         Args:
-            destination: Directory or fsspec URL the files are written into.
-            compute: False returns every file pending, written by one
-                `dask.compute` of the result.
-            engine: Concrete xarray netCDF writing engine.
-            overwrite: Replace files that already exist.
-            storage_options: Options for the filesystem a URL names.
-            **write_options: Supported xarray netCDF write options, applied to
-                every group.
+            path: The file, ending in .nc, .nc4 or .cdf.
+            compute: False returns one native `dask.Delayed`; computing it
+                writes the file and returns its path.
+            engine: Concrete xarray netCDF backend.
+            overwrite: Replace an existing file.
+            storage_options: Filesystem options merged into the destination UPath.
+            **write_options: Supported xarray netCDF write options; `encoding` is keyed by variable name and reaches every node holding it.
 
         Returns:
-            One scene per group, in order, holding its file, as `to_zarr`
-            returns them.
+            Path of the file written, or one delayed result.
 
         Raises:
-            FileExistsError: A file exists and `overwrite` is false.
-            TypeError: An option is unsupported.
+            ValueError: The destination does not end in a netCDF suffix.
+            KeyError: An encoding name is no variable of the tree.
+            FileExistsError: The file exists and overwrite is false.
 
         Examples:
-            >>> sample.gs.to_netcdf("samples/s0")
-            [Scene('optical', {'image': optical.nc}), Scene('label', {'image': label.nc})]
+            >>> open_raster(tree.gs.to_netcdf("scene.nc")).gs.groups
         """
-        from geosave.geodata.io import netcdf
+        from geosave.geodata.io.formats import netcdf
 
-        write = partial(
-            netcdf.write, engine=engine, overwrite=overwrite, **write_options
-        )
-        return self._save(
-            self._per_group(destination, ".nc", storage_options), write, None, compute
-        )
-
-    def _per_group(
-        self, folder: Location, suffix: str, storage_options: StorageOptions | None
-    ) -> dict[str, UPath]:
-        """Name each group's file in `folder` after the group."""
-        from geosave.geodata.io.storage import location
-
-        root = location(folder, storage_options)
-        return {name: root / f"{name}{suffix}" for name in self._data.children}
-
-    def _save(
-        self,
-        template: Location | Mapping[str, Location],
-        write: Writer,
-        storage_options: StorageOptions | None,
-        compute: bool,
-    ) -> list[Scene]:
-        """Lay every layer out as files and write them through `write`."""
-        from geosave.geodata.io.raster.layout import layout, save
-        from geosave.geodata.io.storage import location
-
-        if isinstance(template, Mapping):
-            paths = {
-                name: location(path, storage_options) for name, path in template.items()
-            }
-            return save(layout(self._data, paths), write, compute=compute)
-        return save(
-            layout(self._data, location(template, storage_options)),
-            write,
+        return netcdf.write_netcdf(
+            self._data,
+            path,
             compute=compute,
+            engine=engine,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **write_options,
         )
+
+    def to_catalog(
+        self,
+        path: Location,
+        *,
+        path_format: str | Mapping[str, str] | None = None,
+        id_format: str = ITEM_ID_FORMAT,
+        datetime: ItemTime | None = None,
+        overwrite: bool = False,
+        storage_options: StorageOptions | None = None,
+        **options: Unpack[COGWriteOptions],
+    ) -> GeoDataFrame:
+        """Write the tree as COGs and return their STAC Items as one item table.
+
+        Each collection is one STAC Collection named after it, and each of its
+        dates one Item, whose assets are that date's files across every grid
+        node, each stating its own grid in `proj:*`. A collection carrying a
+        `stac_collection` gives the table that Collection's metadata under the
+        collection's name.
+
+        Args:
+            path: Folder the files go under.
+            path_format: Relative path ending in .tif, as `to_cog` lays it out,
+                or one per collection. None writes one file per band and date.
+            id_format: Item id template, as `Dataset.gs.to_catalog` takes it.
+            datetime: Date or interval for collections stating no time.
+            overwrite: Replace files that exist.
+            storage_options: Credentials and connection options for the files.
+            **options: GeoTIFF creation options.
+
+        Returns:
+            Item table, one row per collection and date.
+
+        Raises:
+            ValueError: A file does not end in .tif, a mapping misses a
+                collection, destinations collide, or a collection cannot be
+                saved as `Dataset.gs.to_catalog` explains.
+            FileExistsError: A file exists and `overwrite` is false.
+
+        Examples:
+            >>> catalog = tree.gs.to_catalog("out", path_format="{collection}/{time:%Y%m%d}/{band}.tif")
+            >>> sorted(catalog["collection"].unique())
+            ['dem', 's2']
+        """
+        from geosave.geodata.io.stac import write_assets
+
+        collections = []
+        for name in self.groups:
+            carried = self._read_collection_metadata(name).gs.stac_collection
+            if carried is not None:
+                # In a tree's catalog the collection's name is its id.
+                renamed = carried.clone()
+                renamed.id = name
+                collections.append(renamed)
+        return write_assets(
+            self._data,
+            path,
+            path_format=path_format,
+            collections=collections,
+            id_format=id_format,
+            datetime=datetime,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **options,
+        )
+
+
+def _nests(grid: GeoBox, target: GeoBox) -> bool:
+    """Say whether one grid is the other zoomed out by a whole number."""
+    if grid.crs != target.crs:
+        return False
+    if grid == target:
+        return True
+    fine, coarse = (
+        (grid, target)
+        if abs(grid.resolution.x) < abs(target.resolution.x)
+        else (target, grid)
+    )
+    factor = abs(coarse.resolution.x) / abs(fine.resolution.x)
+    return factor == round(factor) and fine.zoom_out(round(factor)) == coarse

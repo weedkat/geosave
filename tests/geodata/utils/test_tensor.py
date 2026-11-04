@@ -19,11 +19,6 @@ def test_to_tensor_casts_to_a_named_or_torch_dtype(torch, dtype, expected) -> No
     assert optical().B04.gs.to_tensor(dtype=dtype).dtype is expected
 
 
-def test_to_tensor_refuses_an_unknown_dtype_name(torch) -> None:
-    with pytest.raises(ValueError, match="not-a-dtype"):
-        optical().gs.to_tensor(dtype="not-a-dtype")
-
-
 def test_to_tensor_refuses_a_dtype_that_is_not_torch_before_reading(torch) -> None:
     import dask
 

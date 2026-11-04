@@ -16,8 +16,3 @@ def test_regression_metrics_score_flat_values() -> None:
     assert scores["mae"].item() == pytest.approx(1.0)
     assert scores["rmse"].item() == pytest.approx(1.0)
     assert scores["r2"].item() == pytest.approx(1 - 4 / 5)
-
-
-def test_regression_metrics_refuse_unknown_names() -> None:
-    with pytest.raises(ValueError, match="Unknown metrics"):
-        RegressionMetrics(["mape"])

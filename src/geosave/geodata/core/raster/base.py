@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-# The accessors that extend GeoRaster are the public path; their pages list what it shares.
-__all__: list[str] = []
-
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-import geosave.geodata.attrs as attrs
-from geosave.geodata.utils.datetime import parse_daterange
-
 from geosave.geodata.conventions import TIME_COORDINATE, require_yx
+from geosave.geodata.core.raster.time import read_bounds
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -57,18 +52,6 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         self._data = data
 
     @property
-    def _grid_source(self) -> xr.Dataset | xr.DataArray:
-        """Return the object odc-geo reads a geobox off directly.
-
-        A DataTree carries no `.odc` accessor of its own, so its root
-        Dataset stands in for it.
-
-        Returns:
-            `_data` itself, or its root Dataset for a DataTree.
-        """
-        return self._data.dataset if isinstance(self._data, xr.DataTree) else self._data
-
-    @property
     def geobox(self) -> GeoBox | GCPGeoBox | None:
         """Read the pixel grid, if this object carries one.
 
@@ -79,9 +62,19 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         Returns:
             Grid including CRS, transform, bounds, and shape; a `GCPGeoBox`
             if placed by ground control points rather than a transform; or
-            None if this object carries no CRS or spatial dims.
+            None if this object carries no CRS or spatial dims. A tree's is
+            the one grid all its grid nodes share, or None where they differ.
         """
-        return self._grid_source.odc.geobox
+        if not isinstance(self._data, xr.DataTree):
+            return self._data.odc.geobox
+        # A DataTree carries no `.odc` accessor, and its root holds no grid.
+        shared = None
+        for node in self._data.leaves:
+            grid = node.to_dataset(inherit="all_coords").odc.geobox
+            if grid is None or (shared is not None and grid != shared):
+                return None
+            shared = grid
+        return shared
 
     @property
     def is_georeferenced(self) -> bool:
@@ -150,34 +143,28 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
     def timespan(self) -> DateRange | None:
         """Read inclusive temporal coverage.
 
-        A resampled axis carries a `TimeSpec`, so a label standing for a month
-        covers that month. An axis carrying none covers what its labels spell:
-        `2018-12-26` is a whole date, `2018-12-26T10:30:31` one second.
+        A composite carries `start_datetime` and `end_datetime`, so its span runs from the earliest
+        start to the latest end. Plain instants span from the oldest to the
+        newest label.
 
         Returns:
             First and last covered instant, or None for timeless data.
         """
         coords = getattr(self._data, "coords", None)
-        if coords is None:
+        if coords is None or TIME_COORDINATE not in coords:
             return None
-        if TIME_COORDINATE not in coords:
+        bounds = read_bounds(coords)
+        if bounds is None:
+            starts = ends = np.atleast_1d(coords[TIME_COORDINATE].values)
+        else:
+            starts, ends = bounds
+        first, last = starts.min(), ends.max()
+        if np.isnat(first) or np.isnat(last):
             return None
-        if "start_datetime" in coords and "end_datetime" in coords:
-            start = pd.Timestamp(coords["start_datetime"].values.min())
-            end = pd.Timestamp(coords["end_datetime"].values.max())
-            if start is pd.NaT or end is pd.NaT:
-                return None
-            return cast("DateRange", (start.to_pydatetime(), end.to_pydatetime()))
-        labels = coords[TIME_COORDINATE].values
-        spec = attrs.TimeSpec.from_attrs(coords[TIME_COORDINATE].attrs)
-        if spec is not None:
-            return spec.timespan(labels)
-
-        covered = [
-            parse_daterange(str(spelled))
-            for spelled in np.datetime_as_string(np.atleast_1d(labels), unit="auto")
-        ]
-        return min(start for start, _ in covered), max(end for _, end in covered)
+        # Microsecond units convert to datetime; nanosecond ones would give an int.
+        return first.astype("datetime64[us]").item(), last.astype(
+            "datetime64[us]"
+        ).item()
 
     @property
     def times(self) -> pd.DatetimeIndex | None:
@@ -202,7 +189,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         """Read exact spatial and temporal coverage.
 
         Returns:
-            Anchor over this object's grid and time span, which names its
+            Anchor over this object's coverage and time span, which names its
             centroid and place and formats both into a filename.
 
         Raises:
@@ -219,7 +206,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         geobox = self.geobox
         if not isinstance(geobox, GeoBox):
             raise ValueError(f"{type(self._data).__name__} carries no locatable grid")
-        return GeoAnchor(geobox, timespan=self.timespan)
+        return GeoAnchor(geobox.extent, timespan=self.timespan)
 
     def unpack(self) -> DataT:
         """Read physical values out of stored digital numbers.

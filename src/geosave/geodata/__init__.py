@@ -6,32 +6,22 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import xarray as xr
 
-from . import attrs, transform
+from . import attrs, io, transform
 from .core import (
+    Chips,
+    GeoSamples,
     GeoAnchor,
+    GeoCatalog,
     GeoDataArray,
     GeoDataset,
     GeoDataTree,
-    GeoVector,
-    GeoCatalog,
-    GeoItem,
-    GeoSample,
-    GeoSamples,
-    array,
-    raster,
-    tree,
+    GeoCatalogItem,
 )
-from . import io
+from .io import open_raster, open_vector
+from geosave.geodata.io.rasterio import configure_gdal
 from .utils.summary import class_percent, statistics
-from .io.raster.gdal import configure_gdal
-from .io import open_raster, open_tree, open_vector
-from .io.raster.file import RasterFile, Scene
-
 
 if TYPE_CHECKING:
-    from typing import Generic
-    from typing_extensions import TypeVar
-
     from . import features, stac
     from .stac import StacClient, StacQuery
 
@@ -62,18 +52,14 @@ if TYPE_CHECKING:
 
         gs: GeoDataTree
 
-    _Vector = TypeVar("_Vector", bound=GeoVector, default=Any)
-
-    class GeoDataFrame(gpd.GeoDataFrame, Generic[_Vector]):
+    class GeoDataFrame(gpd.GeoDataFrame):
         """GeoPandas GeoDataFrame carrying GeoSave's `gs` accessor.
 
         The runtime value is a `geopandas.GeoDataFrame`; this declaration
-        exists only so type checkers can resolve `.gs`. Known schemas specify
-        the accessor type; file readers leave it dynamic until the columns
-        are read at runtime.
+        exists only so type checkers can resolve the stable `.gs` accessor.
         """
 
-        gs: _Vector
+        gs: GeoCatalog
 
 else:
     DataArray = xr.DataArray
@@ -100,6 +86,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "Chips",
+    "GeoSamples",
     "attrs",
     "GeoAnchor",
     "GeoDataArray",
@@ -109,25 +97,16 @@ __all__ = [
     "GeoDataFrame",
     "GeoDataset",
     "GeoDataTree",
-    "GeoVector",
     "GeoCatalog",
-    "GeoItem",
-    "GeoSample",
-    "GeoSamples",
-    "RasterFile",
-    "Scene",
+    "GeoCatalogItem",
     "StacClient",
     "StacQuery",
-    "array",
     "configure_gdal",
     "features",
     "io",
-    "raster",
     "open_raster",
-    "open_tree",
     "open_vector",
     "stac",
-    "tree",
     "class_percent",
     "statistics",
     "transform",

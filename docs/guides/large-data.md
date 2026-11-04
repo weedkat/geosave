@@ -7,15 +7,20 @@ import dask.array as da
 import geopandas as gpd
 from shapely.geometry import box
 
+import xarray as xr
+
 import geosave as gs
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=256, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 502560, 5002560),
+    crs='EPSG:32633', resolution=10,
 )
 pixels = da.random.RandomState(0).randint(
     0, 3000, (256, 256), chunks=128
 ).astype("uint16")
-scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
 scene
 ```
 
@@ -25,8 +30,8 @@ Output:
 <xarray.Dataset> Size: 135kB
 Dimensions:      (y: 256, x: 256)
 Coordinates:
-  * y            (y) float64 2kB 4.989e+06 4.989e+06 ... 4.986e+06 4.986e+06
-  * x            (x) float64 2kB 2.623e+05 2.623e+05 ... 2.648e+05 2.648e+05
+  * y            (y) float64 2kB 5.003e+06 5.003e+06 5.003e+06 ... 5e+06 5e+06
+  * x            (x) float64 2kB 5e+05 5e+05 5e+05 ... 5.025e+05 5.026e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 131kB dask.array<chunksize=(128, 128), meta=np.ndarray>
@@ -44,7 +49,7 @@ separately; constructing the raster does not generate their pixels.
 | `.isel(...)` or `.gs.crop(...)` | Selected raster | Stays lazy for Dask-backed inputs. |
 | `.gs.statistics()` | pandas DataFrame | Computes reductions over selected pixels. |
 | `.compute()` | Computed xarray object | Materializes the selected data in memory. |
-| `.gs.to_zarr(path)` | Destination UPath | Computes and writes output pixels. |
+| `.gs.to_zarr(path)` | One store UPath | Computes and writes output pixels. |
 | `.gs.to_tensor()` | PyTorch tensor | Materializes pixels into a writable tensor. |
 
 Selecting first reduces the logical data required by later operations. File
@@ -68,8 +73,8 @@ Output:
 <xarray.Dataset> Size: 9kB
 Dimensions:      (y: 64, x: 64)
 Coordinates:
-  * y            (y) float64 512B 4.987e+06 4.987e+06 ... 4.986e+06 4.986e+06
-  * x            (x) float64 512B 2.623e+05 2.623e+05 ... 2.629e+05 2.629e+05
+  * y            (y) float64 512B 5.001e+06 5.001e+06 5.001e+06 ... 5e+06 5e+06
+  * x            (x) float64 512B 5e+05 5e+05 5e+05 ... 5.006e+05 5.006e+05
     spatial_ref  int32 4B 32633
 Data variables:
     red          (y, x) uint16 8kB dask.array<chunksize=(64, 64), meta=np.ndarray>
@@ -140,8 +145,8 @@ Output:
 <xarray.Dataset> Size: 9kB
 Dimensions:      (y: 64, x: 64)
 Coordinates:
-  * y            (y) float64 512B 4.987e+06 4.987e+06 ... 4.986e+06 4.986e+06
-  * x            (x) float64 512B 2.623e+05 2.623e+05 ... 2.629e+05 2.629e+05
+  * y            (y) float64 512B 5.001e+06 5.001e+06 5.001e+06 ... 5e+06 5e+06
+  * x            (x) float64 512B 5e+05 5e+05 5e+05 ... 5.006e+05 5.006e+05
     spatial_ref  int32 4B ...
 Data variables:
     red          (y, x) uint16 8kB dask.array<chunksize=(64, 64), meta=np.ndarray>
@@ -153,16 +158,16 @@ prepared.close()
 
 Writing computes the selected data and stores its chunks. To schedule a write
 yourself, assign `pending = cropped.gs.to_zarr(path, compute=False)`, then call
-`file = pending.compute()`. Nothing reaches the destination until then.
-`to_cog` and `to_netcdf` take `compute=False` too, and `dask.compute(items)`
-writes every pending file a call returned in one parallel run.
+`paths = pending.compute()`. Nothing reaches the destination until then.
+`to_cog` and `to_netcdf` take `compute=False` too. Each call returns one
+native Dask Delayed; its computed value has the same shape as an eager result.
 
 ## Read one model input at a time
 
-[Catalogs and windows](catalogs-and-cuts.md) show how to describe many source
-files in a table, cut them into model-sized windows, and open one window with
-`row.gs.to_xarray()`. Cutting the table reads no pixels. Opening a window builds
-lazy rasters for the selected region.
+[Catalogs and samples](catalogs-and-cuts.md) shows how to group file metadata
+with `items.gs.sample()`, open sample trees with `rows.gs.to_datatree()`, and
+cut those trees with `gs.Chips`. Sampling and chip layout read no pixels;
+selecting a chip builds lazy raster work for its grid.
 
 The logical window may be smaller than the storage chunks or TIFF blocks the
 backend must read. Choose on-disk blocks, Dask chunks, and model chip sizes with

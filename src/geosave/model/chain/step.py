@@ -64,7 +64,7 @@ def _validate_value(value: object, expected: type, where: str) -> None:
 
 @dataclass(frozen=True)
 class Step:
-    """Describe one method's contract for named data flow.
+    """Hold one method's contract for named data flow.
 
     Args:
         name: Module method name.

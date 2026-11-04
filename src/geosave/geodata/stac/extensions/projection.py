@@ -11,7 +11,7 @@ from odc.geo.geobox import GeoBox
 from pystac.extensions.projection import AssetProjectionExtension, ProjectionExtension
 
 
-def from_geobox(grid: GeoBox | None) -> dict[str, Any]:
+def build_fields(grid: GeoBox | None) -> dict[str, Any]:
     """Spell a grid as the Projection fields an asset carries.
 
     Args:
@@ -25,7 +25,7 @@ def from_geobox(grid: GeoBox | None) -> dict[str, Any]:
         ValueError: The grid is missing or has no CRS.
 
     Examples:
-        >>> from_geobox(scene.gs.geobox)["proj:code"]
+        >>> build_fields(scene.gs.geobox)["proj:code"]
         'EPSG:32633'
     """
     if not isinstance(grid, GeoBox) or grid.crs is None:
@@ -52,7 +52,7 @@ def read_crs(asset: pystac.Asset) -> CRS | None:
     return None if code is None else CRS(code)
 
 
-def to_geobox(asset: pystac.Asset) -> GeoBox | None:
+def read_geobox(asset: pystac.Asset) -> GeoBox | None:
     """Read the grid an asset's Projection fields state.
 
     Args:
@@ -62,7 +62,7 @@ def to_geobox(asset: pystac.Asset) -> GeoBox | None:
         The grid, or None where the asset states no shape or transform.
 
     Examples:
-        >>> to_geobox(item.assets["image"]).shape
+        >>> read_geobox(item.assets["image"]).shape
         Shape2d(x=64, y=64)
     """
     # Read without the schema check, as catalogs often omit declaring it.
@@ -76,7 +76,7 @@ def to_geobox(asset: pystac.Asset) -> GeoBox | None:
 
 def write_asset(asset: pystac.Asset, grid: GeoBox) -> None:
     """Write the file grid and declare Projection on the Asset's owner."""
-    fields = from_geobox(grid)
+    fields = build_fields(grid)
     extension = ProjectionExtension.ext(asset, add_if_missing=True)
     extension.shape = fields["proj:shape"]
     extension.transform = fields["proj:transform"]

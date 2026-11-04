@@ -3,8 +3,9 @@
 from pathlib import Path, PurePosixPath
 
 from geosave.geodata import GeoDataFrame, open_raster, open_vector
-from geosave.geodata.io.raster.file import Scene
-from geosave.geodata.stac import create_catalog, create_items
+from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.io.storage import location
+from geosave.geodata.stac.item import create_item
 
 _TABLE_SUFFIXES = (".parquet", ".geoparquet")
 
@@ -55,17 +56,18 @@ def read_labels(source: str | Path, pattern: str = "**/*.tif") -> GeoDataFrame:
     """
     path = Path(source)
     if path.suffix.lower() not in _TABLE_SUFFIXES:
-        scenes = {}
+        items = []
         for sample_id, label_path in find_labels(path, pattern).items():
             with open_raster(label_path) as label:
                 if label.gs.timespan is None:
                     raise ValueError(f"Label raster has no time: {label_path}")
-            scenes[sample_id] = Scene.open({"label": label_path})
-        return create_catalog(
-            item
-            for sample_id, scene in scenes.items()
-            for item in create_items(scene, id_format=sample_id)
-        )
+                # The label stays where it is; its Item describes the file in place.
+                items.append(
+                    create_item(
+                        {"label": (location(label_path), label)}, id_format=sample_id
+                    )
+                )
+        return from_items(items)
 
     labels = open_vector(path)
     absent = [name for name in ("id", "assets") if name not in labels]

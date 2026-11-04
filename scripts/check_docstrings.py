@@ -1,4 +1,5 @@
 """Check Python docstrings and comments against AGENTS.md size limits."""
+
 from __future__ import annotations
 
 import ast
@@ -8,25 +9,39 @@ from pathlib import Path
 
 MAX_BODY_LINES = 3
 MAX_COMMENT_LINES = 1
-SECTION_HEADERS = ("Args:", "Returns:", "Raises:", "Examples:", "Yields:", "Attributes:")
+SECTION_HEADERS = (
+    "Args:",
+    "Returns:",
+    "Raises:",
+    "Examples:",
+    "Yields:",
+    "Attributes:",
+)
 
 
 def _docstring_findings(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     findings = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
             continue
         doc = ast.get_docstring(node, clean=False)
         if not doc:
             continue
         lines = doc.splitlines()
-        body_end = next((i for i, line in enumerate(lines) if line.strip() in SECTION_HEADERS), len(lines))
+        body_end = next(
+            (i for i, line in enumerate(lines) if line.strip() in SECTION_HEADERS),
+            len(lines),
+        )
         body = [line for line in lines[1:body_end] if line.strip()]
         if len(body) > MAX_BODY_LINES:
             name = getattr(node, "name", "<module>")
             lineno = getattr(node, "lineno", 1)
-            findings.append(f"{path}:{lineno}: {name}'s docstring body is {len(body)} lines, max {MAX_BODY_LINES}")
+            findings.append(
+                f"{path}:{lineno}: {name}'s docstring body is {len(body)} lines, max {MAX_BODY_LINES}"
+            )
     return findings
 
 
@@ -39,7 +54,9 @@ def _comment_findings(path: Path) -> list[str]:
         tokens = tokenize.tokenize(f.readline)
         prev_line = -2
         for tok in tokens:
-            is_standalone = tok.type == tokenize.COMMENT and tok.line.strip().startswith("#")
+            is_standalone = (
+                tok.type == tokenize.COMMENT and tok.line.strip().startswith("#")
+            )
             if not is_standalone:
                 continue
             line = tok.start[0]
@@ -47,11 +64,15 @@ def _comment_findings(path: Path) -> list[str]:
                 run_len += 1
             else:
                 if run_len > MAX_COMMENT_LINES:
-                    findings.append(f"{path}:{run_start}: {run_len}-line comment run, max {MAX_COMMENT_LINES}")
+                    findings.append(
+                        f"{path}:{run_start}: {run_len}-line comment run, max {MAX_COMMENT_LINES}"
+                    )
                 run_start, run_len = line, 1
             prev_line = line
         if run_len > MAX_COMMENT_LINES:
-            findings.append(f"{path}:{run_start}: {run_len}-line comment run, max {MAX_COMMENT_LINES}")
+            findings.append(
+                f"{path}:{run_start}: {run_len}-line comment run, max {MAX_COMMENT_LINES}"
+            )
     return findings
 
 

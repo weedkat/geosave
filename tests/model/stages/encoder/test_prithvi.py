@@ -6,7 +6,8 @@ import torch
 from torch import nn
 from torch.utils.data import default_collate
 
-from geosave.geodata import Dataset, attrs, raster
+from geosave.geodata import Dataset, attrs
+from tests.conftest import build_dataset
 from geosave.geodata.attrs import TimeSpec
 from geosave.model.stages.encoder import prithvi
 from geosave.model.stages.encoder.prithvi import BACKBONE_REGISTRY, Prithvi, PrithviTL
@@ -33,12 +34,6 @@ def test_named_bands_keep_their_pretrained_patch_embedding(tmp_path: Path) -> No
     assert not torch.equal(weight[:, 4], source[:, 4])
 
 
-def test_default_bands_are_the_pretrained_six() -> None:
-    encoder = PrithviTL(model_name="prithvi_eo_v2_tiny_tl", input_size=32)
-
-    assert encoder.model.patch_embed.proj.weight.shape[1] == 6
-
-
 def _chip(data, column=0):
     return data.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
 
@@ -49,22 +44,14 @@ def test_model_context_reads_the_raster_it_encodes(scene):
         context["temporal_coords"], torch.tensor([[2024.0, 365.0], [2024.0, 0.0]])
     )
     torch.testing.assert_close(context["location_coords"], torch.tensor([51.0, 11.0]))
-
-
-def test_prithvi_context_preserves_frame_order_and_calendar_values(
-    scene: Dataset,
-) -> None:
-    times = prithvi.temporal_coords(scene)
-    centre = prithvi.location_coords(scene)
-    torch.testing.assert_close(times, torch.tensor([[2024.0, 365.0], [2024.0, 0.0]]))
-    torch.testing.assert_close(centre, torch.tensor([51.0, 11.0]))
-    assert times.dtype == centre.dtype == torch.float32
+    assert context["temporal_coords"].dtype == torch.float32
+    assert context["location_coords"].dtype == torch.float32
 
 
 def test_context_encodes_bucket_label_not_midpoint(scene: Dataset) -> None:
     single = scene.isel(time=slice(1, 2))
     monthly = single.assign_coords(
-        time=attrs.stamp_attrs(single.time, TimeSpec.from_resample("MS"))
+        time=attrs.stamp_attrs(single.time, TimeSpec(time_freq="MS"))
     )
     torch.testing.assert_close(
         prithvi.temporal_coords(monthly), torch.tensor([[2024.0, 0.0]])
@@ -88,7 +75,7 @@ def test_missing_time_raises(scene: Dataset) -> None:
 def test_missing_grid_raises() -> None:
     with pytest.raises(ValueError, match="grid"):
         prithvi.location_coords(
-            raster({"red": (("y", "x"), np.zeros((2, 2), dtype="float32"))})
+            build_dataset({"red": (("y", "x"), np.zeros((2, 2), dtype="float32"))})
         )
 
 

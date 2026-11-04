@@ -50,9 +50,9 @@ Write a group with `attrs.stamp_attrs(obj, value)` and remove one with
 shallow copy of the object, so the original keeps its attrs.
 
 ```python
-band = attrs.stamp_attrs(band, attrs.Nodata(value=255))
+band = attrs.stamp_attrs(band, attrs.Nodata(fill_value=255))
 band = attrs.clear_attrs(band, attrs.Nodata)
-band = attrs.stamp_attrs(band, attrs.GDALBand.replace(band.attrs, colorinterp="red"))
+band = attrs.stamp_attrs(band, attrs.GDALBand(colorinterp="red"))
 ```
 
 Writing a group removes all its previous keys before stating the new value.
@@ -86,23 +86,14 @@ Attributes:
 `attrs.combine_attrs` is an explicit xarray callback; ordinary xarray operations do
 not automatically apply it. xarray calls it once per variable, coordinate and
 root, with that place's attrs from every input. It keeps a group or plain key
-only when all inputs state it alike. `attrs.intersect` does the same without
-refusing or warning, as when `gs.to_array` stacks the bands of one raster.
+only when all inputs state it alike, and drops the rest with
+`DroppedAttrsWarning`. A group is kept or dropped whole, since half of a packing
+or a legend is a wrong one. `attrs.intersect` does the same without warning, as
+when `gs.to_array` stacks the bands of one raster.
 
-`ACDD` joins each field separately, so a shared license can remain even when
-dataset titles differ. The warning and conflict rules below still apply to
-the other groups and plain keys.
-
-When every input states nodata, packing, or a legend but the values disagree,
-the join raises `ValueError`. Conflicting `units`, `standard_name`, and
-`cell_methods` also raise when every input states the key. Make the pixel
-meaning consistent before joining; changing an attr alone may be wrong if
-the values actually use different scales or class codes.
-
-If an input omits a group or key, the combined result drops it and warns.
-Other differing attrs, including descriptions and spectral metadata, drop
-with `DroppedAttrsWarning`. A warning therefore calls for review: it may be
-an expected loss of per-file metadata, or a missing description needed later.
+A warning calls for review: it may be an expected loss of per-file metadata, or
+a nodata, packing, or legend that differs between inputs and needs aligning
+before you join them, as pixels with two nodata values mean different things.
 
 ## Decode and encode are different stages
 
@@ -128,21 +119,25 @@ Metadata support varies by format, so verify a round trip for the properties
 your workflow needs. See the [attrs reference](../reference/attrs.md) and
 [read and write guide](../basics/io.md).
 
-STAC observation properties requested with `with_properties` retain ODC's
-representation as variables, using original names such as `eo:cloud_cover`.
-Use `.set_coords("eo:cloud_cover")` explicitly to carry a property as metadata
-when writing a Scene. Recognized scalar coordinates are exported automatically
-when that Scene becomes an Item. Scene coordinates remain separate from the
-actual file header; GeoTIFF cannot store every coordinate.
+A raster loaded from STAC carries its STAC metadata in two named places.
+The root `StacMetadata` attrs hold the Collection, the properties every loaded
+Item shares, and the Items' extension schemas. The `stac_properties`
+coordinate along `time` holds each date's properties requested with
+`with_properties`, one JSON mapping per date. `to_catalog` builds each Item's
+properties from both, the date's mapping overlaid on the shared ones; no other
+coordinate becomes a property. Dates, `proj:*` and band fields always come
+from the raster's own coordinates, grid and attrs.
 
 Native Item reading retains composite `start_datetime` and `end_datetime`
-coordinates. `StacSource` instead keeps ODC's time axis and grouping, without
+coordinates. `io.load_dataset` instead keeps ODC's time axis and grouping, without
 reconstructing interval bounds or squeezing a one-Item result. Retain source
 Items when their composite intervals are needed for later publication.
 Changing the time axis or reducing pixels does not recompute provenance.
 Drop or recompute coordinates that no longer describe the result.
 
 Full Collection definitions belong to catalog tables, under the JSON-serializable
-`stac:collections` DataFrame attr. `catalog.gs.collections` exposes native copies;
-Dataset ACDD attrs contain only the selected descriptive fields for that raster.
-Use `GeoCatalog.concat` to combine tables while preserving their definitions.
+`stac-geoparquet` DataFrame attr; `catalog.gs.collections` exposes native copies.
+A Dataset's `gs.stac_collection` holds the one it was loaded from. Attrs
+describe one load: concatenating two loads keeps the first one's attrs, so
+request a property with `with_properties` to keep it per date. Use
+`GeoCatalog.concat` to combine tables while preserving their definitions.

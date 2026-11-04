@@ -8,24 +8,6 @@ from geosave_flows.configs import RasterAnchorConfig
 runner = CliRunner()
 
 
-def test_help_lists_only_runnable_commands() -> None:
-    result = runner.invoke(app, ["--help"])
-
-    assert result.exit_code == 0
-    assert "ingest" in result.stdout
-    assert "prepare-dense-data" not in result.stdout
-
-
-def test_ingest_help_lists_its_flow_options() -> None:
-    result = runner.invoke(app, ["ingest", "--help"])
-
-    assert result.exit_code == 0
-    for option in ("--anchor", "--output", "--spec", "--format"):
-        assert option in result.stdout
-    assert "--catalog" not in result.stdout
-    assert "--sources" not in result.stdout
-
-
 def test_ingest_parses_anchor_and_prints_result(
     monkeypatch,
 ) -> None:
@@ -33,7 +15,7 @@ def test_ingest_parses_anchor_and_prints_result(
 
     def run_flow(**arguments):
         captured.update(arguments)
-        return "data/scenes/s1"
+        return "data/raw/s1/catalog.parquet"
 
     monkeypatch.setattr(geosave_flows, "ingest", run_flow)
     result = runner.invoke(
@@ -43,25 +25,19 @@ def test_ingest_parses_anchor_and_prints_result(
             "--anchor",
             '{"kind":"raster","path":"data/reference.tif"}',
             "--output",
-            "data/scenes/s1",
+            "data/raw/s1",
             "--spec",
             "model_spec.yaml",
-            "--format",
-            "geotiff",
-            "--write-options",
-            '{"compress":"ZSTD"}',
         ],
     )
 
     assert result.exit_code == 0
     assert captured == {
         "anchor": RasterAnchorConfig(kind="raster", path="data/reference.tif"),
-        "output": "data/scenes/s1",
+        "output": "data/raw/s1",
         "spec": "model_spec.yaml",
-        "format": "geotiff",
-        "write_options": {"compress": "ZSTD"},
     }
-    assert result.stdout == "data/scenes/s1\n"
+    assert result.stdout == "data/raw/s1/catalog.parquet\n"
 
 
 @pytest.mark.parametrize(

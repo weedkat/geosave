@@ -3,13 +3,13 @@ import json
 import numpy as np
 from pydantic import TypeAdapter
 
-from geosave.geodata.core.raster.create import raster
 from geosave.geodata import io
+from tests.conftest import build_dataset
 from geosave_flows.configs import AnchorConfig
 
 
 def test_coordinate_anchor_opens_a_native_grid():
-    anchor = (
+    anchor, grid = (
         TypeAdapter(AnchorConfig)
         .validate_python(
             {
@@ -25,7 +25,7 @@ def test_coordinate_anchor_opens_a_native_grid():
         .open()
     )
 
-    assert anchor.geobox.shape.yx == (4, 6)
+    assert grid.shape.yx == (4, 6)
     assert anchor.timespan is not None
 
 
@@ -42,28 +42,28 @@ def test_geojson_anchor_opens_a_native_grid(tmp_path):
         )
     )
 
-    anchor = (
+    anchor, grid = (
         TypeAdapter(AnchorConfig)
         .validate_python({"kind": "geojson", "path": path, "shape": [4, 4]})
         .open()
     )
 
-    assert anchor.geobox.shape.yx == (4, 4)
+    assert grid.shape.yx == (4, 4)
 
 
-def test_raster_anchor_uses_the_file_grid_and_time(tmp_path, anchor):
+def test_raster_anchor_uses_the_file_grid_and_time(tmp_path, grid):
     instant = np.datetime64("2025-01-15")
-    label = raster(
+    label = build_dataset(
         {"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
-        anchor.geobox,
+        grid,
     ).assign_coords(time=instant)
-    path = io.geotiff.write_cog(label, tmp_path / "label.tif").path
+    path = io.formats.geotiff.write_cog(label, tmp_path / "label.tif").path
 
-    result = (
+    result, result_grid = (
         TypeAdapter(AnchorConfig)
         .validate_python({"kind": "raster", "path": path})
         .open()
     )
 
-    assert result.geobox == label.gs.anchor.geobox
+    assert result_grid == label.gs.geobox
     assert result.timespan == label.gs.anchor.timespan

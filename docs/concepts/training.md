@@ -1,5 +1,9 @@
 # Training contracts
 
+Geospatial recipes use ModelSpec v3 and project-owned Datasets. See
+[training setup](../guides/training.md#geospatial-recipes) for the explicit
+DataModule size and the migration required by existing generated workspaces.
+
 Start with [a complete offline segmentation run](../guides/training.md). This
 page explains what changes when you connect real rasters, add transforms, or
 choose another training method.
@@ -97,21 +101,23 @@ Declare normalization in the model spec so it runs during evaluation too:
 # Add to the two-band model_spec.yaml from the training guide.
 transforms:
   image:
-    - name: Normalize
-      init_args:
-        mean: [0.5, 0.5]
-        std: [0.25, 0.25]
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref image
+      mean: [0.5, 0.5]
+      std: [0.25, 0.25]
+      dim: -3
 ```
 
 In `on_after_batch_transfer`, the DataModule applies training augmentation,
 optional CutMix, then the spec's input transforms in every split. `ImageAugmenter`
-owns synchronized tensor geometry; `InputTransform` applies the named spec
-transforms; `CutMix` pastes the same region into images and targets. Context
+owns synchronized tensor geometry; `spec.transform` applies the named recipe
+calls; `CutMix` pastes the same region into images and targets. Context
 inputs pass through. Input values are not repaired automatically.
 
 For temporal inputs, geometry is shared across all instants of each chip and
-normalization applies the same per-band statistics to every instant. Per-input
-spec transforms must preserve geometry; place spatial transforms in the joint
+normalization applies the same per-band statistics to every instant. Recipe calls are explicit and are not classified automatically. Shared
+input transforms should preserve geometry; place spatial transforms in the joint
 training augmentation. Choose statistics in the input's band order.
 
 For direct use outside a DataModule, `ImageAugmenter` constructs a Kornia

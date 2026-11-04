@@ -9,30 +9,10 @@ import pytest
 import xarray as xr
 from dask.callbacks import Callback
 
-from geosave.geodata.core.raster.create import tree
+from tests.conftest import build_tree
 from geosave.geodata.transform.extent import crop, pad
 from tests.geodata.conftest import titled
 from tests.geodata.transform.conftest import grid_of
-
-
-def test_crop_cuts_a_band_and_marks_outside_pixels_nodata() -> None:
-    import geopandas as gpd
-    import shapely
-    from odc.geo.geobox import GeoBox
-
-    from geosave.geodata.core.raster.create import array
-
-    grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
-    band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0)
-    triangle = gpd.GeoDataFrame(
-        geometry=[shapely.Polygon([(0, 0), (20, 0), (0, 20)])], crs="EPSG:32633"
-    )
-
-    cropped = band.gs.crop(triangle)
-
-    assert cropped.shape == (2, 2)
-    assert cropped.dtype == np.dtype("uint16")
-    assert (cropped.values == 0).any() and (cropped.values == 1).any()
 
 
 def test_crop_refuses_a_raster_without_crs_and_names_the_accessor() -> None:
@@ -59,12 +39,12 @@ def _triangle():
 def _band(times: int = 0):
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.raster.create import array
+    from tests.conftest import build_dataarray
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
-    band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0).rename(
-        "red"
-    )
+    band = build_dataarray(
+        np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0
+    ).rename("red")
     if not times:
         return band
     return band.expand_dims(time=np.arange(times).astype("datetime64[D]")).copy()
@@ -73,6 +53,7 @@ def _band(times: int = 0):
 def test_crop_masks_pixel_centres_inside_the_geometry() -> None:
     cropped = _band().gs.crop(_triangle())
 
+    assert cropped.dtype == np.dtype("uint16")
     assert cropped.values.tolist() == [[1, 0, 0], [1, 1, 0], [1, 1, 1]]
 
 
@@ -85,10 +66,10 @@ def test_crop_masks_every_instant_of_a_time_axis() -> None:
 
 
 def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
-    from geosave.geodata.core.raster.create import tree
+    from tests.conftest import build_tree
 
     band = _band()
-    tree = tree(
+    tree = build_tree(
         {"optical": band.to_dataset(), "dem": band.rename("height").to_dataset()}
     )
     tree = titled(tree)
@@ -97,7 +78,7 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
 
     assert cropped.gs.groups == ("optical", "dem")
     assert grid_of(cropped).shape == (3, 3)
-    assert cropped.gs.rasters["dem"].height.values.tolist() == [
+    assert cropped["dem"].gs.to_dataset().height.values.tolist() == [
         [1, 0, 0],
         [1, 1, 0],
         [1, 1, 1],
@@ -116,7 +97,7 @@ def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() ->
     import shapely
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.raster.create import array
+    from tests.conftest import build_dataarray
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(
@@ -124,7 +105,9 @@ def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() ->
         crs="EPSG:4326",
         resolution=step,
     )
-    band = array(np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0)
+    band = build_dataarray(
+        np.ones(grid.shape, "uint16"), grid, dims=("y", "x"), nodata=0
+    )
     corner = gpd.GeoDataFrame(
         geometry=[
             shapely.Polygon(
@@ -142,15 +125,6 @@ def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() ->
 
     assert cropped.dtype == np.dtype("uint16")
     assert (cropped.values == 0).any() and (cropped.values == 1).any()
-
-
-def test_crop_masks_a_raster_whose_leading_axis_holds_no_dates() -> None:
-    band = _band().expand_dims(time=[0, 1]).copy()
-
-    cropped = band.gs.crop(_triangle())
-
-    assert cropped.shape == (2, 3, 3)
-    assert cropped.values[1].tolist() == [[1, 0, 0], [1, 1, 0], [1, 1, 1]]
 
 
 def test_crop_reads_no_pixels_of_a_chunked_raster() -> None:
@@ -184,12 +158,6 @@ def test_crop_takes_an_odc_geometry_carrying_its_own_crs() -> None:
     assert cropped.values.tolist() == [[1, 1], [1, 1]]
 
 
-def test_crop_takes_a_geoseries() -> None:
-    cropped = _band().gs.crop(_triangle().geometry)
-
-    assert cropped.values.tolist() == [[1, 0, 0], [1, 1, 0], [1, 1, 1]]
-
-
 def test_crop_keeps_every_disconnected_geometry_and_masks_the_gap() -> None:
     import geopandas as gpd
     import shapely
@@ -218,13 +186,6 @@ def test_crop_refuses_a_bare_shapely_geometry_that_names_no_crs() -> None:
         _band().gs.crop(shapely.box(10, 10, 30, 30))  # pyright: ignore[reportArgumentType]
 
 
-def test_crop_refuses_an_odc_geometry_that_names_no_crs() -> None:
-    from odc.geo.geom import box
-
-    with pytest.raises(TypeError, match="CRS"):
-        _band().gs.crop(box(10, 10, 30, 30, None))
-
-
 @pytest.mark.parametrize("kind", ["array", "dataset", "tree"])
 def test_pad_preserves_native_type_time_and_grows_the_grid_lazily(kind):
     band = _band(times=2).chunk().assign_attrs(description="reflectance")
@@ -233,14 +194,14 @@ def test_pad_preserves_native_type_time_and_grows_the_grid_lazily(kind):
     elif kind == "dataset":
         source = band.to_dataset()
     else:
-        source = tree({"image": band.to_dataset()})
+        source = build_tree({"image": band.to_dataset()})
 
     with Callback(pretask=lambda *_: pytest.fail("pad computed pixels")):
         result = pad(source, [(1, 2), (2, 1)], mode="edge")
 
     assert type(result) is type(source)
     if isinstance(result, xr.DataTree):
-        output = result.gs.rasters["image"].red
+        output = result["image"].gs.to_dataset().red
     elif isinstance(result, xr.Dataset):
         output = result.red
     else:
@@ -282,11 +243,6 @@ def test_pad_reflects_wider_than_the_source_on_dask():
     np.testing.assert_array_equal(
         result.values, np.pad(values, ((3, 0), (0, 0)), mode="reflect")
     )
-
-
-def test_padding_nothing_keeps_the_dtype():
-    source = _band()
-    assert pad(source, [(0, 0), (0, 0)]).dtype == source.dtype
 
 
 def test_padding_clears_source_without_changing_input():

@@ -2,6 +2,7 @@
 
 Lightning Modules, DataModules, Datasets, and sample definitions are generated
 project code. They are no longer imported from `geosave.ml.tasks`.
+Geospatial recipes use [ModelSpec v3 and explicit DataModule size](../guides/training.md#geospatial-recipes); their Datasets remain project-owned.
 See [workspaces](../guides/workspaces.md) for generation and
 [training behavior](../concepts/training.md) for the recipes' initial contracts.
 

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import colorcet as cc
+
+# Colours for classes and categories that carry none: distinct, and dark enough
+# to stay visible on a light basemap.
+CATEGORY_PALETTE: list[str] = cc.glasbey_dark
+
 type RGB = tuple[int, int, int]
 type Palette = dict[int, RGB] | dict[int, str]
 

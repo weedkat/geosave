@@ -6,7 +6,7 @@ import questionary as qu
 import typer
 
 from .prompts import prompt_select
-from .templates import describe, get_methods, get_tasks
+from .templates import get_methods, get_tasks, read_method_description
 from .workspace import has_method
 
 
@@ -48,7 +48,7 @@ def select_method(
                 qu.Choice(
                     name,
                     value=name,
-                    description=describe(task, name),
+                    description=read_method_description(task, name),
                     disabled="already exists" if exists else None,
                 )
             )

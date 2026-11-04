@@ -31,11 +31,10 @@ src/geosave/
 └── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
-├── core/         # `gs` accessors and GeoAnchor; raster/ (dataarray, dataset, datatree, constructors), vector/ (vector, item table, stack table, row)
+├── core/         # `gs` accessors, GeoAnchor and Chips; raster/ (dataarray, dataset, datatree, chips), ctor/ (create_* constructors), vector/ (vector base, frame, catalog, sampling)
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
-├── stac/         # extensions/ per schema, translate/ per STAC level, search/, source.py, create.py
-├── catalog/      # the work behind the table operations: series, join, chips, time query; nothing public
+├── stac/         # extensions/ per schema, catalog/item/asset/band metadata, search/
 ├── transform/    # explicit operations, one module per thing changed: warp, extent, combine, nodata, temporal, color, vector
 └── features/     # spectral indices and masks
 
@@ -56,7 +55,12 @@ Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_fl
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC is organized on two axes. `stac/extensions/` has one module per extension schema and is the only importer of `pystac.extensions`. `stac/translate/` has one module per STAC level, each translating to its xarray counterpart and composing the level below: Collection <-> root ACDD attrs, Item <-> a scene (files of one collection, instant and grid), Asset <-> one file and its variables, band <-> one variable's attrs. Public builders and clients (`create_item`, `StacClient`, `StacTable`, `StacSource`) stay thin over these.
+STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
+`stac/extensions/` has one module per schema and is the only production importer
+of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
+`io.load_dataset` and `io.load_datatree` load selected Items through ODC. Format
+readers/writers live in `io/formats/`, and `io/stac.py` owns raster asset I/O.
+`GeoAnchor` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Design
 

@@ -1,49 +1,74 @@
-"""Raster and vector I/O, one module per format.
+"""Public geospatial I/O: formats, storage, discovery-independent loading.
 
-Raster formats live in `io.raster` and vector formats in `io.vector`; both are
-also reachable from here. `storage` resolves locations and writes single
-files, and `openers` picks a format by suffix.
-
-Format modules have an `open_raster`; writable formats also have a `write`,
-except GeoTIFF (`write_cog`, `write_gtiff`). Every raster writer returns the
-`RasterFile` it wrote. `layout` arranges one raster as the files of several
-`Scene`s and writes them through any writer; `assemble` reads them back.
-Reach for them module-qualified:
-
-Examples:
-    >>> from geosave.geodata import io
-    >>> raster = io.zarr.open_raster("scene.zarr", mask_and_scale=True)
-    >>> io.geotiff.write_cog(raster, "scene.tif")
-    >>> io.open_raster("scene.zarr")  # by suffix, when the format is not known
-
-The fluent `to_cog`, `to_zarr`, and `to_netcdf` names belong to the `gs`
-accessors, not here.
+Use io.formats.geotiff.write_cog for a known format, open_raster for suffix
+selection, and load_dataset/load_datatree for selected native STAC Items.
 """
 
-from . import raster, storage, vector
-from .raster import assemble, gdal, geotiff, layout, netcdf, zarr
-from .vector import geojson, geopackage, geoparquet
-from .raster.gdal import RasterioOpenOptions, configure_gdal
-from .vector.geojson import GeoJSONOpenOptions
-from .vector.geopackage import GeoPackageOpenOptions
-from .vector.geoparquet import GeoParquetOpenOptions
-from .raster.geotiff import (
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+from . import formats, paths, rasterio, storage
+from .formats.geojson import GeoJSONOpenOptions, open_geojson, write_geojson
+from .formats.geopackage import GeoPackageOpenOptions, open_geopackage, write_geopackage
+from .formats.geoparquet import GeoParquetOpenOptions, open_geoparquet, write_geoparquet
+from .formats.geotiff import (
     COGWriteOptions,
-    GeoTIFFTags,
     GeoTIFFWriteOptions,
     GTiffWriteOptions,
+    open_geotiff,
+    write_cog,
+    write_geotiff,
 )
-from .raster.netcdf import NetCDFOpenOptions, NetCDFWriteOptions
-from .raster.zarr import ZarrOpenOptions, ZarrWriteOptions
-from .openers import open_raster, open_tree, open_vector
+from .formats.netcdf import (
+    NetCDFOpenOptions,
+    NetCDFWriteOptions,
+    open_netcdf,
+    write_netcdf,
+)
+from .formats.zarr import ZarrOpenOptions, ZarrWriteOptions, open_zarr, write_zarr
+from .openers import open_raster, open_vector
+from .rasterio import RasterioOpenOptions, configure_gdal
+
+if TYPE_CHECKING:
+    from .formats.stac_geoparquet import write_stac_geoparquet
+    from .odc import StacLoadOptions, load_dataset, load_datatree
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"StacLoadOptions", "load_dataset", "load_datatree"}:
+        return getattr(import_module(f"{__name__}.odc"), name)
+    if name == "write_stac_geoparquet":
+        return getattr(import_module(f"{__name__}.formats.stac_geoparquet"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *__all__})
+
 
 __all__ = [
+    "open_geojson",
+    "write_geojson",
+    "open_geopackage",
+    "write_geopackage",
+    "open_geoparquet",
+    "write_geoparquet",
+    "open_geotiff",
+    "write_geotiff",
+    "open_zarr",
+    "write_zarr",
+    "open_netcdf",
+    "write_netcdf",
+    "write_cog",
+    "write_stac_geoparquet",
+    "StacLoadOptions",
+    "load_dataset",
+    "load_datatree",
     "COGWriteOptions",
     "GTiffWriteOptions",
     "GeoJSONOpenOptions",
     "GeoPackageOpenOptions",
     "GeoParquetOpenOptions",
-    "GeoTIFFTags",
     "GeoTIFFWriteOptions",
     "NetCDFOpenOptions",
     "NetCDFWriteOptions",
@@ -51,19 +76,10 @@ __all__ = [
     "ZarrOpenOptions",
     "ZarrWriteOptions",
     "configure_gdal",
-    "assemble",
-    "gdal",
-    "geojson",
-    "geopackage",
-    "geoparquet",
-    "geotiff",
-    "layout",
-    "netcdf",
-    "raster",
+    "rasterio",
+    "paths",
+    "formats",
     "open_raster",
-    "open_tree",
     "open_vector",
     "storage",
-    "vector",
-    "zarr",
 ]

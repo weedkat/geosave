@@ -64,6 +64,7 @@ data:
       init_args:
         split: val
     ignore_index: 255
+    size: 224
     batch_size: 8
     num_workers: 4
     augmentations:

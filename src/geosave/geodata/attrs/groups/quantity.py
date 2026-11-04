@@ -10,7 +10,7 @@ class Quantity(AttrsGroup):
     """Name the quantity one variable or coordinate measures.
 
     Two objects stating it differently hold values that mean different
-    things, so a join refuses them rather than dropping it.
+    things, so a join drops it whole.
 
     Attributes:
         standard_name: CF standard name, as `"surface_reflectance"`.
@@ -21,8 +21,6 @@ class Quantity(AttrsGroup):
         >>> attrs.Quantity.from_attrs(ds["B04"].attrs).units
         '1'
     """
-
-    REFUSE_CONFLICT = True
 
     standard_name: str | None = None
     units: str | None = None

@@ -5,7 +5,13 @@ from __future__ import annotations
 import geopandas as gpd
 import numpy as np
 import pytest
+from dask.callbacks import Callback
+from shapely.geometry import Polygon
 
+from odc.geo.geobox import GeoBox
+from tests.conftest import build_dataarray
+from geosave.geodata.transform.vector import rasterize, vectorize
+from geosave.geodata.utils.geometry import to_shapely
 from tests.geodata.transform.conftest import grid_of
 
 
@@ -13,7 +19,7 @@ def _sliced_geographic_scene():
     """Build a raster whose sliced coordinates drift from its geobox's own."""
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.raster.create import raster
+    from tests.conftest import build_dataset
 
     step = 1 / 3600
     grid = GeoBox.from_bbox(
@@ -21,7 +27,9 @@ def _sliced_geographic_scene():
         crs="EPSG:4326",
         resolution=step,
     )
-    whole = raster({"red": (("y", "x"), np.ones(grid.shape, "uint16"))}, grid, nodata=0)
+    whole = build_dataset(
+        {"red": (("y", "x"), np.ones(grid.shape, "uint16"))}, grid, nodata=0
+    )
     return whole.isel(x=slice(5, 25), y=slice(5, 25))
 
 
@@ -61,12 +69,12 @@ def test_a_presence_mask_refuses_a_truthy_fill() -> None:
 def _flags(values, dtype):
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.core.raster.create import array
+    from tests.conftest import build_dataarray
 
     pixels = np.asarray(values, dtype=dtype)
     side = pixels.shape[0] * 10
     grid = GeoBox.from_bbox((0, 0, side, side), crs="EPSG:32633", resolution=10)
-    return array(pixels, grid, dims=("y", "x"))
+    return build_dataarray(pixels, grid, dims=("y", "x"))
 
 
 def test_vectorize_joins_regions_touching_at_a_corner_into_valid_geometry() -> None:
@@ -116,47 +124,123 @@ def test_geographic_polygonization_and_rasterization_round_trip():
     np.testing.assert_array_equal(restored, pixels)
 
 
-def test_rasterizing_onto_a_dated_anchor_dates_the_result() -> None:
-    import shapely
+def test_rasterizing_onto_an_explicit_grid_is_undated(grid):
+    plot = gpd.GeoDataFrame(geometry=[grid.extent.geom], crs=grid.crs)
+    burned = plot.gs.rasterize(grid)
+    assert burned.gs.geobox == grid
+    assert "time" not in burned.coords
 
-    from geosave.geodata.core.anchor import GeoAnchor
 
-    anchor = GeoAnchor.from_coordinates(
-        latitude=45,
-        longitude=12,
-        shape=4,
-        resolution=10,
-        crs="EPSG:32633",
-        timespan="2024-07",
+def test_vectorize_creates_one_row_per_connected_flag_region(raster) -> None:
+    flags = build_dataarray(
+        np.array([[1, 0, 1], [1, 0, 0], [2, 2, 0]], dtype="uint8"),
+        GeoBox.from_bbox(raster.gs.geobox.boundingbox, shape=(3, 3), crs=raster.gs.crs),
+        dims=("y", "x"),
+        nodata=0,
     )
-    left, bottom, right, top = anchor.geobox.boundingbox.bbox
-    plot = gpd.GeoDataFrame(
-        {"label": [1]},
-        geometry=[shapely.box(left, bottom, right, top)],
-        crs=anchor.geobox.crs,
+    vector = vectorize(flags, value_name="class_id")
+    assert list(vector.class_id) == [1, 1, 2]
+    assert vector.gs.crs == flags.gs.crs
+    assert vector.geometry.is_valid.all()
+
+
+def test_vectorize_preserves_the_value_schema_when_every_pixel_is_nodata(
+    raster,
+) -> None:
+    flags = build_dataarray(
+        np.zeros(raster.gs.geobox.shape, dtype="uint8"),
+        raster.gs.geobox,
+        dims=("y", "x"),
+        nodata=0,
     )
+    vector = vectorize(flags, value_name="class_id")
+    restored = rasterize(vector, like=flags, column="class_id", fill=0, dtype="uint8")
+    assert list(vector) == ["class_id", "geometry"]
+    assert vector.class_id.dtype == np.dtype("uint8")
+    np.testing.assert_array_equal(restored.values, np.zeros(flags.shape, "uint8"))
 
-    burned = plot.gs.rasterize(anchor, column="label", dtype="uint8")
 
-    assert burned.dims == ("y", "x")
-    assert burned.time.values == np.datetime64("2024-07-01")
+def test_vectorize_computes_dask_flags_explicitly(raster) -> None:
+    flags = raster.red.chunk({"y": 1, "x": 1})
+    started: list[object] = []
+    with Callback(pretask=lambda key, *_: started.append(key)):
+        vectorize(flags)
+    assert started
 
 
-def test_rasterizing_onto_a_timeless_anchor_leaves_the_result_undated() -> None:
-    import shapely
+def test_vectorize_requires_one_spatial_plane(raster) -> None:
+    flags = raster.red.expand_dims(time=["2025-01-01"])
+    with pytest.raises(ValueError, match="two-dimensional"):
+        vectorize(flags)
 
-    from geosave.geodata.core.anchor import GeoAnchor
 
-    anchor = GeoAnchor.from_coordinates(
-        latitude=45,
-        longitude=12,
-        shape=4,
-        resolution=10,
-        crs="EPSG:32633",
+def test_vectorize_rejects_unsupported_values(raster) -> None:
+    flags = raster.red.astype("complex64")
+    with pytest.raises(ValueError, match="dtype"):
+        vectorize(flags)
+
+
+def test_vectorize_rejects_same_shape_mask_on_another_grid(raster) -> None:
+    shifted = raster.red.assign_coords(x=raster.x + 10)
+    with pytest.raises(ValueError, match="exact flags grid"):
+        vectorize(raster.red, mask=shifted)
+
+
+@pytest.mark.parametrize("problem", ["null", "empty"])
+def test_rasterize_refuses_a_missing_geometry(raster, problem: str) -> None:
+    geometry = None if problem == "null" else Polygon()
+    vector = gpd.GeoDataFrame(geometry=[geometry], crs=raster.gs.crs)
+    with pytest.raises(ValueError, match="null, empty, or invalid"):
+        rasterize(vector, raster)
+
+
+def test_rasterize_refuses_a_geometry_naming_no_ground(raster) -> None:
+    bowtie = gpd.GeoDataFrame(
+        geometry=[Polygon([(0, 0), (1, 1), (1, 0), (0, 1)])], crs=raster.gs.crs
     )
-    left, bottom, right, top = anchor.geobox.boundingbox.bbox
-    plot = gpd.GeoDataFrame(
-        geometry=[shapely.box(left, bottom, right, top)], crs=anchor.geobox.crs
-    )
+    with pytest.raises(ValueError, match="invalid geometry"):
+        rasterize(bowtie, raster)
 
-    assert "time" not in plot.gs.rasterize(anchor).coords
+
+def test_rasterize_without_column_returns_boolean_presence(raster) -> None:
+    vector = gpd.GeoDataFrame(
+        geometry=[to_shapely(raster.gs.geobox.extent)], crs=raster.gs.geobox.extent.crs
+    )
+    mask = rasterize(vector, like=raster)
+    assert mask.dtype == np.dtype("bool")
+    assert mask.values.all()
+
+
+def test_rasterize_later_rows_win_on_overlap(raster) -> None:
+    bounds = raster.gs.geobox.extent.geom
+    vector = gpd.GeoDataFrame(
+        {"class_id": [1, 2]}, geometry=[bounds, bounds], crs=raster.gs.crs
+    )
+    result = rasterize(vector, like=raster, column="class_id", dtype="uint8")
+    assert (result.values == 2).all()
+
+
+def test_rasterize_rejects_values_outside_dtype(raster) -> None:
+    vector = gpd.GeoDataFrame(
+        [{"class_id": 300}],
+        geometry=[to_shapely(raster.gs.geobox.extent)],
+        crs=raster.gs.geobox.extent.crs,
+    )
+    with pytest.raises(ValueError, match="uint8"):
+        rasterize(vector, like=raster, column="class_id", dtype="uint8")
+
+
+def test_rasterize_rejects_non_numeric_property(raster) -> None:
+    vector = gpd.GeoDataFrame(
+        [{"label": "forest"}],
+        geometry=[to_shapely(raster.gs.geobox.extent)],
+        crs=raster.gs.geobox.extent.crs,
+    )
+    with pytest.raises(ValueError, match="numeric raster dtype"):
+        rasterize(vector, like=raster, column="label")
+
+
+def test_rasterize_empty_vector_returns_only_fill(raster) -> None:
+    empty = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs=raster.gs.crs))
+    result = rasterize(empty, like=raster, fill=0)
+    assert not result.values.any()

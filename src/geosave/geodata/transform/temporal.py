@@ -25,13 +25,18 @@ from xarray.core.resample import DataArrayResample, DatasetResample
 
 import geosave.geodata.attrs as attrs
 from geosave.geodata.conventions import TIME_COORDINATE
-from geosave.geodata.core.raster.create import tree
+from geosave.geodata.core.raster.time import assign_bounds, read_bounds
 from geosave.geodata.transform import nodata
-from geosave.geodata.utils.datetime import AnchorDatetime, freq_offset, parse_daterange
+from geosave.geodata.utils.datetime import (
+    AnchorDatetime,
+    freq_offset,
+    parse_daterange,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime as dt, timedelta
+    from datetime import datetime as dt
+    from datetime import timedelta
 
     from geosave.geodata import DataArray, Dataset
     from geosave.geodata.utils.datetime import Freq
@@ -76,33 +81,35 @@ def select[T: xr.DataArray | xr.Dataset | xr.DataTree](
 
     Returns:
         Same kind of raster with matching steps in source order. Composite
-        steps use `start_datetime` and `end_datetime` coordinates when present,
-        including scalar bounds; otherwise each step spans its `time` alone.
-        Missing bounds are open.
+        steps use their `start_datetime` and `end_datetime` coordinates when
+        present, including scalar ones; otherwise each step spans its `time` alone. A missing
+        bound is open.
 
     Examples:
         >>> january = select(observations, "2024-01")
         >>> january.sizes["time"]
         2
     """
-    from geosave.geodata.core.raster.datatree import map_groups
-
     if when is None:
         return data
     if isinstance(data, xr.DataTree):
-        return cast("T", map_groups(data, lambda raster: select(raster, when)))
+        return cast("T", data.map_over_datasets(lambda raster: select(raster, when)))
     if "time" not in data.dims:
         return data
 
     first, last = parse_daterange(when)
-    starts = data.coords.get("start_datetime", data["time"])
-    ends = data.coords.get("end_datetime", data["time"])
-    overlapping = (starts.isnull() | (starts <= np.datetime64(last))) & (
-        ends.isnull() | (ends >= np.datetime64(first))
+    bounds = read_bounds(data.coords)
+    if bounds is None:
+        starts = ends = data["time"].values
+    else:
+        starts, ends = bounds
+    overlapping = (np.isnat(starts) | (starts <= np.datetime64(last))) & (
+        np.isnat(ends) | (ends >= np.datetime64(first))
     )
-    overlapping = overlapping.broadcast_like(data["time"])
+    # One pair of bounds covers every step of a raster that carries one.
+    overlapping = np.broadcast_to(overlapping, data["time"].shape)
 
-    return cast("T", data.isel(time=np.flatnonzero(overlapping.values)))
+    return cast("T", data.isel(time=np.flatnonzero(overlapping)))
 
 
 def concat[T: xr.DataArray | xr.Dataset | xr.DataTree](
@@ -145,10 +152,10 @@ def concat[T: xr.DataArray | xr.Dataset | xr.DataTree](
 
         Rasters that arrived out of order lay down in that order all the same.
         Sort the result where the axis has to be chronological; a DataTree
-        carries no `sortby`, so a tree sorts group by group::
+        carries no `sortby`, so a tree sorts grid node by grid node::
 
             >>> concat([march, january]).sortby("time")
-            >>> tree({n: g.sortby("time") for n, g in scene.gs.rasters.items()})
+            >>> scene.map_over_datasets(lambda node: node.sortby("time") if "time" in node.dims else node)
     """
     if not rasters:
         raise ValueError("no rasters to concatenate; pass at least one")
@@ -188,21 +195,22 @@ def _concat_trees(
     join: Join,
     fill: float | int | Mapping[str, float | int] | None,
 ) -> xr.DataTree:
-    """Concatenate corresponding groups and combine root metadata."""
-    groups = trees[0].gs.groups
+    """Concatenate corresponding grid nodes and combine root metadata."""
+    paths = list(trees[0].gs.rasters)
     for position, other in enumerate(trees[1:], start=1):
-        if set(other.gs.groups) != set(groups):
+        if set(other.gs.rasters) != set(paths):
             raise ValueError(
-                f"tree {position} holds {sorted(other.gs.groups)} and tree 0 "
-                f"holds {sorted(groups)}, so they name different rasters to "
-                f"lay end to end; concatenate trees carrying the same groups"
+                f"tree {position} holds {sorted(other.gs.rasters)} and tree 0 "
+                f"holds {sorted(paths)}, so they name different rasters to "
+                f"lay end to end; concatenate trees carrying the same grid nodes"
             )
-    series = {}
-    for name in groups:
-        series[name] = concat(
-            [other.gs.rasters[name] for other in trees], join=join, fill=fill
-        )
-    combined = tree(series)
+    # The first tree's nodes above the grid nodes keep their attrs.
+    combined = trees[0].copy()
+    for path in paths:
+        nodes = []
+        for other in trees:
+            nodes.append(other.gs.rasters[path])
+        combined[path] = concat(nodes, join=join, fill=fill)
     combined.attrs = attrs.combine_attrs([other.attrs for other in trees])
     return combined
 
@@ -275,7 +283,7 @@ def resample(
     """Cut a time axis into calendar buckets, recording how they were cut.
 
     The `time` coordinate carries a `TimeSpec` from here on, saying what its
-    labels stand for. No pixel moves, and no value changes but the nodata
+    labels stand for; `reduce` turns it into `start_datetime` and `end_datetime`. No pixel moves, and no value changes but the nodata
     ones `skip_nodata` leaves NaN.
 
     Args:
@@ -295,19 +303,21 @@ def resample(
 
     Returns:
         xarray's resampler over the buckets, holding data whose `time`
-        coordinate records the bucketing. Reduce it with any reducer xarray
-        offers; a bucket covering no observation survives as absent.
+        coordinate records the bucketing. Reduce it with `reduce`; a bucket
+        covering no observation survives as absent.
 
     Raises:
         ValueError: `data` carries no `time` coordinate, or pandas does not
             know `freq`.
 
     Examples:
-        >>> monthly = resample(daily, "MS").median()
+        >>> monthly = reduce(resample(daily, "MS"), "median")
         >>> monthly.time.dt.strftime("%Y-%m-%d").values.tolist()
         ['2024-01-01', '2024-02-01', '2024-03-01']
         >>> TimeSpec.from_attrs(monthly.time.attrs).time_freq
         'MS'
+        >>> monthly.end_datetime.dims
+        ('time',)
     """
     if TIME_COORDINATE not in data.coords:
         raise ValueError(
@@ -316,8 +326,12 @@ def resample(
         )
 
     alias = freq_offset(freq)
-    timespec = attrs.TimeSpec.from_resample(
-        alias, closed=closed, label=label, origin=origin, offset=offset
+    timespec = attrs.TimeSpec(
+        time_freq=alias,
+        time_closed=closed,
+        time_label=label,
+        time_origin=origin,
+        time_offset=offset,
     )
     observations = nodata.to_nan(data) if skip_nodata else data
     # The spec rides the time coordinate through grouping onto the reduced axis.
@@ -363,6 +377,8 @@ def reduce(
     Returns:
         New object of the kind the resampler holds, one position per bucket,
         preserving metadata and carrying the CF cell method it was collapsed with.
+        Buckets from `resample` also carry the period each covers as
+        `start_datetime` and `end_datetime`.
 
     Raises:
         ValueError: An input variable holds class codes and `method` is not
@@ -406,15 +422,19 @@ def reduce(
             )
     else:
         buckets = getattr(resampler, method)(keep_attrs=True)
+        timespec = attrs.TimeSpec.from_attrs(buckets[TIME_COORDINATE].attrs)
+        if timespec is not None:
+            bounds = timespec.bounds(buckets[TIME_COORDINATE].values)
+            buckets = assign_bounds(buckets, bounds)
 
     # CF records on each variable how its values were collapsed along time.
     cell_method_attrs = {"cell_methods": f"{TIME_COORDINATE}: {cell_method}"}
     if isinstance(buckets, xr.DataArray):
         return cast("DataArray", buckets.assign_attrs(cell_method_attrs))
-    described = {}
+    reduced_variables = {}
     for name, variable in buckets.data_vars.items():
-        described[name] = variable.assign_attrs(cell_method_attrs)
-    return cast("Dataset", buckets.assign(described))
+        reduced_variables[name] = variable.assign_attrs(cell_method_attrs)
+    return cast("Dataset", buckets.assign(reduced_variables))
 
 
 @overload
@@ -442,8 +462,8 @@ def interpolate(
     by cell, so a partly clouded bucket fills only the cells it missed.
 
     Args:
-        data: DataArray or Dataset whose `time` coordinate records the
-            bucketing it was cut with, as `reduce` leaves it.
+        data: DataArray or Dataset carrying `start_datetime` and `end_datetime`, as
+            `reduce` leaves them.
         method: How an absent cell reads its value. `"nearest"` repeats the
             nearest observed bucket, reaching a bucket with none on one side
             of it; `"linear"` interpolates between the observed buckets on
@@ -459,7 +479,7 @@ def interpolate(
         read between.
 
     Raises:
-        ValueError: The `time` axis is absent or records no bucketing, or
+        ValueError: The `time` axis is absent or carries no `start_datetime` and `end_datetime`, or
             `method="linear"` would interpolate class codes.
 
     Examples:
@@ -476,8 +496,7 @@ def interpolate(
             f"it holds no buckets to fill; resample its time axis first"
         )
 
-    timespec = attrs.TimeSpec.from_attrs(data[TIME_COORDINATE].attrs)
-    if timespec is None and not {"start_datetime", "end_datetime"} <= set(data.coords):
+    if read_bounds(data.coords) is None:
         raise ValueError(
             f"the {TIME_COORDINATE!r} axis names instants rather than buckets, so "
             f"no bucket observed nothing; resample it to a cadence first"

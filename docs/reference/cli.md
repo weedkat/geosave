@@ -56,13 +56,15 @@ Install `geosave[flows]` to use `geosave-flows ingest`.
 | Input | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `--anchor JSON` | Yes | — | Validated `coordinates`, `geojson`, or `raster` [anchor configuration](workflow.md). |
-| `--output PATH` | Yes | — | New local sample directory. |
+| `--output PATH` | Yes | — | New folder for the rasters and their catalog. |
 | `--spec PATH` | Yes | — | Model spec with a STAC recipe for every declared raster. |
-| `--format` | No | `zarr` | `zarr` or `geotiff`, applied to each raster. |
-| `--write-options JSON` | No | `{}` | Native writer options; publication controls `compute`, `layout`, and `overwrite` are rejected. |
 
-The command waits for acquisition and writing, then prints the completed
-sample directory. It needs access to the configured endpoints/assets. It
+Use local `--output` and `--spec` paths for now: the CLI currently rewrites
+remote URL schemes through `pathlib.Path`. The Python flow accepts location
+strings directly.
+
+The command waits for loading and writing, then prints the path of the written
+`catalog.parquet`. It needs access to the configured endpoints/assets. It
 does not run preprocessing or training. See [ingestion](../guides/workflows.md)
 for grid, time, write, and failure behavior.
 
@@ -70,5 +72,7 @@ for grid, time, write, and failure behavior.
 
 `--help` displays help and exits on every command. At the top level,
 `--show-completion` prints shell completion code and `--install-completion`
-installs it for the current shell. Both CLIs load an available `.env` from
-the current directory or a parent before running a command.
+installs it for the current shell. Both CLIs currently call automatic `.env` discovery, which can start from
+the installed library rather than your workspace. Export required settings
+explicitly until workspace lookup is corrected; generated training startup
+does not itself load `.env`.

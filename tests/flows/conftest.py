@@ -38,15 +38,12 @@ class LocalCatalog:
 
 @pytest.fixture
 def local_stac(tmp_path):
-    anchor = GeoAnchor.from_coordinates(
-        45.0,
-        12.0,
-        shape=4,
-        crs="EPSG:32633",
-        resolution=10,
-        timespan="2025-01",
+    from odc.geo.geobox import GeoBox
+
+    box = GeoBox.from_bbox(
+        (500000, 5000000, 500040, 5000040), crs="EPSG:32633", resolution=10
     )
-    box = anchor.geobox
+    anchor = GeoAnchor.from_geometry(box.extent, timespan="2025-01")
     bounds = list(box.geographic_extent.boundingbox)
     timestamp = datetime(2025, 1, 15, 12, tzinfo=timezone.utc)
     collection = pystac.Collection(
@@ -107,13 +104,13 @@ def local_stac(tmp_path):
                 },
             ),
         )
-    return {"optical": LocalCatalog(collection, [item])}, anchor
+    return {"optical": LocalCatalog(collection, [item])}, anchor, box
 
 
 @pytest.fixture
 def stac_server(local_stac):
     """Serve fixture STAC documents while retaining real local raster assets."""
-    catalogues, anchor = local_stac
+    catalogues, anchor, box = local_stac
     queries = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -198,7 +195,7 @@ def stac_server(local_stac):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", queries, anchor
+        yield f"http://127.0.0.1:{server.server_port}", queries, anchor, box
     finally:
         server.shutdown()
         server.server_close()

@@ -9,17 +9,24 @@ pip install "geosave[flows]"
 ```bash
 geosave-flows ingest \
   --anchor '{"kind":"coordinates","latitude":45,"longitude":12,"shape":1024,"resolution":10,"crs":"EPSG:32633","timespan":"2025-01"}' \
-  --output data/scenes/s1 \
+  --output data/raw/s1 \
   --spec model_spec.yaml
 ```
 
 The optional `geosave_flows` package runs Prefect jobs that compose the GeoSave
 library. Its `ingest` command loads the rasters declared in your model spec onto
-one spatial and temporal target, then writes them into a new sample directory.
+one spatial and temporal target, saves them as published, and lists them in one
+catalog.
 It requires a `stac` acquisition recipe for **every** declared raster and access to the
 endpoints and assets in those recipes. Create that spec first using
-[Model spec](model-spec.md); the small tensor-only
-training example has no acquisition recipes and cannot be ingested this way.
+[Model spec](model-spec.md); a spec declaring only input variables has no acquisition recipes and cannot
+be ingested this way.
+
+The CLI currently converts `--output` and `--spec` through `pathlib.Path`,
+which corrupts remote URL schemes. Use local paths with this command until
+that parsing is fixed. The Python `geosave_flows.ingest` function accepts
+unmodified path/URL strings; storage access still requires the corresponding
+backend and credentials. See [the tracked issue](../contributing/review-2026-11-04.md#26-preserve-url-protocols-through-the-flows-cli).
 
 If you already have raster or vector files, start with
 [file ingestion](ingest-files.md). Opening those files does not require a
@@ -28,46 +35,45 @@ model declares.
 
 | Input | Used for | Output |
 | --- | --- | --- |
-| Anchor configuration | Target grid and time range | GeoAnchor opened by the flow. |
+| Anchor configuration | Location, time and grid settings | Geographic GeoAnchor and native GeoBox opened by the flow. |
 | Model spec YAML with STAC recipes | Collection search and required raster validation | One Dataset per declared raster. |
-| New local output directory and format | Computing and writing the acquired rasters | Completed directory path as a string. |
+| New output folder | Computing and writing the loaded rasters | Path of the written `catalog.parquet`, as a string. |
 
 The command runs a Prefect flow locally and waits for completion. Prefect may
 start a temporary server; a Prefect account is not required. On success, the
-final command output is the directory path:
+final command output is the catalog path:
 
 ```text
-data/scenes/s1
+data/raw/s1/catalog.parquet
 ```
 
 This is the expected result for a successful run with the command above; the
 external data download is separate from the offline training examples.
 
-## Open the saved sample
+## Open the catalog
 
 ```python
 import geosave as gs
 
-scene = gs.open_tree("data/scenes/s1")
-scene
+catalog = gs.open_vector("data/raw/s1/catalog.parquet")
+catalog.iloc[0].gs.to_datatree()
 ```
 
-The result is a native xarray DataTree, with one raster group per name in
-`ModelSpec.rasters`. For example, a spec declaring `sentinel_2_l2a` produces:
+The result is an item table: one STAC Item per declared raster and instant,
+each a COG under the output folder named after its raster. For example, a spec
+declaring `sentinel_2_l2a` produces:
 
 ```text
-data/scenes/s1/
-└── sentinel_2_l2a.zarr/
+data/raw/s1/
+├── catalog.parquet
+└── sentinel_2_l2a/
+    └── 20250115T000000.tif
 ```
 
-The default Zarr format retains a time series. Use `--format geotiff` for
-rasters with no time dimension or exactly one instant; the writer refuses a
-multi-instant raster in that format. Reading the directory opens its rasters;
-it does not create training splits or a torch Dataset.
-
+Each run writes one catalog. Join several runs with `gs.GeoCatalog.concat`.
 Ingestion writes only the declared rasters. It does not run the spec's
-preprocessing graph, tensor transforms, or training. Add saved rasters to a
-catalog when you need to organize many samples; see [STAC](stac.md) and
+preprocessing graph, tensor transforms, or training; `ModelSpec.prepare` takes
+this catalog next. See [STAC](stac.md) and
 [catalogs and cuts](catalogs-and-cuts.md).
 
 ## Choose the target grid
@@ -81,7 +87,7 @@ supported:
 | `geojson` | The extent of a local GeoJSON file, with either shape or resolution. | Optional `timespan`. |
 | `raster` | An existing raster's exact grid. | The raster's own temporal metadata. |
 
-For raster labels, use their grid as the anchor:
+For raster labels, derive geographic coverage and the exact grid from the file:
 
 ```json
 {"kind": "raster", "path": "data/reference.tif"}
@@ -111,33 +117,29 @@ anchor = TypeAdapter(AnchorConfig).validate_python(
 )
 scene_path = ingest(
     anchor=anchor,
-    output="data/scenes/s1",
+    output="data/raw/s1",
     spec="model_spec.yaml",
 )
 scene_path
 ```
 
 The Python flow accepts a validated anchor configuration, rather than an
-unvalidated dictionary. It opens that anchor, loads the spec's rasters, and
-returns the completed sample directory as a string. Validating the
+unvalidated dictionary. It opens the geographic anchor and pixel grid, loads the spec's rasters, and
+returns the written catalog's path as a string. Validating the
 configuration alone does not open files or contact STAC services.
 
 | CLI option | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `--anchor JSON` | Yes | — | Spatial and temporal target. |
-| `--output PATH` | Yes | — | New local sample directory. |
+| `--output PATH` | Yes | — | New folder for the rasters and their catalog. |
 | `--spec PATH` | Yes | — | Model spec YAML file. |
-| `--format [geotiff\|zarr]` | No | `zarr` | Storage for each raster. |
-| `--write-options JSON` | No | `{}` | Encoding options passed to the native writer. |
 
 [`ModelSpec.load`](../reference/model-spec.md#geosave.model.spec.ModelSpec.load)
-reads the supplied YAML file directly. The output directory must not already
-exist. Files are written into a staging directory and the completed sample is
-then published as the destination. The writer also requires co-registered rasters. It owns publication settings,
-so `compute`, `layout`, and `overwrite` are not accepted in `write-options`.
+reads the supplied YAML file directly. The output folder must not already
+exist.
 
-See the [optional flows API](../reference/workflow.md) for flow, anchor, and
-sample writer arguments.
+See the [optional flows API](../reference/workflow.md) for flow and anchor
+arguments.
 
 ## Load rasters directly in Python
 
@@ -149,12 +151,15 @@ recipes:
 import geosave as gs
 from geosave.model.spec import ModelSpec
 
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=1024, resolution=10,
-    crs="EPSG:32633", timespan="2025-01",
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 510240, 5010240),
+    crs='EPSG:32633', resolution=10,
 )
+anchor = gs.GeoAnchor.from_geometry(grid.extent, timespan='2025-01')
 spec = ModelSpec.load("model_spec.yaml")
-rasters = spec.load_rasters(anchor)
+rasters = spec.load_rasters(anchor, geobox=grid)
 rasters
 ```
 
@@ -166,24 +171,8 @@ preprocessing; saving and training are separate calls too.
 
 ## Prepare an existing catalog for training
 
-```python
-import geosave as gs
-from geosave.model.spec import ModelSpec
-
-raw = gs.open_vector("data/raw/catalog.parquet")
-spec = ModelSpec.load("model_spec.yaml")
-prepared = spec.prepare(raw, "data/prepared", on="label")
-prepared
-```
-
-For a compatible raw Item table and spec, this returns
-`data/prepared/catalog.parquet`. `on="label"` selects the collection whose
-items define the preparation windows. The method runs model-owned raster
-selection and preprocessing, writes the input rasters and retained labels as
-COGs, and saves the new catalog and model spec. Tensor transforms still run
-later in the DataModule. This operation reads and writes pixels; the output
-folder must be new. See [Model spec](model-spec.md)
-for a complete catalog example.
-
-The optional flows package currently provides ingestion. Use
-`ModelSpec.prepare` directly for catalog preparation.
+The Prefect package provides ingestion. Catalog preparation through
+`ModelSpec.prepare` currently has a nested-tree compatibility gap; see
+[the limitation and in-memory alternative](model-spec.md#catalog-preparation-limitation).
+Sample an Item table with `items.gs.sample(...)` and cut opened raster trees
+with `gs.Chips(...)`. ModelSpec has no `sample` method.

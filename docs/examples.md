@@ -38,7 +38,7 @@ separate test set before drawing conclusions about model accuracy.
 | I want to… | Read |
 | --- | --- |
 | Start with pretrained weights. | [Pretrained models](guides/pretrained.md) |
-| Use GeoSave's training modules. | [Training](guides/training.md) |
+| Run an editable Lightning starter. | [Training](guides/training.md) |
 | Save training settings in a project. | [Workspaces](guides/workspaces.md) |
 | Declare a model's data requirements. | [ModelSpec](guides/model-spec.md), an Alpha API |
 | Prepare spatial and temporal windows. | [Catalogs and cuts](guides/catalogs-and-cuts.md) |

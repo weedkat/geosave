@@ -7,8 +7,8 @@ Examples:
     A DataArray holds one band's pixels. `band` and `time` lead, the spatial
     pair trails, and `spatial_ref` rides along carrying the CRS:
 
-    >>> array(pixels, geobox, dims=("time", "band", "y", "x"),
-    ...       time=labels, band=["red", "green", "blue"])
+    >>> xr.DataArray(pixels, dims=("time", "band", "y", "x"),
+    ...       coords={"time": labels, "band": ["red", "green", "blue"]}).gs.write_grid(geobox)
     <xarray.DataArray (time: 2, band: 3, y: 512, x: 512)>
     Coordinates:
       * time         (time) datetime64[ns] 2025-06-01 2025-06-11
@@ -20,8 +20,8 @@ Examples:
     A Dataset holds several variables on one grid. They need not span the same
     axes — `red` repeats over `time`, `dem` does not:
 
-    >>> raster({"red": (("time", "y", "x"), cube),
-    ...         "dem": (("y", "x"), flat)}, geobox, time=labels)
+    >>> xr.Dataset({"red": (("time", "y", "x"), cube),
+    ...         "dem": (("y", "x"), flat)}, coords={"time": labels}).gs.write_grid(geobox)
     <xarray.Dataset>
     Dimensions:      (y: 512, x: 512, time: 2)
     Coordinates:
@@ -33,36 +33,36 @@ Examples:
         red          (time, y, x) uint16 ...
         dem          (y, x) float32 ...
 
-    A DataTree holds several rasters on one shared grid. The root carries the
-    coordinates every group shares, so a group repeats only `spatial_ref` and
-    xarray refuses one that does not align:
+    A DataTree holds collections, each over its grid nodes. Every grid node
+    carries its own grid, and the root and collection nodes carry none:
 
-    >>> tree({"sentinel-2-l2a": optical, "dem": dem})
+    >>> xr.merge([optical.gs.to_datatree("sentinel-2-l2a"), dem.gs.to_datatree("dem")])
     <xarray.DataTree>
     Group: /
-    │   Dimensions:      (y: 512, x: 512, time: 2)
-    │   Coordinates:
-    │     * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
-    │     * x            (x) float64 3e+05 3e+05 ... 3.051e+05
-    │     * time         (time) datetime64[ns] 2025-06-01 2025-06-11
-    │       spatial_ref  int32 32633
     ├── Group: /sentinel-2-l2a
-    │       Dimensions:      (time: 2, y: 512, x: 512)
-    │       Coordinates:
-    │           spatial_ref  int32 32633
-    │       Data variables:
-    │           red          (time, y, x) uint16 ...
+    │   └── Group: /sentinel-2-l2a/r10m
+    │           Dimensions:      (time: 2, y: 512, x: 512)
+    │           Coordinates:
+    │             * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
+    │             * x            (x) float64 3e+05 3e+05 ... 3.051e+05
+    │             * time         (time) datetime64[ns] 2025-06-01 2025-06-11
+    │               spatial_ref  int32 32633
+    │           Data variables:
+    │               red          (time, y, x) uint16 ...
     └── Group: /dem
-            Dimensions:      (y: 512, x: 512)
-            Coordinates:
-                spatial_ref  int32 32633
-            Data variables:
-                dem          (y, x) float32 ...
+        └── Group: /dem/r10m
+                Dimensions:      (y: 512, x: 512)
+                Coordinates:
+                  * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
+                  * x            (x) float64 3e+05 3e+05 ... 3.051e+05
+                    spatial_ref  int32 32633
+                Data variables:
+                    dem          (y, x) float32 ...
 
-    Without a geobox odc resolves no grid, so the pixels keep their shape and
+    Without `write_grid` odc resolves no grid, so the pixels keep their shape and
     claim no ground position. The spatial pair is named but carries no labels:
 
-    >>> array(pixels, dims=("y", "x"))
+    >>> xr.DataArray(pixels, dims=("y", "x"))
     <xarray.DataArray (y: 512, x: 512)>
     Dimensions without coordinates: y, x
 
@@ -93,6 +93,20 @@ BAND_DIMENSION = "band"
 
 # Axis a raster spans when it carries observations over time.
 TIME_COORDINATE = "time"
+
+# Coordinates along `time` holding the inclusive first and last instant each
+# label covers. Two plain coordinates rather than CF `time_bnds`, whose extra
+# `bnds` dimension a DataArray cannot carry.
+START_DATETIME = "start_datetime"
+END_DATETIME = "end_datetime"
+
+# Coordinate along `time` holding each date's STAC Item properties as JSON
+# text: one mapping per date, which NetCDF and Zarr store as a string.
+STAC_PROPERTIES = "stac_properties"
+
+# A STAC Item's id by default: its time and the centre of its grid, which
+# together name one observation of a collection.
+ITEM_ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{lat:.4f}_{lon:.4f}"
 
 
 def _spatial_pair(data: xr.DataArray | xr.Dataset) -> tuple[str, str] | None:

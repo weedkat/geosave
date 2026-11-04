@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from geosave.geodata.core.raster.create import raster
+from tests.conftest import build_dataset
 from tests.geodata.conftest import geobox
 
 
@@ -13,7 +13,7 @@ def optical(shape: tuple[int, int] = (8, 8), *, times: int = 2) -> xr.Dataset:
     labels = np.array(
         [f"2024-0{month + 1}-01" for month in range(times)], dtype="datetime64[ns]"
     )
-    return raster(
+    return build_dataset(
         {
             "B04": (
                 ("time", *("y", "x")),

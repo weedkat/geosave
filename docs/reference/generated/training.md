@@ -5,6 +5,10 @@
 below are rendered directly from the implementation. Configuration input
 fields appear as attributes, including their annotated types and defaults.
 
+::: geosave.ml.builders.criterion.CRITERIA
+    options:
+      show_root_full_path: true
+
 ::: geosave.ml.builders.criterion.CriterionSpec
     options:
       show_root_full_path: true
@@ -164,14 +168,6 @@ fields appear as attributes, including their annotated types and defaults.
 ::: geosave.ml.transforms.augmenter.build_augmentation_pipeline
     options:
       show_root_full_path: true
-
-::: geosave.ml.transforms.inputs.InputTransform
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - transforms
-        - forward
 
 ::: geosave.ml.transforms.mixing.CutMix
     options:

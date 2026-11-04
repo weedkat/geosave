@@ -7,17 +7,21 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import xarray as xr
 
 import geosave as gs
 
 root = Path(tempfile.mkdtemp())
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
-scene = gs.raster({"red": (("y", "x"), pixels)}, anchor.geobox, nodata=0)
-files = scene.gs.to_cog(root / "scene.tif")
-reopened = gs.open_raster(files)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
+files = scene.gs.to_cog(root, path_format="scene.tif")
+reopened = gs.open_raster(files[0])
 reopened
 ```
 
@@ -27,8 +31,8 @@ Output:
 <xarray.Dataset> Size: 88B
 Dimensions:      (x: 4, y: 4)
 Coordinates:
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
     spatial_ref  int64 8B 0
 Data variables:
     red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
@@ -38,18 +42,21 @@ Attributes:
 
 The reopened object is an xarray `Dataset`, with one variable per band.
 The file preserves this raster's grid, `uint8` values, variable name, and nodata.
-`to_cog` returns a list of `Scene`s, one per date. Each scene maps an asset key
-to a `RasterFile`: the file's `path` and the `header` it states, its bands and
-date, without pixels. A file holding one band is keyed by that band, and a file
-holding several is keyed `"image"`. `gs.open_raster(scenes)` reads them back as
-one raster.
+`to_cog` returns a list of written UPaths, in time then variable order.
+`gs.open_raster(files[0])` reads the single file in this example. For files split across bands or dates, write a catalog and use `rows.gs.to_datatree()`. Only GeoTIFF is split
+into files by a template (`{collection}`, `{res}`, `{time}`, `{band}`), since a
+GeoTIFF holds one grid at one date. `to_zarr` and `to_netcdf` take no template:
+they write one store and return its UPath, and a tree's store keeps its
+collections and grid nodes as groups, which `gs.open_raster(path)` reads back.
+With `compute=False`, each writer returns one native Dask Delayed whose
+computed result has the same shape.
 
 Readers pick the format from the path suffix:
 
 | Object | Reader | Writers |
 | --- | --- | --- |
 | Raster: xarray `Dataset` | `gs.open_raster(path)` | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf` |
-| Tree: xarray `DataTree` | `gs.open_tree(paths)` | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf` |
+| Tree: xarray `DataTree` | `gs.open_raster(path)` | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf` |
 | Vector: GeoPandas `GeoDataFrame` | `gs.open_vector(path)` | `.gs.to_geoparquet`, `.gs.to_geojson`, `.gs.to_geopackage` |
 
 A location can be a string, `Path`, or `UPath`. For a full workflow, see
@@ -74,8 +81,8 @@ Output:
 <xarray.Dataset> Size: 84B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B ...
 Data variables:
     red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
@@ -93,16 +100,17 @@ Output:
 <xarray.Dataset> Size: 84B
 Dimensions:      (y: 4, x: 4)
 Coordinates:
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
     spatial_ref  int32 4B ...
 Data variables:
-    red          (y, x) uint8 16B ...
+    red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
 ```
 
 Zarr and NetCDF writers return a destination `UPath`, which readers accept.
-`chunks={}` opens Dask arrays, so arithmetic stays lazy; writing computes the
-pixels. See [lazy data](../concepts/lazy-data.md).
+`chunks={}` is the convenience opener default: Dask arrays keep arithmetic
+lazy. Pass `chunks=None` for backend indexing without Dask. Writing computes
+the pixels. See [lazy data](../concepts/lazy-data.md).
 
 Close file-backed objects when you finish:
 

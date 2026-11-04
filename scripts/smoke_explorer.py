@@ -6,11 +6,11 @@ In a notebook, import `create_explorer` and display its return value. Set
 GEOSAVE_PROOF_SIZE=8192 for the larger raster-work measurement fixture.
 """
 
-from datetime import datetime, timezone
 import os
+import weakref
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import weakref
 
 import dask.array as da
 import geopandas as gpd
@@ -21,8 +21,7 @@ from odc.geo.xr import xr_coords
 from shapely.geometry import Point, box
 
 import geosave  # noqa: F401
-from geosave.geodata import stac
-from geosave.geodata.viz.explorer import Explorer, RasterLayer
+from geosave.geodata.viz.explore import Explorer, RasterLayer
 
 
 def create_explorer() -> Explorer:
@@ -54,11 +53,10 @@ def create_explorer() -> Explorer:
         }
     ).gs.write_rgb("red", "green", "blue")
     # File creation is explicit fixture work, outside display measurements.
-    files = raster.gs.to_cog(Path(directory.name) / "image.tif")
-    catalog = stac.create_catalog(
-        stac.create_items(
-            files, id_format="COG", datetime=datetime(2024, 1, 1, tzinfo=timezone.utc)
-        )
+    catalog = raster.gs.to_catalog(
+        Path(directory.name) / "image.tif",
+        id_format="COG",
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
     )
     catalog["quality"] = 90
     fields = gpd.GeoDataFrame(

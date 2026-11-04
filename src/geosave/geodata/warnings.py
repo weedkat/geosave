@@ -1,15 +1,5 @@
 """Warnings for data loss, assumptions, and incomplete results."""
 
-__all__ = [
-    "GeoSaveWarning",
-    "UnreadMaskWarning",
-    "AssumedFillWarning",
-    "DroppedAttrsWarning",
-    "DroppedInstantsWarning",
-    "DroppedRowsWarning",
-    "PartialCoverWarning",
-]
-
 
 class GeoSaveWarning(UserWarning):
     """Base category for GeoSave warnings.
@@ -44,7 +34,3 @@ class PartialCoverWarning(GeoSaveWarning):
 
 class TimelessItemWarning(GeoSaveWarning):
     """An Item's files state no time, so it spans all of time."""
-
-
-class MissingGridWarning(GeoSaveWarning):
-    """An Item cannot define a spatial window because it states no grid."""

@@ -1,153 +1,141 @@
-"""Exact spatial and temporal coverage independent of raster values."""
+"""Geographic location and temporal coverage, independent of pixel grids."""
 
 from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Self, get_args
+from typing import TYPE_CHECKING, Self
 
-from odc.geo.crs import CRS as OdcCRS
-from odc.geo.geobox import GeoBox
-from odc.geo.geom import BoundingBox, point
+from odc.geo.crs import CRS
+from odc.geo.geom import BoundingBox, Geometry, point
 
-from geosave.geodata.utils.datetime import (
-    AnchorDatetime,
-    DateRange,
-    parse_daterange,
-)
-from geosave.geodata.utils.crs import (
-    select_grid_crs,
-    validate_wgs84_bbox,
-    validate_wgs84_coordinate,
-)
+from geosave.geodata.utils.crs import validate_wgs84_bbox, validate_wgs84_coordinate
+from geosave.geodata.utils.datetime import AnchorDatetime, DateRange, parse_daterange
 from geosave.geodata.utils.geometry import SomeGeometry
-
-# Where pixel edges sit relative to the CRS origin, spelled as odc accepts it.
-type GridAnchor = Literal["edge", "centre", "floating"]
 
 if TYPE_CHECKING:
     import geopandas as gpd
-    from odc.geo import Resolution
-    from pyproj import CRS
-
+    from odc.geo import SomeCRS
+    from odc.geo.geobox import GeoBox
     from geosave.geodata.utils.geocode import Place
 
 
 @dataclass(frozen=True, eq=False)
 class GeoAnchor:
-    """Describe exactly where and when geospatial data exists.
+    """Describe a CRS-aware location and optional temporal coverage.
 
     Args:
-        geobox: Exact pixel grid, including CRS, transform, bounds, and shape.
-        timespan: Inclusive temporal coverage, or None for timeless data.
+        geometry: Nonempty, valid ODC geometry with a CRS. Points and polygons
+            retain their shape; no pixel grid is inferred.
+        timespan: Inclusive pair of start/end datetimes, or None for a timeless
+            location. The factory methods also accept date strings and intervals.
     """
 
-    geobox: GeoBox
+    geometry: Geometry
     timespan: DateRange | None = None
 
-    @property
-    def crs(self) -> OdcCRS:
-        """Read the coordinate reference system the grid is placed in.
-
-        Returns:
-            CRS the geobox names.
-
-        Raises:
-            ValueError: The geobox carries no CRS, so it is indexed in pixels
-                rather than placed on the ground.
-        """
-        if self.geobox.crs is None:
-            raise ValueError(
-                "geobox carries no CRS, so the anchor is not placed on the ground"
-            )
-        return self.geobox.crs
+    def __post_init__(self) -> None:
+        if not isinstance(self.geometry, Geometry):
+            raise TypeError("geometry must be an odc.geo Geometry; use from_geometry")
+        if self.geometry.crs is None:
+            raise ValueError("anchor geometry needs a CRS")
+        if self.geometry.is_empty or not self.geometry.is_valid:
+            raise ValueError("anchor geometry must be nonempty and valid")
+        if self.timespan is not None:
+            object.__setattr__(self, "timespan", parse_daterange(self.timespan))
 
     @property
-    def resolution(self) -> Resolution:
-        """Read the pixel size in CRS units.
-
-        Returns:
-            Signed resolution along x and y.
-        """
-        return self.geobox.resolution
+    def crs(self) -> CRS:
+        """Return the geometry's coordinate reference system."""
+        assert self.geometry.crs is not None
+        return self.geometry.crs
 
     @property
     def lonlat(self) -> tuple[float, float]:
-        """Return the grid centroid in WGS84 longitude/latitude order.
-
-        Returns:
-            Longitude and latitude in degrees.
-        """
-        longitude, latitude = self.geobox.extent.centroid.to_crs("EPSG:4326").coords[0]
+        """Return the centroid in WGS84 longitude/latitude order."""
+        longitude, latitude = self.geometry.centroid.to_crs("EPSG:4326").coords[0]
         return float(longitude), float(latitude)
 
     def locate(self) -> Place | None:
-        """Reverse geocode the grid centroid, asking Nominatim over the network.
+        """Reverse geocode the centroid through Nominatim.
+
+        May make a network request; results are cached by rounded coordinates.
 
         Returns:
-            Resolved place, or None when Nominatim has no result or is
-            unavailable.
+            Place with the available address fields, or None when the service
+            has no result or cannot be reached.
         """
         from geosave.geodata.utils.geocode import Place
 
         longitude, latitude = self.lonlat
         return Place.from_coordinate(latitude, longitude)
 
-    def replace(self, *, timespan: AnchorDatetime | None) -> GeoAnchor:
-        """Return this anchor over another time, on the same grid.
+    def replace(self, *, timespan: AnchorDatetime | None) -> Self:
+        """Return a new anchor with the same geometry and another timespan.
 
         Args:
-            timespan: Temporal coverage, as `parse_daterange` accepts it, such
-                as a month `"2025-06"`. None makes the anchor timeless.
+            timespan: ISO or compact date string (such as "2025-06" or
+                "20250601"), a "start/end" interval, a pair of date strings,
+                or a pair of datetimes. Partial dates cover their entire period;
+                string range endpoints are inclusive. None makes the new anchor
+                timeless.
 
         Returns:
-            New anchor; this one is unchanged.
-
-        Examples:
-            >>> month = anchor.replace(timespan=anchor.format("{start:%Y-%m}"))
-            >>> source.search(month)
+            New anchor; the original is unchanged.
         """
-        window = None if timespan is None else parse_daterange(timespan)
-        return dataclasses.replace(self, timespan=window)
+        return dataclasses.replace(
+            self, timespan=None if timespan is None else parse_daterange(timespan)
+        )
 
-    def format(self, template: str) -> str:
-        """Spell this anchor through a `str.format` template.
-
-        Each field takes its own format spec, so a date field reads `strftime`
-        directives and a number reads a precision.
+    def format(self, template: str, *, geobox: GeoBox | None = None) -> str:
+        """Format location and time fields with a Python format string.
 
         Args:
-            template: Template naming any of `lon` and `lat` (WGS84 centroid,
-                degrees), `start` and `end` (timespan edges), `res` (pixel
-                size along x), `width` and `height` (ground extent) — the last
-                three in grid CRS units — and `epsg`.
+            template: Text containing named replacement fields:
+                `lon` and `lat` are centroid coordinates in WGS84 degrees;
+                `epsg` is the integer CRS code, or None if unavailable;
+                `width` and `height` are geometry bounds spans in the geometry's
+                CRS units, not pixel counts. `start` and `end` are inclusive
+                datetimes, available only when the anchor has a timespan.
+                Use numeric formats such as `{lon:.4f}`, datetime formats such
+                as `{start:%Y%m%d}`, and `{{` or `}}` for literal braces.
+            geobox: Optional grid supplying `epsg`, `width`, and `height`
+                instead of the anchor geometry, plus `res` (absolute x-axis
+                resolution). Spans and resolution use the grid's CRS units.
+                The anchor still supplies `lon`, `lat`, `start`, and `end`.
+                Without a grid, `res` is unavailable.
 
         Returns:
-            The template with every field filled in.
+            Text with the fields substituted.
 
         Raises:
-            ValueError: The template names a field this anchor does not offer,
-                as `start` on a timeless one.
+            ValueError: A field is unavailable, the template is malformed, or
+                a format specification is invalid for its value, or the supplied
+                grid has no CRS.
 
         Examples:
-            >>> anchor = GeoAnchor.from_coordinates(
-            ...     52, 13, 500, 10, timespan="2025-06-01/2025-06-11"
-            ... )
-            >>> anchor.format("{lat:.2f}N_{lon:.2f}E_{start:%Y%m%d}_{res:g}m")
-            '52.00N_13.00E_20250601_10m'
-            >>> anchor.format("{start:%Y}/{start:%m}/{epsg}")
-            '2025/06/32633'
+            >>> anchor = GeoAnchor.from_coordinates(52, 13, timespan="2025-06")
+            >>> anchor.format("{lat:.2f}_{lon:.2f}_{start:%Y%m%d}")
+            '52.00_13.00_20250601'
         """
         longitude, latitude = self.lonlat
-        bounds = self.geobox.boundingbox
+        bounds = self.geometry.boundingbox
         fields: dict[str, object] = {
             "lon": longitude,
             "lat": latitude,
-            "res": abs(self.resolution.x),
+            "epsg": self.crs.epsg,
             "width": bounds.span_x,
             "height": bounds.span_y,
-            "epsg": self.crs.epsg,
         }
+        if geobox is not None:
+            if geobox.crs is None:
+                raise ValueError("grid carries no CRS")
+            fields.update(
+                epsg=geobox.crs.epsg,
+                width=geobox.boundingbox.span_x,
+                height=geobox.boundingbox.span_y,
+                res=abs(geobox.resolution.x),
+            )
         if self.timespan is not None:
             fields["start"], fields["end"] = self.timespan
         try:
@@ -162,223 +150,111 @@ class GeoAnchor:
         cls,
         bbox: BoundingBox | tuple[float, float, float, float],
         *,
-        resolution: float | None = None,
-        shape: int | tuple[int, int] | None = None,
-        pad: float = 0.0,
-        crs: str | CRS | OdcCRS | None = None,
-        anchor: GridAnchor = "edge",
         timespan: AnchorDatetime | None = None,
     ) -> Self:
-        """Build an anchor on a grid covering a bounding box.
-
-        The grid always covers the padded box. Size it by `resolution` and the
-        pixel count follows, or by `shape` and the pixel size follows.
+        """Create an anchor from bounding coordinates.
 
         Args:
-            bbox: Bounds as `(left, bottom, right, top)` in WGS84 degrees, or
-                an ODC BoundingBox carrying its own CRS.
-            resolution: Pixel size in grid CRS units.
-            shape: Pixels to divide the box into — one value spans the longest
-                axis at square pixels, or `(height, width)` spans both.
-            pad: Grid CRS units added to every side of the box.
-            crs: CRS to place the grid in. None keeps a projected source CRS
-                or selects local UTM/UPS for a geographic one.
-            anchor: Where pixel edges fall relative to the CRS origin.
-                `"edge"` puts them on multiples of `resolution`, so grids built
-                from different extents share one lattice and compose.
-                `"floating"` fits the extent exactly instead, at a phase
-                nothing else shares.
-            timespan: Temporal coverage, as `parse_daterange` accepts it. None
-                leaves the anchor timeless.
+            bbox: ODC BoundingBox in its own CRS, or a WGS84
+                `(west, south, east, north)` tuple in degrees. A BoundingBox
+                without a CRS is also interpreted as WGS84.
+            timespan: ISO or compact date string, "start/end" interval, pair
+                of date strings, or pair of datetimes. Partial dates cover
+                their whole period, including both endpoints. None is timeless.
 
         Returns:
-            Anchor whose geobox covers the padded box.
+            Anchor whose geometry is the bounding polygon.
 
         Raises:
-            ValueError: Neither or both of `resolution` and `shape` are given,
-                a measurement is not positive, or `anchor` is not a known
-                spelling.
-
-        Examples:
-            >>> GeoAnchor.from_bbox((112.10, -8.10, 112.20, -8.00), resolution=10).geobox.crs
-            CRS('EPSG:32749')
+            ValueError: WGS84 bounds are out of range, south exceeds north,
+                the resulting geometry is invalid or empty, or a date string
+                cannot be parsed.
         """
-        if (resolution is None) == (shape is None):
-            raise ValueError(
-                "give exactly one of resolution= or shape= to size the grid"
-            )
-        if resolution is not None and resolution <= 0:
-            raise ValueError(f"resolution must be positive, got {resolution}")
-        if pad < 0:
-            raise ValueError(f"pad must be non-negative, got {pad}")
-        if anchor not in get_args(GridAnchor.__value__):
-            raise ValueError(
-                f"anchor must be one of {get_args(GridAnchor.__value__)}, got {anchor!r}"
-            )
-
-        bounds = bbox if isinstance(bbox, BoundingBox) else BoundingBox(*bbox, crs=None)
-        if bounds.crs is None:
-            # Bare numbers are lon/lat, as odc assumes; say so before the grid maths does.
-            edges = (bounds.left, bounds.bottom, bounds.right, bounds.top)
-            validate_wgs84_bbox(edges)
-            bounds = BoundingBox(*edges, crs="EPSG:4326")
-        grid_crs = select_grid_crs(bounds, crs)
-        return cls(
-            GeoBox.from_bbox(
-                bounds.to_crs(grid_crs).buffered(pad),
-                grid_crs,
-                resolution=resolution,
-                shape=shape,
-                anchor=anchor,
-            ),
-            timespan=None if timespan is None else parse_daterange(timespan),
-        )
+        if not isinstance(bbox, BoundingBox) or bbox.crs is None:
+            validate_wgs84_bbox(tuple(bbox))
+            bbox = BoundingBox(*bbox, crs="EPSG:4326")
+        return cls.from_geometry(bbox.polygon, timespan=timespan)
 
     @classmethod
     def from_geometry(
         cls,
         geometry: SomeGeometry | gpd.GeoDataFrame | gpd.GeoSeries,
         *,
-        resolution: float | None = None,
-        shape: int | tuple[int, int] | None = None,
-        pad: float = 0.0,
-        crs: str | CRS | OdcCRS | None = None,
-        anchor: GridAnchor = "edge",
+        crs: SomeCRS | None = None,
         timespan: AnchorDatetime | None = None,
     ) -> Self:
-        """Build an anchor on a grid covering one geometry or a vector's features.
-
-        The grid always covers the geometry. Size it by `resolution` and the
-        pixel count follows, or by `shape` and the pixel size follows. A
-        geographic geometry is placed on its local UTM or UPS CRS.
+        """Preserve a geometry or union a frame's features, without creating a grid.
 
         Args:
-            geometry: GeoJSON mapping, WKT string, Shapely geometry, or ODC
-                geometry; or a GeoDataFrame or GeoSeries, covered whole in
-                its own CRS.
-            resolution: Pixel size in grid CRS units.
-            shape: Pixels to divide the extent into — one value spans the
-                longest axis at square pixels, or `(height, width)` spans both.
-            pad: Grid CRS units added to every side of the geometry extent.
-            crs: CRS to place the grid in. None keeps a projected source CRS
-                or selects local UTM/UPS for a geographic one.
-            anchor: Where pixel edges fall relative to the CRS origin.
-                `"edge"` puts them on multiples of `resolution`, so grids built
-                from different extents share one lattice and compose.
-                `"floating"` fits the extent exactly instead, at a phase
-                nothing else shares.
-            timespan: Temporal coverage, as `parse_daterange` accepts it. None
-                leaves the anchor timeless.
+            geometry: ODC geometry, GeoDataFrame/GeoSeries, GeoJSON geometry
+                mapping, WKT string, or Shapely geometry. Frames and series
+                must carry a CRS and contain valid, nonempty geometries without
+                missing values; their features are unioned.
+            crs: CRS of bare geometry inputs (WGS84 when omitted). For inputs
+                carrying a CRS, a different CRS must be applied explicitly first.
+            timespan: ISO or compact date string, "start/end" interval, pair
+                of date strings, or pair of datetimes. Partial dates cover
+                their whole period, including both endpoints. None is timeless.
 
         Returns:
-            Anchor whose geobox covers the padded extent.
+            Anchor preserving the geometry's shape and CRS.
 
         Raises:
-            ValueError: The geometry is empty or invalid, neither or both of
-                `resolution` and `shape` are given, or a measurement is not
-                positive.
-
-        Examples:
-            >>> GeoAnchor.from_geometry(field, resolution=10).geobox.shape
-            Shape2d(x=335, y=1108)
-            >>> GeoAnchor.from_geometry(field, shape=512).geobox.resolution
-            Resolution(x=21.6149, y=-21.6149)
+            TypeError: The geometry representation is unsupported.
+            ValueError: Geometry is invalid or empty, a frame or series lacks
+                a CRS, an explicit CRS conflicts with the existing CRS, or a
+                date string cannot be parsed.
         """
         import geopandas as gpd
+        from geosave.geodata.utils.geometry import to_shapely
 
-        from .vector.vector import GeoVector
-
-        if isinstance(geometry, gpd.GeoSeries):
-            geometry = gpd.GeoDataFrame(geometry=geometry)
-        if not isinstance(geometry, gpd.GeoDataFrame):
-            geometry = GeoVector.from_geometry(geometry)
-        # Reproject before bounding, so the box fits no looser than the CRS change forces.
-        footprint = geometry.gs.footprint
-        grid_crs = select_grid_crs(footprint, crs)
-        return cls.from_bbox(
-            footprint.to_crs(grid_crs).boundingbox,
-            resolution=resolution,
-            shape=shape,
-            pad=pad,
-            crs=grid_crs,
-            anchor=anchor,
-            timespan=timespan,
-        )
+        if isinstance(geometry, (gpd.GeoDataFrame, gpd.GeoSeries)):
+            shapes = geometry.geometry
+            if geometry.crs is None:
+                raise ValueError("geometry frame needs a CRS")
+            if (
+                shapes.empty
+                or shapes.isna().any()
+                or shapes.is_empty.any()
+                or not shapes.is_valid.all()
+            ):
+                raise ValueError("anchor geometry must be nonempty and valid")
+            geometry = Geometry(shapes.union_all(), geometry.crs)
+        if isinstance(geometry, Geometry):
+            if crs is not None and geometry.crs != CRS(crs):
+                raise ValueError(
+                    "geometry already has a different CRS; reproject explicitly"
+                )
+        else:
+            geometry = Geometry(to_shapely(geometry), crs or "EPSG:4326")
+        return cls(geometry, None if timespan is None else parse_daterange(timespan))
 
     @classmethod
     def from_coordinates(
         cls,
         latitude: float,
         longitude: float,
-        shape: int | tuple[int, int],
-        resolution: float,
         *,
-        crs: str | CRS | OdcCRS | None = None,
-        anchor: GridAnchor = "edge",
         timespan: AnchorDatetime | None = None,
     ) -> Self:
-        """Build an anchor on a grid centred on one WGS84 coordinate.
-
-        A coordinate bounds no area, so it fixes only the centre and `shape`
-        gives the grid its extent.
+        """Create a WGS84 point anchor without defining a raster window.
 
         Args:
-            latitude: WGS84 latitude of the grid centre, in degrees.
-            longitude: WGS84 longitude of the grid centre, in degrees, wrapped
-                into [-180, 180).
-            shape: Grid size in pixels — one value for a square, or
-                `(height, width)`.
-            resolution: Square pixel size in grid CRS units.
-            crs: CRS to place the grid in. None picks the local UTM or UPS
-                zone, which is metre-based.
-            anchor: Where pixel edges fall relative to the CRS origin.
-                `"edge"` puts them on multiples of `resolution`, so grids built
-                from different extents share one lattice and compose.
-                `"floating"` fits the extent exactly instead, at a phase
-                nothing else shares.
-            timespan: Temporal coverage, as `parse_daterange` accepts it. None
-                leaves the anchor timeless.
+            latitude: Latitude in degrees, in [-90, 90].
+            longitude: Longitude in degrees, wrapped into [-180, 180).
+            timespan: ISO or compact date string, "start/end" interval, pair
+                of date strings, or pair of datetimes. Partial dates cover
+                their whole period, including both endpoints. None is timeless.
 
         Returns:
-            Anchor whose geobox is centred on the coordinate at exactly
-            `resolution` and the requested size.
+            Point anchor in EPSG:4326. Its `lonlat` property returns longitude
+            first, unlike this method's latitude-first arguments.
 
         Raises:
-            ValueError: Latitude is out of range, or a measurement is not
-                positive.
-
-        Examples:
-            >>> GeoAnchor.from_coordinates(-8.05, 112.15, 512, 10).geobox.shape
-            Shape2d(x=512, y=512)
-            >>> anchor = GeoAnchor.from_coordinates(
-            ...     -8.05, 112.15, 512, 10, timespan="2024-01-01/2024-06-30"
-            ... )
+            ValueError: Latitude is outside [-90, 90], the point is invalid,
+                or a date string cannot be parsed.
         """
         latitude, longitude = validate_wgs84_coordinate(latitude, longitude)
-        if resolution <= 0:
-            raise ValueError(f"resolution must be positive, got {resolution}")
-
-        centre = point(longitude, latitude, "EPSG:4326")
-        grid_crs = select_grid_crs(centre, crs)
-        centre_x, centre_y = centre.to_crs(grid_crs).coords[0]
-
-        height, width = (shape, shape) if isinstance(shape, int) else shape
-        if height < 1 or width < 1:
-            raise ValueError(
-                f"shape must be positive in both axes, got {(height, width)}"
-            )
-        # Sizing the box to the shape makes odc read exactly `resolution` back off it.
-        half_x, half_y = width * resolution / 2, height * resolution / 2
-        return cls.from_bbox(
-            BoundingBox(
-                centre_x - half_x,
-                centre_y - half_y,
-                centre_x + half_x,
-                centre_y + half_y,
-                crs=grid_crs,
-            ),
-            shape=(height, width),
-            crs=grid_crs,
-            anchor=anchor,
-            timespan=timespan,
+        return cls.from_geometry(
+            point(longitude, latitude, "EPSG:4326"), timespan=timespan
         )

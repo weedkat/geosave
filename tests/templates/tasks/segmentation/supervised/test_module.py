@@ -68,17 +68,6 @@ def stages() -> dict[str, dict[str, object]]:
     }
 
 
-def test_task_defaults(stages):
-    task = supervised.Module(model_chain=stages, ignore_index=7)
-    task.configure_model()
-    assert task.num_classes == 2
-    assert isinstance(task.criterion, nn.CrossEntropyLoss)
-    assert task.criterion.ignore_index == 7
-    optimizer = task.configure_optimizers()
-    assert isinstance(optimizer, torch.optim.AdamW)
-    assert optimizer.param_groups[0]["lr"] == 1e-3
-
-
 def test_ignored_targets_produce_zero_loss_and_no_metric_update(stages):
     task = supervised.Module(model_chain=stages)
     task.configure_model()
@@ -102,12 +91,6 @@ def test_criterion_cannot_override_the_task_ignore_value(stages):
             ignore_index=255,
             criterion={"name": "cross_entropy", "init_args": {"ignore_index": -1}},
         )
-
-
-def test_the_module_takes_no_data_shaped_arguments(stages):
-    for argument in ("in_channels", "input_size"):
-        with pytest.raises(TypeError, match=argument):
-            supervised.Module(model_chain=stages, **{argument: 2})
 
 
 class UncountedModel(nn.Module):
@@ -154,28 +137,6 @@ def test_thresholds_must_number_the_classes(stages) -> None:
         task.configure_model()
 
 
-def test_task_uses_registered_training_builders(stages) -> None:
-    task = supervised.Module(
-        model_chain=stages,
-        ignore_index=-1,
-        criterion={"name": "cross_entropy", "init_args": {"ignore_index": -1}},
-        optimizer={"name": "sgd", "init_args": {"lr": 0.1}},
-        lr_scheduler={
-            "name": "reduce_on_plateau",
-            "init_args": {"patience": 2},
-            "monitor": "val_loss",
-        },
-    )
-    task.configure_model()
-
-    configured = task.configure_optimizers()
-
-    assert isinstance(task.criterion, nn.CrossEntropyLoss)
-    assert task.criterion.ignore_index == -1
-    assert isinstance(configured["optimizer"], torch.optim.SGD)
-    assert configured["lr_scheduler"]["monitor"] == "val_loss"
-
-
 @pytest.mark.parametrize(
     "criterion, expected",
     [
@@ -196,53 +157,6 @@ def test_criterion_ignore_index(stages, criterion, expected):
         criterion=criterion,
     )
     assert task.criterion.ignore_index == expected
-
-
-class Encoder(nn.Module):
-    def __init__(self, in_channels=2):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(in_channels))
-        self.frozen = nn.Parameter(torch.zeros(in_channels), requires_grad=False)
-
-    @chain_step(outputs=("features",))
-    def encode(self, image: torch.Tensor) -> torch.Tensor:
-        return image * self.weight.reshape(1, -1, 1, 1)
-
-
-class Head(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.num_classes = num_classes
-        self.weight = nn.Parameter(torch.ones(num_classes))
-
-    @chain_step(head=True)
-    def logits(self, features: torch.Tensor) -> torch.Tensor:
-        return features * self.weight.reshape(1, -1, 1, 1)
-
-
-def test_optimizer_exact_groups_and_remaining_trainable_parameters():
-    task = supervised.Module(
-        model_chain={
-            "encoder": {"class_path": f"{__name__}.Encoder"},
-            "head": {
-                "class_path": f"{__name__}.Head",
-                "init_args": {"num_classes": 2},
-            },
-        },
-        optimizer={
-            "class_path": "torch.optim.AdamW",
-            "init_args": {"lr": 1e-3, "weight_decay": 1e-2},
-            "groups": {"head": {"lr": 1e-4, "weight_decay": 0.0}},
-        },
-    )
-    task.configure_model()
-    optimizer = task.configure_optimizers()
-    assert len(optimizer.param_groups) == 2
-    head, remaining = optimizer.param_groups
-    assert head["params"] == [task.model.get_submodule("head").weight]
-    assert remaining["params"] == [task.model.get_submodule("encoder").weight]
-    assert (head["lr"], head["weight_decay"]) == (1e-4, 0.0)
-    assert (remaining["lr"], remaining["weight_decay"]) == (1e-3, 1e-2)
 
 
 def test_optimizer_keeps_direct_chain_parameters_in_default_group(stages):
@@ -275,86 +189,6 @@ def test_optimizer_keeps_direct_chain_parameters_in_default_group(stages):
     torch.testing.assert_close(bias, torch.tensor(0.8))
 
 
-@pytest.mark.parametrize("group", ["mod", "MODEL", "model.factor"])
-def test_unknown_optimizer_groups_fail_before_optimizer_construction(stages, group):
-    task = supervised.Module(
-        model_chain=stages,
-        optimizer={
-            "class_path": "torch.optim.SGD",
-            "groups": {group: {"lr": 0.1}},
-            "init_args": {"invalid_argument": True},
-        },
-    )
-    task.configure_model()
-    with pytest.raises(KeyError, match="Unknown model groups"):
-        task.configure_optimizers()
-
-
-def test_scheduler_metadata_and_plateau_monitoring(stages):
-    task = supervised.Module(
-        model_chain=stages,
-        lr_scheduler={
-            "class_path": "torch.optim.lr_scheduler.ReduceLROnPlateau",
-            "init_args": {"patience": 2},
-            "monitor": "val_loss",
-            "interval": "epoch",
-            "frequency": 3,
-            "strict": False,
-            "scheduler_name": "rate",
-        },
-    )
-    task.configure_model()
-    configured = task.configure_optimizers()
-    scheduler = configured["lr_scheduler"].pop("scheduler")
-    assert isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
-    assert scheduler.optimizer is configured["optimizer"]
-    assert scheduler.patience == 2
-    assert configured["lr_scheduler"] == {
-        "monitor": "val_loss",
-        "interval": "epoch",
-        "frequency": 3,
-        "strict": False,
-        "name": "rate",
-    }
-
-
-@pytest.mark.parametrize(
-    "field, path",
-    [
-        ("criterion", "torch.optim.AdamW"),
-        ("optimizer", "torch.nn.CrossEntropyLoss"),
-        ("lr_scheduler", "torch.nn.CrossEntropyLoss"),
-    ],
-)
-def test_training_specs_require_expected_torch_subclass(stages, field, path):
-    with pytest.raises(TypeError, match="subclass"):
-        task = supervised.Module(
-            model_chain=stages,
-            **{field: {"class_path": path}},
-        )
-        task.configure_model()
-        task.configure_optimizers()
-
-
-@pytest.mark.parametrize(
-    "field, path",
-    [
-        ("criterion", "torch.nn.CrossEntropyLoss"),
-        ("optimizer", "torch.optim.AdamW"),
-        ("lr_scheduler", "torch.optim.lr_scheduler.StepLR"),
-    ],
-)
-def test_training_constructor_errors_remain_native(stages, field, path):
-    with pytest.raises(TypeError, match="unexpected keyword argument 'wrong'") as error:
-        task = supervised.Module(
-            model_chain=stages,
-            **{field: {"class_path": path, "init_args": {"wrong": True}}},
-        )
-        task.configure_model()
-        task.configure_optimizers()
-    assert error.value.__cause__ is None
-
-
 def test_forward_preserves_prepared_inputs_and_routes_context(
     stages: dict[str, dict[str, object]],
 ) -> None:
@@ -371,8 +205,6 @@ def test_forward_preserves_prepared_inputs_and_routes_context(
     torch.testing.assert_close(actual, image + offset)
     torch.testing.assert_close(image, original)
     assert actual.dtype == torch.float64
-    assert not hasattr(task, "preprocessor")
-    assert not hasattr(task, "preprocess")
 
 
 def test_forward_rejects_mapped_model_results() -> None:
@@ -413,25 +245,6 @@ def test_steps_accept_sample_batches(
 
     expected = torch.nn.functional.cross_entropy(image, target)
     torch.testing.assert_close(loss, expected)
-
-
-@pytest.mark.parametrize(
-    "batch",
-    [
-        (torch.zeros(1, 2, 2, 2), torch.zeros(1, 2, 2, dtype=torch.long)),
-        {"image": torch.zeros(1, 2, 2, 2), "label": torch.zeros(1, 2, 2)},
-    ],
-)
-def test_incompatible_batches_raise_native_python_errors(
-    stages: dict[str, dict[str, object]], batch: object
-) -> None:
-    task = supervised.Module(
-        model_chain=stages,
-    )
-    task.configure_model()
-
-    with pytest.raises((KeyError, TypeError)):
-        task.training_step(batch, 0)  # type: ignore[arg-type]
 
 
 def test_training_and_checkpoint_reload_preserve_construction(

@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING, cast
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
+
 import geosave.geodata.attrs as attrs
 from geosave.geodata.conventions import CRS_COORDINATE
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
 
     from geosave.geodata import Dataset
 

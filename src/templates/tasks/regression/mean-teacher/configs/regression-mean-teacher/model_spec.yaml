@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 rasters:
   sentinel_2_l2a:
     variables: [B02, B03, B04, B08]
@@ -17,9 +17,9 @@ preprocessing:
 # Features select variable and coordinate names from one Dataset. Their
 # unnamed DataArray outputs are named when assigned back to the Dataset.
 # Include B10 in variables/load.bands for this optional cloud/shadow example.
-# Load sun azimuth under a plain name, since a !ref path cannot hold a colon:
+# Carry the original STAC sun-azimuth property:
 #   rasters.sentinel_2_l2a.stac.load.with_properties:
-#     - {key: "view:sun_azimuth", name: sun_azimuth}
+#     - "view:sun_azimuth"
 #   preprocessing:
 #     cloud:
 #       call: geosave.geodata.features.cirrus_cloud_mask
@@ -29,28 +29,32 @@ preprocessing:
 #       kwargs: {cloud: !ref cloud}
 #     shadow:
 #       call: geosave.geodata.features.shadow_mask
-#       kwargs: {scene: !ref cloud_scene, cloud: cloud, sun_azimuth: sun_azimuth}
+#       kwargs: {scene: !ref cloud_scene, cloud: cloud, sun_azimuth: "view:sun_azimuth"}
 #     prepared:
 #       call: !ref cloud_scene.assign
 #       kwargs: {shadow: !ref shadow}
-chips:
-  size: 224
-  overlap: 32
-  mode: reflect
-  window: hann
-# Pixel bindings. Context reads the same rasters in training and inference.
+encoding:
+  tensor:
+    call: geosave.model.processing.to_tensor
+    kwargs:
+      raster: !ref image
+      dims: [time, band, y, x]
+      dtype: float32
+# Additional context can be encoded here with installed encoder functions.
+# Bind returned keys explicitly, e.g. !ref 'context["temporal_coords"]'.
 inputs:
-  image: !ref image
-# Enable the encoder's context recipe when the data supplies its metadata:
-# context:
-#   call: geosave.model.stages.encoder.prithvi.model_context
-#   kwargs: {raster: !ref image}
-# For Clay, use geosave.model.stages.encoder.clay.model_context.
-# Run on the device after augmentation, in training, validation, and prediction.
-# Reflectance statistics per band, in the order of `rasters.sentinel_2_l2a`.
+  image: !ref tensor
+pixels: [image]
+tensors:
+  image:
+    shape: [time, 4, height, width]
+    dtype: float32
+# Shared by the DataModule after augmentation and by inference.
 transforms:
   image:
-    - name: Normalize
-      init_args:
-        mean: [0.1105, 0.1355, 0.1552, 0.2743]
-        std: [0.1809, 0.1757, 0.1888, 0.1742]
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref image
+      mean: [0.1105, 0.1355, 0.1552, 0.2743]
+      std: [0.1809, 0.1757, 0.1888, 0.1742]
+      dim: -3

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
 
-import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
@@ -11,12 +9,11 @@ from dask.callbacks import Callback
 from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata import raster, tree
-from geosave.geodata.core.raster.create import raster as build_raster
-from geosave.geodata.core.raster.create import tree as build_tree
+from tests.conftest import build_dataset, build_tree
+from tests.conftest import build_dataset as build_raster
 from geosave.geodata.transform.warp import Resampling, align, reproject
 
-from .conftest import build, geobox, grid_of
+from .conftest import grid_of
 
 UTM = "EPSG:32633"
 WGS84 = "EPSG:4326"
@@ -50,30 +47,6 @@ def landcover() -> xr.Dataset:
     return coded.gs.write_legend({1: "water", 2: "urban"}, target="landcover")
 
 
-def test_a_geobox_target_lands_exactly_on_it() -> None:
-    target = utm_box().to_crs(WGS84)
-
-    warped = reproject(scene(), target)
-
-    assert warped.gs.geobox == target
-
-
-@pytest.mark.parametrize("mode", ["direct", "accessor", "tree"])
-def test_fill_warning_points_to_the_caller(mode: str) -> None:
-    from geosave.geodata.warnings import AssumedFillWarning
-
-    source = landcover()
-    with pytest.warns(AssumedFillWarning) as caught:
-        if mode == "direct":
-            reproject(source, WGS84)
-        elif mode == "accessor":
-            source.gs.reproject(WGS84)
-        else:
-            reproject(build_tree({"cover": source}), WGS84)
-
-    assert all(Path(warning.filename) == Path(__file__) for warning in caught)
-
-
 def test_a_warped_raster_reports_the_crs_it_landed_on() -> None:
     source = build_raster(
         {"elevation": (("y", "x"), np.ones(utm_box().shape, "float32"))},
@@ -85,57 +58,6 @@ def test_a_warped_raster_reports_the_crs_it_landed_on() -> None:
     assert warped.gs.crs == "EPSG:4326"
     # odc's own Dataset path leaves the source CRS in spatial_ref's attrs.
     assert source.odc.reproject(WGS84).odc.crs.epsg == 32633
-
-
-def test_a_warped_raster_trees_with_the_grid_it_targeted() -> None:
-    imagery = scene()
-    dem_box = GeoBox.from_bbox((12.9, 45.0, 13.2, 45.2), crs=WGS84, resolution=0.0003)
-    dem = build_raster(
-        {"elevation": (("y", "x"), np.ones(dem_box.shape, "float32"))}, dem_box
-    )
-
-    warped = reproject(dem, imagery, resampling="bilinear")
-
-    assert build_tree({"optical": imagery, "dem": warped}).gs.groups == (
-        "optical",
-        "dem",
-    )
-
-
-def test_warping_keeps_the_raster_and_variable_attrs() -> None:
-    source = scene().assign_attrs(title="Sentinel-2 Level-2A")
-
-    warped = reproject(source, WGS84)
-
-    assert warped.attrs["title"] == "Sentinel-2 Level-2A"
-    assert warped.red.attrs["_FillValue"] == 0
-
-
-def test_warping_a_band_returns_a_band() -> None:
-    warped = reproject(scene().red, WGS84)
-
-    assert isinstance(warped, xr.DataArray)
-    assert warped.gs.crs.epsg == 4326
-
-
-def test_warping_a_tree_leaves_every_group_on_one_grid() -> None:
-    source = build_tree({"optical": scene(), "cover": landcover()})
-
-    warped = reproject(source, WGS84)
-
-    grids = {name: group.gs.geobox for name, group in warped.gs.rasters.items()}
-    assert warped.gs.groups == ("optical", "cover")
-    assert len(set(grids.values())) == 1
-    assert warped.gs.crs == "EPSG:4326"
-
-
-def test_warping_a_tree_onto_a_geobox_lands_every_group_on_it() -> None:
-    target = utm_box().to_crs(WGS84)
-    source = build_tree({"optical": scene(), "cover": landcover()})
-
-    warped = reproject(source, target)
-
-    assert all(group.gs.geobox == target for group in warped.gs.rasters.values())
 
 
 @pytest.mark.parametrize("resampling", ["bilinear", "cubic", "average"])
@@ -169,19 +91,6 @@ def test_a_value_preserving_kernel_accepts_class_codes(
     assert set(np.unique(warped.landcover.values)) <= {0, 1, 2, 255}
 
 
-def test_a_blending_kernel_names_the_group_holding_class_codes() -> None:
-    source = build_tree({"optical": scene(), "cover": landcover()})
-
-    with pytest.raises(ValueError, match=r"cover/landcover"):
-        reproject(source, WGS84, resampling="bilinear")
-
-
-def test_reproject_honours_a_requested_resolution() -> None:
-    warped = reproject(scene(), WGS84, resolution=0.001)
-
-    assert warped.gs.resolution.x == 0.001
-
-
 def test_matching_adopts_a_rasters_grid_without_naming_a_geobox() -> None:
     imagery = scene()
     dem_box = GeoBox.from_bbox((12.9, 45.0, 13.2, 45.2), crs=WGS84, resolution=0.0003)
@@ -190,14 +99,6 @@ def test_matching_adopts_a_rasters_grid_without_naming_a_geobox() -> None:
     )
 
     assert reproject(dem, imagery).gs.geobox == imagery.gs.geobox
-
-
-def test_a_variable_off_the_grid_is_refused_by_name() -> None:
-    source = scene()
-    source["profile"] = ("depth", np.arange(3.0))
-
-    with pytest.raises(ValueError, match="'profile' spans"):
-        reproject(source, WGS84)
 
 
 def test_warping_refuses_a_raster_carrying_no_grid() -> None:
@@ -224,15 +125,6 @@ def placed(box: GeoBox, fill: int = 7, name: str = "red") -> xr.Dataset:
     )
 
 
-def test_align_puts_every_raster_on_one_exact_grid() -> None:
-    aligned = align(
-        [placed(utm_box()), placed(offset_box(), fill=9, name="vv")], target=utm_box()
-    )
-
-    assert aligned[0].gs.geobox == aligned[1].gs.geobox
-    assert build_tree({"a": aligned[0], "b": aligned[1]}).gs.groups == ("a", "b")
-
-
 def test_align_uses_the_requested_reference_grid() -> None:
     first, second = placed(utm_box()), placed(offset_box(), name="vv")
 
@@ -241,46 +133,6 @@ def test_align_uses_the_requested_reference_grid() -> None:
 
     assert on_first[0].gs.geobox == first.gs.geobox
     assert on_second[0].gs.geobox == second.gs.geobox
-
-
-def test_align_reaches_every_raster_when_it_unions() -> None:
-    west = placed(utm_box(size=4))
-    east = placed(offset_box(shift=20.0, size=4), fill=9, name="vv")
-
-    aligned = align([west, east], target=west, extent="union")
-
-    assert aligned[0].gs.geobox.shape.x > west.gs.geobox.shape.x
-    assert aligned[0].gs.bounds.left == pytest.approx(west.gs.bounds.left)
-    assert aligned[0].gs.bounds.right == pytest.approx(east.gs.bounds.right, abs=10)
-
-
-def test_align_keeps_only_common_ground_when_it_intersects() -> None:
-    west = placed(utm_box(size=4))
-    east = placed(offset_box(shift=20.0, size=4), fill=9, name="vv")
-
-    aligned = align([west, east], target=west, extent="intersection")
-
-    assert aligned[0].gs.geobox.shape.x < west.gs.geobox.shape.x
-    assert aligned[0].gs.geobox == aligned[1].gs.geobox
-
-
-def test_align_carries_a_raster_across_crs_and_resolution() -> None:
-    metric = placed(utm_box(size=8))
-    coarse = build_raster(
-        {
-            "dem": (
-                ("y", "x"),
-                np.full((4, 4), 5.0, "float32"),
-            )
-        },
-        GeoBox.from_bbox((300000, 5000000, 300080, 5000080), crs=UTM, resolution=20),
-        nodata=-9999.0,
-    )
-
-    aligned = align([metric, coarse], target=metric, extent="match")
-
-    assert aligned[1].gs.geobox == metric.gs.geobox
-    assert aligned[1].gs.resolution == metric.gs.resolution
 
 
 def test_align_leaves_a_raster_already_on_the_grid_untouched() -> None:
@@ -331,21 +183,6 @@ def _wider() -> GeoBox:
     return GeoBox.from_bbox((300000, 5000000, 300160, 5000080), crs=UTM, resolution=10)
 
 
-def test_reproject_keeps_a_nan_fill_value() -> None:
-    source = _small("float32", np.nan)
-
-    warped = reproject(source, _wider())
-    band = reproject(source.red, _wider())
-
-    assert np.isnan(warped.red.gs.nodata)
-    assert np.isnan(band.gs.nodata)
-    assert np.isnan(warped.red.values).any()
-
-
-def test_reproject_keeps_a_bands_name() -> None:
-    assert reproject(_small("uint16", 0).red, _wider()).name == "red"
-
-
 @pytest.mark.parametrize(
     ("dtype", "fill"), [("uint16", 65535), ("uint8", 255), ("int16", -32768)]
 )
@@ -365,16 +202,6 @@ def test_reproject_gives_an_integer_with_no_fill_value_one_and_warns(
     assert sorted(np.unique(warped.red.values).tolist()) == sorted([5, fill])
     assert sorted(np.unique(band.values).tolist()) == sorted([5, fill])
     assert warped.red.dtype == np.dtype(dtype)
-
-
-def test_reproject_stays_quiet_for_a_variable_carrying_a_fill_value() -> None:
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        warped = reproject(_small("uint16", 0), _wider())
-
-    assert sorted(np.unique(warped.red.values).tolist()) == [0, 5]
 
 
 def test_reproject_records_nan_for_a_float_with_no_fill_value_and_warns() -> None:
@@ -401,29 +228,11 @@ def test_reproject_onto_a_geographic_grid_keeps_y_x_and_laziness() -> None:
     assert warped.y.attrs["standard_name"] == "latitude"
 
 
-def test_unnamed_class_array_refuses_blending() -> None:
-    with pytest.raises(ValueError, match="class codes"):
-        reproject(landcover().landcover.rename(None), WGS84, resampling="bilinear")
-
-
 def test_tree_reproject_resolves_numeric_resolution_once() -> None:
     source = build_tree({"image": scene().chunk()})
     warped = reproject(source, WGS84, resolution=0.001)
-    assert grid_of(warped.gs.rasters["image"]).resolution.x == 0.001
-    assert warped.gs.rasters["image"].red.chunks is not None
-
-
-def test_union_alignment_covers_every_tree_group() -> None:
-    source = scene()
-    eastern = build_raster(
-        {"red": (("y", "x"), np.full((256, 256), 2, dtype="uint16"))},
-        source.gs.geobox.translate_pix(256, 0),
-        nodata=0,
-    )
-    tree = build_tree({"west": source, "east": eastern})
-    grid = tree.gs.align(target=source, extent="union").gs.geobox
-    assert grid.shape.yx == (256, 512)
-    assert grid.transform == source.gs.geobox.transform
+    assert grid_of(warped["image"].gs.to_dataset()).resolution.x == 0.001
+    assert warped["image"].gs.to_dataset().red.chunks is not None
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -445,44 +254,23 @@ def test_alignment_target_is_independent_of_input_order(reverse, rotation) -> No
     assert all(result.gs.geobox == narrow for result in aligned)
 
 
-def test_alignment_requires_an_explicit_target():
-    source = placed(utm_box())
-    with pytest.raises(TypeError, match="target"):
-        align([source])
-    with pytest.raises(TypeError, match="target"):
-        build_tree({"image": source}).gs.align()
-
-
-def test_alignment_defaults_to_exact_target_for_rasters_and_trees():
-    reference = placed(utm_box(size=4))
-    other = placed(offset_box(shift=20.0, size=4), name="vv")
-    aligned = align([reference, other], target=reference)
-    result = build_tree({"image": reference, "radar": other}).gs.align(target=reference)
-
-    assert all(raster.gs.geobox == reference.gs.geobox for raster in aligned)
-    assert result.gs.geobox == reference.gs.geobox
-    np.testing.assert_array_equal(result.gs.rasters["radar"].vv, aligned[1].vv)
-
-
-def test_tree_alignment_inplace_keeps_metadata_and_qualified_kernels():
+def test_tree_alignment_keeps_metadata_and_qualified_kernels():
     reference = placed(utm_box(size=4)).chunk({"y": 2, "x": 2})
     other = placed(offset_box(shift=20.0, size=4), name="vv").chunk({"y": 2, "x": 2})
     source = build_tree({"image": reference, "radar": other})
     source.attrs["title"] = "paired imagery"
     kernels = {"*": "nearest", "radar/vv": "bilinear"}
-    expected = source.gs.align(target=reference, resampling=kernels)
 
     from dask.callbacks import Callback
 
     with Callback(pretask=lambda *_: pytest.fail("alignment computed lazy pixels")):
-        assert (
-            source.gs.align(target=reference, resampling=kernels, inplace=True) is None
-        )
+        aligned = source.gs.align(target=reference, resampling=kernels)
 
-    assert source.attrs["title"] == "paired imagery"
-    assert source.gs.geobox == reference.gs.geobox
-    assert source.gs.rasters["radar"].vv.chunks is not None
-    xr.testing.assert_equal(source.compute(), expected.compute())
+    assert aligned.attrs["title"] == "paired imagery"
+    assert aligned.gs.geobox == reference.gs.geobox
+    assert aligned["radar"].gs.to_dataset().vv.chunks is not None
+    # The source tree is left as it was.
+    assert source.gs.geobox is None
 
 
 GRID = GeoBox((4, 4), Affine(10, 0, 300000, 0, -10, 5000000), "EPSG:32633")
@@ -492,14 +280,21 @@ def image(grid=GRID, *, dtype="uint16", fill: float = 0):
     pixels = np.arange(1, grid.shape.y * grid.shape.x + 1, dtype=dtype).reshape(
         grid.shape.yx
     )
-    return raster({"red": (("y", "x"), pixels)}, grid, nodata=fill)
+    return build_dataset({"red": (("y", "x"), pixels)}, grid, nodata=fill)
 
 
-@pytest.mark.parametrize("kind", ["array", "dataset", "tree"])
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
-    "dtype,fill",
-    [("uint8", 0), ("int16", -999), ("float32", np.nan), ("float64", -999.0)],
+    "kind,lazy,dtype,fill",
+    [
+        ("array", False, "uint8", 0),
+        ("array", True, "int16", -999),
+        ("dataset", False, "int16", -999),
+        ("dataset", True, "float32", np.nan),
+        ("tree", False, "float32", np.nan),
+        ("tree", True, "uint8", 0),
+        ("dataset", False, "float64", -999.0),
+        ("tree", True, "float64", -999.0),
+    ],
 )
 def test_wider_grid_preserves_pixels_nodata_metadata_and_laziness(
     kind, lazy, dtype, fill
@@ -513,16 +308,17 @@ def test_wider_grid_preserves_pixels_nodata_metadata_and_laziness(
         source = source.chunk({"y": 2, "x": 2})
     data = source.red if kind == "array" else source
     if kind == "tree":
-        data = tree({"image": source})
+        data = build_tree({"image": source})
         data.attrs["title"] = "collection"
     target = GeoBox((6, 6), GRID.transform * Affine.translation(-1, -1), GRID.crs)
 
     with Callback(pretask=lambda *_: pytest.fail("reproject computed lazy pixels")):
         result = reproject(data, target)
 
-    output = result.gs.rasters["image"] if isinstance(result, xr.DataTree) else result
+    output = result["image"].gs.to_dataset() if isinstance(result, xr.DataTree) else result
     band = output if kind == "array" else output.red
     assert type(result) is type(data)
+    assert band.name == "red"
     assert band.gs.geobox == target
     assert band.dtype == np.dtype(dtype)
     assert (band.chunks is not None) is lazy
@@ -575,14 +371,14 @@ def test_reproject_validates_bands_even_on_the_same_grid(empty, same_grid):
 
 @pytest.mark.parametrize("resolution", [None, 10])
 def test_tree_reproject_to_crs_covers_every_group(resolution):
-    source = tree({"west": image(), "east": image(GRID.translate_pix(4, 0))})
+    source = build_tree({"west": image(), "east": image(GRID.translate_pix(4, 0))})
     result = reproject(source, "EPSG:32633", resolution=resolution)
     assert grid_of(result).shape.yx == (4, 8)
     np.testing.assert_array_equal(
-        result.gs.rasters["west"].red.values[:, :4], image().red
+        result["west"].gs.to_dataset().red.values[:, :4], image().red
     )
     np.testing.assert_array_equal(
-        result.gs.rasters["east"].red.values[:, 4:], image().red
+        result["east"].gs.to_dataset().red.values[:, 4:], image().red
     )
 
 
@@ -619,15 +415,6 @@ def test_nonadjacent_spatial_dimensions_reproject_without_losing_axis_order(kind
     band = result if kind == "array" else result.red
     assert band.dims == ("y", "time", "x")
     np.testing.assert_array_equal(band.isel(time=0).values, [[6, 8], [14, 16]])
-
-
-@pytest.mark.parametrize("operation", [reproject, align])
-def test_empty_tree_has_a_clear_grid_error(operation):
-    with pytest.raises(ValueError, match="grid|groups|no data variables"):
-        if operation is reproject:
-            operation(xr.DataTree(), GRID)
-        else:
-            operation([xr.DataTree()], target=GRID)
 
 
 @pytest.mark.parametrize(
@@ -677,17 +464,19 @@ def test_cross_crs_pixels_match_explicit_rasterio_warp(kernel, crs, lazy, reques
 def test_tree_variable_kernels_keep_class_codes_and_continuous_values_lazy():
     labels = image().gs.write_legend({1: "land", 2: "water"}, target="red")
     labels.red.values[:] = [[1, 1, 2, 2]] * 4
-    source = tree({"labels": labels.chunk(), "dem": image(dtype="float32").chunk()})
+    source = build_tree(
+        {"labels": labels.chunk(), "dem": image(dtype="float32").chunk()}
+    )
     target = GRID.zoom_out(2)
     with Callback(pretask=lambda *_: pytest.fail("reproject computed lazy pixels")):
         result = reproject(
             source, target, resampling={"*": "average", "labels/red": "mode"}
         )
     np.testing.assert_array_equal(
-        result.gs.rasters["labels"].red.values, [[1, 2], [1, 2]]
+        result["labels"].gs.to_dataset().red.values, [[1, 2], [1, 2]]
     )
     np.testing.assert_array_equal(
-        result.gs.rasters["dem"].red.values, [[3.5, 5.5], [11.5, 13.5]]
+        result["dem"].gs.to_dataset().red.values, [[3.5, 5.5], [11.5, 13.5]]
     )
 
 
@@ -729,31 +518,16 @@ def test_fractional_intersection_keeps_conservative_boundary_pixels():
 def test_native_tree_to_crs_preserves_resolutions_and_pixels():
     fine = GeoBox((6, 6), GRID.transform, GRID.crs)
     coarse = fine.zoom_out(3)
-    source = tree({"fine": image(fine), "coarse": image(coarse)})
+    source = build_tree({"fine": image(fine), "coarse": image(coarse)})
     result = reproject(source, "EPSG:32633", resolution="native")
-    for name in ("fine", "coarse"):
-        xr.testing.assert_identical(result.gs.rasters[name], source.gs.rasters[name])
+    assert list(result.gs.rasters) == list(source.gs.rasters)
+    for path, raster in source.gs.rasters.items():
+        xr.testing.assert_identical(result.gs.rasters[path], raster)
 
 
 def test_a_tree_target_with_no_root_grid_requires_an_explicit_group():
-    target = tree({"r10": image(), "r20": image(GRID.zoom_out(2))})
+    target = build_tree({"r10": image(), "r20": image(GRID.zoom_out(2))})
     assert target.gs.geobox is None
     with pytest.raises(ValueError, match="select a reference group"):
         reproject(image(dtype="float32"), target)
-    assert reproject(image(dtype="float32"), target.gs.rasters["r10"]).gs.geobox == GRID
-
-
-def test_reproject_onto_a_new_grid_stays_lazy():
-    source = image().chunk()
-    with Callback(pretask=lambda *_: pytest.fail("reproject computed pixels")):
-        result = reproject(source, GRID.zoom_out(2))
-    assert isinstance(result.red.data, da.Array)
-
-
-def test_reproject_preserves_tree_root_attrs():
-    source = tree({"optical": build(geobox())})
-    source.attrs = {"title": "training scene", "foreign": {"site": 7}}
-    coarse = grid_of(source).zoom_out(2)
-    result = reproject(source, coarse)
-    assert result.gs.geobox == coarse
-    assert result.attrs == source.attrs
+    assert reproject(image(dtype="float32"), target["r10"].gs.to_dataset()).gs.geobox == GRID

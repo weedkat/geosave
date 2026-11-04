@@ -36,16 +36,26 @@ def test_one_nodata_spelled_two_ways_agrees() -> None:
     assert joined == {"_FillValue": 0}
 
 
-def test_an_agree_group_that_differs_refuses_the_join() -> None:
-    with pytest.raises(ValueError, match="Nodata"):
-        xr.concat(
+def test_a_nodata_that_differs_is_dropped_with_a_warning() -> None:
+    with pytest.warns(DroppedAttrsWarning, match="_FillValue"):
+        joined = xr.concat(
             [_timestep(_FillValue=0), _timestep(_FillValue=1)],
             "time",
             combine_attrs=attrs.combine_attrs,
         )
 
+    assert joined.attrs == {}
 
-def test_a_drop_group_that_differs_leaves_the_join() -> None:
+
+def test_a_group_that_differs_is_dropped_whole() -> None:
+    packed = {"scale_factor": 0.1, "add_offset": 5.0}
+    other = {"scale_factor": 0.1, "add_offset": 6.0}
+
+    with pytest.warns(DroppedAttrsWarning, match="add_offset"):
+        assert attrs.combine_attrs([packed, other]) == {}
+
+
+def test_a_descriptive_group_that_differs_is_dropped() -> None:
     joined = attrs.combine_attrs(
         [{"common_name": "red", "units": "1"}, {"common_name": "nir", "units": "1"}]
     )
@@ -64,28 +74,6 @@ def test_a_key_one_object_lacks_is_left_out() -> None:
         }
 
 
-def test_units_that_differ_refuse_the_join() -> None:
-    with pytest.raises(ValueError, match="Quantity"):
-        attrs.combine_attrs([{"units": "m"}, {"units": "ft"}])
-
-
-def test_a_quantity_one_object_leaves_unstated_drops() -> None:
-    with pytest.warns(DroppedAttrsWarning, match="units"):
-        assert attrs.combine_attrs([{"units": "m"}, {}]) == {}
-
-
-def test_a_quantity_stated_alike_is_kept_whole() -> None:
-    quantity = {"standard_name": "surface_reflectance", "units": "1"}
-
-    assert attrs.combine_attrs([quantity, dict(quantity)]) == quantity
-
-
-def test_plain_keys_that_differ_drop() -> None:
-    assert attrs.combine_attrs(
-        [{"title": "a", "units": "1"}, {"title": "b", "units": "1"}]
-    ) == {"units": "1"}
-
-
 def test_nan_fills_agree() -> None:
     joined = attrs.combine_attrs(
         [{"_FillValue": float("nan")}, {"_FillValue": np.float32("nan")}]
@@ -94,11 +82,11 @@ def test_nan_fills_agree() -> None:
     assert np.isnan(joined["_FillValue"])
 
 
-def test_an_each_group_joins_its_keys_one_by_one() -> None:
+def test_a_group_joins_whole_so_a_differing_title_drops_the_license() -> None:
     first = {"title": "scene", "license": "CC0"}
     second = {"title": "other", "license": "CC0"}
 
     with pytest.warns(DroppedAttrsWarning, match="title"):
         joined = attrs.combine_attrs([first, second])
 
-    assert joined == {"license": "CC0"}
+    assert joined == {}

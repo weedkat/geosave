@@ -96,7 +96,7 @@ def reproject[T: xr.DataArray | xr.Dataset | xr.DataTree](
         target: Grid to land on, a raster already on one, or a CRS.
         resampling: One GDAL kernel for every variable, or a mapping naming
             each variable's own, which `"*"` answers the rest of. Inside a
-            tree a key names its group, as `"<group>/<variable>"`.
+            tree a key names its collection, as `"<collection>/<variable>"`.
         resolution: Output pixel size. None takes the target's own, or the
             source's ground sampling where the target names only a CRS. A grid
             derived from a CRS snaps to the pixel lattice and covers the source
@@ -255,7 +255,7 @@ def _read_variables(
 
     Returns:
         {
-            "<variable>" or "<group>/<variable>": variable,
+            "<variable>" or "<collection>/<variable>": variable,
         }
     """
     if isinstance(data, xr.DataArray):
@@ -267,10 +267,20 @@ def _read_variables(
         return variables
 
     # A DataTree's indexing can return groups, so walk its rasters.
-    for group, raster in data.gs.rasters.items():
+    for path, raster in data.gs.rasters.items():
         for name, variable in raster.data_vars.items():
-            variables[f"{group}/{name}"] = variable
+            variables[_qualify_variable(path, str(name))] = variable
     return variables
+
+
+def _qualify_variable(path: str, name: str) -> str:
+    """Key a grid node's variable by its collection, leaving the grid out.
+
+    Names are unique within a collection, so `"s2/red"` holds whichever grid
+    `red` sits on; a grid node with no collection above it keys `"red"`.
+    """
+    collection = path.rsplit("/", 1)[0] if "/" in path else ""
+    return f"{collection}/{name}" if collection else name
 
 
 def _read_kernels(
@@ -281,7 +291,7 @@ def _read_kernels(
 
     Returns:
         {
-            "<variable>" or "<group>/<variable>": kernel,
+            "<variable>" or "<collection>/<variable>": kernel,
         }
 
     Raises:
@@ -486,9 +496,7 @@ def _reproject_tree(
     kernels: Mapping[str, Resampling],
     resolution: SomeResolution | Native | None,
 ) -> xr.DataTree:
-    """Warp every group of a tree onto one grid, or its nesting grids."""
-    from geosave.geodata.core.raster.create import tree
-
+    """Warp every grid node of a tree onto one grid, or its nesting grids."""
     rasters = data.gs.rasters
     # A grid target is adopted whole; a CRS keeps the ground every group covers.
     if isinstance(target, GeoBox | xr.DataArray | xr.Dataset | xr.DataTree):
@@ -500,19 +508,16 @@ def _reproject_tree(
         )
 
     group_resolution = NATIVE if resolution == NATIVE else None
-    groups = {}
+    # The nodes above the grid nodes keep their attrs.
+    warped = data.copy()
     for name, raster in rasters.items():
         source = _read_geobox(raster)
         geobox = _resolve_target(source, grid, group_resolution)
-        group_kernels: dict[str, Resampling] = {
-            str(variable): kernels[f"{name}/{variable}"]
-            for variable in raster.data_vars
-        }
-        groups[name] = _warp_raster(raster, source, geobox, group_kernels)
-
-    result = tree(groups)
-    result.attrs = dict(data.attrs)
-    return result
+        group_kernels: dict[str, Resampling] = {}
+        for variable in raster.data_vars:
+            group_kernels[str(variable)] = kernels[_qualify_variable(name, str(variable))]
+        warped[name] = _warp_raster(raster, source, geobox, group_kernels)
+    return warped
 
 
 def _warp_raster[R: xr.DataArray | xr.Dataset](

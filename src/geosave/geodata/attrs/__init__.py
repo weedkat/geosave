@@ -16,6 +16,7 @@ from .groups.nodata import Nodata
 from .groups.packing import Packing
 from .groups.quantity import Quantity
 from .groups.spectral import Spectral
+from .groups.stac import StacMetadata
 from .groups.timespec import TimeSpec
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "Packing",
     "Quantity",
     "Spectral",
+    "StacMetadata",
     "TimeSpec",
     "clear_attrs",
     "combine_attrs",

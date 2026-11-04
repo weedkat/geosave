@@ -5,19 +5,25 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import xarray as xr
+
 import geosave as gs
 
 # Make an input file so this example runs without downloads.
 root = Path(tempfile.mkdtemp())
-anchor = gs.GeoAnchor.from_coordinates(
-    latitude=45, longitude=12, shape=4, resolution=10, crs="EPSG:32633"
+from odc.geo.geobox import GeoBox
+
+grid = GeoBox.from_bbox(
+    (500000, 5000000, 500040, 5000040),
+    crs='EPSG:32633', resolution=10,
 )
 red = np.arange(1, 17, dtype="uint16").reshape(4, 4)
-original = gs.raster(
-    {"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)},
-    anchor.geobox, nodata=0,
+original = (
+    xr.Dataset({"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)})
+    .gs.write_grid(grid)
+    .gs.write_nodata(0)
 )
-(scene_file,) = original.gs.to_cog(root / "scene.tif")
+(scene_file,) = original.gs.to_cog(root, path_format="scene.tif")
 source = scene_file
 
 scene = gs.open_raster(source, chunks={"y": 2, "x": 2})
@@ -30,8 +36,8 @@ Output:
 <xarray.Dataset> Size: 136B
 Dimensions:      (x: 4, y: 4)
 Coordinates:
-  * x            (x) float64 32B 2.635e+05 2.635e+05 2.636e+05 2.636e+05
-  * y            (y) float64 32B 4.987e+06 4.987e+06 4.987e+06 4.987e+06
+  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
+  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
     spatial_ref  int64 8B 0
 Data variables:
     red          (y, x) uint16 32B dask.array<chunksize=(2, 2), meta=np.ndarray>
@@ -41,8 +47,8 @@ Attributes:
 ```
 
 For your own file, set `source = Path("data/scene.tif")` and start at
-`gs.open_raster`. The file supplies its grid; you need an anchor only when
-creating pixels or choosing a target grid. Opening reads metadata and builds
+`gs.open_raster`. The file supplies its grid; choose a GeoBox when
+creating pixels or setting a target grid. Opening reads metadata and builds
 lazy arrays. It leaves stored values and their dtype unchanged unless you
 request `mask_and_scale=True`.
 
@@ -55,8 +61,8 @@ acquisition recipes in a model spec as a Prefect job, use
 
 | Input | Public call | Result |
 | --- | --- | --- |
-| One TIFF, JPEG 2000, PNG, NetCDF file, or Zarr store | `gs.open_raster(path, **options)` | xarray `Dataset`, one variable per band or stored variable. |
-| Names mapped to raster locations, or a folder with one file/store per name | `gs.open_tree(source, **options)` | xarray `DataTree`, one raster group per name. |
+| One TIFF, JPEG 2000, PNG, or root-only NetCDF/Zarr | `gs.open_raster(path, **options)` | xarray `Dataset`, one variable per band or stored variable. |
+| Zarr or NetCDF with child groups | `gs.open_raster(source, **options)` | xarray `DataTree`, preserving stored groups. |
 | GeoParquet, GeoJSON, or GeoPackage | `gs.open_vector(path, **options)` | GeoPandas `GeoDataFrame`, with the file's geometry and columns. |
 
 Readers select a backend by suffix. Plain PNG files often lack a CRS and grid;
@@ -83,8 +89,8 @@ Output:
 array([[0.6666667, 0.5      ],
        [0.2857143, 0.25     ]], dtype=float32)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int64 8B 0
 ```
 
@@ -104,9 +110,8 @@ boundaries in more detail.
 ## Save the result
 
 ```python
-prepared = gs.raster({"ndvi": ndvi}, patch).gs.write_nodata(np.nan)
-(saved,) = prepared.gs.to_cog(root / "prepared/ndvi.tif")
-(destination,) = saved.written.values()
+prepared = ndvi.to_dataset().gs.write_nodata(np.nan)
+(destination,) = prepared.gs.to_cog(root / "prepared", path_format="ndvi.tif")
 destination.name
 ```
 
@@ -116,45 +121,41 @@ Output:
 'ndvi.tif'
 ```
 
-Writing computes the pixels and returns the written file in a `Scene`, as a
-`RasterFile` whose `path` is the destination. Here NaN is
-the declared fill value for the floating-point output. `gs.raster` uses the
-patch as its grid reference; the result has one variable with new meaning.
+Writing computes the pixels and returns a list of destination UPaths. Here NaN is
+the declared fill value for the floating-point output. The NDVI band keeps the
+patch's grid coordinates; the result has one variable with new meaning.
 Reopen with `gs.open_raster(destination)` in another process. Choose
 `.gs.to_zarr(path)` or `.gs.to_netcdf(path)` for multidimensional output.
 Writers refuse existing destinations unless you pass `overwrite=True`.
 
-## Describe saved files in a catalog
+## Save the result as a catalog
 
 ```python
 from datetime import UTC, datetime
 
-ndvi_collection = gs.stac.create_collection("ndvi", description="NDVI patch")
-items = gs.stac.create_catalog(
-    gs.stac.create_items(
-        saved,
-        id_format="ndvi",
-        collection=ndvi_collection,
-        datetime=datetime(2025, 1, 1, tzinfo=UTC),
-    ),
-    collections=[ndvi_collection],
+items = prepared.gs.to_catalog(
+    root / "catalog",
+    path_format="ndvi.tif",
+    id_format="ndvi",
+    collection="ndvi",
+    datetime=datetime(2025, 1, 1, tzinfo=UTC),
 )
-catalog = items.gs.to_geoparquet(root / "prepared/catalog.parquet")
+catalog = items.gs.to_geoparquet(root / "catalog/catalog.parquet")
 gs.open_vector(catalog)[["collection", "datetime"]]
 ```
 
 Output:
 
 ```text
-  collection                  datetime
-0       ndvi 2025-01-01 00:00:00+00:00
+  collection                   datetime
+0       ndvi  2025-01-01 00:00:00+00:00
 ```
 
-`create_items` reads file headers and yields one `pystac.Item` per scene;
-`create_catalog` lays Items out as a GeoDataFrame. No pixel is read. This undated synthetic
-file needs an explicit date; without one, the Item spans all of time and
-`create_items` warns. For your own data, use its actual acquisition date or interval; files
-with a `time` coordinate already supply that information.
+`to_catalog` writes the raster's files, as `to_cog` does, and returns one STAC
+Item per date as a GeoDataFrame, built from the raster's grid, bands and dates.
+This undated synthetic raster needs an explicit date; without one, the Item
+spans all of time, with a warning. For your own data, use its actual
+acquisition date or interval; rasters with a `time` coordinate already supply it.
 The catalog stores asset addresses and metadata. The TIFF still holds the
 pixels. Continue with [catalogs and windows](catalogs-and-cuts.md) to prepare
 model inputs from many saved files.
@@ -184,8 +185,8 @@ Output:
 array([[1, 1],
        [1, 1]], dtype=uint8)
 Coordinates:
-  * y            (y) float64 16B 4.987e+06 4.987e+06
-  * x            (x) float64 16B 2.635e+05 2.635e+05
+  * y            (y) float64 16B 5e+06 5e+06
+  * x            (x) float64 16B 5e+05 5e+05
     spatial_ref  int64 8B 0
 ```
 

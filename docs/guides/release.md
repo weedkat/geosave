@@ -31,7 +31,7 @@ chain = build_model({
     },
 })
 spec = ModelSpec(
-    schema_version=2,
+    schema_version=3,
     rasters={"features": {"variables": ["red", "nir"]}},
     inputs={"feature_map": Ref("features")},
 )
@@ -43,14 +43,18 @@ This small example saves a randomly initialized built-in head without downloadin
 weights. For a trained model, pass its chain, such as `task.model`, instead.
 Wrapping shares the existing modules and weights; it does not rebuild them.
 
-After fitting the Module/DataModule from [Training](training.md), save their
-trained chain and actual input contract:
+For a project Module whose `model` is a registered chain and whose DataModule
+holds the matching spec, save their trained chain and actual input contract:
 
 ```python
 module.eval()
 trained = GeoSaveModel.from_chain(module.model, spec=data.spec)
 trained.save_pretrained("trained-release")
 ```
+
+The plain Lightning starter in [Training](training.md) uses a custom network,
+so it cannot use this registered-chain export. Use its Lightning checkpoint
+or build a registered architecture first.
 
 `data.spec` is the spec the DataModule loaded. Saving it preserves the declared
 bands, input names, and tensor transforms beside the weights. It does not bundle

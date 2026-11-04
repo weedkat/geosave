@@ -62,6 +62,7 @@ data:
       class_path: modules.regression.mean_teacher.datasets.MyDataset
       init_args:
         split: val
+    size: 224
     batch_size: 8
     num_workers: 4
     augmentations:

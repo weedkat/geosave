@@ -14,8 +14,8 @@ def test_a_spectral_variable_names_its_band() -> None:
         "red", center_wavelength=0.665, target="red"
     )
 
-    red = eo.from_dataarray(scene.red.assign_attrs(long_name="Red"))
-    nir = eo.from_dataarray(scene.nir)
+    red = eo.build_band(scene.red.assign_attrs(long_name="Red"))
+    nir = eo.build_band(scene.nir)
 
     assert (red.name, red.common_name, red.center_wavelength) == ("red", "red", 0.665)
     assert red.description == "Red"
@@ -32,7 +32,3 @@ def test_spectral_facts_and_the_description_are_stamped_onto_the_variable() -> N
         "center_wavelength": 0.665,
         "long_name": "Red",
     }
-
-
-def test_a_band_stating_only_its_name_stamps_no_attrs() -> None:
-    assert eo.stamp(_empty("B08"), Band({"name": "B08"})).attrs == {}

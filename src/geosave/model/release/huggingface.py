@@ -32,7 +32,7 @@ class StageConfig(TypedDict):
 
 
 class GeoSaveConfig(PretrainedConfig):
-    """Describe a native chain in a generated model artifact.
+    """Record a native chain in a generated model artifact.
 
     Args:
         stages: Ordered stage names and construction specifications.

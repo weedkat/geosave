@@ -58,6 +58,7 @@ data:
       class_path: modules.classification.supervised.datasets.MyDataset
       init_args:
         split: val
+    size: 224
     batch_size: 8
     num_workers: 4
     augmentations:

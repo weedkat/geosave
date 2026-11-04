@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Annotated, Any, Self
+from typing import Annotated, Any, Self, cast
 
-import orjson
 import numpy as np
+import orjson
 from pydantic import BeforeValidator, field_serializer, model_validator
 
-from geosave.geodata.utils.color import parse_color
+from geosave.geodata.utils.color import CATEGORY_PALETTE, parse_color
 
 from .base import AttrsGroup, Decoded, decode
 
-if TYPE_CHECKING:
-    pass
 
-
-def _hexes(colors: object) -> object:
-    """Spell every colour `#RRGGBB`, so one palette compares as one however it was given."""
+def _normalize_colors(colors: object) -> object:
+    """Spell every colour `#RRGGBB`, so one palette compares equal however it was given."""
     colors = decode(colors)
     if not isinstance(colors, Mapping):
         return colors
@@ -29,7 +26,7 @@ def _hexes(colors: object) -> object:
 
 
 # Hex, RGB, or GDAL's JSON text of either, read as hex.
-type Hexes = Annotated[dict[int, str], BeforeValidator(_hexes)]
+type Hexes = Annotated[dict[int, str], BeforeValidator(_normalize_colors)]
 
 
 class Legend(AttrsGroup):
@@ -58,8 +55,6 @@ class Legend(AttrsGroup):
         {0: 'bg', 1: 'palm'}
     """
 
-    REFUSE_CONFLICT = True
-
     flag_values: Decoded[list[int]] | None = None
     flag_masks: Decoded[list[int]] | None = None
     flag_meanings: str | None = None
@@ -76,35 +71,65 @@ class Legend(AttrsGroup):
     def colors(self) -> dict[int, str]:
         """Return the colour of every class, in class order.
 
+        A class takes its `color_map` colour, else the `CATEGORY_PALETTE`
+        colour at its position among the classes, so it keeps that colour
+        whichever other classes carry their own.
+
         Raises:
-            ValueError: No classes are listed, or a class carries no colour.
+            ValueError: No classes are listed.
+
+        Examples:
+            >>> Legend(classes={0: "water", 1: "trees"}, color_map={0: "#0000ff"}).colors[0]
+            '#0000FF'
         """
         classes = self.classes
         if classes is None:
             raise ValueError(
-                "the legend lists no classes, so its values name none to colour; "
-                "give it flag_values and flag_meanings"
+                "The legend has no classes to color. Give it classes, for example "
+                "Legend(classes={0: 'water', 1: 'trees'})."
             )
         color_map = self.color_map or {}
-        uncolored = [code for code in sorted(classes) if code not in color_map]
-        if uncolored:
+        colors = {}
+        for position, code in enumerate(classes):
+            if code in color_map:
+                colors[code] = color_map[code]
+            else:
+                colors[code] = CATEGORY_PALETTE[position % len(CATEGORY_PALETTE)]
+        return cast("dict[int, str]", _normalize_colors(colors))
+
+    def check_dtype(self, dtype: np.dtype) -> None:
+        """Refuse class values that `dtype` would store as other numbers.
+
+        A class value names a class only as the exact number stored: 300 wraps
+        to 44 on uint8, so it would name another class or none.
+
+        Raises:
+            ValueError: A class value or mask does not fit `dtype`.
+        """
+        values = [*(self.flag_values or ()), *(self.flag_masks or ())]
+        with np.errstate(invalid="ignore", over="ignore"):
+            stored = np.asarray(values).astype(dtype)
+        misstored = [
+            value for value, kept in zip(values, stored, strict=True) if kept != value
+        ]
+        if misstored:
             raise ValueError(
-                f"classes {uncolored} carry no colour; give color_map an entry "
-                f"for every class"
+                f"The class values {misstored} do not fit this {dtype} band: they would "
+                f"be stored as other numbers and label the wrong pixels. Use class "
+                f"values the band can hold, or convert the band to a wider dtype first."
             )
-        return {code: color_map[code] for code in classes}
 
     @field_serializer("color_map")
-    def _as_text(self, colors: dict[int, str] | None) -> str | None:
-        """Write the palette as JSON text; NetCDF attrs hold no mappings."""
+    def _serialize_color_map(self, colors: dict[int, str] | None) -> str | None:
+        """Write the palette as JSON text, since NetCDF attrs cannot hold a mapping."""
         if colors is None:
             return None
         return orjson.dumps(colors, option=orjson.OPT_NON_STR_KEYS).decode()
 
     @model_validator(mode="before")
     @classmethod
-    def _from_classes(cls, data: Any) -> Any:
-        """Accept `classes` in place of the codes and names CF stores."""
+    def _expand_classes(cls, data: Any) -> Any:
+        """Turn the `classes` argument into the `flag_values` and `flag_meanings` CF stores."""
         if not isinstance(data, dict) or data.get("classes") is None:
             return data
         given = dict(data)
@@ -112,8 +137,9 @@ class Legend(AttrsGroup):
         split = sorted(name for name in classes.values() if name.split() != [name])
         if split:
             raise ValueError(
-                f"class names {split} are empty or carry whitespace; "
-                f"flag_meanings tokens are single words, so use '_'"
+                f"Class names {split} are empty or contain spaces, which the CF "
+                f"flag_meanings format cannot store. Use single words such as "
+                f"'tall_grass'."
             )
         values = sorted(classes)
         given["flag_values"] = values
@@ -121,72 +147,51 @@ class Legend(AttrsGroup):
         return given
 
     @model_validator(mode="after")
-    def _line_up(self) -> Self:
-        """Refuse a listing whose names and codes do not describe one another."""
-        listed = {
-            name: codes
-            for name, codes in (
-                ("flag_values", self.flag_values),
-                ("flag_masks", self.flag_masks),
-            )
-            if codes is not None
-        }
-        if self.flag_meanings is None:
-            if listed:
-                raise ValueError(
-                    f"{sorted(listed)} list codes but flag_meanings names no classes for them"
-                )
-        elif not listed:
+    def _check_names_match_values(self) -> Self:
+        """Require one class name for each pixel value or bit mask listed."""
+        names = [] if self.flag_meanings is None else self.flag_meanings.split()
+        listings = {"pixel values": self.flag_values, "bit masks": self.flag_masks}
+        listings = {label: listed for label, listed in listings.items() if listed}
+
+        if listings and not names:
             raise ValueError(
-                "flag_meanings names classes that no flag_values or flag_masks enumerate"
+                f"The legend lists {' and '.join(listings)} but names no classes. "
+                f"Give each class a name."
             )
-        else:
-            names = self.flag_meanings.split()
-            for name, codes in listed.items():
-                if len(codes) != len(names):
-                    raise ValueError(
-                        f"{name} lists {len(codes)} codes but flag_meanings names "
-                        f"{len(names)} classes"
-                    )
-        if (
-            self.flag_values is not None
-            and sorted(set(self.flag_values)) != self.flag_values
-        ):
+        if names and not listings:
             raise ValueError(
-                f"flag_values {self.flag_values} are not ascending and unique"
+                f"The legend names the classes {names} but lists no pixel values. "
+                f"Give each class the pixel value it stands for."
             )
-        # A colour for a value the listing does not name paints nothing.
-        if self.color_map is not None and self.flag_values is not None:
-            unlisted = sorted(set(self.color_map) - set(self.flag_values))
-            if unlisted:
+        for label, listed in listings.items():
+            if len(listed) != len(names):
                 raise ValueError(
-                    f"colours {unlisted} key to values this listing does not name; "
-                    f"it lists {self.flag_values}"
+                    f"The legend lists {len(listed)} {label} but {len(names)} class "
+                    f"names. Each class needs exactly one name and one of the {label}."
                 )
         return self
 
-    def check_dtype(self, dtype: np.dtype) -> None:
-        """Refuse class codes a variable of `dtype` cannot store exactly.
+    @model_validator(mode="after")
+    def _check_values_ascending(self) -> Self:
+        """Require pixel values in ascending order without repeats."""
+        values = self.flag_values
+        if values is not None and values != sorted(set(values)):
+            raise ValueError(
+                f"The legend's pixel values {values} must be ascending with no "
+                f"repeats. Sort the classes by pixel value and remove duplicates."
+            )
+        return self
 
-        A code names a class only as the exact number stored, so a code
-        stored as another number, as 300 wraps to 44 on uint8, would name
-        another class or none.
-
-        Args:
-            dtype: Dtype of the variable the legend is written onto.
-
-        Raises:
-            ValueError: A code or flag mask is no value of `dtype`.
-
-        Examples:
-            >>> Legend(classes={0: "bg", 300: "palm"}).check_dtype(np.dtype("uint8"))
-            ValueError: codes [300] are no uint8 values
-        """
-        codes = [*(self.flag_values or ()), *(self.flag_masks or ())]
-        with np.errstate(invalid="ignore", over="ignore"):
-            stored = np.asarray(codes).astype(dtype)
-        outside = [
-            code for code, kept in zip(codes, stored, strict=True) if kept != code
-        ]
-        if outside:
-            raise ValueError(f"codes {outside} are no {dtype} values")
+    @model_validator(mode="after")
+    def _check_colors_match_classes(self) -> Self:
+        """Require every colored pixel value to belong to a listed class."""
+        if self.color_map is None or self.flag_values is None:
+            return self
+        uncolored = sorted(set(self.color_map) - set(self.flag_values))
+        if uncolored:
+            raise ValueError(
+                f"The color map colors pixel values {uncolored}, but no class has "
+                f"those values (the classes are {self.flag_values}). Add the "
+                f"missing classes or remove their colors."
+            )
+        return self

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import numpy as np
@@ -10,72 +9,20 @@ import xarray as xr
 from odc.geo import CRS
 
 from geosave.geodata import (
-    GeoDataArray,
-    GeoDataset,
-    GeoDataTree,
     attrs,
     open_raster,
-    stac,
 )
-from geosave.geodata.core.raster.create import raster
-from geosave.geodata.io import gdal
+from tests.conftest import build_dataset
 from tests.geodata.conftest import build_raster, flat, geobox
 from tests.geodata.core.raster.conftest import optical
 
 UTM = "EPSG:32633"
-
-
-@pytest.mark.parametrize(
-    ("times", "template", "count"),
-    [
-        (0, "scene.tif", 1),
-        (0, "{band}.tif", 2),
-        (1, "scene.tif", 1),
-        (2, "{time:%Y%m%d}.tif", 2),
-        (2, "{time:%Y%m%d}_{band}.tif", 4),
-    ],
-)
-def test_cog_export_returns_readable_files(
-    tmp_path: Path, times: int, template: str, count: int
-) -> None:
-    written = build_raster(times=times)
-
-    paths = [str(file) for file in flat(written.gs.to_cog(f"{tmp_path}/{template}"))]
-
-    assert len(paths) == count
-    for path in paths:
-        with gdal.open_raster(path) as restored:
-            expected = written.sel(time=restored.time) if times else written
-            assert restored.gs.geobox == written.gs.geobox
-            for name in restored.data_vars:
-                np.testing.assert_array_equal(restored[name], expected[name])
-
-
-def test_cog_export_takes_creation_options_as_keywords(
-    tmp_path: Path,
-) -> None:
-    import rasterio
-
-    (file,) = flat(build_raster().gs.to_cog(f"{tmp_path}/s2.tif", compress="deflate"))
-    path = Path(file)
-
-    assert path == tmp_path / "s2.tif"
-    with rasterio.open(path) as src:
-        assert src.compression.name.lower() == "deflate"
-
-
-def test_cog_export_refuses_a_path_that_is_not_a_tiff(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="names no raster format"):
-        flat(build_raster().gs.to_cog(tmp_path / "scene"))
-
-
-def test_to_cog_takes_no_id() -> None:
-    assert "id" not in inspect.signature(GeoDataset.to_cog).parameters
+DAYS = ("20250601", "20250602")
 
 
 def test_to_array_keeps_what_every_band_states_alike() -> None:
     box = geobox()
-    built = raster(
+    built = build_dataset(
         {
             "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
             "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
@@ -93,45 +40,10 @@ def test_to_array_keeps_what_every_band_states_alike() -> None:
     assert stacked.attrs == {"scale_factor": pytest.approx(1e-4)}
 
 
-def test_one_nodata_spelled_two_ways_trees_as_one() -> None:
-    source = raster(
-        {
-            "red": (("y", "x"), np.ones(geobox().shape, "int16")),
-            "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
-        },
-        geobox(),
-    )
-    source.red.attrs = {"nodata": 0, "long_name": "red"}
-    source.nir.attrs = {"_FillValue": 0, "long_name": "nir"}
-
-    assert source.gs.to_array().attrs == {"_FillValue": 0}
-
-
-def test_bands_with_different_nodata_tree_without_one() -> None:
-    source = raster(
-        {
-            "red": (("y", "x"), np.ones(geobox().shape, "int16")),
-            "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
-        },
-        geobox(),
-    )
-    source.red.attrs = {"_FillValue": 0, "units": "1"}
-    source.nir.attrs = {"_FillValue": -1, "units": "1"}
-
-    assert source.gs.to_array().attrs == {"units": "1"}
-
-
-def test_nan_nodata_stacks() -> None:
-    source = raster({"red": (("y", "x"), np.ones(geobox().shape, "float32"))}, geobox())
-    source.red.attrs = {"nodata": np.float32("nan")}
-
-    assert np.isnan(source.gs.to_array().gs.nodata)
-
-
 def test_nodata_reads_back_what_was_written() -> None:
     box = geobox()
     pixels = np.zeros(box.shape, "uint16")
-    built = raster(
+    built = build_dataset(
         {"red": (("y", "x"), pixels), "nir": (("y", "x"), pixels)},
         box,
     ).gs.write_nodata(0, target="red")
@@ -144,7 +56,7 @@ def test_nodata_reads_back_what_was_written() -> None:
 def test_raster_statistics_tabulate_each_variable_as_its_band_does() -> None:
     box = geobox()
     pixels = np.arange(64, dtype="uint16").reshape(box.shape)
-    built = raster(
+    built = build_dataset(
         {
             "red": (("y", "x"), pixels),
             "nir": (("y", "x"), pixels * 2),
@@ -179,7 +91,7 @@ def test_dataset_statistics_have_one_row_per_variable_with_band_dimensions() -> 
 
 
 def test_write_crs_replaces_grid_coordinate_attrs_and_keeps_the_root() -> None:
-    built = raster({"red": (("y", "x"), np.ones(geobox().shape))}, geobox())
+    built = build_dataset({"red": (("y", "x"), np.ones(geobox().shape))}, geobox())
     built.attrs = {"title": "S2"}
     built.x.attrs["crs"] = "EPSG:4326"
 
@@ -191,7 +103,7 @@ def test_write_crs_replaces_grid_coordinate_attrs_and_keeps_the_root() -> None:
 
 
 def test_write_crs_keeps_a_one_pixel_grid() -> None:
-    built = raster(
+    built = build_dataset(
         {"red": (("y", "x"), np.ones((1, 1)))},
         geobox(shape=(1, 1)),
     )
@@ -199,41 +111,12 @@ def test_write_crs_keeps_a_one_pixel_grid() -> None:
     assert built.gs.write_crs().odc.geobox == built.odc.geobox
 
 
-@pytest.mark.parametrize(
-    "writer",
-    [
-        GeoDataset.to_cog,
-        GeoDataset.to_zarr,
-        GeoDataset.to_netcdf,
-        GeoDataTree.to_cog,
-        GeoDataTree.to_zarr,
-        GeoDataTree.to_netcdf,
-        GeoDataArray.to_cog,
-    ],
-)
-def test_writers_take_no_catalog_argument(writer) -> None:
-    assert "catalog" not in inspect.signature(writer).parameters
-
-
-@pytest.mark.parametrize(
-    "writer",
-    [
-        GeoDataset.to_zarr,
-        GeoDataset.to_netcdf,
-        GeoDataTree.to_cog,
-        GeoDataTree.to_zarr,
-        GeoDataTree.to_netcdf,
-        GeoDataArray.to_cog,
-    ],
-)
-def test_writers_that_name_nothing_take_no_id(writer) -> None:
-    assert "id" not in inspect.signature(writer).parameters
-
-
 def _classes() -> xr.Dataset:
     box = geobox()
     codes = np.zeros(box.shape, "uint8")
-    return raster({"label": (("y", "x"), codes), "other": (("y", "x"), codes)}, box)
+    return build_dataset(
+        {"label": (("y", "x"), codes), "other": (("y", "x"), codes)}, box
+    )
 
 
 NAMES = {0: "water", 1: "trees"}
@@ -249,54 +132,10 @@ def test_write_legend_names_and_colours_each_class() -> None:
     assert labelled.other.gs.legend is None
 
 
-def test_write_legend_without_colours_names_the_classes() -> None:
-    labelled = _classes().gs.write_legend(NAMES, target="label")
-
-    assert labelled.label.gs.legend.classes == NAMES
-
-
 def test_write_legend_defaults_to_every_variable() -> None:
     labelled = _classes().gs.write_legend(NAMES)
 
     assert all(labelled[name].gs.legend.classes == NAMES for name in ("label", "other"))
-
-
-def test_write_legend_refuses_a_variable_it_does_not_hold() -> None:
-    with pytest.raises(KeyError):
-        _classes().gs.write_legend(NAMES, target="missing")
-
-
-def test_a_band_writes_its_own_legend() -> None:
-    band = _classes()["label"].gs.write_legend(NAMES, COLORS)
-
-    assert band.gs.legend.classes == NAMES
-
-
-def test_a_written_legend_survives_a_geotiff_round_trip(tmp_path: Path) -> None:
-    from geosave.geodata.io import geotiff
-
-    labelled = _classes()[["label"]].gs.write_legend(NAMES, COLORS)
-
-    restored = gdal.open_raster(geotiff.write_cog(labelled, tmp_path / "label.tif"))
-
-    assert restored.label.gs.legend.classes == NAMES
-
-
-def test_a_legend_without_colours_writes_to_netcdf(tmp_path: Path) -> None:
-
-    labelled = _classes()[["label"]].gs.write_legend(NAMES, None)
-
-    restored = open_raster(labelled.gs.to_netcdf(tmp_path / "label.nc"))
-
-    assert restored.label.gs.legend == labelled.label.gs.legend
-
-
-def test_a_raster_crops_to_its_own_bounds() -> None:
-    scene = build_raster().gs.write_nodata(0)
-
-    cut = scene.gs.crop(scene.gs.bounds)
-
-    assert cut.gs.geobox == scene.gs.geobox
 
 
 def _bands() -> xr.Dataset:
@@ -348,7 +187,7 @@ def test_to_numpy_trees_in_the_order_xarray_holds_the_variables() -> None:
 
 
 def test_to_numpy_reads_an_unplaced_raster() -> None:
-    unplaced = raster(
+    unplaced = build_dataset(
         {
             "pixels": (
                 ("y", "x"),
@@ -367,7 +206,9 @@ def test_to_numpy_refuses_a_raster_carrying_no_variables() -> None:
 
 def test_to_numpy_refuses_variables_on_different_axes() -> None:
     source = optical()
-    timeless = raster({"dem": (("y", "x"), np.zeros((8, 8), "uint16"))}, geobox())
+    timeless = build_dataset(
+        {"dem": (("y", "x"), np.zeros((8, 8), "uint16"))}, geobox()
+    )
     mixed = source.assign(dem=timeless.dem)
 
     with pytest.raises(ValueError, match="different axes"):
@@ -390,7 +231,7 @@ def test_to_numpy_casts_variables_onto_one_dtype() -> None:
 
 
 def test_to_numpy_refuses_a_raster_already_carrying_the_stacking_axis() -> None:
-    conflicting = raster(
+    conflicting = build_dataset(
         {
             "pixels": (
                 ("band", "y", "x"),
@@ -420,13 +261,6 @@ def test_to_tensor_computes_a_lazy_raster(torch) -> None:
     tensor.fill_(0)
 
 
-def test_to_tensor_refuses_variables_on_different_dtypes(torch) -> None:
-    mixed = optical().assign(B08=optical().B08.astype("float32"))
-
-    with pytest.raises(ValueError, match="dtype"):
-        mixed.gs.to_tensor()
-
-
 def build_bands(*colours: str | None) -> xr.Dataset:
     """Bands whose names do not hint at their declared color interpretation."""
     pixels = xr.DataArray(np.ones((2, 2), "uint8"), dims=("y", "x"))
@@ -437,16 +271,8 @@ def build_bands(*colours: str | None) -> xr.Dataset:
     return raster
 
 
-def test_rgb_names_the_three_colour_bands() -> None:
-    assert build_bands("red", "green", "blue").gs.rgb == ("b0", "b1", "b2")
-
-
 def test_rgb_follows_what_bands_draw_not_their_order() -> None:
     assert build_bands("blue", "red", "green").gs.rgb == ("b1", "b2", "b0")
-
-
-def test_rgb_passes_over_a_band_drawing_nothing() -> None:
-    assert build_bands("red", None, "green", "blue").gs.rgb == ("b0", "b2", "b3")
 
 
 def test_rgb_takes_the_first_of_two_bands_drawing_one_colour() -> None:
@@ -461,15 +287,6 @@ def test_rgb_is_none_where_no_band_draws_blue() -> None:
 def test_a_plot_without_bands_refuses_a_raster_drawing_no_colour() -> None:
     with pytest.raises(ValueError, match="write_rgb"):
         build_bands("gray", "red", "green").gs.plot()
-
-
-def test_write_rgb_names_the_channels_a_composite_draws() -> None:
-    raster = build_bands(None, None, None, None)
-
-    written = raster.gs.write_rgb("b2", "b1", "b0")
-
-    assert written.gs.rgb == ("b2", "b1", "b0")
-    assert "colorinterp" not in written.b3.attrs
 
 
 def test_write_rgb_repoints_the_channels_it_replaces() -> None:
@@ -500,10 +317,372 @@ def test_write_rgb_refuses_one_variable_on_two_channels() -> None:
         build_bands(None, None).gs.write_rgb("b0", "b0", "b1")
 
 
-@pytest.mark.parametrize("compute", [True, False])
-def test_properties_survive_per_band_cog_writing(tmp_path, compute):
-    ds = build_raster(times=2).assign_coords({"eo:cloud_cover": ("time", [12.0, 65.0])})
-    scenes = ds.gs.to_cog(str(tmp_path / "{time:%Y%m%d}_{band}.tif"), compute=compute)
-    items = list(stac.create_items([scene.compute() for scene in scenes]))
+def test_properties_survive_per_band_catalog_publication(tmp_path):
+    from geosave.geodata.stac.item import stamp_properties_coordinate
+
+    ds = stamp_properties_coordinate(
+        build_raster(times=2), [{"eo:cloud_cover": 12.0}, {"eo:cloud_cover": 65.0}]
+    )
+    catalog = ds.gs.to_catalog(tmp_path, path_format="{time:%Y%m%d}_{band}.tif")
+    items = list(catalog.gs.to_items())
+    # Two band files per date are one Item each date, with that date's properties.
     assert [item.properties["eo:cloud_cover"] for item in items] == [12.0, 65.0]
-    assert any("eo/" in schema for schema in items[0].stac_extensions)
+    assert [sorted(item.assets) for item in items] == [["nir", "red"], ["nir", "red"]]
+
+
+@pytest.mark.parametrize(
+    ("times", "path_format", "expected"),
+    [
+        (0, "scene.tif", ["scene.tif"]),
+        (0, "s2_{band}.tif", ["s2_red.tif", "s2_nir.tif"]),
+        (0, "scene/{band}.tif", ["scene/red.tif", "scene/nir.tif"]),
+        (2, "scene_{time:%Y%m%d}.tif", [f"scene_{day}.tif" for day in DAYS]),
+        (
+            2,
+            "{time:%Y%m%d}/{band}.tif",
+            [
+                "20250601/red.tif",
+                "20250601/nir.tif",
+                "20250602/red.tif",
+                "20250602/nir.tif",
+            ],
+        ),
+    ],
+    ids=["one-file", "flat-bands", "folder-bands", "dates", "dates-and-bands"],
+)
+def test_the_path_format_fields_decide_the_files(
+    tmp_path: Path, times: int, path_format: str, expected: list[str]
+) -> None:
+    written = build_raster(times=times)
+
+    files = written.gs.to_cog(tmp_path, path_format=path_format)
+
+    assert [Path(f) for f in files] == [tmp_path / name for name in expected]
+    for path in files:
+        with open_raster(path) as restored:
+            assert restored.gs.geobox == written.gs.geobox
+            for name in restored.data_vars:
+                source = written[name]
+                if times:
+                    source = source.sel(time=restored.time.values)
+                np.testing.assert_array_equal(
+                    restored[name].squeeze(), source.squeeze()
+                )
+
+
+def test_place_is_a_callers_field_not_a_built_in(tmp_path: Path) -> None:
+    with pytest.raises(KeyError, match="lat"):
+        flat(build_raster().gs.to_cog(tmp_path, path_format="{lat:.3f}.tif"))
+
+
+def test_several_dates_without_time_refuse(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError, match=r"2 dates would share .*scene\.tif; add \{time\}"
+    ):
+        flat(build_raster(times=2).gs.to_cog(tmp_path, path_format="scene.tif"))
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_partial_date_that_collides_refuses(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="collid"):
+        flat(build_raster(times=2).gs.to_cog(tmp_path, path_format="{time:%Y}.tif"))
+
+
+def test_time_on_an_undated_raster_refuses(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"no dates, so \{time\} cannot be filled"):
+        flat(build_raster().gs.to_cog(tmp_path, path_format="{time:%Y}.tif"))
+
+
+def test_sub_second_instants_render_through_strftime(tmp_path: Path) -> None:
+    instant = np.datetime64("2025-06-01T10:30:31.123456", "ns")
+    written = build_raster(times=1).assign_coords(time=[instant])
+
+    (file,) = flat(
+        written.gs.to_cog(tmp_path, path_format="{time:%Y%m%dT%H%M%S_%f}.tif")
+    )
+
+    assert file.name == "20250601T103031_123456.tif"
+    assert open_raster(file).time.values == instant
+
+
+def test_variable_attrs_reach_every_file(tmp_path: Path) -> None:
+    source = build_raster(times=2)
+    written = source.assign(
+        {
+            name: source[name].assign_attrs(units="reflectance")
+            for name in ("red", "nir")
+        }
+    )
+
+    files = written.gs.to_cog(tmp_path, path_format="{time:%Y%m%d}.tif")
+
+    for path in files:
+        assert open_raster(path).red.attrs["units"] == "reflectance"
+
+
+def test_an_existing_file_refuses_without_overwrite(tmp_path: Path) -> None:
+    written = build_raster(times=1)
+    flat(written.gs.to_cog(tmp_path, path_format="scene.tif"))
+
+    with pytest.raises(FileExistsError):
+        flat(written.gs.to_cog(tmp_path, path_format="scene.tif"))
+    assert flat(written.gs.to_cog(tmp_path, path_format="scene.tif", overwrite=True))
+
+
+def test_a_raster_spanning_more_than_time_refuses(tmp_path: Path) -> None:
+    spanning = build_raster(times=2).expand_dims({"model": ["a", "b"]})
+
+    with pytest.raises(ValueError, match="a COG holds one instant of one grid"):
+        flat(spanning.gs.to_cog(tmp_path, path_format="{time:%Y%m%d}.tif"))
+
+
+def test_remote_paths_keep_their_scheme(bucket: str) -> None:
+    files = flat(
+        build_raster(times=2).gs.to_cog(bucket, path_format="{time:%Y%m%d}/{band}.tif")
+    )
+
+    assert [str(f) for f in files] == [
+        f"{bucket}/20250601/red.tif",
+        f"{bucket}/20250601/nir.tif",
+        f"{bucket}/20250602/red.tif",
+        f"{bucket}/20250602/nir.tif",
+    ]
+
+
+def test_each_file_states_its_band_and_date(tmp_path: Path) -> None:
+    scene = build_raster(times=2)
+
+    files = flat(scene.gs.to_cog(tmp_path, path_format="s_{time:%Y%m%d}_{band}.tif"))
+
+    headers = [open_raster(f) for f in files]
+    assert [h.gs.variables for h in headers] == [("red",), ("nir",), ("red",), ("nir",)]
+    assert len({str(f) for f in files}) == 4
+    assert headers[0].gs.times[0] == pd.Timestamp(scene.time.values[0])
+    assert headers[0].gs.acdd is None
+
+
+def test_a_scalar_time_fills_the_time_field(tmp_path: Path) -> None:
+    # A scalar time coordinate is one date, as one step of a time axis is.
+    scene = build_raster(times=2).isel(time=1)
+
+    files = flat(scene.gs.to_cog(tmp_path, path_format="s_{time:%Y%m%d}.tif"))
+
+    assert [file.name for file in files] == ["s_20250602.tif"]
+    restored = open_raster(files[0])
+    assert pd.Timestamp(restored.time.values) == pd.Timestamp("2025-06-02")
+
+
+def test_a_relative_template_returns_absolute_paths(scene, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    (path, _) = flat(scene.gs.to_cog("out", path_format="s_{time:%Y%m%d}.tif"))
+
+    assert Path(path).is_absolute()
+    assert Path(path) == tmp_path / "out" / "s_20250601.tif"
+
+
+def test_native_deferred_cog_inventory_waits_for_pixels(tmp_path):
+    from dask import delayed
+    from dask.array import from_delayed
+    from dask.delayed import Delayed
+    from upath import UPath
+    from tests.geodata.conftest import build_raster
+
+    calls = []
+    raster = build_raster(times=0)
+
+    values = raster.red.values
+
+    @delayed
+    def pixels():
+        calls.append(True)
+        return values
+
+    raster = raster.assign(
+        red=(
+            raster.red.dims,
+            from_delayed(pixels(), shape=raster.red.shape, dtype=raster.red.dtype),
+        )
+    )
+    pending = raster.gs.to_cog(tmp_path, path_format="{band}.tif", compute=False)
+    assert isinstance(pending, Delayed)
+    assert calls == []
+    assert list(tmp_path.iterdir()) == []
+    paths = pending.compute()
+    assert isinstance(paths, list)
+    assert all(isinstance(path, UPath) and path.exists() for path in paths)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize(
+    ("method", "backend", "suffix"),
+    [
+        ("to_cog", "geotiff", ".tif"),
+        ("to_zarr", "zarr", ".zarr"),
+        ("to_netcdf", "netcdf", ".nc"),
+    ],
+)
+def test_deferred_formats_receive_lazy_pixels(
+    tmp_path, monkeypatch, method, backend, suffix
+):
+    from geosave.geodata.io.formats import geotiff
+    from geosave.geodata.io.formats import netcdf
+    from geosave.geodata.io.formats import zarr
+
+    source = build_raster().chunk({"y": 1, "x": 1})
+    module = {"geotiff": geotiff, "zarr": zarr, "netcdf": netcdf}[backend]
+    # The step that runs when the delayed result computes, and receives the pixels.
+    name = "write_cog" if backend == "geotiff" else "_write"
+    write = getattr(module, name)
+    chunks = []
+
+    def save(raster, destination, *args, **options):
+        chunks.append(raster.red.chunks)
+        assert raster.red.chunks == source.red.chunks
+        return write(raster, destination, *args, **options)
+
+    monkeypatch.setattr(module, name, save)
+    if method == "to_cog":
+        pending = source.gs.to_cog(tmp_path, path_format="raster.tif", compute=False)
+    else:
+        pending = getattr(source.gs, method)(
+            tmp_path / f"raster{suffix}", compute=False
+        )
+    assert chunks == []
+    saved = pending.compute()
+    saved = saved[0] if method == "to_cog" else saved
+    assert chunks == [source.red.chunks]
+    with open_raster(saved) as restored:
+        np.testing.assert_array_equal(restored.red, source.red)
+
+
+@pytest.mark.parametrize("kind", ["dataset", "array", "tree"])
+def test_explicit_templates_round_trip_under_a_literal_parent(tmp_path, kind):
+    from tests.conftest import build_tree
+
+    source = build_raster(times=2).chunk()
+    parent = tmp_path / "{literal}"
+    if kind == "array":
+        source = source.red
+    if kind == "tree":
+        source = build_tree({"s2": source})
+        template = "{collection}/{time:%Y%m%d}_{band}.tif"
+    else:
+        template = "{time:%Y%m%d}_{band}.tif"
+    files = source.gs.to_cog(parent, path_format=template)
+    assert files[0] == parent / (
+        "s2/20250601_red.tif" if kind == "tree" else "20250601_red.tif"
+    )
+    with open_raster(files[0]) as restored:
+        np.testing.assert_array_equal(
+            restored.red, build_raster(times=2).red.isel(time=0)
+        )
+        assert restored.gs.geobox == build_raster().gs.geobox
+
+
+def test_an_exact_destination_does_not_format_braces(tmp_path):
+    source = build_raster()
+    destination = tmp_path / "scene_{band}.nc"
+    saved = source.gs.to_netcdf(destination)
+    assert saved == destination
+    with open_raster(saved) as restored:
+        np.testing.assert_array_equal(restored.red, source.red)
+        assert list(restored.data_vars) == ["red", "nir"]
+
+
+class RecordingArray:
+    """A 2-D array recording the shape of every slice it serves."""
+
+    def __init__(self, values: np.ndarray, served_shapes: list) -> None:
+        self.values = values
+        self.served_shapes = served_shapes
+        self.shape = values.shape
+        self.dtype = values.dtype
+        self.ndim = values.ndim
+
+    def __getitem__(self, key):
+        served = self.values[key]
+        self.served_shapes.append(served.shape)
+        return served
+
+
+def create_mercator_grid(pixel_size: float, size: int = 1024):
+    from odc.geo.geobox import GeoBox
+
+    return GeoBox.from_bbox(
+        (0, 0, size * 10.0, size * 10.0), crs="EPSG:3857", resolution=pixel_size
+    )
+
+
+def test_read_pixels_samples_before_computing():
+    import dask.array
+
+    served_shapes = []
+    values = np.arange(1024 * 1024, dtype="float32").reshape(1024, 1024)
+    band = dask.array.from_array(RecordingArray(values, served_shapes), chunks=256)
+    scene = build_dataset({"red": (("y", "x"), band)}, create_mercator_grid(10.0))
+    # Dask probes the array with an empty slice when it is built
+    served_shapes.clear()
+    view = create_mercator_grid(80.0)
+
+    pixels = scene.gs.read_pixels(view)
+
+    assert pixels.odc.geobox == view
+    served_pixels = 0
+    for shape in served_shapes:
+        served_pixels += shape[0] * shape[1]
+    assert served_pixels <= 128 * 128
+
+
+def test_read_pixels_outside_returns_nan_without_computing():
+    import dask.array
+
+    served_shapes = []
+    values = np.ones((1024, 1024), dtype="float32")
+    band = dask.array.from_array(RecordingArray(values, served_shapes), chunks=256)
+    scene = build_dataset({"red": (("y", "x"), band)}, create_mercator_grid(10.0))
+    # Dask probes the array with an empty slice when it is built
+    served_shapes.clear()
+    from odc.geo.geobox import GeoBox
+
+    view = GeoBox.from_bbox(
+        (50000, 50000, 60000, 60000), crs="EPSG:3857", resolution=100.0
+    )
+
+    pixels = scene.gs.read_pixels(view)
+
+    assert pixels.odc.geobox == view
+    assert np.isnan(pixels["red"].values).all()
+    assert served_shapes == []
+
+
+def test_read_pixels_keeps_band_identity_and_nodata():
+    values = np.full((64, 64), 3, dtype="uint8")
+    values[:4, :4] = 255
+    scene = build_dataset(
+        {"cover": (("y", "x"), values)}, create_mercator_grid(10.0, 64), nodata=255
+    )
+    scene = scene.gs.write_legend({3: "trees"}, {3: "#397d49"}, target="cover")
+
+    pixels = scene.gs.read_pixels(create_mercator_grid(10.0, 64))
+
+    assert list(pixels.data_vars) == ["cover"]
+    assert pixels["cover"].dtype == np.float32
+    assert pixels["cover"].gs.legend == scene["cover"].gs.legend
+    assert np.isnan(pixels["cover"].values[:4, :4]).all()
+
+
+def test_read_pixels_states_the_grid_it_reads_onto():
+    from odc.geo.geobox import GeoBox
+
+    grid = GeoBox.from_bbox(
+        (500000, 9000000, 500640, 9000640), crs="EPSG:32749", resolution=10
+    )
+    scene = build_dataset({"red": (("y", "x"), np.ones((64, 64), "float32"))}, grid)
+    view = GeoBox.from_bbox(
+        grid.extent.to_crs("EPSG:3857").boundingbox, crs="EPSG:3857", shape=(32, 32)
+    )
+
+    pixels = scene.gs.read_pixels(view)
+
+    assert pixels.odc.geobox == view

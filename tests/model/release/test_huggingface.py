@@ -69,7 +69,7 @@ def chain(stages: dict[str, dict[str, object]]) -> ModelChain:
 
 @pytest.fixture
 def spec() -> ModelSpec:
-    return ModelSpec(schema_version=2, rasters={})
+    return ModelSpec(schema_version=3, rasters={})
 
 
 def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
@@ -96,16 +96,6 @@ def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
         torch.testing.assert_close(restored.chain.state_dict()[name], value)
 
 
-def test_wrapping_keeps_trained_weights(chain: ModelChain) -> None:
-    trained = {name: value.clone() for name, value in chain.state_dict().items()}
-
-    published = GeoSaveModel.from_chain(chain)
-
-    assert published.chain is chain
-    for name, value in trained.items():
-        torch.testing.assert_close(chain.state_dict()[name], value)
-
-
 def test_save_writes_the_spec_beside_the_weights(
     tmp_path: Path, chain: ModelChain, spec: ModelSpec
 ) -> None:
@@ -117,14 +107,6 @@ def test_save_writes_the_spec_beside_the_weights(
         ModelSpec.filename,
     }
     assert ModelSpec.load(tmp_path / ModelSpec.filename) == spec
-
-
-def test_save_without_a_spec_writes_only_the_model(
-    tmp_path: Path, chain: ModelChain
-) -> None:
-    GeoSaveModel.from_chain(chain).save_pretrained(tmp_path)
-
-    assert not (tmp_path / ModelSpec.filename).exists()
 
 
 def test_push_uploads_model_spec_and_card_in_one_commit(

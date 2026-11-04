@@ -1,0 +1,301 @@
+{
+  "versions": {
+    "panel": "1.10.0",
+    "param": "2.4.2",
+    "holoviews": "1.23.2",
+    "geoviews": "1.15.1",
+    "bokeh": "3.10.1"
+  },
+  "fixture": "256x256 lazy RGB; chunks 64x64; two polygons; full Panel page; no browser",
+  "operations": [
+    {
+      "name": "raster opacity",
+      "repeats": 5,
+      "median_ms": 64.307,
+      "min_ms": 63.37,
+      "max_ms": 66.209,
+      "work": [
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        }
+      ]
+    },
+    {
+      "name": "vector color",
+      "repeats": 5,
+      "median_ms": 79.066,
+      "min_ms": 73.25,
+      "max_ms": 86.055,
+      "work": [
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "vector_renders": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "vector_renders": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "vector_renders": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "vector_renders": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "period_updates": 1,
+          "menu_builds": 9,
+          "legend_formats": 2,
+          "map_draws": 1,
+          "vector_renders": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        }
+      ]
+    },
+    {
+      "name": "active layer",
+      "repeats": 5,
+      "median_ms": 48.888,
+      "min_ms": 45.003,
+      "max_ms": 62.231,
+      "work": [
+        {
+          "menu_builds": 9,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": -7
+        },
+        {
+          "menu_builds": 9,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 7
+        },
+        {
+          "menu_builds": 9,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": -7
+        },
+        {
+          "menu_builds": 9,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 7
+        },
+        {
+          "menu_builds": 9,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": -7
+        }
+      ]
+    },
+    {
+      "name": "cached pan",
+      "repeats": 5,
+      "median_ms": 60.374,
+      "min_ms": 57.034,
+      "max_ms": 64.276,
+      "work": [
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        }
+      ]
+    },
+    {
+      "name": "zoom in",
+      "repeats": 1,
+      "median_ms": 1158.031,
+      "min_ms": 1158.031,
+      "max_ms": 1158.031,
+      "work": [
+        {
+          "map_draws": 1,
+          "pixel_reader_calls": 1,
+          "dask_tasks": 175,
+          "image_updates": 1,
+          "image_array_bytes": 22259524,
+          "model_count_change": 0
+        }
+      ]
+    },
+    {
+      "name": "return to original zoom",
+      "repeats": 1,
+      "median_ms": 1160.728,
+      "min_ms": 1160.728,
+      "max_ms": 1160.728,
+      "work": [
+        {
+          "map_draws": 1,
+          "pixel_reader_calls": 1,
+          "dask_tasks": 127,
+          "image_updates": 1,
+          "image_array_bytes": 22259524,
+          "model_count_change": 0
+        }
+      ]
+    },
+    {
+      "name": "hidden raster pan",
+      "repeats": 5,
+      "median_ms": 39.882,
+      "min_ms": 38.209,
+      "max_ms": 42.145,
+      "work": [
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        },
+        {
+          "map_draws": 1,
+          "dask_tasks": 0,
+          "image_updates": 0,
+          "image_array_bytes": 0,
+          "model_count_change": 0
+        }
+      ]
+    }
+  ]
+}
