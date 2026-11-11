@@ -2,139 +2,112 @@
 
 ```python
 import geosave as gs
-from geosave.model.spec import ModelSpec
 
-spec = ModelSpec.load("model_spec.yaml")
-scene = gs.open_raster("optical.tif")
-prepared = spec.preprocess({"optical": scene})
-inputs = spec.model_inputs(prepared)
+scene = gs.open_raster("sample-scene.tif")
+patch = scene[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
+ndvi = gs.features.ndvi(patch, nir="nir", red="red").rename("ndvi")
+ndvi.gs.to_cog("output", format_paths="ndvi.tif")
+scene.close()
 ```
 
-This fragment assumes the spec declares `rasters.optical` and its model inputs.
-`prepared` maps names to selected rasters and preprocessing results. `inputs`
-maps model argument names to raster objects and any encoded context. Neither
-call runs the network, and `model_inputs` does not convert pixels to tensors.
-The [model spec guide](../guides/model-spec.md) provides a complete example.
+With the [sample scene](../first-raster.md), this is a complete data workflow:
+open, select, calculate, save. `scene` and `patch` are native xarray Datasets;
+`ndvi` is a DataArray. You do not need a catalog, model recipe, workspace, or
+workflow engine to use GeoSave.
 
-## What GeoSave adds to native objects
+## Native objects first
 
-`gs.Dataset`, `gs.DataArray`, and `gs.DataTree` are native xarray types at
-runtime. `GeoDataset`, `GeoDataArray`, and `GeoDataTree` are their `.gs`
-accessors. GeoSave supplies geospatial operations and preserves the meaning of
-pixels; ordinary xarray and GeoPandas operations remain available.
+Importing GeoSave registers `.gs` accessors on xarray and GeoPandas objects.
+Use normal indexing and arithmetic, then `.gs` for geospatial operations.
+`gs.Dataset`, `gs.DataArray`, and `gs.DataTree` are native xarray types;
+`GeoDataset`, `GeoDataArray`, and `GeoDataTree` implement their accessors.
 
-Keep four decisions separate:
+| What you have | Python value | What it represents |
+| --- | --- | --- |
+| One band | `xarray.DataArray` | Values, dimensions, coordinates, and metadata |
+| Bands on a shared grid | `xarray.Dataset` | Named variables, such as red and near-infrared |
+| Several collections or grids | `xarray.DataTree` | Explicit groups of Datasets |
+| Features or STAC Items | `geopandas.GeoDataFrame` | Geometry and attributes; Item assets point to pixel files |
 
-| Decision | Value that represents it |
+An operation should make changes to pixel meaning explicit: decode packed
+values, reproject onto another grid, convert dtype, or read pixels into memory.
+Ordinary xarray operations remain available, but may not preserve every metadata
+contract. See [metadata](metadata.md) before combining encoded imagery.
+
+## Place, observations, grid, and chips
+
+These answer different questions:
+
+| Question | Value |
 | --- | --- |
-| Which ground and time are of interest? | A `GeoAnchor`: geometry with a CRS and optional temporal coverage. |
-| Which observations belong together? | Item rows grouped by Region, Pair, Slot and Window into `GeoSamples`. |
-| Where will each output pixel lie? | A native `GeoBox`: CRS, affine transform and shape. |
-| Which model-sized windows are read and merged? | `Chips`, retaining one raster layout per input tree. |
+| Which place and time are of interest? | `GeoRegion`: geometry, CRS, and optional temporal coverage |
+| Which observations belong together? | `GeoSamples`: catalog row positions grouped by footprint and optional calendar windows |
+| Where are the pixels? | Native `GeoBox`: CRS, affine transform, and shape |
+| Which model-sized windows should be read? | `Chips`: windows of prepared Datasets or DataArrays |
 
-A Region is the geographic support used for sampling; a Pair joins nearby
-observations across collections; a Slot places a Pair in time; a Window takes
-consecutive Slots. These are not interchangeable with spatial Chips.
-`GeoSamples` stores overlapping Item-row memberships, so one radar swath can
-belong to several Regions. Its rows remain native GeoDataFrames.
+A declared region can differ from a raster's rectangular grid footprint. A
+sample's Item membership does not crop or align its assets. Select the intended
+extent and prepare a shared grid before constructing Chips. Chips neither
+chooses a union grid nor opens catalog rows for you.
 
-A sample's Item membership does not crop its assets. Native opening reads their
-full grids, and Chips currently lays out their union. Select the intended
-geographic support explicitly when a shared swath extends beyond your Region;
-see [sample reading limits](../guides/catalogs-and-cuts.md#choose-the-reading-grid).
+## Add a catalog when you need observation selection
 
-## From files to model results
+```python title="Adaptation example — use your catalog and collection name"
+items = gs.open_vector("catalog.parquet")
+samples = items.gs.sample(collections=["optical"], freq="MS", window=3)
+with samples[0].gs.to_datatree() as tree:
+    scene = tree["optical"].gs.to_dataset()
+    chips = gs.Chips([scene], size=256)
+    pixels = chips[0].gs.to_numpy(dtype="float32")
+```
+
+This example assumes compatible native grids. Each collection independently
+populates calendar slots; a window selects consecutive slots. `samples[i]`
+returns native rows. Loading retains source observations and timestamps, so
+reduction, interpolation, and alignment remain explicit operations. For mixed
+grids, [choose the reading grid](../guides/catalogs-and-cuts.md#choose-the-reading-grid)
+before converting the tree to a Dataset.
+
+Sampling and chip construction inspect metadata. Indexing a chip returns a lazy
+xarray window; `gs.to_numpy` computes it. Keep source rasters open until dependent reads
+finish. “Lazy” describes when work runs, not a guarantee about remote transfer
+size or peak memory. See [lazy execution](lazy-data.md) and [remote storage](storage.md#use-remote-storage).
+
+## Add training when you need a model
 
 ```mermaid
-flowchart TD
-    files["Local files or remote assets"] --> native["xarray rasters"]
-    files --> items["STAC Item GeoDataFrame"]
-    native --> published["to_catalog: write raster assets"]
-    published --> items
-    items --> samples["Item rows grouped into samples"]
-    samples --> native
-    native --> chips["Chips: explicit layout and lazy reads"]
-    chips --> prep
-    native --> prep["ModelSpec: select and preprocess"]
-    prep --> bind["Bind model inputs and encode context"]
-    bind --> dataset["Your torch Dataset: model-ready tensors and target"]
-    dataset --> data["DataModule: batch, augment, normalize"]
-    data --> task["Lightning Module: model, loss, metrics"]
-    task --> trainer["Trainer: fit, validate, checkpoint"]
-    trainer --> release["Native model release: chain, weights, optional spec"]
+flowchart LR
+    rasters["Prepared xarray rasters"] --> samples["Project Dataset: inputs and targets"]
+    samples --> batches["DataModule: batches and augmentation"]
+    batches --> training["LightningModule + Trainer"]
+    training --> checkpoint["Training checkpoint"]
+    training --> release["Model release"]
 ```
 
-The diagram shows alternatives: a model may consume a whole raster or a Chip.
-These are composable steps. You can process a raster without making a model,
-train from an existing torch Dataset without a catalog, or call a model
-directly without Lightning or Prefect.
+Your project Dataset owns reading, band order, target codes, and train/validation
+selection. Chips is optional. A DataModule batches samples and applies the
+method's tensor operations; the LightningModule owns loss and metrics, and
+Trainer runs training. Start with the [offline training tutorial](../guides/training.md)
+for a complete example before adopting a generated workspace.
 
-## What each step accepts and returns
+ModelSpec is optional when sharing processing between training and inference:
 
-| Step | Input | Output | Work performed |
-| --- | --- | --- | --- |
-| Open a raster | One path, URL, or UPath. | `xarray.Dataset` or grouped `xarray.DataTree` | Reads header and coordinates; pixels can remain lazy. |
-| Describe saved files | Paths and optional collection/date information. | STAC Item `GeoDataFrame` | Opens headers and records footprints, dates, grids, and assets. |
-| Group samples | Item rows and pairing/window settings. | `GeoSamples`, retaining Item row positions per sample | Lists each sample's Items without reading pixels. |
-| Read one sample | One sample's rows, `samples[i]`. | `xarray.DataTree` | Opens collections lazily on their native grids. |
-| `spec.preprocess` | Declared raster names mapped to Datasets. | Selected rasters and processing results by name. | Validates requirements and runs declared calls. |
-| `spec.model_inputs` | Prepared rasters. | Pixel rasters and context by model argument name. | Resolves references; optional context reads metadata. |
-| Convert pixels | Selected rasters; decode explicitly when physical values are needed. | NumPy arrays or torch tensors. | Materializes pixels; returns values without coordinate labels. |
-| Train | Task-specific Dataset samples and a model configuration. | Fitted model, metrics, configured logs/checkpoints. | DataModule prepares batches; Module and Trainer run learning. |
-| Save a release | ModelChain and optional ModelSpec. | Transformers-compatible release directory. | Saves constructor configuration and weights. |
+```python
+from geosave.model.spec import ModelSpec
 
-“Lazy” describes when pixel computation runs; it does not guarantee how many
-bytes a remote reader transfers. Sampling and chip layout inspect metadata;
-Dask transformations defer pixel work; tensor conversion and persistence
-execute it. Remote COGs opened with `storage_options` currently download first,
-as described in [storage](storage.md#use-remote-storage).
+spec = ModelSpec.load("configs/segmentation-supervised/model_spec.yaml")
+image = spec.run(entry="encoded", output="normalized", raster=scene)
+prediction = model(image=image)
+```
 
-Preprocessing can be lazy if its functions support lazy arrays. Arbitrary
-declared calls can compute or have side effects. A spec validates its
-declarations; it does not make an eager function lazy.
+Named Python calls own preparation and inference. References specify their
+dependencies. Processing stays lazy only where the called operations do.
+See [recipes](../guides/model-spec.md) for execution and input contracts.
 
-## Preparation and training own different work
+A Lightning checkpoint preserves training state. A native model release saves
+registered model construction and weights, plus an optional spec. Loading that
+release does not automatically execute the spec: inference must reproduce
+training's band order, units, missing-value handling, and normalization.
+See [releases](../guides/release.md).
 
-Each step takes a catalog and gives one. `spec.ingest(anchor, path, geobox=grid)` saves the
-declared rasters from their STAC recipes as a raw catalog; a catalog of your own
-files serves the same purpose. The optional Prefect ingestion flow writes that
-catalog and stops there.
-
-`spec.prepare(raw, keep=["label"])` runs raster selection and preprocessing on
-every sample of the raw catalog and returns a prepared catalog of the rasters
-model inputs read, plus retained labels. It computes pixels while writing, to a
-temporary folder unless given a path. Sample a catalog with `catalog.gs.sample(...)` and cut opened trees with
-`gs.Chips(...)`; tensor transforms run later in the DataModule. The current
-`prepare` implementation does not yet handle nested collection/grid trees;
-see [the preparation limitation](../guides/model-spec.md#catalog-preparation-limitation).
-
-A torch Dataset supplies source-specific reading, splitting, target codes and
-the model's tensor layout. The generated project DataModules consume those samples;
-they do not infer train/validation splits or discover data sources.
-
-## Inference must match the input contract
-
-A direct chain call accepts its named tensors and returns its stage outputs.
-For segmentation these are logits; interpreting class codes and confidence is
-an explicit step. A release stores its optional spec beside the weights; load
-and execute that spec separately. Its `forward` does not automatically run
-the spec's tensor normalization.
-
-Keep band order, temporal axes, units, missing-value handling, context encoding,
-and normalization consistent with training. Preserve the reference raster to
-place outputs back on its grid. See [pretrained models](../guides/pretrained.md),
-[releases](../guides/release.md), and [training contracts](training.md).
-
-## Where GeoSave fits
-
-| Package | What it owns | Main dependency objects |
-| --- | --- | --- |
-| `geosave.geodata` | Metadata-aware I/O, accessors, transforms, STAC, windows. | xarray, GeoPandas, PySTAC, Dask. |
-| `geosave.model` | Chain construction, stages, input specs, releases. | PyTorch; Transformers for releases. |
-| `geosave.ml` | Reusable builders, metrics, losses, transforms, callbacks, and CLI. | Lightning, torchmetrics, Kornia. |
-| `geosave_flows` | Optional acquisition jobs composing library APIs. | Prefect. |
-
-Importing `geosave` registers the accessors without importing torch. Optional
-dependencies load when their features are used. Model specs can be loaded
-without a training stack. For contributor package boundaries, read
-[Architecture](../contributing/architecture.md).
+Package ownership belongs in [the contributor architecture guide](../contributing/architecture.md).

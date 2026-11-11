@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
+from typing import TypedDict, cast
 
 import pystac
-import xarray as xr
 from pystac.extensions.classification import Classification, ClassificationExtension
 from pystac.extensions.raster import RasterBand
 
@@ -16,48 +16,41 @@ from geosave.geodata.utils.color import parse_color
 _CLASS_NAME = re.compile(r"[0-9A-Za-z_-]+")
 
 
-def build_classes(variable: xr.DataArray) -> list[Classification] | None:
-    """Build the classes a variable's Raster band lists from its legend.
+def build_classes(legend: attrs.Legend | None) -> list[Classification] | None:
+    """Build the classes a Raster band lists from its legend.
 
     Args:
-        variable: Variable as `open_raster` opens it.
+        legend: Legend of the band's variable or file band.
 
     Returns:
-        Its classes, or None where it has no legend or its legend lists bit
-        masks, whose offset, length and names CF does not state.
+        Its classes, or None where there is no legend or it lists bit masks,
+        whose offset, length and names CF does not state.
 
     Raises:
         ValueError: A class name carries a character the schema refuses.
 
     Examples:
-        >>> [c.name for c in build_classes(label.label)]
+        >>> [c.name for c in build_classes(label.label.gs.legend)]
         ['background', 'forest']
     """
-    legend = variable.gs.legend
     if legend is None or legend.classes is None or legend.flag_masks is not None:
         return None
     return _classes(legend)
 
 
-def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
-    """Stamp the legend a Raster band's classes state onto its variable.
+class ClassificationAttrs(TypedDict, total=False):
+    """CF enumeration and serialized colors translated from class metadata."""
 
-    Args:
-        variable: Variable the band belongs to.
-        band: Its Raster band, listing its classes.
+    flag_values: list[int]
+    flag_meanings: str
+    color_map: str
 
-    Returns:
-        The variable carrying its classes as `flag_values`, `flag_meanings`
-        and, where classes carry colour hints, `color_map`; unchanged where
-        the band lists none.
 
-    Examples:
-        >>> stamp(variable, band).attrs["flag_meanings"]
-        'background forest'
-    """
+def read_attrs(band: RasterBand) -> ClassificationAttrs:
+    """Translate a Raster band's classification into CF legend attrs."""
     classes = ClassificationExtension.ext(band).classes
     if not classes:
-        return variable
+        return {}
     colors = {
         entry.value: f"#{entry.color_hint}"
         for entry in classes
@@ -70,7 +63,7 @@ def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
             "color_map": colors or None,
         }
     )
-    return variable.assign_attrs(legend.to_attrs())
+    return cast("ClassificationAttrs", legend.to_attrs())
 
 
 def _classes(legend: attrs.Legend) -> list[Classification]:
@@ -91,13 +84,10 @@ def _classes(legend: attrs.Legend) -> list[Classification]:
     return classes
 
 
-def write_band(asset: pystac.Asset, band: RasterBand, variable: xr.DataArray) -> None:
-    """Attach classes to a band and declare the schema on its owning Item."""
-    if classes := build_classes(variable):
+def write_band(
+    asset: pystac.Asset, band: RasterBand, legend: attrs.Legend | None
+) -> None:
+    """Attach a legend's classes to a band and declare the schema on its owner."""
+    if classes := build_classes(legend):
         ClassificationExtension.ext(band).apply(classes=classes)
         ClassificationExtension.ext(asset, add_if_missing=True)
-
-
-def stamp_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
-    """Read a band's classification fields."""
-    return stamp(variable, RasterBand(fields))

@@ -159,7 +159,7 @@ def raster_worker(sizes, repeats):
                 variables[name] = (("y", "x"), pixels[i])
             scene = xr.Dataset(variables).gs.write_grid(grid).gs.write_nodata(0)
             lazy = scene.chunk({"y": 256, "x": 256})
-            tree = lazy.gs.to_datatree("optical")
+            tree = xr.DataTree.from_dict({"/optical/r10m": lazy})
             coarse_grid = grid.zoom_out(2)
             coarse = (
                 xr.Dataset(
@@ -174,7 +174,7 @@ def raster_worker(sizes, repeats):
                 .gs.write_nodata(0)
                 .chunk({"y": 256, "x": 256})
             )
-            mixed = xr.merge([tree, coarse.gs.to_datatree("optical")])
+            mixed = xr.DataTree.from_dict({"/optical/r10m": lazy, "/optical/r20m": coarse})
             mib = pixels.nbytes / 2**20
             prefix = f"{size}."
 
@@ -193,8 +193,8 @@ def raster_worker(sizes, repeats):
                 assert result.gs.geobox == grid
 
             timed(
-                "to_datatree",
-                lambda: lazy.gs.to_datatree("optical"),
+                "native_tree",
+                lambda: xr.DataTree.from_dict({"/optical/r10m": lazy}),
                 lambda t: same_grid(t["optical/r10m"]),
                 tasks=True,
             )
@@ -205,14 +205,14 @@ def raster_worker(sizes, repeats):
                 tasks=True,
             )
             timed(
-                "to_dataset.multires.plan",
-                lambda: mixed["optical"].gs.to_dataset(),
+                "align_to_dataset.multires.plan",
+                lambda: mixed["optical"].gs.align(how=lazy.gs.geobox, resampling="nearest").gs.to_dataset(),
                 same_grid,
                 tasks=True,
             )
-            merged = mixed["optical"].gs.to_dataset()
+            merged = mixed["optical"].gs.align(how=lazy.gs.geobox, resampling="nearest").gs.to_dataset()
             timed(
-                "to_dataset.multires.compute",
+                "align_to_dataset.multires.compute",
                 lambda: merged.compute(),
                 lambda r: (
                     same_grid(r),
@@ -330,21 +330,21 @@ def raster_worker(sizes, repeats):
             )
             timed(
                 "chips.layout",
-                lambda: gs.Chips([tree], size=256, resolution=10),
+                lambda: gs.Chips([lazy], size=256),
                 lambda c: assert_count(c, (size // 256) ** 2),
                 tasks=True,
             )
-            chips = gs.Chips([tree], size=256, resolution=10)
+            chips = gs.Chips([lazy], size=256)
             timed(
                 "chips.select",
-                lambda: chips[0],
-                lambda r: assert_grid(r[1], grid[:256, :256]),
+                lambda: chips[0, 0],
+                lambda r: np.testing.assert_array_equal(r, pixels[:, :256, :256]),
                 tasks=True,
             )
-            chip = chips[0][1]["optical"].gs.to_dataset()
+            chip = chips[0, 0]
             timed(
                 "chips.to_tensor",
-                chip.gs.to_tensor,
+                lambda: torch.from_numpy(chip),
                 lambda r: np.testing.assert_array_equal(
                     r.numpy(), pixels[:, :256, :256]
                 ),

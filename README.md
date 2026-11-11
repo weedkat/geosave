@@ -1,91 +1,120 @@
 # GeoSave
 
-GeoSave is an Alpha Python library for geospatial data preparation and
-Lightning-based model development. Work with native xarray rasters and
-GeoDataFrames, preserve their geospatial metadata, and prepare model inputs
-without replacing the ecosystem's objects.
+**From satellite imagery to geospatial machine learning, in ordinary Python.**
+
+GeoSave connects imagery discovery, raster preparation, interactive maps, and
+Lightning-based model development. Work with xarray Datasets and GeoDataFrames
+while keeping the coordinates, CRS, nodata, and band metadata needed to turn
+results back into usable maps.
+
+[Documentation](https://weedkat.github.io/geosave-engine/) ·
+[Examples](https://github.com/weedkat/geosave/tree/main/examples) ·
+[Installation](https://weedkat.github.io/geosave-engine/install/)
+
+![Sentinel-2 imagery and vegetation index near Davis, California](https://raw.githubusercontent.com/weedkat/geosave/main/docs/assets/vegetation.jpg)
+
+## What can I do with it?
+
+- **Find and download imagery.** Search STAC collections and load the bands,
+  dates, area, and pixel grid you need.
+- **Explore before processing.** Inspect rasters, vectors, and catalogs on
+  interactive maps or create static plots.
+- **Prepare useful datasets.** Align inputs explicitly, calculate spectral
+  indices, preserve nodata, and save GeoTIFF, Zarr, NetCDF, or GeoParquet.
+- **Use pretrained model components.** Build models with supported encoders,
+  decoders, and heads, including geospatial foundation-model integrations.
+- **Train and map predictions.** Make chips from aligned xarray Datasets,
+  train with Lightning, and merge chip predictions onto their source grids.
+
+GeoSave is **Alpha**: APIs are evolving. These examples track `main`.
 
 ## Install
 
-Requires Python 3.12 or newer:
+Python **3.12+**. Choose a source:
+
+**Stable · PyPI** — the release command is `python -m pip install geosave`.
+A public release was not yet available on 6 November 2026; use a preview below
+until one is published.
+
+**Test build · [TestPyPI](https://test.pypi.org/project/geosave/)**
 
 ```bash
-pip install geosave
+python -m pip download --no-deps --index-url https://test.pypi.org/simple/ --dest wheels "geosave==0.3.0.dev38"
+python -m pip install --upgrade ./wheels/geosave-0.3.0.dev38-py3-none-any.whl
 ```
 
-Add `geosave[ml]` for tensors and training, `geosave[hub]` for native model
-releases, `geosave[flows]` for Prefect ingestion, or `geosave[cloud]` for S3
-and Google Cloud filesystems. See the [installation guide](docs/install.md).
+This downloads only GeoSave from TestPyPI; dependencies use your normal index.
+For training, add `[ml]` to the quoted wheel path. Use `[all]` for the notebooks.
+Replace the version in both commands when choosing a newer test build.
 
-## Start with a raster
+**Latest source · GitHub** — requires Git:
+
+```bash
+python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosave.git@main"
+```
+
+Use `geosave[ml] @` for training or `geosave[all] @` for every extra.
+Replace `main` with a commit SHA to pin an experiment. See the
+[installation guide](https://weedkat.github.io/geosave-engine/install/) for
+extras, development setup, and version checks.
+
+## Make a vegetation map
+
+Download a small real Sentinel-2 crop, calculate NDVI, and save a georeferenced
+result. No account or GPU is needed for this example.
 
 ```python
-import numpy as np
-import xarray as xr
-from odc.geo.geobox import GeoBox
+from urllib.request import urlretrieve
 
 import geosave as gs
 
-grid = GeoBox.from_bbox(
-    (500000, 5000000, 500040, 5000040), crs="EPSG:32633", resolution=10
+urlretrieve(
+    "https://raw.githubusercontent.com/weedkat/geosave/main/docs/assets/sample-scene.tif",
+    "scene.tif",
 )
-scene = xr.Dataset({
-    "red": (("y", "x"), np.full((4, 4), 0.25, dtype="float32")),
-    "nir": (("y", "x"), np.full((4, 4), 0.75, dtype="float32")),
-}).gs.write_grid(grid)
-ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
-paths = ndvi.gs.to_cog("output", path_format="ndvi.tif")
+with gs.open_raster("scene.tif") as stored:
+    scene = stored.gs.mask_and_scale()
+    ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+    ndvi.gs.to_cog("output", path_format="ndvi.tif")
 ```
 
-Every NDVI pixel is `0.5`; the output retains the image's grid. The writer's
-first argument is a directory, and `path_format` names the file. Existing files
-raise unless replacement is explicitly requested.
+Open `output/ndvi.tif` in your GIS. The sample is a 752 KiB crop of agricultural
+land near Davis, California. An index shows spectral variation; one scene
+does not establish crop health, drought, or change.
 
-Follow [your first raster](docs/first-raster.md) for a complete offline round
-trip, then [images to training chips](docs/quickstart.md). File-backed rasters
-can stay lazy until an operation needs their pixels.
+Follow the [vegetation tutorial](https://weedkat.github.io/geosave-engine/first-raster/)
+for the map and interpretation, or run
+[zone summaries](https://github.com/weedkat/geosave/blob/main/examples/vegetation_zones.py)
+to produce a map and CSV for two demonstration areas.
 
-## Train an editable starter
+## Follow a land-cover project
 
-```bash
-pip install 'geosave[ml]'
-geosave create demo --task lightning --method boilerplate
-cd demo
-python main.py fit --config configs/lightning-boilerplate.yaml \
-  --trainer.accelerator cpu --trainer.devices 1 --trainer.max_epochs 1
-```
+[The notebook series](https://github.com/weedkat/geosave/tree/main/examples)
+uses real Sentinel-2 imagery and expert-annotated labels: inspect class balance,
+train a baseline, acquire new imagery for existing labels, then predict and
+export maps for a forest area. Tiles are split before making training chips.
+The teaching download is about 400 MB; the short runs demonstrate a workflow,
+not a validated operational model.
 
-The starter supplies project-owned Dataset, DataModule, and LightningModule
-files. Reusable builders, metrics, losses, transforms, and callbacks live in
-GeoSave. Geospatial task recipes currently have a ModelSpec migration blocker;
-see [training status](docs/guides/training.md#geospatial-recipes).
-
-## Find the next step
-
-- [Documentation](https://weedkat.github.io/geosave-engine/): guides and API reference.
-- [Catalogs and samples](docs/guides/catalogs-and-cuts.md): publish imagery,
-  group Item rows, and cut lazy raster trees into chips.
-- [Training workspaces](docs/guides/workspaces.md): generate and customize code.
-- [Model releases](docs/guides/release.md): save registered chains, weights,
-  and optional preprocessing declarations.
-- [Notebook examples](docs/examples.md): a land-cover project using real data;
-  these require downloads and are separate from the offline starters.
-- [Project review](docs/contributing/review-2026-11-04.md): current findings and
-  prioritized implementation recommendations.
+| Your next task | Guide |
+| --- | --- |
+| Download imagery for your area | [Search and download](https://weedkat.github.io/geosave-engine/guides/download-imagery/) |
+| Explore imagery on a map | [Explorer](https://weedkat.github.io/geosave-engine/guides/explore/) |
+| Start with pretrained weights | [Pretrained models](https://weedkat.github.io/geosave-engine/guides/pretrained/) |
+| Create an editable training project | [Workspaces](https://weedkat.github.io/geosave-engine/guides/workspaces/) |
+| Look up a function | [API reference](https://weedkat.github.io/geosave-engine/reference/) |
 
 ## Development
 
 ```bash
+git clone https://github.com/weedkat/geosave.git
+cd geosave
 uv sync
-uv run pytest                    # excludes slow and integration tests
-uv run pytest -m integration     # external-service tests
-uv run pytest -m slow
-uv run ruff check .
-uv run pre-commit run --all-files
+uv run pytest
 uv run zensical build
 ```
 
-Read [architecture](docs/contributing/architecture.md) and
-[documentation maintenance](docs/contributing/documentation.md) before changing
-public behavior or guides. Edit `src/templates/` to change future generated
-workspaces; existing projects own their copied code.
+See [contributing](https://weedkat.github.io/geosave-engine/contributing/architecture/)
+for architecture and contracts. Training workspaces own their Dataset,
+DataModule, and LightningModule; edit `src/templates/` to change future
+workspace generation.

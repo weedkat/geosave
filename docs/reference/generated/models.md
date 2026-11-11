@@ -95,7 +95,27 @@ fields appear as attributes, including their annotated types and defaults.
         - validate_selector
         - resolve
 
+::: geosave.model.ingestion.ingest_stac
+    options:
+      show_root_full_path: true
+
+::: geosave.model.ingestion.regions_from_features
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.encode_rasters
+    options:
+      show_root_full_path: true
+
 ::: geosave.model.processing.normalize
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.restore_rasters
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.select_variables
     options:
       show_root_full_path: true
 
@@ -104,6 +124,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.model.processing.to_tensor
+    options:
+      show_root_full_path: true
+
+::: geosave.model.processing.validate_raster
     options:
       show_root_full_path: true
 
@@ -158,49 +182,23 @@ fields appear as attributes, including their annotated types and defaults.
         - stage
         - spec
 
-::: geosave.model.spec.base.Name
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.base.SpecModel
+::: geosave.model.spec.declarations.Input
     options:
       show_root_full_path: true
       filters: []
-      members: false
+      members:
+        - default
+        - check_default
 
-::: geosave.model.spec.base.Text
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.call.CallSpec
+::: geosave.model.spec.declarations.Step
     options:
       show_root_full_path: true
       filters: []
       members:
         - call
         - kwargs
-        - validate_call
-        - validate_kwargs
-        - references
-        - inputs
-        - select_inputs
-        - invoke
-
-::: geosave.model.spec.call.CallValue
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.call.Ref
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - path
-        - root
-        - resolve
-        - __repr__
-        - __eq__
-        - __hash__
+        - check_operation
+        - find_references
 
 ::: geosave.model.spec.model.ModelSpec
     options:
@@ -208,154 +206,69 @@ fields appear as attributes, including their annotated types and defaults.
       filters: []
       members:
         - filename
-        - schema_version
-        - rasters
-        - preprocessing
-        - encoding
         - inputs
-        - pixels
-        - tensors
-        - transforms
-        - decoding
-        - postprocessing
-        - input_rasters
-        - load_rasters
-        - preprocess
-        - ingest
-        - prepare
-        - encode
-        - model_inputs
-        - transform
-        - decode
-        - postprocess
+        - steps
+        - entry
+        - output
+        - from_dict
+        - from_yaml
+        - load
         - save
-        - load
-
-::: geosave.model.spec.rasters.AttrsRequirement
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - root
-        - data_vars
-        - coords
-
-::: geosave.model.spec.rasters.FieldRequirement
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - required
-        - equals
-        - one_of
-        - keys
-        - validate_attrs
-
-::: geosave.model.spec.rasters.RasterRequirement
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - type
-        - variables
-        - channels
-        - coordinates
-        - stac
-        - dims
-        - dtypes
-        - require_crs
-        - resolution
-        - attrs
-        - select_raster
-
-::: geosave.model.spec.stac.Bands
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.stac.ChunkSize
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.stac.QueryConfig
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - bbox
-        - intersects
-        - datetime
-        - filter
-        - max_items
-        - limit
-        - ids
-        - sortby
-        - to_query
-
-::: geosave.model.spec.stac.SortConfig
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - field
-        - direction
-
-::: geosave.model.spec.stac.StacGroupby
-    options:
-      show_root_full_path: true
-
-::: geosave.model.spec.stac.StacLoadConfig
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - bands
-        - groupby
-        - chunks
-        - resampling
-        - dtype
-        - nodata
-        - fail_on_error
-        - with_properties
-        - stac_cfg
-        - pool
-        - progress
-        - patch_url
-        - preserve_original_order
-        - exact_property_names
-        - to_load_kwargs
-
-::: geosave.model.spec.stac.StacRecipe
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - collection
-        - endpoints
-        - query
-        - load
-        - load_raster
-
-::: geosave.model.spec.stage.StageSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - root
-        - __getitem__
-        - __iter__
-        - __len__
-        - external_inputs
-        - validate_inputs
+        - plan
         - run
 
-::: geosave.model.spec.tensors.TensorRequirement
+::: geosave.model.spec.model.Plan
     options:
       show_root_full_path: true
       filters: []
       members:
-        - shape
-        - dtype
-        - validate_tensor
+        - entry
+        - output
+        - steps
+        - inputs
+
+::: geosave.model.spec.reference.Reference
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - path
+        - root
+        - read_value
+
+::: geosave.model.spec.reference.bind_arguments
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.reference.find_references
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.yaml.Dumper
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.model.spec.yaml.Loader
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - construct_mapping
+        - compose_node
+
+::: geosave.model.spec.yaml.construct_reference
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.yaml.read_yaml
+    options:
+      show_root_full_path: true
+
+::: geosave.model.spec.yaml.write_yaml
+    options:
+      show_root_full_path: true
 
 ::: geosave.model.stages.decoder.dpt.DPT
     options:

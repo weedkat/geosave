@@ -13,7 +13,7 @@ from geosave.geodata.errors import CollectionNotFoundError
 from geosave.geodata.io.formats import stac_geoparquet
 from geosave.geodata.io.storage import absolute_location
 
-from .query import StacQuery
+from .query import SearchParams, StacQuery
 
 if TYPE_CHECKING:
     from geosave.geodata import GeoDataFrame
@@ -59,20 +59,26 @@ class StacTable:
         """Return None; table hrefs have no implicit provider signer."""
         return None
 
-    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
+    def search(self, query: StacQuery | SearchParams) -> GeoDataFrame:
         """Return matching Items as a native catalog with Collection metadata."""
-        from geosave.geodata.stac.catalog import from_items
+        from geosave.geodata.stac.catalog import create_catalog
 
         items = self.search_items(query)
         identities = dict.fromkeys(
             item.collection_id for item in items if item.collection_id
         )
+        available = self._read_collections() if identities else {}
         collections = []
         for identity in identities:
-            collections.append(self.collection(identity))
-        return from_items(items, collections=collections)
+            if identity not in available:
+                raise CollectionNotFoundError(
+                    f"collection {identity!r} not found in {self._location}; "
+                    f"call collections() to see what it holds"
+                )
+            collections.append(available[identity])
+        return create_catalog(items, collections=collections)
 
-    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
+    def search_items(self, query: StacQuery | SearchParams) -> list[pystac.Item]:
         """Run one search over the table as pystac Items, for loaders.
 
         Args:
@@ -87,7 +93,7 @@ class StacTable:
             3
         """
         given = query.to_search_params() if isinstance(query, StacQuery) else query
-        params = dict(given)
+        params: dict[str, Any] = dict(given)
 
         # rustac takes one RFC 3339 string, a range as "start/end".
         when = params.get("datetime")

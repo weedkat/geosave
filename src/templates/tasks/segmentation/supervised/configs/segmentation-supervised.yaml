@@ -56,13 +56,21 @@ data:
   init_args:
     spec: configs/segmentation-supervised/model_spec.yaml
     train:
-      class_path: modules.segmentation.supervised.datasets.MyDataset
+      class_path: modules.segmentation.supervised.datasets.RasterDataset
       init_args:
-        split: train
+        images: [data/train/image.tif]
+        targets: [data/train/label.tif]
+        spec: configs/segmentation-supervised/model_spec.yaml
+        num_classes: 2
+        ignore_index: 255
     val:
-      class_path: modules.segmentation.supervised.datasets.MyDataset
+      class_path: modules.segmentation.supervised.datasets.RasterDataset
       init_args:
-        split: val
+        images: [data/val/image.tif]
+        targets: [data/val/label.tif]
+        spec: configs/segmentation-supervised/model_spec.yaml
+        num_classes: 2
+        ignore_index: 255
     ignore_index: 255
     size: 224
     batch_size: 8

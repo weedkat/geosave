@@ -1,176 +1,158 @@
-"""Sampling an item table into windows of paired time steps, and opening a sample."""
+"""Grouping source rows and explicitly preparing their native raster data."""
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from geosave.geodata.core.vector.catalog import GeoCatalog
-from geosave.geodata.warnings import DroppedRowsWarning
+
+@pytest.fixture
+def temporal_catalog():
+    from datetime import UTC, datetime
+
+    import pystac
+    from shapely.geometry import box, mapping
+
+    from geosave.geodata.stac.catalog import create_catalog
+    from geosave.geodata.stac.item import TIMELESS
+
+    footprint = box(0, 0, 1, 1)
+    entries = []
+    for name, collection, instant, properties in [
+        ("january", "optical", datetime(2025, 1, 15, tzinfo=UTC), {}),
+        ("february", "optical", datetime(2025, 2, 15, tzinfo=UTC), {}),
+        (
+            "composite",
+            "composite",
+            None,
+            {
+                "start_datetime": "2025-01-01T00:00:00Z",
+                "end_datetime": "2025-01-31T23:59:59Z",
+            },
+        ),
+        (
+            "dem",
+            "dem",
+            None,
+            {
+                "start_datetime": TIMELESS[0].isoformat(),
+                "end_datetime": TIMELESS[1].isoformat(),
+            },
+        ),
+    ]:
+        entry = pystac.Item(
+            name,
+            mapping(footprint),
+            list(footprint.bounds),
+            instant,
+            properties,
+            collection=collection,
+        )
+        entry.add_asset("data", pystac.Asset(f"/not-opened/{name}.tif", roles=["data"]))
+        entries.append(entry)
+    return create_catalog(entries)
 
 
-def read_samples(samples) -> list[list[str]]:
-    """Return each sample's Items, in sample order."""
-    sample_ids = []
-    for rows in samples:
-        sample_ids.append(read_ids(rows["id"]))
-    return sample_ids
+def test_static_collections_are_explicit_and_do_not_define_dates(temporal_catalog):
+    samples = temporal_catalog.gs.sample(
+        collections=["dem", "optical"], freq="MS", window=2
+    )
+    assert set(samples[0]["id"]) == {"dem", "january", "february"}
+    assert samples[0]["id"].tolist().count("dem") == 1
+    optical = temporal_catalog.gs.sample(collections=["optical"], freq="MS")
+    assert set(optical[0]["collection"]) == {"optical"}
 
 
-def read_ids(item_ids) -> list[str]:
-    """Return Item ids without the tile prefix, as `collection date`."""
-    ids = []
-    for item_id in item_ids:
-        collection, _, date = item_id.split("_")
-        ids.append(f"{collection} {date}")
-    return ids
+def test_static_only_sample_has_no_temporal_axis(temporal_catalog):
+    samples = temporal_catalog.gs.sample(collections=["dem"])
+    assert samples.indices == [[3]]
+    assert len(samples.times[0]) == 0
 
 
-def test_a_sample_is_the_catalog_rows_at_its_indices(tiles):
-    with pytest.warns(DroppedRowsWarning):
-        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D", window=2)
-
-    rows = samples[0]
-    assert type(rows.gs) is GeoCatalog
-    assert rows["collection"].tolist() == ["s2", "s1", "s2", "s1", "dem"]
-    assert rows.equals(tiles.iloc[samples.indices[0]])
-    assert len(samples) == len(samples.indices)
-
-
-def test_a_sample_footprint_is_where_its_items_overlap(tiles):
-    footprints = tiles.gs.sample().footprints
-
-    assert footprints.geometry.iloc[0].equals(tiles.geometry.iloc[0])
-    assert not footprints.geometry.is_empty.any()
-    assert footprints.crs == tiles.crs
-
-
-def test_footprints_without_pair_are_one_sample_each(tiles):
+def test_spatial_only_samples_keep_source_membership(tiles):
     samples = tiles.gs.sample()
-
     assert samples.footprints["items"].tolist() == [10, 1]
+    assert samples[0].equals(tiles.iloc[samples.indices[0]])
+    assert samples.footprints.crs == tiles.crs
 
 
-def test_a_step_pairs_each_item_with_its_nearest_partner(tiles):
-    with pytest.warns(DroppedRowsWarning, match="3 s2 Items have no partner"):
-        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D")
-
-    assert read_samples(samples) == [
-        ["s2 20240105", "s1 20240106", "dem 20240101"],
-        ["s2 20240204", "s1 20240203", "dem 20240101"],
-        ["s2 20240308", "s1 20240309", "dem 20240101"],
-    ]
-
-
-def test_a_dated_collection_outside_pair_joins_no_sample(tiles):
-    samples = tiles.gs.sample(pair=["s2"])
-
+def test_exact_time_windows_and_stride(tiles):
+    samples = tiles.gs.sample(collections=["s2"], window=3, step=2)
+    dates = []
     for rows in samples:
-        assert "s1" not in set(rows["collection"])
-    assert read_samples(samples)[0] == ["s2 20240105", "dem 20240101"]
+        dates.append(pd.to_datetime(rows["datetime"]).dt.strftime("%m%d").tolist())
+    assert dates == [["0105", "0120", "0204"], ["0204", "0308", "0407"]]
 
 
-def test_windows_roll_over_steps_like_rolling(tiles):
-    samples = tiles.gs.sample(pair=["s2"], window=3, step=2)
-
-    assert read_samples(samples) == [
-        ["s2 20240105", "s2 20240120", "s2 20240204", "dem 20240101"],
-        ["s2 20240204", "s2 20240308", "s2 20240407", "dem 20240101"],
-    ]
+def test_reindexed_catalog_uses_original_positions(tiles):
+    shuffled = tiles.iloc[::-1].set_index("id", drop=False)
+    samples = shuffled.gs.sample(collections=["s2"], window=2)
+    assert samples[0].equals(shuffled.iloc[samples.indices[0]])
+    assert samples[0]["id"].str.endswith("20240105").iloc[0]
 
 
-def test_freq_slots_are_resample_buckets_filled_by_keep(tiles):
-    last = tiles.gs.sample(pair=["s2"], freq="MS")
-    first = tiles.gs.sample(pair=["s2"], freq="MS", keep="first")
-
-    assert read_samples(last)[0] == ["s2 20240120", "dem 20240101"]
-    assert read_samples(first)[0] == ["s2 20240105", "dem 20240101"]
+def test_empty_and_too_short_samples(tiles):
+    assert len(tiles.iloc[:0].gs.sample()) == 0
+    assert len(tiles.gs.sample(collections=["s2"], window=99)) == 0
 
 
-def test_an_empty_bucket_breaks_a_window(tiles):
-    without_february = tiles[~tiles["id"].str.endswith("20240204")]
+def test_grouped_rows_load_raw_dates_and_prepare_explicitly(tiles):
 
-    with pytest.warns(DroppedRowsWarning, match="windows hold an empty slot"):
-        samples = without_february.gs.sample(pair=["s2"], window=2, freq="MS")
-
-    assert read_samples(samples) == [["s2 20240308", "s2 20240407", "dem 20240101"]]
-
-
-def test_a_monthly_window_of_pairs(tiles):
-    with pytest.warns(DroppedRowsWarning):
-        samples = tiles.gs.sample(
-            pair=["s2", "s1"], tolerance="2D", window=2, freq="MS"
+    samples = tiles.gs.sample(collections=["s2", "s1", "dem"], freq="MS", window=2)
+    rows = samples[0]
+    assert rows.equals(tiles.iloc[samples.indices[0]])
+    with rows.gs.to_datatree() as tree:
+        optical = tree["s2"].gs.to_dataset()
+        radar = tree["s1"].gs.to_dataset()
+        assert optical.sizes["time"] == 3
+        assert radar.sizes["time"] == 2
+        assert radar.gs.resolution.x == 20
+        assert "time" not in tree["dem"].gs.to_dataset().dims
+        assert pd.DatetimeIndex(optical.time.values).day.tolist() == [5, 20, 4]
+        monthly = optical.gs.mask_and_scale().gs.composite("MS", "mean")
+        assert monthly.red.chunks is not None
+        assert monthly.sizes["time"] == 2
+        expected = optical.red.isel(time=slice(0, 2)).mean("time")
+        np.testing.assert_allclose(
+            monthly.red.isel(time=0).compute(), expected.compute()
         )
 
-    assert read_samples(samples) == [
-        ["s2 20240105", "s1 20240106", "s2 20240204", "s1 20240203", "dem 20240101"],
-        ["s2 20240204", "s1 20240203", "s2 20240308", "s1 20240309", "dem 20240101"],
+
+def test_missing_slots_do_not_modify_selected_rows_or_loaded_dates(tiles):
+
+    rows = tiles.loc[~tiles["id"].str.endswith("20240204")]
+    samples = rows.gs.sample(collections=["s2"], freq="MS", window=3, missing="keep")
+    assert samples.slots[0].iloc[1]["indices"] == []
+    with samples[0].gs.to_datatree() as tree:
+        observations = tree["s2"].gs.to_dataset()
+        assert 2 not in pd.DatetimeIndex(observations.time.values).month
+        monthly = observations.gs.mask_and_scale().gs.composite("MS", "mean")
+        assert monthly.red.isel(time=1).isnull().all().compute().item()
+        filled = monthly.chunk(time=-1).interpolate_na(dim="time", method="linear")
+        assert filled.red.chunks is not None
+        assert filled.red.isel(time=1).notnull().all().compute().item()
+
+
+def test_selected_collection_metadata_describes_all_rows(tiles):
+    from geosave.geodata.attrs import StacMetadata
+    from geosave.geodata.stac.catalog import create_catalog
+
+    entries = tiles.gs.to_items()
+    for position, entry in enumerate(entries):
+        entry.properties["platform"] = f"platform-{position}"
+    rows = create_catalog(entries)
+    samples = rows.gs.sample(collections=["s2"], freq="MS", window=2)
+    with samples[0].gs.to_datatree() as tree:
+        metadata = StacMetadata.from_attrs(tree["s2"].attrs)
+        assert metadata is not None
+        assert "platform" not in tree["s2"].to_dataset().gs.stac_common_properties
+
+
+def test_wholly_missing_collection_is_only_grouping_metadata(tiles):
+    samples = tiles.gs.sample(collections=["s2", "s1"], freq="MS", missing="keep")
+    position = len(samples) - 1
+    missing = samples.slots[position].loc[
+        samples.slots[position]["collection"] == "s1", "indices"
     ]
-
-
-def test_a_footprint_without_a_window_gives_no_sample(tiles):
-    with pytest.warns(DroppedRowsWarning, match="1 footprints hold fewer than 2"):
-        samples = tiles.gs.sample(pair=["s2"], window=2)
-
-    # Tile B holds one scene, so only tile A has windows of two.
-    for rows in samples:
-        for item_id in rows["id"]:
-            assert item_id.split("_")[1] == "300000"
-
-
-def test_window_options_need_pair(tiles):
-    with pytest.raises(ValueError, match="name them with pair"):
-        tiles.gs.sample(window=3)
-
-
-def test_pair_names_existing_collections(tiles):
-    with pytest.raises(KeyError, match="l8"):
-        tiles.gs.sample(pair=["s2", "l8"])
-
-
-@pytest.mark.parametrize("overlap", [0, 1.5])
-def test_overlap_is_a_fraction(tiles, overlap):
-    with pytest.raises(ValueError, match="fraction"):
-        tiles.gs.sample(overlap=overlap)
-
-
-def test_no_complete_window_raises(tiles):
-    with pytest.raises(ValueError, match="no footprint holds 9"):
-        tiles.gs.sample(pair=["s2"], window=9)
-
-
-def test_sample_an_empty_catalog(catalog):
-    samples = catalog.iloc[:0].gs.sample()
-
-    assert len(samples) == 0
-
-
-def test_a_sample_opens_lazily_one_group_per_collection(tiles):
-    with pytest.warns(DroppedRowsWarning):
-        samples = tiles.gs.sample(pair=["s2", "s1"], tolerance="2D", window=2)
-
-    tree = samples[0].gs.to_datatree()
-
-    assert tree.gs.groups == ("s2", "s1", "dem")
-    assert tree["s2"].gs.to_dataset().sizes["time"] == 2
-    assert tree["s1"].gs.to_dataset().sizes["time"] == 2
-    assert tree["s1"].gs.to_dataset().gs.resolution.x == 20
-    assert "time" not in tree["dem"].gs.to_dataset().dims
-    for raster in tree.gs.rasters.values():
-        for variable in raster.data_vars.values():
-            assert variable.chunks is not None
-
-
-def test_a_sample_holds_the_catalog_it_grouped(tiles):
-    samples = tiles.gs.sample(pair=["s2"], window=2)
-    ids = samples[0]["id"].tolist()
-
-    filtered = tiles[tiles["collection"] == "dem"]
-
-    assert len(filtered) == 1
-    assert samples[0]["id"].tolist() == ids
-
-
-def test_samples_of_a_reindexed_catalog_select_by_position(tiles):
-    shuffled = tiles.iloc[::-1].set_index("id", drop=False)
-
-    samples = shuffled.gs.sample(pair=["s2"], window=2)
-
-    assert read_samples(samples)[0] == ["s2 20240105", "s2 20240120", "dem 20240101"]
+    assert missing.iloc[0] == []
+    with samples[position].gs.to_datatree() as tree:
+        assert "s1" not in tree.children

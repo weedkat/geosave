@@ -1,17 +1,17 @@
 """Serializable inputs for deployable workflows."""
 
-from .anchor import (
-    AnchorConfig,
-    CoordinateAnchorConfig,
-    GeoJSONAnchorConfig,
-    RasterAnchorConfig,
+from .region import (
+    RegionConfig,
+    CoordinateRegionConfig,
+    GeoJSONRegionConfig,
+    RasterRegionConfig,
 )
 from .base import ConfigModel
 
 __all__ = [
-    "AnchorConfig",
+    "RegionConfig",
     "ConfigModel",
-    "CoordinateAnchorConfig",
-    "GeoJSONAnchorConfig",
-    "RasterAnchorConfig",
+    "CoordinateRegionConfig",
+    "GeoJSONRegionConfig",
+    "RasterRegionConfig",
 ]

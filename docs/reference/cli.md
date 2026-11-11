@@ -5,7 +5,6 @@ geosave --help
 geosave create --help
 geosave add-task --help
 geosave publish --help
-geosave-flows ingest --help
 ```
 
 These commands show the installed version's accepted inputs. Use the
@@ -49,30 +48,11 @@ not copied again. Existing incidental files trigger overwrite/skip prompts.
 it is not implemented yet and exits with status 1. Release a checkpoint with
 `scripts/segmentation/supervised/publish.py` from the segmentation starter in the meantime.
 
-## Acquire model rasters
-
-Install `geosave[flows]` to use `geosave-flows ingest`.
-
-| Input | Required | Default | Meaning |
-| --- | --- | --- | --- |
-| `--anchor JSON` | Yes | — | Validated `coordinates`, `geojson`, or `raster` [anchor configuration](workflow.md). |
-| `--output PATH` | Yes | — | New folder for the rasters and their catalog. |
-| `--spec PATH` | Yes | — | Model spec with a STAC recipe for every declared raster. |
-
-Use local `--output` and `--spec` paths for now: the CLI currently rewrites
-remote URL schemes through `pathlib.Path`. The Python flow accepts location
-strings directly.
-
-The command waits for loading and writing, then prints the path of the written
-`catalog.parquet`. It needs access to the configured endpoints/assets. It
-does not run preprocessing or training. See [ingestion](../guides/workflows.md)
-for grid, time, write, and failure behavior.
-
 ## Shared options
 
 `--help` displays help and exits on every command. At the top level,
 `--show-completion` prints shell completion code and `--install-completion`
-installs it for the current shell. Both CLIs currently call automatic `.env` discovery, which can start from
+installs it for the current shell. The CLI currently calls automatic `.env` discovery, which can start from
 the installed library rather than your workspace. Export required settings
 explicitly until workspace lookup is corrected; generated training startup
 does not itself load `.env`.

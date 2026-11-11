@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
 
@@ -12,8 +11,6 @@ from nbclient import NotebookClient
 
 EXAMPLES = Path(__file__).parents[2] / "examples"
 DATASET = "fatmur/dynamicworld-300"
-EXERCISE = "# Your code here"
-SOLUTION = re.compile(r"<summary>Solution</summary>\s*```python\n(.*?)```", re.DOTALL)
 
 
 @pytest.fixture(scope="session")
@@ -22,25 +19,13 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> Path:
     from huggingface_hub import snapshot_download
 
     folder = tmp_path_factory.mktemp("data")
-    snapshot_download(DATASET, repo_type="dataset", local_dir=folder / "dynamic_world")
+    snapshot_download(
+        DATASET,
+        repo_type="dataset",
+        revision="5e65026ad47e1f02f9a48a3efee1028db3bb0d1a",
+        local_dir=folder / "dynamic_world",
+    )
     return folder
-
-
-def fill_solutions(notebook: nbformat.NotebookNode) -> None:
-    """Put each exercise's folded solution into the empty cell below it.
-
-    Solutions live in markdown, so without this they would never run and
-    would drift from the API. Exercises with only a hint keep their empty cell.
-    """
-    previous = None
-    for cell in notebook.cells:
-        if cell.cell_type == "code" and cell.source.strip() == EXERCISE:
-            if previous is not None:
-                match = SOLUTION.search(previous.source)
-                if match is not None:
-                    cell.source = match.group(1)
-        if cell.cell_type == "markdown":
-            previous = cell
 
 
 def _run(name: str, workdir: Path, data: Path) -> list[nbformat.NotebookNode]:
@@ -53,14 +38,12 @@ def _run(name: str, workdir: Path, data: Path) -> list[nbformat.NotebookNode]:
             download then only checks it.
 
     Returns:
-        The notebook's code cells with the outputs of this run, without the
-        empty cells its exercises leave for the reader.
+        The notebook's executed code cells and outputs.
     """
     (workdir / "data").symlink_to(data, target_is_directory=True)
     # Notebooks 2 and 3 read the forest outline shipped beside them.
     shutil.copy(EXAMPLES / "khdtk.geojson", workdir)
     notebook = nbformat.read(EXAMPLES / name, as_version=4)
-    fill_solutions(notebook)
     client = NotebookClient(
         notebook,
         timeout=600,
@@ -68,11 +51,7 @@ def _run(name: str, workdir: Path, data: Path) -> list[nbformat.NotebookNode]:
         resources={"metadata": {"path": workdir}},
     )
     client.execute()
-    return [
-        cell
-        for cell in notebook.cells
-        if cell.cell_type == "code" and cell.source.strip() != EXERCISE
-    ]
+    return [cell for cell in notebook.cells if cell.cell_type == "code"]
 
 
 def _scalars(run: Path) -> dict[str, int]:
@@ -181,6 +160,7 @@ def test_catalog_examples_load_chips_and_restore_pixels(tmp_path):
     image = build_dataset(pixels, grid, nodata=0).assign_coords(
         time=np.datetime64("2025-01-15")
     )
+    image["B08"].values[0, 0] = 0
     collection = create_test_collection(
         "sentinel-2-l2a", description="Local test imagery"
     )
@@ -191,36 +171,199 @@ def test_catalog_examples_load_chips_and_restore_pixels(tmp_path):
         "gs": gs,
         "io": io,
         "xr": xr,
-        "client": client,
-        "collection": collection,
-        "query": gs.StacQuery(collections=[collection.id], max_items=1),
-        "options": dict(bands=bands, dtype="uint16", nodata=0),
+        "BANDS": bands,
     }
     sources = nbformat.read(EXAMPLES / "02_sources.ipynb", as_version=4)
-    cell = next(cell for cell in sources.cells if "def fetch_image(" in cell.source)
-    exec(compile(cell.source, "02_sources.ipynb", "exec"), namespace)
+    for cell in sources.cells:
+        if cell.cell_type != "code":
+            continue
+        if any(
+            name in cell.source
+            for name in ("def fetch_image(", "def save_tile(", "def build_dataset(")
+        ):
+            exec(compile(cell.source, "02_sources.ipynb", "exec"), namespace)
     label = build_dataset(
         {"label": (("y", "x"), np.ones((8, 8), dtype="uint8"))}, grid, nodata=255
     ).assign_coords(time=np.datetime64("2025-01-15"))
     label_path = io.formats.geotiff.write_cog(label, tmp_path / "label.tif")
-    table = namespace["save_tile"](label_path, tmp_path / "paired")
-    sample = table.gs.sample(pair=["sentinel-2-l2a", "label"], tolerance="1D")[0]
+    table = namespace["build_dataset"](
+        [label_path],
+        tmp_path / "paired",
+        "train",
+        client=client,
+        collection=collection,
+        query=gs.StacQuery(collections=[collection.id], max_items=1),
+    )
+    assert set(table["split"]) == {"train"}
+    sample = table.gs.sample(collections=["sentinel-2-l2a", "label"], freq="D")[0]
     tree = sample.gs.to_datatree()
     assert tree.gs.geobox == grid
 
+    import ast
+
     inputs = nbformat.read(EXAMPLES / "03_inputs.ipynb", as_version=4)
-    cell = next(cell for cell in inputs.cells if "def read_image(" in cell.source)
-    namespace.update(Dataset=Dataset, IGNORE_INDEX=255)
-    exec(compile(cell.source, "03_inputs.ipynb", "exec"), namespace)
-    dataset = namespace["DynamicWorld"]([tree], chip_size=4, overlap=2)
+    namespace.update(Dataset=Dataset, torch=torch)
+    for cell in inputs.cells:
+        if cell.cell_type != "code":
+            continue
+        parsed = ast.parse(cell.source)
+        definitions = []
+        for node in parsed.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                if node.name in {
+                    "load_pairs",
+                    "prepare_pairs",
+                    "cut_pairs",
+                    "DynamicWorld",
+                }:
+                    definitions.append(node)
+        module = ast.Module(body=definitions, type_ignores=[])
+        exec(compile(module, "03_inputs.ipynb", "exec"), namespace)
+
+    images, labels = namespace["load_pairs"](table)
+    images, labels = namespace["prepare_pairs"](
+        images, labels, bands=bands, ignore_index=255
+    )
+    image_chips, label_chips = namespace["cut_pairs"](
+        images, labels, size=128, ignore_index=255
+    )
+    dataset = namespace["DynamicWorld"](image_chips, label_chips)
     image_tensor, label_tensor = dataset[0]
-    assert image_tensor.shape == (4, 4, 4)
-    assert label_tensor.shape == (4, 4)
+
+    assert image_tensor.shape == (4, 128, 128)
+    assert label_tensor.shape == (128, 128)
     assert label_tensor.dtype == torch.int64
-    outputs = np.ones((len(dataset), 2, 4, 4), dtype="float32")
-    (merged,) = dataset.merge(outputs)
-    assert merged.gs.geobox == grid
-    np.testing.assert_allclose(merged.values, 1)
-    imagery = xr.DataTree.from_dict({"sentinel-2-l2a": tree["sentinel-2-l2a"]})
-    inference = namespace["DynamicWorld"]([imagery], chip_size=4)
-    assert inference[0].shape == (4, 4, 4)
+    torch.testing.assert_close(image_tensor[:, 1, 1], torch.full((4,), 0.2))
+    assert image_tensor[3, 0, 0] == 0
+    assert label_tensor[0, 0] == 255
+    assert label_tensor[1, 1] == 1
+    assert (label_tensor[8:, :] == 255).all()
+    assert (label_tensor[:, 8:] == 255).all()
+
+    chips = gs.Chips(images, size=4, overlap=2)
+    predictions = []
+    for key in chips:
+        predictions.append((key, np.ones((2, 4, 4), dtype="float32")))
+    (merged,) = chips.merge(predictions, window="hamming")
+    assert merged.shape == (2, 8, 8)
+    np.testing.assert_allclose(merged, 1)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_recipe_runs(tmp_path: Path, data: Path) -> None:
+    """Carry the trained forest model into a saved preparation recipe."""
+    if not (data / "landcover" / "weights.pt").is_file():
+        workdir = tmp_path / "training"
+        workdir.mkdir()
+        test_inputs_runs(workdir, data)
+    workdir = tmp_path / "recipe"
+    workdir.mkdir()
+    code = _run("04_recipe.ipynb", workdir, data)
+    assert all(cell.execution_count is not None for cell in code)
+
+    import geosave as gs
+
+    review = data / "landcover" / "review"
+    image_path = next(review.glob("image-*.tif"))
+    cover_path = next(review.glob("land-cover-*.tif"))
+    with gs.open_raster(image_path) as image, gs.open_raster(cover_path) as cover:
+        assert cover.gs.geobox == image.gs.geobox
+        assert cover.gs.timespan == image.gs.timespan
+        assert cover["label"].gs.nodata == 255
+        assert cover["label"].gs.legend is not None
+
+
+@pytest.mark.parametrize("name", ["00_basics.ipynb", "01_model.ipynb"])
+def test_training_dataset_scales_images_and_preserves_label_ids(name, tmp_path):
+    """Prepared pairs become tensors without changing categorical targets."""
+    import ast
+
+    import numpy as np
+    import torch
+    from odc.geo.geobox import GeoBox
+    from torch.utils.data import Dataset
+
+    import geosave as gs
+    from tests.conftest import build_dataset
+
+    grid = GeoBox.from_bbox((0, 0, 20, 20), crs="EPSG:32633", resolution=10)
+    bands = {}
+    for index, band in enumerate(["B02", "B03", "B04", "B08"]):
+        bands[band] = (("y", "x"), np.full((2, 2), 1000 * (index + 1), dtype="uint16"))
+
+    image = build_dataset(bands, grid, nodata=0).gs.write_scale_offset(1e-4, 0)
+    image = image[["B08", "B04", "B03", "B02"]]
+    labels = build_dataset(
+        {"label": (("y", "x"), np.array([[1, 255], [2, 3]], dtype="uint8"))},
+        grid,
+        nodata=255,
+    )
+    image_path = gs.geodata.io.formats.geotiff.write_cog(image, tmp_path / "image.tif")
+    label_path = gs.geodata.io.formats.geotiff.write_cog(labels, tmp_path / "label.tif")
+
+    notebook = nbformat.read(EXAMPLES / name, as_version=4)
+    cell = next(cell for cell in notebook.cells if "class DynamicWorld(" in cell.source)
+    parsed = ast.parse(cell.source)
+    definition = next(node for node in parsed.body if isinstance(node, ast.ClassDef))
+    module = ast.Module(body=[definition], type_ignores=[])
+    namespace = {"Dataset": Dataset, "gs": gs}
+    exec(compile(module, name, "exec"), namespace)
+    dataset = namespace["DynamicWorld"]([image_path], [label_path])
+    pixels, target = dataset[0]
+
+    torch.testing.assert_close(pixels[:, 1, 1], torch.tensor([0.1, 0.2, 0.3, 0.4]))
+    assert target.dtype == torch.int64
+    assert target.tolist() == [[1, 255], [2, 3]]
+
+
+@pytest.mark.parametrize("name", ["00_basics.ipynb", "01_model.ipynb"])
+def test_prediction_uses_image_grid_without_reference_labels(name, tmp_path):
+    """Run the prediction cell with an image and class definitions only."""
+    import numpy as np
+    import torch
+    import yaml
+    from odc.geo.geobox import GeoBox
+
+    import geosave as gs
+    from geosave.geodata.io.formats.geotiff import write_cog
+    from tests.conftest import build_dataset
+
+    grid = GeoBox.from_bbox(
+        (500000, 9200000, 500040, 9200040), crs="EPSG:32749", resolution=10
+    )
+    bands = {}
+    for band in ["B02", "B03", "B04", "B08"]:
+        pixels = np.arange(16, dtype="uint16").reshape(4, 4) + 2000
+        bands[band] = (("y", "x"), pixels)
+    image = build_dataset(bands, grid, nodata=0).gs.write_scale_offset(1e-4, 0)
+    image = image.gs.write_rgb(red="B04", green="B03", blue="B02")
+    image_path = write_cog(image, tmp_path / "image.tif")
+    classes = {
+        "ignore_index": 255,
+        "class_map": {0: "water", 1: "trees"},
+        "color_map": {0: "#419bdf", 1: "#397d49"},
+    }
+    (tmp_path / "classes.yaml").write_text(yaml.safe_dump(classes))
+
+    model = torch.nn.Conv2d(4, 2, 1)
+    model.device = torch.device("cpu")
+    namespace = {
+        "gs": gs,
+        "torch": torch,
+        "root": tmp_path,
+        "val_images": [image_path],
+        "module": model,
+    }
+    notebook = nbformat.read(EXAMPLES / name, as_version=4)
+    cell = next(
+        cell for cell in notebook.cells if "predicted = xr.DataArray(" in cell.source
+    )
+    exec(compile(cell.source, name, "exec"), namespace)
+
+    predicted = namespace["predicted"]
+    assert predicted.gs.geobox == grid
+    assert predicted.gs.legend.classes == classes["class_map"]
+    assert predicted.gs.nodata == 255
+    assert predicted.dtype == np.uint8
+    assert set(np.unique(predicted.values)) <= {0, 1}

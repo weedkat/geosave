@@ -3,7 +3,7 @@
 A raster is an image whose pixels have locations; its bands hold measurements
 such as red light or elevation. A vector describes shapes, such as field
 boundaries. GeoSave works with both as ordinary Python objects, so start with
-[Your first raster](../first-raster.md).
+[Your first vegetation map](../first-raster.md).
 
 | Guide | You will learn | Result |
 | --- | --- | --- |
@@ -25,5 +25,5 @@ xarray and GeoPandas code keeps working. Reading defers pixel work; selecting
 bands and a region first keeps it small.
 
 Next: [activities](../activities.md) for complete tasks, or
-[Advanced](../concepts/index.md) for the rules behind the examples (lazy
+[Concepts](../concepts/index.md) for the rules behind the examples (lazy
 execution, storage layouts, the interactive explorer).

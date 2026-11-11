@@ -9,8 +9,7 @@ from .base import AttrsGroup
 class Quantity(AttrsGroup):
     """Name the quantity one variable or coordinate measures.
 
-    Two objects stating it differently hold values that mean different
-    things, so a join drops it whole.
+    The names and units describe the physical meaning of stored values.
 
     Attributes:
         standard_name: CF standard name, as `"surface_reflectance"`.

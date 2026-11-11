@@ -33,6 +33,27 @@ use `--check` to detect drift.
       members:
         - open_raster
         - open_vector
+        - open_item
+
+## STAC Item pixels
+
+```python
+from geosave.geodata import io
+
+# One Item, one node per exact native grid. Closing the tree closes its files.
+with io.open_item(item) as tree:
+    pixels = tree.gs.to_dataset().compute()  # when the Item has one grid
+
+# Several selected Items, explicitly assembled onto a common grid.
+cube = stac.load_dataset(items, geobox=grid, groupby="id")
+```
+
+`open_item` replaces `io.stac.open_scene`. There is no public `open_items`,
+`open_collection` or `open_stack`. Existing catalog
+`rows.gs.to_datatree()` retains native Collection/grid time series: it requires
+matching grids and variables within each Collection and owns its file handles.
+This conversion preserves native temporal bounds and timeless rasters; it does
+not invoke ODC. Use `load_dataset` / `load_datatree` for output-grid assembly.
 
 ## Saved raster files
 
@@ -45,20 +66,18 @@ describes actual files while retaining source observation properties.
 The catalog table remains in memory until saved with `catalog.gs.to_geoparquet`.
 Item metadata and identities are checked before writing raster assets.
 
-::: geosave.geodata.io.stac
+::: geosave.geodata.stac.publish
     options:
       members:
         - write_assets
 
-## Path formats and raster combination
+## Path formats
 
 ::: geosave.geodata.io.paths
     options:
       members:
         - default_path_format
         - expand_paths
-        - split_by_collection
-        - split_by_res
         - split_by_time
         - split_by_band
 
@@ -66,11 +85,6 @@ Item metadata and identities are checked before writing raster assets.
     options:
       members:
         - write_files
-
-::: geosave.geodata.transform.combine
-    options:
-      members:
-        - merge
 
 ## GeoTIFF and GDAL
 
@@ -163,7 +177,7 @@ SAFE loading is not implemented.
         - parse_collections
 
 
-::: geosave.geodata.io.formats._geopandas
+::: geosave.geodata.io.formats.utils.geopandas
     options:
       members:
         - unpack_engine_options
@@ -181,10 +195,10 @@ SAFE loading is not implemented.
         - absolute_location
         - write_file
 
-::: geosave.geodata.io.stac
+::: geosave.geodata.stac.publish
 
 ## Load selected STAC Items
 
-::: geosave.geodata.io.odc
+::: geosave.geodata.stac.load
     options:
       members: [load_dataset, load_datatree, StacLoadOptions]

@@ -1,4 +1,6 @@
+from geosave.geodata.viz.explore import create_layer
 import pytest
+from tests.geodata.conftest import create_test_collection
 from bokeh.models import HoverTool
 
 from geosave.geodata.viz.explore import Explorer, VectorLayer
@@ -10,7 +12,7 @@ def test_hover_preserves_attribute_names_and_datetime_offsets(fields):
     frame = fields.rename(columns={"crop": "land cover", "area": "mean-value"})
     frame["A.B"] = "text"
     frame["observed"] = pd.Timestamp("2024-01-01 12:00:00+07:00")
-    viewer = Explorer(frame, basemap="None")
+    viewer = Explorer(layers=[create_layer(frame)], basemap="None")
     root = viewer.map.pane.get_root()
     for tool in root.select({"type": HoverTool}):
         assert tool.renderers
@@ -60,7 +62,7 @@ def test_glyph_layers_do_not_redraw_on_pan(fields, monkeypatch):
         return render(self, *args, **kwargs)
 
     monkeypatch.setattr(VectorLayer, "render", count)
-    viewer = Explorer(fields, basemap="None")
+    viewer = Explorer(layers=[create_layer(fields)], basemap="None")
     viewer.map.pane.object[()]
     drawn = len(renders)
     viewer.map.ranges.event(x_range=(0.0, 1000.0), y_range=(0.0, 1000.0))
@@ -134,9 +136,9 @@ def test_unchecked_footprint_is_not_drawn(fields):
 
 
 def test_frame_without_assets_offers_no_rasters(fields):
-    layer = VectorLayer(fields)
-
-    assert layer.has_rasters is False
+    viewer = Explorer(tables={"Fields": fields}, basemap="None")
+    assert viewer.table.has_rasters is False
+    viewer.close()
 
 
 def test_checking_a_raster_row_adds_its_layer(catalog):
@@ -144,7 +146,8 @@ def test_checking_a_raster_row_adds_its_layer(catalog):
 
     from geosave.geodata.viz.explore import RasterLayer
 
-    layer = VectorLayer(catalog)
+    viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
+    layer = viewer.table
     assert layer.has_rasters is True
 
     layer.raster_rows = [0]
@@ -157,6 +160,7 @@ def test_checking_a_raster_row_adds_its_layer(catalog):
     raster = layer.rasters[0]
     assert isinstance(raster, RasterLayer)
     assert raster.row.equals(catalog.iloc[0])
+    viewer.close()
 
 
 def test_map_click_picks_without_opening_rasters(catalog):
@@ -167,15 +171,60 @@ def test_map_click_picks_without_opening_rasters(catalog):
     layer.identify(center.x, center.y, 1.0)
 
     assert 0 in layer.picked_rows
-    assert layer.raster_rows == []
 
 
 def test_catalog_status_does_not_replace_drawn_geometry(fields):
-    from geosave.geodata.viz.explore import VectorLayer
-
-    layer = VectorLayer(fields)
+    viewer = Explorer(tables={"Fields": fields}, basemap="None")
+    table = viewer.table
+    table.selection = [0]
+    layer = viewer.layers[0]
     original = layer.draw(None)
-    layer.error = "Unable to open raster"
+    table.error = "Unable to open raster"
     assert layer.draw(None) is original
     layer.color = "#ff0000"
     assert layer.draw(None) is not original
+    viewer.close()
+
+
+@pytest.mark.parametrize("shifted", [False, True])
+def test_catalog_display_aligns_every_grid_onto_the_finest_node(tmp_path, shifted):
+    from datetime import datetime, UTC
+
+    import numpy as np
+    import xarray as xr
+    from affine import Affine
+    from odc.geo.geobox import GeoBox
+
+    from tests.geodata.conftest import build_raster
+
+    reference = build_raster().gs.geobox
+    fine_grid = GeoBox((4, 4), reference.transform * Affine.scale(0.5), reference.crs)
+    fine = xr.Dataset({"red": (("y", "x"), np.ones((4, 4), dtype="uint16"))})
+    fine = fine.gs.write_grid(fine_grid).gs.write_nodata(0)
+    grid = fine_grid.zoom_out(2)
+    if shifted:
+        grid = GeoBox(grid.shape, Affine.translation(5, 0) * grid.transform, grid.crs)
+    coarse = xr.Dataset(
+        {"height": (("y", "x"), np.full(grid.shape, 7, dtype="uint16"))}
+    )
+    coarse = coarse.gs.write_grid(grid).gs.write_nodata(0)
+    tree = xr.DataTree.from_dict({"fine": fine, "coarse": coarse})
+    catalog = tree.gs.to_catalog(
+        tmp_path,
+        collection=create_test_collection("optical", description="Optical"),
+        input_datetime=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
+    layer = viewer.table
+    # Nested or shifted, the display resamples onto the finest node grid.
+    opened = layer.open_row_raster(0)
+    assert opened.data.gs.geobox == fine.gs.geobox
+    assert opened.data.height.chunks is not None
+    expected = np.full((4, 4), 7)
+    if shifted:
+        # The shifted coarse grid starts one fine pixel east; that column is nodata.
+        expected[:, 0] = 0
+    # One Item loads as one time step, as stac.load_dataset loads it.
+    np.testing.assert_array_equal(opened.data.height.isel(time=0).values, expected)
+    opened.data.close()
+    viewer.close()

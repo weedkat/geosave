@@ -1,15 +1,11 @@
 # Workflow inputs, flows, and tasks
 
 Prefect flows run complete jobs from validated inputs. They ship as
-`geosave_flows`, installed with `pip install "geosave[flows]"`. See [Ingest data](../guides/workflows.md).
+`geosave_flows`, installed with `pip install "geosave[flows]"`. See [Project workflows](../guides/workflows.md).
 
-## Anchor configuration
+## Region configuration
 
 ::: geosave_flows.configs
-
-## Flows
-
-::: geosave_flows.ingest
 
 ## Label files
 

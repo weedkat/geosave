@@ -15,13 +15,13 @@ from tests.geodata.conftest import create_test_collection
 
 
 def make_catalog():
-    from geosave.geodata.stac.catalog import from_items
+    from geosave.geodata.stac.catalog import create_catalog
     from tests.geodata.stac.conftest import entry
 
     collection = create_test_collection(
         "optical", description="Reflectance", license="CC-BY-4.0"
     )
-    return from_items([entry()], collections=[collection])
+    return create_catalog([entry()], collections=[collection])
 
 
 @pytest.mark.parametrize(
@@ -141,7 +141,7 @@ def test_options_cannot_remove_required_geoparquet_metadata(tmp_path, catalog):
 def test_catalog_row_group_size_reaches_actual_encoding(tmp_path):
     import pyarrow.parquet as pq
 
-    from geosave.geodata.stac.catalog import from_items
+    from geosave.geodata.stac.catalog import create_catalog
 
     source = make_catalog()
     items = []
@@ -149,7 +149,7 @@ def test_catalog_row_group_size_reaches_actual_encoding(tmp_path):
         item = source.iloc[0].gs.to_item()
         item.id = f"scene-{index}"
         items.append(item)
-    rows = from_items(items, collections=source.gs.collections.values())
+    rows = create_catalog(items, collections=source.gs.collections.values())
     path = rows.gs.to_geoparquet(
         tmp_path / "items.parquet", parquet_options={"row_group_size": 1}
     )
@@ -176,7 +176,7 @@ def test_geoparquet_catalog_supports_bbox_and_column_filtering(
     assert list(selected.name) == ["near"]
 
 
-def test_geoparquet_write_replaces_stale_staging_file(tmp_path: Path) -> None:
+def test_geoparquet_write_preserves_unrelated_staging_file(tmp_path: Path) -> None:
     target = tmp_path / "catalog.parquet"
     staged = tmp_path / ".catalog.staging.parquet"
     staged.write_text("interrupted")
@@ -184,7 +184,7 @@ def test_geoparquet_write_replaces_stale_staging_file(tmp_path: Path) -> None:
     gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:4326").gs.to_geoparquet(target)
 
     assert target.is_file()
-    assert not staged.exists()
+    assert staged.read_text() == "interrupted"
 
 
 def test_empty_geoparquet_catalog_round_trips(tmp_path: Path) -> None:

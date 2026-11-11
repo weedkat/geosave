@@ -1,7 +1,7 @@
 """Public geospatial I/O: formats, storage, discovery-independent loading.
 
 Use io.formats.geotiff.write_cog for a known format, open_raster for suffix
-selection, and load_dataset/load_datatree for selected native STAC Items.
+selection. STAC Items load through `geosave.geodata.stac`.
 """
 
 from importlib import import_module
@@ -31,12 +31,9 @@ from .rasterio import RasterioOpenOptions, configure_gdal
 
 if TYPE_CHECKING:
     from .formats.stac_geoparquet import write_stac_geoparquet
-    from .odc import StacLoadOptions, load_dataset, load_datatree
 
 
 def __getattr__(name: str) -> Any:
-    if name in {"StacLoadOptions", "load_dataset", "load_datatree"}:
-        return getattr(import_module(f"{__name__}.odc"), name)
     if name == "write_stac_geoparquet":
         return getattr(import_module(f"{__name__}.formats.stac_geoparquet"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -61,9 +58,6 @@ __all__ = [
     "write_netcdf",
     "write_cog",
     "write_stac_geoparquet",
-    "StacLoadOptions",
-    "load_dataset",
-    "load_datatree",
     "COGWriteOptions",
     "GTiffWriteOptions",
     "GeoJSONOpenOptions",

@@ -25,11 +25,11 @@ from geosave.geodata import (
 )
 from geosave.geodata.io import rasterio as gdal
 from geosave.geodata.io.formats import geotiff
-from geosave.geodata.transform import temporal
 from geosave.geodata.warnings import UnreadMaskWarning
 from tests.conftest import build_dataset
 from tests.geodata.conftest import (
     _refuse,
+    assign_cells,
     build_raster,
     create_file_items,
     create_test_collection,
@@ -102,6 +102,30 @@ def test_a_scalar_time_survives_as_coverage_attrs(tmp_path: Path) -> None:
     # The date lives on the time coordinate alone, so dates join without conflict.
     assert "time_coverage_start" not in restored.attrs
     assert "start_datetime" not in restored.coords
+
+
+def test_grouped_time_bounds_survive_cog_persistence(tmp_path: Path) -> None:
+    dataset = build_raster(times=2)
+    bounds = np.array(
+        [["2024-01-01", "2024-01-03"], ["2024-02-01", "2024-02-03"]],
+        dtype="datetime64[ns]",
+    )
+    dataset = dataset.assign_coords(time_bounds=(("time", "edge"), bounds))
+    dataset = assign_cells(dataset, list(map(tuple, bounds)))
+
+    for index, (_, observation) in enumerate(dataset.groupby("time")):
+        observation = observation.squeeze("time", drop=False)
+        path = geotiff.write_cog(observation, tmp_path / f"{index}.tif")
+
+        with rasterio.open(path) as raster:
+            assert raster.tags()["time_coverage_start"] == np.datetime_as_string(
+                bounds[index, 0].astype("datetime64[us]"), unit="auto"
+            )
+            assert raster.tags()["time_coverage_end"] == np.datetime_as_string(
+                bounds[index, 1].astype("datetime64[us]"), unit="auto"
+            )
+            np.testing.assert_array_equal(raster.read(1), observation.red.values)
+            assert raster.transform == observation.gs.geobox.transform
 
 
 @pytest.mark.parametrize("dated", [False, True])
@@ -374,7 +398,7 @@ def test_a_legend_colour_map_writes_a_gdal_palette(tmp_path: Path) -> None:
 
 
 def test_the_writer_never_states_a_native_value_twice(tmp_path: Path) -> None:
-    written = build_raster().gs.write_packing(1e-4)
+    written = build_raster().gs.write_scale_offset(1e-4)
 
     path = geotiff.write_cog(written, tmp_path / "scene.tif")
 
@@ -492,8 +516,14 @@ def test_a_palette_read_from_a_cog_writes_to_netcdf(tmp_path: Path) -> None:
     assert again.red.gs.legend.color_map == {0: "#000000", 1: "#00FF00"}
 
 
-@pytest.mark.parametrize("explicit", [False, True], ids=["resampled", "explicit"])
-def test_saved_paths_preserve_composite_coverage(tmp_path: Path, explicit: bool):
+@pytest.mark.parametrize(
+    ("explicit", "period"),
+    [(False, ("2024-02-01", "2024-03-01")), (True, ("2024-02-01", "2024-03-01"))],
+    ids=["bin", "explicit"],
+)
+def test_saved_paths_preserve_composite_coverage(
+    tmp_path: Path, explicit: bool, period: tuple[str, str]
+):
     grid = GeoBox.from_bbox((0, 0, 20, 20), "EPSG:3857", resolution=10)
     source = build_dataset(
         {"red": (("time", "y", "x"), da.full((2, 2, 2), 5.0, chunks=(1, 2, 2)))},
@@ -501,32 +531,28 @@ def test_saved_paths_preserve_composite_coverage(tmp_path: Path, explicit: bool)
         time=pd.to_datetime(["2024-02-05", "2024-02-20"]),
         nodata=np.nan,
     )
-    monthly = temporal.reduce(temporal.resample(source, "MS"), "median")
+    monthly = source.gs.mask_and_scale().gs.composite("MS", "median")
     if explicit:
-        monthly.time.attrs = {}
-        monthly = monthly.assign_coords(
-            start_datetime=np.datetime64("2024-02-01T00:00:00", "us"),
-            end_datetime=np.datetime64("2024-02-29T23:59:59.999999", "us"),
+        monthly = assign_cells(
+            monthly, [(np.datetime64("2024-02-01"), np.datetime64("2024-03-01"))]
         )
-    monthly.gs.to_cog(tmp_path, path_format="{time:%Y%m}.tif")
+    monthly.gs.to_cog(tmp_path, format_paths="{time:%Y%m}.tif")
     collection = create_test_collection("image", description="Monthly imagery")
     items = list(
         create_file_items({"image": tmp_path / "202402.tif"}, collection=collection)
     )
-    assert items[0].properties["start_datetime"] == "2024-02-01T00:00:00Z"
-    assert items[0].properties["end_datetime"] == "2024-02-29T23:59:59.999999Z"
-    from geosave.geodata.stac.catalog import from_items
+    start, end = pd.Timestamp(period[0]), pd.Timestamp(period[1])
+    assert pd.Timestamp(items[0].properties["start_datetime"]) == start.tz_localize(
+        "UTC"
+    )
+    assert pd.Timestamp(items[0].properties["end_datetime"]) == end.tz_localize("UTC")
+    from geosave.geodata.stac.catalog import create_catalog
 
-    table = from_items(items, collections=[collection])
+    table = create_catalog(items, collections=[collection])
     restored = gs.open_vector(table.gs.to_geoparquet(tmp_path / "catalog.parquet"))
     raster = restored.iloc[0].gs.to_datatree().gs.to_dataset()
     assert raster.to_array().chunks is not None
-    assert raster.start_datetime.values == np.datetime64("2024-02-01")
-    assert raster.end_datetime.values == np.datetime64("2024-02-29T23:59:59.999999")
-    assert raster.gs.timespan == (
-        pd.Timestamp("2024-02-01"),
-        pd.Timestamp("2024-02-29T23:59:59.999999"),
-    )
+    assert raster.gs.timespan == (start, end)
     np.testing.assert_allclose(raster.to_array().values, 5)
 
 
@@ -536,7 +562,7 @@ def test_cogs_round_trip_lazily(remote) -> None:
     source = build_raster(times=2)
 
     paths = source.gs.to_cog(
-        prefix, path_format="forest_{time:%Y%m%d}.tif", storage_options=options
+        prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
     )
 
     assert all(str(path).startswith(prefix) for path in paths)
@@ -560,3 +586,20 @@ def test_direct_writer_preserves_explicit_filesystem_options(writer, bucket):
     with open_raster(saved) as restored:
         assert restored.gs.geobox == source.gs.geobox
         np.testing.assert_array_equal(restored.red, source.red)
+
+
+@pytest.mark.parametrize("route", ["direct", "dataset", "tree"])
+def test_irregular_coordinates_are_rejected_before_writing(tmp_path, route):
+    raster = xr.Dataset(
+        {"image": (("y", "x"), np.ones((3, 3), dtype="uint8"))},
+        coords={"y": [2.0, 1.0, 0.0], "x": [0.0, 1.0, 5.0]},
+    ).odc.assign_crs("EPSG:4326")
+    with pytest.raises(ValueError, match="regularly spaced"):
+        if route == "direct":
+            geotiff.write_geotiff(raster, tmp_path / "bad.tif")
+        elif route == "dataset":
+            raster.gs.to_cog(tmp_path, format_paths="bad.tif")
+        else:
+            tree = xr.DataTree.from_dict({"scene": raster})
+            tree.gs.to_cog(tmp_path, format_paths="bad.tif", collection="test")
+    assert not list(tmp_path.rglob("*.tif"))

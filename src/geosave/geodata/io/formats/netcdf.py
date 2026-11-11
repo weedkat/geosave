@@ -12,9 +12,8 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 import xarray as xr
 from upath import UPath
 
-from geosave.geodata.conventions import to_yx
 from geosave.geodata.io import storage
-from geosave.geodata.io.formats._stores import check_store
+from geosave.geodata.io.formats.utils.stores import check_store
 from geosave.geodata.io.storage import Location, StorageOptions, absolute_location
 
 if TYPE_CHECKING:
@@ -223,7 +222,7 @@ def open_netcdf(
         Closing the result releases the file and any temporary download.
 
     Examples:
-        >>> list(open_netcdf("scene.nc").gs.rasters)
+        >>> list(open_netcdf("scene.nc").gs.datasets)
         ['s2/r10m', 's2/r20m']
     """
     path = storage.location(source, storage_options)
@@ -245,9 +244,9 @@ def open_netcdf(
         )
         opened.callback(stored.close)
         if stored.children:
-            result = to_yx(stored).copy()
+            result = stored.copy()
         else:
-            result = to_yx(stored.to_dataset()).copy(deep=False)
+            result = stored.to_dataset().copy(deep=False)
             result.encoding["source"] = absolute_location(path)
         result.set_close(opened.pop_all().close)
         return cast("Dataset | DataTree", result)

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import dask.array as da
+import numpy as np
 import pytest
 import xarray as xr
 from affine import Affine
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
-from geosave.geodata.conventions import require_yx, to_yx
+from geosave.geodata.conventions import to_yx
 
 GRID = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")
 
@@ -47,6 +48,8 @@ def test_to_yx_finds_a_pair_only_its_cf_attrs_name() -> None:
 
 def test_to_yx_leaves_an_unlabelled_pair_alone() -> None:
     unlabelled = loaded(("north", "east"))
+    unlabelled.north.attrs = {}
+    unlabelled.east.attrs = {}
 
     assert to_yx(unlabelled) is unlabelled
 
@@ -58,7 +61,7 @@ def test_to_yx_renames_one_band() -> None:
     assert result.odc.geobox == GRID
 
 
-def test_to_yx_renames_each_group_of_a_tree() -> None:
+def test_a_tree_renames_node_by_node_with_map_over_datasets() -> None:
     foreign = loaded(("latitude", "longitude"))
     tree = xr.DataTree.from_dict(
         {
@@ -68,7 +71,7 @@ def test_to_yx_renames_each_group_of_a_tree() -> None:
         }
     )
 
-    result = to_yx(tree)
+    result = tree.map_over_datasets(to_yx)
 
     assert result["optical"].dataset.red.dims == ("y", "x")
     assert result["dem"].dataset.elevation.dims == ("y", "x")
@@ -76,10 +79,89 @@ def test_to_yx_renames_each_group_of_a_tree() -> None:
     assert isinstance(result["optical"].dataset.red.data, da.Array)
 
 
-def test_require_yx_names_the_rename_that_fixes_a_foreign_grid() -> None:
-    foreign = loaded(("latitude", "longitude"))
+def _monthly() -> xr.Dataset:
+    from tests.geodata.conftest import assign_cells, build_raster
 
-    with pytest.raises(ValueError, match=r"rename\(\{'latitude': 'y'"):
-        require_yx(foreign)
-    with pytest.raises(ValueError, match=r"rename\(\{'latitude': 'y'"):
-        require_yx(xr.DataTree.from_dict({"/optical": foreign}))
+    raster = build_raster(times=2)
+    return assign_cells(
+        raster,
+        [
+            (np.datetime64("2025-06-01"), np.datetime64("2025-07-01")),
+            (np.datetime64("2025-07-01"), np.datetime64("2025-08-01")),
+        ]
+    )
+
+
+@pytest.mark.parametrize("suffix", ["nc", "zarr"])
+def test_observation_period_roundtrip_stays_separate_from_cf_cells(tmp_path, suffix):
+    from geosave.geodata.io import open_raster
+
+    monthly = _monthly()
+    # The original CF variable's name and meaning must survive ingestion.
+    monthly["cells"] = (
+        ("time", "vertices"),
+        np.stack([monthly.start_datetime.values, monthly.end_datetime.values], axis=-1),
+    )
+    monthly["cells"].attrs["long_name"] = "cell extent"
+    monthly.time.attrs["bounds"] = "cells"
+    path = tmp_path / f"monthly.{suffix}"
+    if suffix == "nc":
+        monthly.gs.to_netcdf(path)
+    else:
+        monthly.gs.to_zarr(path)
+
+    with open_raster(path) as restored:
+        assert restored.start_datetime.equals(monthly.start_datetime)
+        assert restored.end_datetime.equals(monthly.end_datetime)
+        assert restored.cf.get_bounds("time").name == "cells"
+        assert restored.cells.attrs["long_name"] == "cell extent"
+        np.testing.assert_array_equal(restored.cells.values, monthly.cells.values)
+
+
+def test_cf_units_identify_spatial_axes_without_name_guesses():
+    from dask.callbacks import Callback
+
+    raster = loaded(("north", "east"))
+    with Callback(pretask=lambda *_: pytest.fail("discovery computed pixels")):
+        normalized = to_yx(raster)
+    assert normalized.red.dims == ("y", "x")
+    assert normalized.gs.geobox == GRID
+
+
+def test_ambiguous_cf_axes_do_not_choose_a_grid():
+    raster = xr.DataArray(
+        np.zeros((2, 2, 3)),
+        dims=("north", "other", "east"),
+        coords={
+            "north": ("north", [0, 1], {"axis": "Y"}),
+            "other": ("other", [0, 1], {"axis": "Y"}),
+            "east": ("east", [0, 1, 2], {"axis": "X"}),
+        },
+    )
+    assert raster.gs.spatial_dims is None
+
+
+def test_curvilinear_coordinates_do_not_imply_affine_spatial_axes():
+    raster = xr.DataArray(
+        np.zeros((2, 3)),
+        dims=("row", "col"),
+        coords={
+            "latitude": (
+                ("row", "col"),
+                np.ones((2, 3)),
+                {"standard_name": "latitude"},
+            ),
+            "longitude": (
+                ("row", "col"),
+                np.ones((2, 3)),
+                {"standard_name": "longitude"},
+            ),
+        },
+    )
+    assert raster.gs.spatial_dims is None
+
+
+def test_missing_declared_bounds_are_not_silently_ignored():
+    raster = xr.Dataset(coords={"time": ("time", [0], {"bounds": "absent"})})
+    with pytest.raises(ValueError, match="Dataset lacks"):
+        _ = raster.gs.cell_bounds

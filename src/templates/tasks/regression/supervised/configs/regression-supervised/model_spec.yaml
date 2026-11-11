@@ -1,60 +1,34 @@
-schema_version: 3
-rasters:
-  sentinel_2_l2a:
-    variables: [B02, B03, B04, B08]
-    coordinates: [x, y]
-    require_crs: true
-    stac:
-      collection: sentinel-2-l2a
-      endpoints:
-        - planetary_computer
-        - cdse
-      load:
-        bands: [B02, B03, B04, B08]
-preprocessing:
-  image:
-    call: !ref sentinel_2_l2a.gs.mask_and_scale
-# Features select variable and coordinate names from one Dataset. Their
-# unnamed DataArray outputs are named when assigned back to the Dataset.
-# Include B10 in variables/load.bands for this optional cloud/shadow example.
-# Carry the original STAC sun-azimuth property:
-#   rasters.sentinel_2_l2a.stac.load.with_properties:
-#     - "view:sun_azimuth"
-#   preprocessing:
-#     cloud:
-#       call: geosave.geodata.features.cirrus_cloud_mask
-#       kwargs: {scene: !ref image, b10: B10}
-#     cloud_scene:
-#       call: !ref image.assign
-#       kwargs: {cloud: !ref cloud}
-#     shadow:
-#       call: geosave.geodata.features.shadow_mask
-#       kwargs: {scene: !ref cloud_scene, cloud: cloud, sun_azimuth: "view:sun_azimuth"}
-#     prepared:
-#       call: !ref cloud_scene.assign
-#       kwargs: {shadow: !ref shadow}
-encoding:
-  tensor:
+schema_version: 1
+entry: encoded
+output: normalized
+inputs:
+  raster: {}
+  value: {}
+
+steps:
+  from_raster:
+    call: geosave.model.processing.validate_raster
+    kwargs: {raster: !ref raster}
+
+  prepared:
+    call: modules.regression.supervised.processing.prepare
+    kwargs: {raster: !ref from_raster}
+
+  encoded:
     call: geosave.model.processing.to_tensor
     kwargs:
-      raster: !ref image
+      raster: !ref prepared
       dims: [time, band, y, x]
       dtype: float32
-# Additional context can be encoded here with installed encoder functions.
-# Bind returned keys explicitly, e.g. !ref 'context["temporal_coords"]'.
-inputs:
-  image: !ref tensor
-pixels: [image]
-tensors:
-  image:
-    shape: [time, 4, height, width]
-    dtype: float32
-# Shared by the DataModule after augmentation and by inference.
-transforms:
-  image:
+
+  from_tensor:
+    call: modules.regression.supervised.processing.accept_tensor
+    kwargs: {value: !ref value}
+
+  normalized:
     call: geosave.model.processing.normalize
     kwargs:
-      value: !ref image
+      value: !ref entry
       mean: [0.1105, 0.1355, 0.1552, 0.2743]
       std: [0.1809, 0.1757, 0.1888, 0.1742]
       dim: -3

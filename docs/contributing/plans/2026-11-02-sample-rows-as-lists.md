@@ -64,7 +64,7 @@ Decisions, each smoke-tested against today's `sample()` on the real COG fixtures
 - **No `gs:region`, no `gs:window`.** The row index numbers the samples.
 - **A sample row builds its Items from its own values.** `samples.iloc[i]` turns Arrow lists into Python lists. Rebuilding an Arrow table from those infers `null` for a column that's empty in a collection, and `to_xarray` then fails. Each Item is built with `_stac.to_item` from its values instead. `build_item` accepts any `datetime`, because list elements come back as `datetime`, not `pd.Timestamp`.
 - **Accessors are chosen by `id`.** If it's an Arrow list: `GeoSamples` / `GeoSamplesItem`. Otherwise: `GeoCatalog` / `GeoCatalogItem`. The vector operations shared by both (`crs`, `footprint`, `plot`, `explore`, `rasterize`) move to a `GeoVector` base. `GeoCatalog` keeps `query`, `concat`, the writers and the Item operations. `GeoSamples` adds nothing, so it has nothing to refuse.
-- **`create_catalog`, `_stac.from_items`, `stac/translate/*` and `stac/extensions/*` are unchanged.** They build and read single Items, and a sample row reaches them one Item at a time.
+- **`create_catalog`, `_stac.create_catalog`, `stac/translate/*` and `stac/extensions/*` are unchanged.** They build and read single Items, and a sample row reaches them one Item at a time.
 
 Removed: `assign_regions`, `find_covered_regions`, `pair_items`, `order_slots`, `roll_windows`, `read_times`, `copy_attrs`, `REGION_KEY`, `WINDOW_KEY`, `SAMPLE_KEYS`; `GeoCatalog.samples`; the "these rows hold N samples" check; `SAMPLE_KEYS` stripping in `GeoCatalog.to_items` and `GeoCatalogItem.to_item`; the samples check in `io/vector/stac_geoparquet.py`, together with its `io -> core.vector` import.
 
@@ -315,7 +315,7 @@ Expected: pass. `grep -rn "SAMPLE_KEYS\|REGION_KEY\|WINDOW_KEY\|gs:region\|gs:wi
 
 **Interfaces:**
 
-- Consumes: `GeoSamplesItem.to_xarray() -> DataTree` (Task 3); `DataTree.gs.align(target=...)`; `DataTree.gs.timespan`.
+- Consumes: `GeoSamplesItem.to_xarray() -> DataTree` (Task 3); `DataTree.gs.align(how=...)`; `DataTree.gs.timespan`.
 - Produces: `prepare` names each sample's folder and Item id prefix by its index label (`str(index)` from `iterrows()`), because `row["id"]` is now a list.
 
 - [ ] **Step 1: Update the six model tests that fail on `main` today**
@@ -333,7 +333,7 @@ for index, row in raw.gs.sample().iterrows():
     sample_id = str(index)
     tree = row.gs.to_xarray()
     if target is not None:
-        tree = tree.gs.align(target=target)
+        tree = tree.gs.align(how=target)
     rasters = tree.gs.rasters
     ...                       # unchanged, with datetime=tree.gs.timespan
 ```

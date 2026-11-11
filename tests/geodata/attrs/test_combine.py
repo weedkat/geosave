@@ -1,6 +1,9 @@
-"""Joining attrs inside xarray's concat and merge."""
+"""Native xarray attr policies with GeoSave drop warnings."""
 
 from __future__ import annotations
+
+import warnings
+from functools import partial
 
 import numpy as np
 import pytest
@@ -10,68 +13,43 @@ from geosave.geodata import attrs
 from geosave.geodata.warnings import DroppedAttrsWarning
 
 
-def _timestep(**attributes) -> xr.DataArray:
-    return xr.DataArray(
-        np.zeros((1, 2), "uint16"), dims=("time", "x"), attrs=attributes
+def test_callback_keeps_agreeing_attrs_without_reading_pixels() -> None:
+    import dask.array as da
+    from dask.delayed import delayed
+
+    @delayed
+    def pixels():
+        raise AssertionError("combining attrs must not compute pixels")
+
+    source = xr.DataArray(
+        da.from_delayed(pixels(), shape=(1,), dtype="uint16"),
+        dims="time",
+        attrs={"_FillValue": 0, "units": "1"},
+    )
+    joined = xr.concat(
+        [source, source.copy()], "time", combine_attrs=attrs.combine_attrs
     )
 
-
-def test_agreeing_groups_and_keys_are_kept() -> None:
-    a = _timestep(_FillValue=0, units="1", long_name="red")
-
-    joined = xr.concat([a, a.copy()], "time", combine_attrs=attrs.combine_attrs)
-
-    assert joined.attrs == {"_FillValue": 0, "units": "1", "long_name": "red"}
+    assert joined.attrs == source.attrs
+    assert isinstance(joined.data, da.Array)
 
 
-def test_one_nodata_spelled_two_ways_agrees() -> None:
-    import warnings
+def test_conflicts_warn_without_discarding_other_fields_of_a_group() -> None:
+    first = {"title": "first", "license": "CC0", "scale_factor": 0.1}
+    second = {"title": "second", "license": "CC0", "scale_factor": 0.2}
 
+    with pytest.warns(DroppedAttrsWarning, match="scale_factor.*title"):
+        joined = attrs.combine_attrs([first, second])
+
+    assert joined == {"license": "CC0"}
+
+
+def test_keys_missing_from_some_inputs_are_kept_without_warnings() -> None:
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        joined = attrs.combine_attrs(
-            [{"_FillValue": "0"}, {"_FillValue": 0}, {"nodata": 0}]
-        )
+        warnings.simplefilter("error", DroppedAttrsWarning)
+        joined = attrs.combine_attrs([{"_FillValue": 0, "note": "a"}, {}])
 
-    assert joined == {"_FillValue": 0}
-
-
-def test_a_nodata_that_differs_is_dropped_with_a_warning() -> None:
-    with pytest.warns(DroppedAttrsWarning, match="_FillValue"):
-        joined = xr.concat(
-            [_timestep(_FillValue=0), _timestep(_FillValue=1)],
-            "time",
-            combine_attrs=attrs.combine_attrs,
-        )
-
-    assert joined.attrs == {}
-
-
-def test_a_group_that_differs_is_dropped_whole() -> None:
-    packed = {"scale_factor": 0.1, "add_offset": 5.0}
-    other = {"scale_factor": 0.1, "add_offset": 6.0}
-
-    with pytest.warns(DroppedAttrsWarning, match="add_offset"):
-        assert attrs.combine_attrs([packed, other]) == {}
-
-
-def test_a_descriptive_group_that_differs_is_dropped() -> None:
-    joined = attrs.combine_attrs(
-        [{"common_name": "red", "units": "1"}, {"common_name": "nir", "units": "1"}]
-    )
-
-    assert joined == {"units": "1"}
-
-
-def test_a_group_one_object_lacks_is_left_out() -> None:
-    assert attrs.combine_attrs([{"_FillValue": 0}, {}]) == {}
-
-
-def test_a_key_one_object_lacks_is_left_out() -> None:
-    with pytest.warns(Warning, match="note"):
-        assert attrs.combine_attrs([{"note": "a", "units": "1"}, {"units": "1"}]) == {
-            "units": "1"
-        }
+    assert joined == {"_FillValue": 0, "note": "a"}
 
 
 def test_nan_fills_agree() -> None:
@@ -82,11 +60,41 @@ def test_nan_fills_agree() -> None:
     assert np.isnan(joined["_FillValue"])
 
 
-def test_a_group_joins_whole_so_a_differing_title_drops_the_license() -> None:
-    first = {"title": "scene", "license": "CC0"}
-    second = {"title": "other", "license": "CC0"}
+def test_custom_policy_receives_xarray_context() -> None:
+    context = object()
+
+    def choose_last(mappings, context):
+        assert context is expected
+        return dict(mappings[-1])
+
+    expected = context
+    joined = attrs.combine_attrs(
+        [{"title": "first"}, {"title": "last"}], context, policy=choose_last
+    )
+
+    assert joined == {"title": "last"}
+
+
+@pytest.mark.parametrize(
+    "policy", [attrs.combine_attrs, partial(attrs.combine_attrs, policy="drop")]
+)
+def test_warning_callback_as_policy_reports_each_omission_once(policy):
+    with pytest.warns(DroppedAttrsWarning) as recorded:
+        combined = attrs.combine_attrs(
+            [{"title": "first"}, {"title": "last"}], policy=policy
+        )
+
+    assert combined == {}
+    assert len(recorded) == 1
+
+
+def test_custom_policy_omissions_warn_and_preserve_its_result():
+    def choose_units(mappings, context):
+        return {"units": mappings[0]["units"]}
 
     with pytest.warns(DroppedAttrsWarning, match="title"):
-        joined = attrs.combine_attrs([first, second])
+        combined = attrs.combine_attrs(
+            [{"units": "m", "title": "scene"}], policy=choose_units
+        )
 
-    assert joined == {}
+    assert combined == {"units": "m"}

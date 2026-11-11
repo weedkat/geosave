@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from geosave.geodata.viz.explore import create_layer
+
 import re
 
 import pytest
@@ -13,28 +15,27 @@ from geosave.geodata.viz.explore import Explorer, RasterLayer
 @pytest.fixture
 def checked_catalog(scene, fields):
     """A catalog with an already opened raster, independent of file I/O."""
-    from geosave.geodata.viz.explore import VectorLayer
-
     frame = fields.copy()
     frame["id"] = ["first", "second", "third"]
     frame["links"] = [[], [], []]
     frame["assets"] = [{}, {}, {}]
     frame["stac_extensions"] = [[], [], []]
-    layer = VectorLayer(frame)
-    layer.rasters = {0: RasterLayer(scene)}
-    layer.raster_rows = [0]
-    return layer
+    viewer = Explorer(tables={"Scenes": frame}, basemap="None")
+    viewer.table.rasters = {0: RasterLayer(scene)}
+    viewer.table.raster_rows = [0]
+    yield viewer
+    viewer.close()
 
 
 def test_copied_catalog_ticks_open_rasters_independently_of_footprints(checked_catalog):
-    viewer = Explorer(checked_catalog, basemap="None")
+    viewer = checked_catalog
     copied = viewer.copy()
     try:
         assert copied.table.value["raster"].tolist() == [True, False, False]
         copied.table.selection = []
-        assert copied.layers[0].footprint_rows == []
-        assert copied.layers[0].raster_rows == [0]
-        assert len(copied.layers) == 2
+        assert copied.table.selection == []
+        assert copied.table.raster_rows == [0]
+        assert len(copied.layers) == 1
     finally:
         copied.close()
         viewer.close()
@@ -42,44 +43,41 @@ def test_copied_catalog_ticks_open_rasters_independently_of_footprints(checked_c
 
 def test_catalog_raster_control_preserves_a_source_column_named_raster(checked_catalog):
     from panel.models.tabulator import CellClickEvent
-    from geosave.geodata.viz.explore import VectorLayer
 
-    layer = VectorLayer(checked_catalog.data.assign(raster="source value"))
-    layer.rasters = checked_catalog.rasters
+    frame = checked_catalog.table.data.assign(raster="source value")
+    viewer = Explorer(tables={"Scenes": frame}, basemap="None")
+    layer = viewer.table
+    layer.rasters = checked_catalog.table.rasters
     layer.raster_rows = [0]
-    viewer = Explorer(layer, basemap="None")
     try:
         table = viewer.table
         assert table.value["raster"].tolist() == ["source value"] * 3
         column = next(iter(table.formatters))
         table._process_event(CellClickEvent(model=None, column=column, row=0))
         assert layer.raster_rows == []
-        assert layer.footprint_rows == [0, 1, 2]
+        assert layer.selection == []
     finally:
         viewer.close()
 
 
-@pytest.mark.parametrize("action", ["remove", "close"])
-def test_detached_table_no_longer_changes_its_layer(fields, action):
-    viewer = Explorer(fields, fields.copy(), basemap="None")
-    layer = viewer.layers[0]
+def test_closed_table_no_longer_changes_its_layer(fields):
+    viewer = Explorer(tables={"Fields": fields}, basemap="None")
     table = viewer.table
-    if action == "remove":
-        viewer.remove(layer)
-    else:
-        viewer.close()
-    table.selection = []
-    assert layer.footprint_rows == [0, 1, 2]
-    layer.footprint_rows = [1]
-    assert table.selection == []
+    table.selection = [0]
+    layer = viewer.layers[0]
     viewer.close()
+
+    table.selection = []
+    assert layer.footprint_rows == [0]
     assert viewer.table is None
 
 
 def test_identify_uses_comparison_visibility_and_unique_labels(scene):
     first = RasterLayer(scene, name="scene")
     second = RasterLayer(scene * 2, name="scene")
-    viewer = Explorer(first, second, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(first), create_layer(second)], basemap="None"
+    )
     x = (first.bbox.left + first.bbox.right) / 2
     y = (first.bbox.bottom + first.bbox.top) / 2
     try:
@@ -96,7 +94,9 @@ def test_identify_uses_comparison_visibility_and_unique_labels(scene):
 def test_detached_color_control_no_longer_changes_its_layer(fields, action):
     import panel as pn
 
-    viewer = Explorer(fields, fields.copy(), basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(fields), create_layer(fields.copy())], basemap="None"
+    )
     layer = viewer.layers[0]
     page = viewer.__panel__()
     controls = page.select(pn.ui.Select)
@@ -115,7 +115,11 @@ def test_identify_does_not_read_rasters_outside_the_date_period(monthly):
     from dask.callbacks import Callback
 
     viewer = Explorer(
-        monthly.isel(time=[0]).chunk(), monthly.isel(time=[1]), basemap="None"
+        layers=[
+            create_layer(monthly.isel(time=[0]).chunk()),
+            create_layer(monthly.isel(time=[1])),
+        ],
+        basemap="None",
     )
     first = viewer.layers[0]
     viewer.period = pd.Period("2024-04", freq="M")
@@ -132,7 +136,7 @@ def test_identify_does_not_read_rasters_outside_the_date_period(monthly):
         viewer.close()
 
 
-@pytest.mark.parametrize("action", ["supersede", "remove", "close"])
+@pytest.mark.parametrize("action", ["supersede", "close"])
 @pytest.mark.parametrize("fails", [True, False])
 def test_obsolete_catalog_result_does_not_change_selection(
     checked_catalog, monkeypatch, action, fails
@@ -140,18 +144,19 @@ def test_obsolete_catalog_result_does_not_change_selection(
     import asyncio
     import panel as pn
 
-    viewer = Explorer(checked_catalog, basemap="None")
-    layer = viewer.layers[0]
+    viewer = checked_catalog
+    layer = viewer.table
     queued = []
     started = asyncio.Event()
     finish = asyncio.Event()
+    raster_data = layer.rasters[0].data
 
     async def fail(*_):
         started.set()
         await finish.wait()
         if fails:
             raise OSError("obsolete failure")
-        return {1: RasterLayer(checked_catalog.rasters[0].data)}
+        return {1: RasterLayer(raster_data)}
 
     monkeypatch.setattr(asyncio, "to_thread", fail)
     monkeypatch.setattr(pn.state, "execute", queued.append)
@@ -187,24 +192,30 @@ def test_obsolete_catalog_result_does_not_change_selection(
 
 
 def test_catalog_filter_sort_pagination_keep_row_identity(catalog):
-    viewer = Explorer(catalog, basemap="None")
+    viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
     table = viewer.table
     table.page_size = 1
     table.sorters = [{"field": "id", "dir": "desc"}]
     table.page = 2
     table.filters = [{"field": "id", "type": "=", "value": catalog.iloc[2]["id"]}]
-    viewer.layers[0].raster_rows = [2]
+    viewer.table.raster_rows = [2]
     expected = catalog.iloc[2].gs.to_datatree().gs.to_dataset()
     xr.testing.assert_equal(viewer.layers[-1].data.B04, expected.B04)
     table.filters = []
     assert table.value["raster"].tolist() == [False, False, True]
-    viewer.layers[0].raster_rows = []
-    assert len(viewer.layers) == 1
+    viewer.table.raster_rows = []
+    assert len(viewer.layers) == 0
     viewer.close()
 
 
 def test_opacity_and_vector_style_do_not_compute_other_rasters(scene, fields):
-    viewer = Explorer(scene.chunk({"y": 16, "x": 16}) * 2, fields, basemap="None")
+    viewer = Explorer(
+        layers=[
+            create_layer(scene.chunk({"y": 16, "x": 16}) * 2),
+            create_layer(fields),
+        ],
+        basemap="None",
+    )
     viewer.map.pane.get_root()
     tasks = []
     with Callback(pretask=lambda key, *args: tasks.append(key)):
@@ -220,7 +231,7 @@ def test_rgb_resends_pixels_only_for_uncached_views(scene, action):
     from bokeh.document import Document
     from bokeh.models import GlyphRenderer, ImageRGBA
 
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     document = Document()
     root = viewer.map.pane.get_root(document)
     document.add_root(root)
@@ -275,24 +286,26 @@ def test_static_and_explorer_backends_in_both_orders(scene):
 
 
 def test_composed_catalog_retains_ownership_and_independent_settings(scene, catalog):
-    viewer = Explorer(catalog, basemap="None")
-    viewer.layers[0].raster_rows = [0]
+    viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
+    viewer.table.raster_rows = [0]
     opened = viewer.layers[-1]
     opened.alpha = 0.4
-    composed = viewer * scene
+    composed = viewer * RasterLayer(scene)
     copied = composed.layers[1]
     assert copied is not opened and copied.alpha == 0.4
-    composed.layers[0].raster_rows = []
+    composed.table.raster_rows = []
     assert copied not in composed.layers
     assert opened in viewer.layers
-    assert viewer.layers[0].raster_rows == [0]
+    assert viewer.table.raster_rows == [0]
     composed.close()
     viewer.close()
 
 
 def test_removed_raster_does_not_execute_on_later_controls_or_view(scene, fields):
     layer = RasterLayer(scene.chunk({"y": 16, "x": 16}) * 2)
-    viewer = Explorer(layer, fields, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(layer), create_layer(fields)], basemap="None"
+    )
     viewer.map.pane.get_root()
     viewer.remove(layer)
     tasks = []
@@ -306,16 +319,16 @@ def test_removed_raster_does_not_execute_on_later_controls_or_view(scene, fields
 def test_catalog_open_failure_preserves_selection_and_existing_layers(
     catalog, fields, monkeypatch
 ):
-    viewer = Explorer(catalog, fields, basemap="None")
+    viewer = Explorer(tables={"Scenes": catalog, "Fields": fields}, basemap="None")
 
     def fail(*args, **kwargs):
         raise OSError("unavailable file")
 
     # The native row reader owns the error; the explorer keeps its last successful selection.
     monkeypatch.setattr(type(catalog.iloc[0].gs), "to_datatree", fail)
-    viewer.layers[0].raster_rows = [0]
-    assert len(viewer.layers) == 2
-    assert viewer.layers[0].raster_rows == []
+    viewer.table.raster_rows = [0]
+    assert len(viewer.layers) == 0
+    assert viewer.table.raster_rows == []
     assert "unavailable file" in viewer.status.object
     viewer.close()
 
@@ -335,25 +348,31 @@ def test_class_legend_without_colors_is_visible(scene):
 def test_date_filters_keep_checked_row_identity_and_raster_time(monthly, catalog):
     from datetime import date
 
-    viewer = Explorer(monthly, catalog, basemap="None")
-    raster, vector = viewer.layers
-    vector.raster_rows = [1]
+    viewer = Explorer(
+        layers=[RasterLayer(monthly)], tables={"Scenes": catalog}, basemap="None"
+    )
+    raster = viewer.layers[0]
+    vector = viewer.table.footprints
+    table = viewer.table
+    table.raster_rows = [1]
     opened = viewer.layers[-1]
     vector.period = (date(2024, 4, 1), date(2024, 4, 30))
     assert vector.shown_rows == [1]
-    assert vector.raster_rows == [1]
+    assert table.raster_rows == [1]
     raster.time = monthly.time.values[-1]
     assert raster.select_shown_bands().B04.equals(monthly.B04.isel(time=-1))
     vector.period = (date(2024, 5, 1), date(2024, 5, 5))
     assert vector.shown_rows == [2]
     assert opened in viewer.layers
-    vector.raster_rows = []
+    table.raster_rows = []
     assert opened not in viewer.layers
     viewer.close()
 
 
 def test_map_identification_reads_values_and_selects_vector(scene, fields):
-    viewer = Explorer(scene, fields, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene), create_layer(fields)], basemap="None"
+    )
     vector = viewer.layers[-1]
     point = vector.frame.geometry.iloc[0].centroid
     viewer.map._identify(x=point.x, y=point.y)
@@ -364,10 +383,12 @@ def test_map_identification_reads_values_and_selects_vector(scene, fields):
 
 
 def test_new_renderers_never_inherit_hover_fields_they_do_not_have(scene, catalog):
-    viewer = Explorer(scene, catalog, basemap="None")
+    viewer = Explorer(
+        layers=[RasterLayer(scene)], tables={"Scenes": catalog}, basemap="None"
+    )
     root = viewer.map.pane.get_root()
     for checked in ([0], [], [0]):
-        viewer.layers[1].raster_rows = checked
+        viewer.table.raster_rows = checked
         for tool in root.select({"type": HoverTool}):
             fields = set()
             for _, expression in tool.tooltips:
@@ -380,7 +401,9 @@ def test_new_renderers_never_inherit_hover_fields_they_do_not_have(scene, catalo
 def test_hidden_raster_does_not_execute_dask_on_pan(scene, fields):
     raster = RasterLayer(scene.chunk({"x": 16, "y": 16}) * 2)
     raster.visible = False
-    viewer = Explorer(fields, raster, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(fields), create_layer(raster)], basemap="None"
+    )
     tasks = []
     with Callback(pretask=lambda key, *args: tasks.append(key)):
         viewer.map.pane.get_root()
@@ -393,13 +416,13 @@ def test_hidden_raster_does_not_execute_dask_on_pan(scene, fields):
 def test_switching_tables_keeps_their_models_in_the_notebook_document(catalog, fields):
     from panel.models.tabulator import DataTabulator
 
-    viewer = Explorer(catalog, fields, basemap="None")
+    viewer = Explorer(tables={"Scenes": catalog, "Fields": fields}, basemap="None")
     root = viewer.__panel__().get_root()
     tables = set(root.select({"type": DataTabulator}))
     assert len(tables) == 2
-    viewer.active_layer = viewer.layers[1]
+    viewer.tables._tabs.active = 1
     assert tables <= root.references()
-    viewer.active_layer = viewer.layers[0]
+    viewer.tables._tabs.active = 0
     assert tables <= root.references()
     viewer.close()
 
@@ -407,8 +430,11 @@ def test_switching_tables_keeps_their_models_in_the_notebook_document(catalog, f
 def test_composition_retains_explicit_rgb_without_declared_rgb(scene):
     data = scene[["B04", "cover"]]
     assert data.gs.rgb is None
-    viewer = Explorer(RasterLayer(data, rgb=("B04", "B04", "cover")), basemap="None")
-    composed = viewer * scene
+    viewer = Explorer(
+        layers=[create_layer(RasterLayer(data, rgb=("B04", "B04", "cover")))],
+        basemap="None",
+    )
+    composed = viewer * RasterLayer(scene)
     assert composed.layers[0].is_rgb
     assert composed.layers[0].rgb == ("B04", "B04", "cover")
     assert (
@@ -419,18 +445,13 @@ def test_composition_retains_explicit_rgb_without_declared_rgb(scene):
     viewer.close()
 
 
-def test_repeated_explorer_keeps_each_catalogs_opened_rasters(catalog):
-    viewer = catalog.gs.explore(basemap="None")
-    viewer.layers[0].raster_rows = [0]
-    composed = viewer * viewer
-    assert len(composed.layers) == 4
-    composed.layers[0].raster_rows = []
-    assert len(composed.layers) == 3
-    composed.layers[1].raster_rows = []
-    assert len(composed.layers) == 2
-    assert len(viewer.layers) == 2
-    composed.close()
-    viewer.close()
+def test_composing_tables_requires_distinct_names(catalog):
+    viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
+    try:
+        with pytest.raises(ValueError, match="table names"):
+            viewer * viewer
+    finally:
+        viewer.close()
 
 
 def test_zoom_updates_the_rendered_map_ranges(scene, fields):
@@ -438,7 +459,9 @@ def test_zoom_updates_the_rendered_map_ranges(scene, fields):
 
     from geosave.geodata.viz.explore.mercator import frame_bbox
 
-    viewer = Explorer(scene, fields, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene), create_layer(fields)], basemap="None"
+    )
     root = viewer.map.pane.get_root()
     figure = root.select_one({"type": Plot})
     extent = frame_bbox(viewer.layers[1].bbox)
@@ -458,7 +481,9 @@ def test_contrast_changes_reuse_visible_pixels(scene, display):
     import numpy as np
     from bokeh.models import GlyphRenderer
 
-    viewer = Explorer(scene.chunk({"x": 16, "y": 16}) * 2, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene.chunk({"x": 16, "y": 16}) * 2)], basemap="None"
+    )
     layer = viewer.layers[0]
     layer.band = display
     root = viewer.map.pane.get_root()
@@ -484,7 +509,9 @@ def test_contrast_changes_reuse_visible_pixels(scene, display):
 def test_zoom_preserves_map_aspect_and_later_style_changes(scene, fields):
     from bokeh.models import Plot
 
-    viewer = Explorer(scene, fields, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene), create_layer(fields)], basemap="None"
+    )
     root = viewer.map.pane.get_root()
     figure = root.select_one({"type": Plot})
     viewer.map.size.event(width=1000, height=500)
@@ -515,7 +542,9 @@ def test_zoom_survives_a_deferred_server_refresh(scene, fields):
 
     from geosave.geodata.viz.explore.mercator import frame_bbox
 
-    viewer = Explorer(scene, fields, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene), create_layer(fields)], basemap="None"
+    )
     document = Document()
     root = viewer.map.pane.get_root(document)
     figure = root.select_one({"type": Plot})
@@ -541,7 +570,7 @@ def test_zoom_survives_a_deferred_server_refresh(scene, fields):
 def test_region_joins_drawn_boxes_and_polygons_in_wgs84(scene):
     from odc.geo.geom import box
 
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     session = viewer._create_session()
     assert viewer.region is None
 
@@ -561,7 +590,9 @@ def test_region_joins_drawn_boxes_and_polygons_in_wgs84(scene):
 
 
 def test_comparison_shows_one_chosen_raster(scene, monthly):
-    viewer = Explorer(scene, monthly, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(scene), create_layer(monthly)], basemap="None"
+    )
     first, second = viewer.layers
     comparison = viewer.comparison
 
@@ -590,9 +621,11 @@ def test_periods_are_the_months_of_switched_on_layers(scene):
     import pandas as pd
 
     viewer = Explorer(
-        date_scene(scene, "2024-03-05"),
-        date_scene(scene, "2024-04-05"),
-        date_scene(scene, "2024-05-05"),
+        layers=[
+            create_layer(date_scene(scene, "2024-03-05")),
+            create_layer(date_scene(scene, "2024-04-05")),
+            create_layer(date_scene(scene, "2024-05-05")),
+        ],
         basemap="None",
     )
 
@@ -606,7 +639,11 @@ def test_periods_are_the_months_of_switched_on_layers(scene):
 
 def test_day_step_separates_dates_one_day_apart(scene):
     viewer = Explorer(
-        date_scene(scene, "2024-01-05"), date_scene(scene, "2024-01-06"), basemap="None"
+        layers=[
+            create_layer(date_scene(scene, "2024-01-05")),
+            create_layer(date_scene(scene, "2024-01-06")),
+        ],
+        basemap="None",
     )
     assert len(viewer.param.period.objects) == 1
 
@@ -622,7 +659,10 @@ def test_each_period_draws_only_layers_with_a_date_in_it(scene):
     march = date_scene(scene, "2024-03-05")
     april = date_scene(scene, "2024-04-05")
     timeless = RasterLayer(scene, "B04")
-    viewer = Explorer(march, april, timeless, basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(march), create_layer(april), create_layer(timeless)],
+        basemap="None",
+    )
 
     viewer.period = pd.Period("2024-04", "M")
 
@@ -632,7 +672,10 @@ def test_each_period_draws_only_layers_with_a_date_in_it(scene):
 
 def test_hiding_a_layer_drops_its_periods(scene):
     march = date_scene(scene, "2024-03-05")
-    viewer = Explorer(march, date_scene(scene, "2024-04-05"), basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(march), create_layer(date_scene(scene, "2024-04-05"))],
+        basemap="None",
+    )
 
     march.visible = False
 
@@ -654,7 +697,10 @@ def test_date_slider_survives_its_last_dated_raster_leaving(scene):
     import panel as pn
 
     march = date_scene(scene, "2024-03-05")
-    viewer = Explorer(march, RasterLayer(scene, "B04"), basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(march), create_layer(RasterLayer(scene, "B04"))],
+        basemap="None",
+    )
     slider = pn.ui.DiscreteSlider.from_param(viewer.param.period)
     slider.get_root()
 
@@ -666,7 +712,9 @@ def test_date_slider_survives_its_last_dated_raster_leaving(scene):
 
 
 def test_details_reuses_controls_and_detaches_selection(fields):
-    viewer = Explorer(fields, fields.copy(), basemap="None")
+    viewer = Explorer(
+        layers=[create_layer(fields), create_layer(fields.copy())], basemap="None"
+    )
     details = viewer.details
     first, second = viewer.layers
     try:
@@ -687,8 +735,53 @@ def test_details_reuses_controls_and_detaches_selection(fields):
 def test_initial_period_synchronizes_a_preconfigured_raster(monthly):
     layer = RasterLayer(monthly)
     layer.time = layer.times[-1]
-    viewer = Explorer(layer, basemap="None")
+    viewer = Explorer(layers=[create_layer(layer)], basemap="None")
     try:
         assert layer.time == layer.select_time(viewer.period)
+    finally:
+        viewer.close()
+
+
+def test_map_requires_crs_even_when_coordinates_define_a_grid():
+    raster = xr.Dataset(
+        {"image": (("y", "x"), [[1, 2], [3, 4]])},
+        coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    with pytest.raises(ValueError, match="CRS"):
+        RasterLayer._check_mappable(raster)
+
+
+def test_tables_start_unselected_and_keep_selection_when_switching(fields):
+    viewer = Explorer(tables={"First": fields, "Second": fields}, basemap="None")
+    try:
+        assert viewer.layers == []
+        first = viewer.table
+        first.selection = [1]
+        assert viewer.layers[0].footprint_rows == [1]
+
+        viewer.tables._tabs.active = 1
+        second = viewer.table
+        assert second.selection == []
+        second.selection = [0]
+        assert len(viewer.layers) == 2
+
+        viewer.tables._tabs.active = 0
+        assert viewer.table is first
+        assert first.selection == [1]
+        first.footprints.column = "crop"
+        first.footprints.alpha = 0.2
+        copied = viewer.copy()
+        try:
+            assert copied.table.selection == [1]
+            assert copied.table.footprints.column == "crop"
+            assert copied.table.footprints.alpha == 0.2
+            copied.table.selection = []
+            assert first.selection == [1]
+        finally:
+            copied.close()
+
+        viewer.remove(viewer.layers[0])
+        assert first.selection == []
+        assert second.selection == [0]
     finally:
         viewer.close()

@@ -117,4 +117,5 @@ class MulticlassMetrics(MetricCollection):
                     metric = ClasswiseWrapper(metric, labels=labels, prefix=f"{name}_")
                 collection[f"{name}_{mode}"] = metric
 
-        super().__init__(collection)
+        # ClasswiseWrapper owns nested update state that compute groups do not reset.
+        super().__init__(collection, compute_groups=False)

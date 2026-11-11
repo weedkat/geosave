@@ -12,8 +12,7 @@ from .base import AttrsGroup, Decoded
 class Spectral(AttrsGroup):
     """Name the spectral band one variable holds.
 
-    Inputs naming different bands join without it: one band name from two
-    sensors names no one band.
+    The band name, centre wavelength and width describe its spectral response.
 
     Attributes:
         common_name: Band name shared across sensors, e.g. `"red"` or `"nir"`.
@@ -25,8 +24,6 @@ class Spectral(AttrsGroup):
         >>> ds["B04"].gs.spectral.common_name
         'red'
     """
-
-    # One band name from two sensors is a fair join; it just names no one band.
 
     common_name: Annotated[str, Field(min_length=1)] | None = None
     center_wavelength: Decoded[Annotated[float, Field(gt=0)]] | None = None

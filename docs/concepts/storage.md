@@ -19,7 +19,7 @@ but spatial operations still need a locatable grid. Unsupported suffixes raise
 
 ```python
 dated = scene.expand_dims(time=[np.datetime64("2025-01-01")])
-items = dated.gs.to_cog(root / "dated", path_format="scene_{time:%Y%m%d}.tif")
+items = dated.gs.to_cog(root / "dated", format_paths="scene_{time:%Y%m%d}.tif")
 [file.name for file in items]
 ```
 
@@ -29,7 +29,7 @@ Output:
 ['scene_20250101.tif']
 ```
 
-`to_cog(path, path_format=...)` takes an output directory or URL prefix.
+`to_cog(path, format_paths=...)` takes an output directory or URL prefix.
 The relative `path_format` determines the filenames; without it, the accessor
 uses its default filename pattern. Literal braces in `path` stay literal. The template determines how
 data splits into files. `{time}` writes a
@@ -48,10 +48,14 @@ files and returns their [STAC Items](../guides/stac.md) as a table.
 ## Read a tree
 
 ```python
-sample = xr.merge([
-    gs.open_raster(files[0]).gs.to_datatree("optical"),
-    gs.open_raster(store).gs.to_datatree("label"),
-])
+optical = gs.open_raster(files[0])
+label = gs.open_raster(store)
+sample = xr.DataTree.from_dict({
+    "/optical": xr.Dataset(attrs=optical.attrs),
+    "/optical/r10m": optical,
+    "/label": xr.Dataset(attrs=label.attrs),
+    "/label/r10m": label,
+})
 sample
 ```
 

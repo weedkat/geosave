@@ -5,9 +5,9 @@ staged, reset or committed. Spec: `../specs/2026-11-03-io-stac-ownership.md`.
 
 ## Binding decisions
 
-- GeoAnchor contains CRS-aware geometry and optional time only. Exact grids
+- GeoRegion contains CRS-aware geometry and optional time only. Exact grids
   remain native GeoBox values, exposed on raster accessors and passed explicitly.
-- `StacQuery.set_anchor` replaces space/time selectors; ModelSpec retains its
+- `StacQuery.set_region` replaces space/time selectors; ModelSpec retains its
   fill-missing search behavior and explicit-ID bypass.
 - Selected native Items feed typed standalone Dataset/DataTree loaders.
 - DataTree loading preserves the existing relative-resolution behavior. The
@@ -20,7 +20,7 @@ staged, reset or committed. Spec: `../specs/2026-11-03-io-stac-ownership.md`.
 ## Tasks and verification
 
 1. Capture a focused baseline; add geometry/query/accessor contract tests.
-   Implement anchors, selection aggregation and `set_anchor` without pixel reads.
+   Implement anchors, selection aggregation and `set_region` without pixel reads.
 2. Extract `io.odc.load_dataset/load_datatree` with typed native load options.
    Check values, exact grids, laziness, property fusion and metadata precedence.
 3. Migrate model recipes and flows, separate grid construction, remove StacSource;
@@ -57,7 +57,7 @@ staged, reset or committed. Spec: `../specs/2026-11-03-io-stac-ownership.md`.
   118 warnings. See `/tmp/geosave-final-suite.log` for exact failures.
 - Persistence checks ran outside the restricted sandbox because sandboxed Zarr
   execution stalled. No remote STAC service availability claim is made.
-- Breaking: GeoAnchor grid fields/constructors and StacSource are removed;
+- Breaking: GeoRegion grid fields/constructors and StacSource are removed;
   loaders take selected Items; ModelSpec raster loading/ingest requires geobox;
   flow anchor configs return (anchor, geobox); format imports use io.formats;
   rasterize accepts a native grid or raster. No compatibility aliases added.

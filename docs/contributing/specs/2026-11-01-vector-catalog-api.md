@@ -1,5 +1,7 @@
 # Vector and raster catalog API
 
+> Historical proposal. Its writer and sampling signatures are superseded. Use [the catalog guide](../../guides/catalogs-and-cuts.md) and [calendar sampling](../../concepts/catalog-windows.md) for the current API.
+
 ## Public interface
 
 ```python

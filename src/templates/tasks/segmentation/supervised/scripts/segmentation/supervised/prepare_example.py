@@ -1,6 +1,7 @@
 """Prepare sample reflectance: python scripts/segmentation/supervised/prepare_example.py."""
 
 from pathlib import Path
+import sys
 
 import dask.array as da
 import xarray as xr
@@ -35,9 +36,10 @@ def sample_raster() -> xr.Dataset:
 def main() -> None:
     """Prepare lazy reflectance and compute only to display the sample pixels."""
     workspace = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(workspace))
     spec = ModelSpec.load(workspace / "configs/segmentation-supervised/model_spec.yaml")
-    results = spec.preprocess({"sentinel_2_l2a": sample_raster()})
-    print(results["image"].compute())
+    results = spec.run(entry="from_raster", output="prepared", raster=sample_raster())
+    print(results.compute())
 
 
 if __name__ == "__main__":

@@ -9,31 +9,33 @@ import torch
 from torch.utils.data import Dataset
 
 from modules.segmentation import supervised
-from geosave.model.spec import ModelSpec, Ref
+from geosave.model.spec import Input, ModelSpec, Reference, Step
 
 FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
-NORMALIZE = {
-    "image": {
-        "call": "geosave.model.processing.normalize",
-        "kwargs": {
-            "value": Ref("image"),
-            "mean": [1.0, 2.0],
-            "std": [2.0, 4.0],
-            "dim": -3,
+NORMALIZE = True
+
+
+def _spec(*, transforms=False) -> ModelSpec:
+    normalization = Step(call="copy.copy", kwargs={"x": Reference("entry")})
+    if transforms:
+        normalization = Step(
+            call="geosave.model.processing.normalize",
+            kwargs={
+                "value": Reference("entry"),
+                "mean": [1.0, 2.0],
+                "std": [2.0, 4.0],
+                "dim": -3,
+            },
+        )
+    return ModelSpec(
+        inputs={"value": Input()},
+        steps={
+            "from_tensor": Step(
+                call="modules.segmentation.supervised.processing.accept_tensor",
+                kwargs={"value": Reference("value")},
+            ),
+            "normalized": normalization,
         },
-    }
-}
-
-
-def _spec(**changes: object) -> ModelSpec:
-    return ModelSpec.model_validate(
-        {
-            "schema_version": 3,
-            "rasters": {"optical": {"variables": ["red", "nir"]}},
-            "inputs": {"image": Ref("optical")},
-            "pixels": list(changes.get("inputs", {"image": None})),
-            **changes,
-        }
     )
 
 
@@ -191,9 +193,11 @@ def test_nonfinite_input_values_are_preserved(tmp_path: Path) -> None:
 def test_multiple_pixel_inputs_share_geometry_and_preserve_context(
     tmp_path: Path,
 ) -> None:
-    spec = _spec(inputs={"image": Ref("optical"), "dem": Ref("optical")})
+    spec = _spec()
     crop = [{"name": "CenterCrop", "init_args": {"size": (4, 4)}}]
-    data = _training(_data(tmp_path, spec, augmentations=crop), True)
+    data = _training(
+        _data(tmp_path, spec, augmentations=crop, pixels=("image", "dem")), True
+    )
     batch = _batch(times=2)
     batch["inputs"]["dem"] = torch.arange(2 * 8 * 8, dtype=torch.float32).reshape(
         2, 1, 8, 8

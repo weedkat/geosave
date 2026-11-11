@@ -3,9 +3,10 @@
 from copy import deepcopy
 
 import geopandas as gpd
+import pytest
 
 from geosave import GeoCatalog
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 from tests.geodata.conftest import create_test_collection
 from tests.geodata.stac.conftest import create_native_item, entry
 
@@ -18,7 +19,7 @@ def test_catalog_preserves_item_order_and_copies_collection_definitions():
     first.id = "first"
     second.id = "second"
 
-    catalog = from_items(iter([second, first]), collections=[collection])
+    catalog = create_catalog([second, first], collections=[collection])
     collection.description = "Changed"
 
     assert isinstance(catalog, gpd.GeoDataFrame)
@@ -32,7 +33,7 @@ def test_catalog_preserves_item_order_and_copies_collection_definitions():
 def test_empty_catalog_retains_its_schema_and_collections():
     collection = create_test_collection("optical", description="Optical imagery")
 
-    catalog = from_items([], collections=[collection])
+    catalog = create_catalog([], collections=[collection])
 
     assert catalog.empty
     assert type(catalog.gs) is GeoCatalog
@@ -41,9 +42,11 @@ def test_empty_catalog_retains_its_schema_and_collections():
     assert catalog.crs.to_epsg() == 4326
 
 
-def test_catalog_preserves_native_item_fields(tmp_path):
-    entry, _ = create_native_item(tmp_path)
-    rows = from_items([entry])
+@pytest.mark.parametrize("as_sequence", [False, True])
+def test_catalog_preserves_native_item_fields(tmp_path, as_sequence):
+    item, _ = create_native_item(tmp_path)
+    entry = item
+    rows = create_catalog([item] if as_sequence else item)
     assert rows.id.tolist() == [entry.id]
     assert rows.iloc[0]["provider:quality"] == "good"
     assert (
@@ -55,6 +58,15 @@ def test_relative_assets_resolve_without_mutating_the_item(tmp_path):
     entry, _ = create_native_item(tmp_path)
     entry.assets["reflectance"].href = "scene.tif"
     entry.set_self_href(str(tmp_path / "scene.json"))
-    rows = from_items([entry])
+    rows = create_catalog([entry])
     assert entry.assets["reflectance"].href == "scene.tif"
     assert rows.iloc[0].assets["reflectance"]["href"] == str(tmp_path / "scene.tif")
+
+
+def test_catalog_rejects_conflicting_collection_definitions():
+    collection = create_test_collection("optical", description="Optical imagery")
+    conflicting = collection.clone()
+    conflicting.license = "CC-BY-4.0"
+
+    with pytest.raises(ValueError, match="optical.*license"):
+        create_catalog([], collections=[collection, conflicting])

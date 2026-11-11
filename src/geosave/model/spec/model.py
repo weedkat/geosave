@@ -1,453 +1,381 @@
-"""Portable model declarations and strict YAML persistence."""
+"""Configure and execute model workflows on native Python values."""
 
-from __future__ import annotations
+from copy import deepcopy
+from graphlib import CycleError, TopologicalSorter
+from importlib import import_module
+import keyword
+from typing import ClassVar, TypedDict, overload
 
-import tempfile
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from pydantic import TypeAdapter
 
-import xarray as xr
-import yaml
-from pydantic import ConfigDict, Field, model_validator
-from upath import UPath
-from yaml.nodes import ScalarNode
+from geosave.geodata.io.storage import Location, StorageOptions, location
 
-from odc.geo.geobox import GeoBox
-from geosave.geodata.core import GeoAnchor
-from geosave.geodata.stac.catalog import from_items
-from geosave.geodata.io import storage
-from geosave.geodata.io.storage import Location
-from geosave.geodata.conventions import ITEM_ID_FORMAT
-
-from .base import Name, SpecModel
-from .call import Ref
-from .rasters import RasterRequirement
-from .stage import StageSpec
-from .tensors import TensorRequirement
-
-if TYPE_CHECKING:
-    import pystac
-
-    from geosave.geodata import GeoDataFrame
-    from geosave.geodata.core import GeoCatalog
-    from geosave.geodata.transform.warp import Target
+from .declarations import Input, Step
+from .reference import Reference, bind_arguments, find_references
+from .yaml import read_yaml, write_yaml
 
 
-class _Loader(yaml.SafeLoader):
-    """Read ordinary mappings strictly and retain inert references."""
-
-    def construct_mapping(self, node, deep=False):
-        self.flatten_mapping(node)
-        result = {}
-        for key, value in self.construct_pairs(node, deep=deep):
-            if not isinstance(key, str):
-                raise ValueError("YAML mapping keys must be strings")
-            if key in result:
-                raise ValueError(f"Duplicate YAML key {key!r}")
-            result[key] = value
-        return result
+_DOCUMENT_FIELDS = {"schema_version", "inputs", "steps", "entry", "output"}
 
 
-class _Dumper(yaml.SafeDumper):
-    """Write references as tags and literals through the safe dumper."""
+class Plan(TypedDict):
+    """Selected entry/output, ordered steps, and required external inputs."""
 
-    def represent_data(self, data):
-        if isinstance(data, Ref):
-            return self.represent_scalar("!ref", data.path)
-        return super().represent_data(data)
-
-
-def _construct_ref(loader: _Loader, node: ScalarNode) -> Ref:
-    """Construct one inert scalar reference."""
-    return Ref(loader.construct_scalar(node))
+    entry: str
+    output: str | list[str]
+    steps: tuple[str, ...]
+    inputs: tuple[str, ...]
 
 
-_Loader.add_constructor("!ref", _construct_ref)
+class ModelSpec:
+    """Save and execute a workflow of installed Python operations.
 
+    Loading and planning do not import configured operations. Running a workflow
+    executes trusted Python code, including attribute properties. Operations own
+    batching, branching, resource cleanup, and validation of the values they use.
 
-class ModelSpec(SpecModel):
-    """Execute a YAML model-processing recipe on native values.
+    Args:
+        steps: Validated Step declarations with literal or referenced arguments.
+        inputs: Validated Input declarations, optionally with default values.
+        entry: Default step supplying !ref entry. May have its own prerequisites.
+        output: Default step or list of steps whose values are returned.
 
-    Attributes:
-        schema_version: Recipe version, currently 3.
-        rasters: Raw raster selection and metadata requirements.
-        preprocessing: Calls on a selected sample with sufficient spatial/time support.
-        encoding: Calls producing tensors, context, and per-sample inverse state.
-        inputs: Encoded values bound to model argument names.
-        pixels: Input names that training may augment as images.
-        tensors: Optional sample-shape and dtype contracts for model inputs.
-        transforms: Calls on named inputs, shared after augmentation and at inference.
-        decoding: Per-sample output calls with prediction and that sample's state.
-        postprocessing: Calls on a merged prediction, such as final class selection.
-
-    Calls run only when their stage is invoked. The caller owns acquisition,
-    sampling, chip layout, augmentation, model execution, and merging. No stage
-    is automatically moved across those boundaries.
+    Examples:
+        >>> spec = ModelSpec.load("model_spec.yaml")
+        >>> prediction = spec.run(raster=raster)
+        >>> path = spec.run(output="saved", raster=raster, destination="map.tif")
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
     filename: ClassVar[str] = "model_spec.yaml"
 
-    schema_version: Literal[3]
-    rasters: dict[Name, RasterRequirement]
-    preprocessing: StageSpec = Field(default_factory=StageSpec)
-    encoding: StageSpec = Field(default_factory=StageSpec)
-    inputs: dict[Name, Ref] = Field(default_factory=dict)
-    pixels: tuple[Name, ...] = ()
-    tensors: dict[Name, TensorRequirement] = Field(default_factory=dict)
-    transforms: StageSpec = Field(default_factory=StageSpec)
-    decoding: StageSpec = Field(default_factory=StageSpec)
-    postprocessing: StageSpec = Field(default_factory=StageSpec)
-
-    @model_validator(mode="after")
-    def _validate_stages(self) -> Self:
-        known = set(self.rasters)
-        self.preprocessing.validate_inputs(known)
-        known.update(self.preprocessing)
-        self.encoding.validate_inputs(known)
-        known.update(self.encoding)
-        if "prediction" in known:
-            raise ValueError("prediction is reserved for model outputs")
-        unknown = {ref.root for ref in self.inputs.values()} - known
-        if unknown:
-            raise ValueError(
-                f"Model inputs reference unavailable values: {sorted(unknown)}"
-            )
-        if len(set(self.pixels)) != len(self.pixels):
-            raise ValueError("pixels must name each input once")
-        unknown = (set(self.pixels) | self.tensors.keys()) - self.inputs.keys()
-        if unknown:
-            raise ValueError(
-                f"Input requirements name undeclared inputs: {sorted(unknown)}"
-            )
-        self.transforms.validate_inputs(self.inputs.keys())
-        self.decoding.validate_inputs(known | {"prediction"})
-        self.postprocessing.validate_inputs({"prediction"})
-        return self
-
-    @property
-    def input_rasters(self) -> tuple[str, ...]:
-        """Return prepared roots needed for encoding and decoding, in first-use order."""
-        known = self.rasters.keys() | set(self.preprocessing)
-        names = dict.fromkeys(self.encoding.external_inputs)
-        for ref in self.inputs.values():
-            if ref.root in known:
-                names.setdefault(ref.root, None)
-        for name in self.decoding.external_inputs:
-            if name in known and name not in self.encoding:
-                names.setdefault(name, None)
-        return tuple(names)
-
-    def load_rasters(
-        self, anchor: GeoAnchor, /, *, geobox: GeoBox
-    ) -> dict[str, xr.Dataset]:
-        """Load and select every declared raster from its STAC recipe.
-
-        Args:
-            anchor: Geographic extent and time window to search.
-            geobox: Exact output grid for every raster.
-
-        Returns:
-            Raster name mapped to its selected lazy raster.
-
-        Raises:
-            ValueError: A raster declares no `stac` block, or a loaded raster
-                misses its requirement.
-
-        Examples:
-            >>> spec.load_rasters(anchor, geobox=grid)["sentinel_2_l2a"].gs.variables
-            ('B02', 'B03', 'B04', 'B08')
-        """
-        if missing := [n for n, r in self.rasters.items() if r.stac is None]:
-            raise ValueError(f"Rasters declare no `stac` block: {missing}")
-        rasters = {}
-        for name, requirement in self.rasters.items():
-            assert requirement.stac is not None
-            try:
-                rasters[name] = requirement.select_raster(
-                    requirement.stac.load_raster(anchor, geobox=geobox)
-                )
-            except Exception as error:
-                error.add_note(f"While loading raster {name!r}")
-                raise
-        return rasters
-
-    def preprocess(self, rasters: Mapping[str, Any], /) -> dict[str, Any]:
-        """Select the declared rasters and run preprocessing on them.
-
-        Args:
-            rasters: Rasters by name; names this spec does not declare, such
-                as labels, are ignored.
-
-        Returns:
-            Each selected raster and each preprocessing result, by name.
-
-        Raises:
-            KeyError: A declared raster is not supplied, or lacks a declared
-                variable or coordinate.
-            ValueError: A raster misses its requirement.
-
-        Examples:
-            >>> sorted(spec.preprocess({"sentinel_2_l2a": scene, "label": label}))
-            ['image', 'sentinel_2_l2a']
-        """
-        if missing := [name for name in self.rasters if name not in rasters]:
-            raise KeyError(f"Missing declared rasters: {missing}")
-        selected = {}
-        for name, requirement in self.rasters.items():
-            try:
-                selected[name] = requirement.select_raster(rasters[name])
-            except Exception as error:
-                error.add_note(f"While selecting raster {name!r}")
-                raise
-        return {**selected, **self.preprocessing.run(selected)}
-
-    def ingest(
+    def __init__(
         self,
-        anchor: GeoAnchor,
-        path: Location,
         *,
-        geobox: GeoBox,
-        path_format: str | Mapping[str, str] | None = None,
-        id_format: str = ITEM_ID_FORMAT,
-    ) -> GeoDataFrame:
-        """Load every declared raster on an anchor, save it, and list it as Items.
+        steps: dict[str, Step],
+        inputs: dict[str, Input] | None = None,
+        entry: str | None = None,
+        output: str | list[str] | None = None,
+    ) -> None:
+        self.inputs = dict(inputs) if inputs is not None else {}
+        self.steps = dict(steps)
+        self.entry = entry
+        self.output = list(output) if isinstance(output, list) else output
+        self._check_connections()
 
-        Training and inference ingest alike and get the same table. Pixels are
-        saved as the source publishes them; `preprocess` runs when they are
-        read. Each raster is saved as the collection its spec name says, so
-        `row.gs.to_datatree().gs.rasters` hands `preprocess` the names it reads.
+    def _check_connections(self) -> None:
+        """Check workflow names, references, and saved entry/output selections."""
+        if self.inputs.keys() & {"entry", "output"}:
+            raise ValueError("entry and output are reserved input names")
+        if "entry" in self.steps:
+            raise ValueError("entry is reserved for the selected entry step's value")
+        if self.inputs.keys() & self.steps.keys():
+            raise ValueError("Input and step names must be distinct")
 
-        Args:
-            anchor: Geographic extent and time window to search.
-            geobox: Exact output grid for every raster.
-            path: Folder the COGs go under.
-            path_format: Relative COG path, shared or keyed by raster. None
-                writes `{collection}/{time}/{band}.tif`.
-            id_format: `GeoAnchor.format` template each Item's id is filled
-                from, as `Dataset.gs.to_catalog` takes it.
+        for name in self.inputs:
+            self._check_name(name)
 
-        Returns:
-            Item table, one Item per raster and instant.
+        known = self.inputs.keys() | self.steps.keys() | {"entry"}
+        for name, step in self.steps.items():
+            self._check_name(name)
+            for ref in step.find_references():
+                if ref.root not in known:
+                    raise ValueError(
+                        f"Step {name!r} has unknown reference {ref.path!r}. "
+                        "Declare that input or step, or correct the reference."
+                    )
 
-        Raises:
-            ValueError: A raster declares no `stac` block, or misses its
-                requirement.
-            FileExistsError: A file the path format names exists.
+        if self.entry is not None:
+            self._select_entry(self.entry)
+        if self.output is not None:
+            self._select_output(self.output)
 
-        Examples:
-            >>> items = spec.ingest(anchor, "data/s0", geobox=grid, path_format="{collection}/{band}.tif")
-            >>> items.gs.sample()[0].gs.to_datatree().gs.groups
-            ('sentinel_2_l2a',)
-        """
-        rasters = self.load_rasters(anchor, geobox=geobox)
-        tree = xr.merge(
-            [raster.gs.to_datatree(name) for name, raster in rasters.items()]
-        )
-        return tree.gs.to_catalog(path, path_format=path_format, id_format=id_format)
-
-    def prepare(
-        self,
-        raw: GeoDataFrame,
-        path: Location | None = None,
-        *,
-        target: Target | None = None,
-        keep: Sequence[str] = (),
-    ) -> GeoDataFrame:
-        """Preprocess every sample of a raw catalog into a catalog of what the model reads.
-
-        Each sample `raw.gs.sample()` groups by footprint is read on native
-        grids unless `target` is given, then selected, validated and
-        preprocessed. Raster dependencies of encoding, input binding, and decoding,
-        plus collections named by `keep`, are saved under `path/<sample position>/`
-        with this spec beside
-        them. Windows are not cut here; sample the prepared catalog with
-        `pair` and `window` to cut them.
-
-        Args:
-            raw: Item table of the declared rasters and the collections kept.
-            path: New folder, as a path, URL, or UPath. None writes to a
-                temporary folder, since prepared rasters serve this model only.
-            target: Explicit alignment target; None keeps native grids.
-            keep: Collections copied through unchanged, as labels for training.
-
-        Returns:
-            Item table of the prepared rasters, one Item per raster and instant.
-
-        Raises:
-            FileExistsError: `path` exists.
-            TypeError: `keep` is given as text.
-            KeyError: A sample lacks a declared raster or a kept collection.
-
-        Examples:
-            >>> prepared = spec.prepare(raw, "data/prepared", keep=["label"])
-            >>> prepared.gs.sample()[0].gs.to_datatree().gs.groups
-            ('image', 'label')
-        """
-        if isinstance(keep, str):
-            raise TypeError(f"keep takes a list of collections, as keep=[{keep!r}]")
-        if path is None:
-            folder = storage.location(tempfile.mkdtemp(prefix="geosave-prepared-"))
-        else:
-            folder = storage.location(path)
-            if folder.exists():
-                raise FileExistsError(f"{folder} exists; prepare writes a new folder")
-        kept = list(dict.fromkeys(keep))
-        items = []
-        # Collections the prepared rasters carry, as their samples' catalogs state them.
-        carried: dict[str, pystac.Collection] = {}
-        samples = raw.gs.sample()
-        for position, rows in enumerate(samples):
-            # A sample has no id of its own; its position names its folder.
-            sample_id = str(position)
-            tree = rows.gs.to_datatree()
-            if target is not None:
-                tree = tree.gs.align(target=target)
-            rasters = {}
-            for name in dict.fromkeys([*self.rasters, *kept]):
-                if name in tree.children:
-                    rasters[name] = tree[name].gs.to_dataset()
-            if missing := [name for name in kept if name not in rasters]:
-                raise KeyError(f"Sample {sample_id!r} lacks {missing}")
-            results = self.preprocess(rasters)
-            groups: dict[str, xr.Dataset] = {
-                name: results[name] for name in self.input_rasters
-            }
-            for name in kept:
-                groups[name] = rasters[name]
-            # Samples share grids and dates, so the sample id keeps their Items apart.
-            sample_tree = xr.merge(
-                [group.gs.to_datatree(name) for name, group in groups.items()]
+    @staticmethod
+    def _check_name(name: str) -> None:
+        if (
+            not isinstance(name, str)
+            or not name.isidentifier()
+            or keyword.iskeyword(name)
+        ):
+            raise ValueError(
+                f"Input and step names must be identifiers without dots: {name!r}"
             )
-            sample_catalog = sample_tree.gs.to_catalog(
-                folder / sample_id,
-                id_format=f"{sample_id}_{{start:%Y%m%dT%H%M%S}}",
-                datetime=tree.gs.timespan,
-            )
-            items.extend(sample_catalog.gs.to_items())
-            carried.update(sample_catalog.gs.collections)
-        self.save(folder / self.filename)
-        # The raw catalog's definitions come first; prepared rasters keep what they carry.
-        definitions = {**carried, **cast("GeoCatalog", raw.gs).collections}
-        collections = []
-        for name in dict.fromkeys(item.collection_id for item in items):
-            if name is not None and name in definitions:
-                collections.append(definitions[name])
-        return from_items(items, collections=collections)
-
-    def encode(self, values: Mapping[str, Any], /) -> dict[str, Any]:
-        """Encode one prepared sample, retaining its values for output decoding.
-
-        Args:
-            values: Results of preprocessing this sample. Encode after any native
-                spatial/time selection that changes what the model will receive.
-
-        Returns:
-            Plain mapping of supplied and encoded values. Only explicitly declared
-            calls compute pixels; intermediate state is not sent to the model.
-        """
-        return {**values, **self.encoding.run(values)}
-
-    def model_inputs(self, values: Mapping[str, Any], /) -> dict[str, Any]:
-        """Bind encoded values to model argument names without rerunning stages.
-
-        Args:
-            values: This sample's encoded values.
-
-        Returns:
-            Only the named model inputs. Call transform before model execution.
-        """
-        return {name: ref.resolve(values) for name, ref in self.inputs.items()}
-
-    def transform(
-        self, inputs: Mapping[str, Any], /, *, batched: bool = False
-    ) -> dict[str, Any]:
-        """Apply shared model-input transforms after optional training augmentation.
-
-        Args:
-            inputs: Named model arguments. Calls may rebind them, but intermediate
-                results are not added to the returned model arguments.
-            batched: Validate a leading DataLoader batch axis in tensor contracts.
-
-        Returns:
-            Transformed arguments, preserving undeclared extra arguments unchanged.
-            Calls must support the stated batch layout; no axes are silently folded.
-
-        Raises:
-            ValueError: A required tensor has the wrong shape or dtype.
-        """
-        self._check_tensors(inputs, batched=batched)
-        values = {**inputs, **self.transforms.run(inputs)}
-        result = {name: values[name] for name in inputs}
-        self._check_tensors(result, batched=batched)
-        return result
-
-    def _check_tensors(self, inputs: Mapping[str, Any], *, batched: bool) -> None:
-        sizes: dict[str, int] = {}
-        for name, requirement in self.tensors.items():
-            requirement.validate_tensor(
-                inputs[name], name=name, sizes=sizes, batched=batched
-            )
-
-    def decode(self, prediction: Any, values: Mapping[str, Any], /) -> dict[str, Any]:
-        """Decode one model output using the same sample's intermediate state.
-
-        Args:
-            prediction: Unbatched model output, including native dictionaries/tuples.
-            values: Values retained from this sample's encode call.
-
-        Returns:
-            Declared decoding results. The caller chooses what to merge.
-        """
-        return self.decoding.run({**values, "prediction": prediction})
-
-    def postprocess(self, prediction: Any, /) -> dict[str, Any]:
-        """Process a merged prediction, after all chip outputs have been accumulated.
-
-        Args:
-            prediction: Merged native output, or mapping of named merged outputs.
-
-        Returns:
-            Declared results, such as class IDs derived from merged logits.
-        """
-        return self.postprocessing.run({"prediction": prediction})
-
-    def save(self, path: Location) -> UPath:
-        """Write this spec as YAML, with references as `!ref` tags.
-
-        Only declared values are written; defaults are left to loading.
-
-        Args:
-            path: YAML file to write, as a path, URL, or UPath.
-
-        Returns:
-            The written file.
-
-        Examples:
-            >>> spec.save("configs/model_spec.yaml")
-            PosixUPath('configs/model_spec.yaml')
-        """
-        target = storage.location(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Defaults are left out, so the file reads as the spec was written.
-        declared = self.model_dump(exclude_defaults=True)
-        payload = yaml.dump(declared, Dumper=_Dumper, sort_keys=False)
-        target.write_text(payload, encoding="utf-8")
-        return target
 
     @classmethod
-    def load(cls, path: Location) -> Self:
-        """Read a model_spec.yaml without importing the calls it declares.
+    def from_dict(cls, document: dict[str, object]) -> "ModelSpec":
+        """Construct a workflow from its saved schema version 1 declarations."""
+        if not isinstance(document, dict):
+            raise ValueError("ModelSpec must be a mapping")
+        version = document.get("schema_version")
+        if type(version) is not int or version != 1:
+            raise ValueError("ModelSpec requires schema_version: 1")
+        unknown = document.keys() - _DOCUMENT_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Unknown workflow fields: {sorted(unknown)}. "
+                "Declare named operations inside the 'steps' mapping."
+            )
 
-        Args:
-            path: YAML file, as a path, URL, or UPath.
+        try:
+            inputs = TypeAdapter(dict[str, Input]).validate_python(
+                document.get("inputs", {}), strict=True
+            )
+        except ValueError as error:
+            error.add_note(
+                "Cannot load workflow inputs. Check the named input declaration above."
+            )
+            raise
+        try:
+            steps = TypeAdapter(dict[str, Step]).validate_python(
+                document.get("steps", {}), strict=True
+            )
+        except ValueError as error:
+            error.add_note(
+                "Cannot load workflow steps. Check the named step declaration above."
+            )
+            raise
+
+        entry = TypeAdapter(str | None).validate_python(
+            document.get("entry"), strict=True
+        )
+        output = TypeAdapter(str | list[str] | None).validate_python(
+            document.get("output"), strict=True
+        )
+        return cls(inputs=inputs, steps=steps, entry=entry, output=output)
+
+    @classmethod
+    def from_yaml(cls, text: str) -> "ModelSpec":
+        """Parse a YAML workflow without importing configured operations."""
+        return cls.from_dict(read_yaml(text))
+
+    @classmethod
+    def load(
+        cls, path: Location, *, storage_options: StorageOptions | None = None
+    ) -> "ModelSpec":
+        """Read a workflow from local or remote storage without executing it."""
+        text = location(path, storage_options).read_text(encoding="utf-8")
+        return cls.from_yaml(text)
+
+    def save(
+        self, path: Location, *, storage_options: StorageOptions | None = None
+    ) -> str:
+        """Write declarations and selection defaults, preserving !ref tags."""
+        document: dict[str, object] = {"schema_version": 1}
+        if self.entry is not None:
+            document["entry"] = self.entry
+        if self.output is not None:
+            document["output"] = self.output
+        inputs = {}
+        for name, declaration in self.inputs.items():
+            # Keep omitted defaults distinct from explicit nulls, and preserve
+            # native values for YAML rather than recursively serializing them.
+            fields = dict(declaration)
+            inputs[name] = {
+                key: value
+                for key, value in fields.items()
+                if key in declaration.model_fields_set
+            }
+        document["inputs"] = inputs
+        document["steps"] = {name: dict(step) for name, step in self.steps.items()}
+
+        target = location(path, storage_options)
+        target.write_text(write_yaml(document), encoding="utf-8")
+        return str(target)
+
+    def _select_entry(self, entry: str | None) -> str:
+        if entry is None:
+            raise ValueError(
+                "No workflow entry was selected. Set 'entry' in the configuration "
+                "or pass entry='step_name' when calling run() or plan()."
+            )
+        if not isinstance(entry, str) or entry not in self.steps:
+            raise ValueError(
+                f"Unknown entry {entry!r}. Choose a declared step: {list(self.steps)}"
+            )
+        return entry
+
+    def _select_output(self, output: str | list[str] | None) -> str | list[str]:
+        if output is None:
+            raise ValueError(
+                "No workflow output was selected. Set 'output' in the configuration "
+                "or pass output='step_name' when calling run() or plan()."
+            )
+        targets = [output] if isinstance(output, str) else output
+        if not isinstance(targets, list) or not targets:
+            raise ValueError(
+                "Select one output step or a nonempty list of output steps"
+            )
+        for name in targets:
+            if not isinstance(name, str) or name not in self.steps:
+                raise ValueError(
+                    f"Unknown output {name!r}. Choose a declared step: {list(self.steps)}"
+                )
+        return list(output) if isinstance(output, list) else output
+
+    def plan(
+        self, *, entry: str | None = None, output: str | list[str] | None = None
+    ) -> Plan:
+        """Order the selected output's dependencies without importing operations.
+
+        Omitted selections use saved defaults. The entry supplies !ref entry and
+        must participate in the selected dependencies. Its prerequisites also run.
+        Only the selected dependencies are checked for cycles.
+        """
+        entry = self._select_entry(self.entry if entry is None else entry)
+        output = self._select_output(self.output if output is None else output)
+        targets = [output] if isinstance(output, str) else output
+
+        dependencies = {}
+        needed_inputs = set()
+        pending = list(reversed(targets))
+        while pending:
+            name = pending.pop()
+            if name in dependencies:
+                continue
+            needed = []
+            for ref in self.steps[name].find_references():
+                root = ref.root
+                if root in self.inputs:
+                    needed_inputs.add(root)
+                    continue
+                if root == "entry":
+                    root = entry
+                if root not in needed:
+                    needed.append(root)
+            dependencies[name] = needed
+            pending.extend(reversed(needed))
+
+        try:
+            order = tuple(TopologicalSorter(dependencies).static_order())
+        except CycleError as error:
+            error.add_note(
+                f"Cannot produce output {output!r} from entry {entry!r}: "
+                "the selected steps depend on each other in a cycle. "
+                "Correct their references so dependencies flow forward."
+            )
+            raise
+        if entry not in dependencies:
+            raise ValueError(
+                f"Output {output!r} does not use entry {entry!r}. "
+                "Choose an entry on this path, or connect the shared flow with !ref entry."
+            )
+        inputs = tuple(name for name in self.inputs if name in needed_inputs)
+        return {"entry": entry, "output": output, "steps": order, "inputs": inputs}
+
+    def _bind_inputs(
+        self, plan: Plan, arguments: dict[str, object]
+    ) -> dict[str, object]:
+        unused = arguments.keys() - set(plan["inputs"])
+        if unused:
+            raise ValueError(
+                f"Inputs unused by output {plan['output']!r}: {sorted(unused)}. "
+                "Remove them or select an output that uses them."
+            )
+
+        values: dict[str, object] = {}
+        for name in plan["inputs"]:
+            definition = self.inputs[name]
+            if name in arguments:
+                value = arguments[name]
+            elif "default" in definition.model_fields_set:
+                value = deepcopy(definition.default)
+            else:
+                uses = []
+                for step_name in plan["steps"]:
+                    step = self.steps[step_name]
+                    if any(ref.root == name for ref in find_references(step.call)):
+                        uses.append(f"step {step_name!r}'s operation")
+                    for argument, configured in step.kwargs.items():
+                        if any(ref.root == name for ref in find_references(configured)):
+                            uses.append(f"step {step_name!r}, argument {argument!r}")
+                raise ValueError(
+                    f"Cannot produce output {plan['output']!r}: input {name!r} is missing.\n"
+                    f"Required by: {'; '.join(uses)}.\n"
+                    f"Pass {name}=... to spec.run(), alongside the other required inputs."
+                )
+
+            values[name] = value
+        return values
+
+    @overload
+    def run(
+        self,
+        /,
+        *,
+        output: list[str],
+        entry: str | None = None,
+        **arguments: object,
+    ) -> dict[str, object]: ...
+
+    @overload
+    def run(
+        self,
+        /,
+        *,
+        output: str | None = None,
+        entry: str | None = None,
+        **arguments: object,
+    ) -> object: ...
+
+    def run(
+        self,
+        /,
+        *,
+        entry: str | None = None,
+        output: str | list[str] | None = None,
+        **arguments: object,
+    ) -> object:
+        """Execute selected steps once and return native output value(s).
+
+        A list of outputs returns a dictionary keyed by step name. Shared steps
+        run once. Missing or unused inputs fail before operation imports. Input
+        defaults are copied; referenced native values are passed unchanged.
+        Operations are loaded and called in execution order. Python validates
+        their call arguments; earlier steps may have executed before a failure.
 
         Returns:
-            The spec the file declares.
-
-        Examples:
-            >>> ModelSpec.load("configs/model_spec.yaml").inputs
-            {'image': Ref('image')}
+            The selected operation's native return value. Its concrete type is
+            defined by that operation, not by ModelSpec. An explicit output list
+            returns a dictionary from step names to their native return values.
         """
-        payload = storage.location(path).read_text(encoding="utf-8")
-        return cls.model_validate(yaml.load(payload, Loader=_Loader))
+        plan = self.plan(entry=entry, output=output)
+        values = self._bind_inputs(plan, arguments)
+
+        for name in plan["steps"]:
+            step = self.steps[name]
+            target = step.call
+            try:
+                if isinstance(target, Reference):
+                    function = target.read_value(values)
+                else:
+                    module, attribute = target.rsplit(".", 1)
+                    try:
+                        function = getattr(import_module(module), attribute)
+                    except Exception as error:
+                        error.add_note(
+                            f"Cannot load operation {target!r}. "
+                            "Check that its package is installed and its module "
+                            "and attribute names are correct."
+                        )
+                        raise
+
+                if not callable(function):
+                    raise TypeError(
+                        f"Configured operation is a {type(function).__name__}, "
+                        "not a callable. Configure a function or method."
+                    )
+                kwargs = bind_arguments(step.kwargs, values)
+                values[name] = function(**kwargs)
+                if name == plan["entry"]:
+                    values["entry"] = values[name]
+            except Exception as error:
+                operation = target.path if isinstance(target, Reference) else target
+                error.add_note(
+                    f"Step {name!r} failed while producing output {plan['output']!r}.\n"
+                    f"Configured operation: {operation}."
+                )
+                raise
+
+        selected = plan["output"]
+        if isinstance(selected, str):
+            return values[selected]
+        return {name: values[name] for name in selected}

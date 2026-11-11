@@ -192,7 +192,7 @@ def write_geoparquet(
     if all(key in gdf for key in ITEM_COLUMNS):
         raise ValueError(
             "Item-shaped rows lack stac-geoparquet metadata; construct a catalog "
-            "with stac.catalog.from_items before writing"
+            "with stac.catalog.create_catalog before writing"
         )
     if collections is not None:
         raise ValueError("Collection definitions require a catalog with STAC metadata")

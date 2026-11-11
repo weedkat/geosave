@@ -15,7 +15,7 @@ from odc.geo.geobox import GeoBox
 from shapely.geometry import box, mapping
 
 import geosave as gs
-from geosave.geodata.stac import from_items
+from geosave.geodata.stac import create_catalog
 from benchmark import measure, assert_grid
 
 
@@ -105,13 +105,13 @@ def main():
                 assert len(frame) == count
 
             measure(
-                f"{count}.catalog.from_items",
-                lambda: from_items(entries),
+                f"{count}.catalog.create_catalog",
+                lambda: create_catalog(entries),
                 check_frame,
                 rows,
                 repeats=3,
             )
-            catalog = from_items(entries)
+            catalog = create_catalog(entries)
             measure(
                 f"{count}.catalog.sample",
                 lambda: catalog.gs.sample(pair=["optical"], window=3),

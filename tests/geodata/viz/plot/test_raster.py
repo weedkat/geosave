@@ -25,7 +25,7 @@ def geobox() -> GeoBox:
 def optical() -> xr.Dataset:
     values = np.arange(16, dtype="uint16").reshape(4, 4) * 100
     raster = build_raster({"B04": (("y", "x"), values)}, geobox())
-    return raster.gs.write_packing(1e-4, target="B04").gs.write_nodata(0, target="B04")
+    return raster.gs.write_scale_offset(1e-4, target="B04").gs.write_nodata(0, target="B04")
 
 
 @pytest.fixture
@@ -180,6 +180,13 @@ class TestOutput:
 
 
 class TestVariables:
+    def test_explicit_band_overrides_recorded_composite(self, rgb: xr.Dataset) -> None:
+        plot = rgb.gs.plot("B04", xlabel="")
+        assert isinstance(plot, hv.Image)
+        np.testing.assert_array_equal(
+            np.sort(drawn_values(plot)), np.sort(rgb.B04.values.ravel())
+        )
+
     def test_rgb_draws_a_composite(self, rgb: xr.Dataset) -> None:
         assert isinstance(rgb.gs.plot(rgb=("B04", "B03", "B02")), hv.RGB)
 

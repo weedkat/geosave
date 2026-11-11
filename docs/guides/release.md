@@ -19,7 +19,7 @@ import torch
 
 from geosave.model.registry import build_model
 from geosave.model.release import GeoSaveModel
-from geosave.model.spec import ModelSpec, Ref
+from geosave.model.spec import ModelSpec
 
 chain = build_model({
     "head": {
@@ -30,11 +30,16 @@ chain = build_model({
         },
     },
 })
-spec = ModelSpec(
-    schema_version=3,
-    rasters={"features": {"variables": ["red", "nir"]}},
-    inputs={"feature_map": Ref("features")},
-)
+spec = ModelSpec.from_yaml("""schema_version: 1
+entry: encoded
+output: encoded
+inputs:
+  features: {}
+steps:
+  encoded:
+    call: geosave.model.processing.to_tensor
+    kwargs: {raster: !ref features, dims: [band, y, x]}
+""")
 release = GeoSaveModel.from_chain(chain, spec=spec).eval()
 release.save_pretrained("release")
 ```
@@ -57,7 +62,7 @@ so it cannot use this registered-chain export. Use its Lightning checkpoint
 or build a registered architecture first.
 
 `data.spec` is the spec the DataModule loaded. Saving it preserves the declared
-bands, input names, and tensor transforms beside the weights. It does not bundle
+inputs and executable recipe beside the weights. It does not bundle
 training data or your Dataset's Python implementation.
 
 Every stage must have been constructed by `build_model` with a registered `name`

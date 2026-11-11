@@ -71,3 +71,18 @@ def test_clones_prefix_classwise_results_and_keep_independent_state(
     train.reset()
     train.update(targets, targets)
     assert all(value.item() == 1.0 for value in train.compute().values())
+
+
+@pytest.mark.filterwarnings(
+    "error:The .*compute.* method of metric .* was called before"
+)
+def test_macro_and_classwise_iou_reset_between_epochs(predictions, targets):
+    metrics = MulticlassMetrics(
+        3, ignore_index=255, metrics=["iou.macro.per_class", "f1.macro"]
+    )
+    metrics.update(predictions, targets)
+    assert metrics.compute()["iou_macro"].item() == pytest.approx(5 / 9)
+
+    metrics.reset()
+    metrics.update(targets, targets)
+    assert all(value.item() == 1.0 for value in metrics.compute().values())

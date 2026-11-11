@@ -5,8 +5,8 @@
 Follow the [notebook learning path](examples.md). Start with real image/label
 pairs and a small model, then learn stage composition, feature preparation,
 prediction maps, and acquisition for your own labels. The
-[training guide](guides/training.md) shows an offline generated Lightning starter and the
-current limitations of the geospatial recipes.
+[training guide](guides/training.md) continues the chip tutorial through a small segmentation model, checkpoint,
+and prediction map. For editable project recipes, see [workspaces](guides/workspaces.md).
 
 ## What can I use without training a model?
 
@@ -25,7 +25,7 @@ See [Installation](install.md) for the extras and commands.
 
 Use native xarray Dataset, DataArray, and DataTree objects and GeoDataFrames.
 `import geosave as gs` registers `.gs` accessors on them. Normal native methods
-remain available. See [basic objects](basics/index.md#know-the-objects).
+remain available. See [basic objects](basics/index.md).
 
 ## Is opening a raster the same as loading all its pixels?
 
@@ -107,8 +107,8 @@ Use [pretrained models](guides/pretrained.md) to choose the loading path and
 
 ## Does a saved model run all preprocessing automatically?
 
-A ModelSpec declares separate raster preprocessing, named inputs, context,
-and tensor transforms. Use its processing methods explicitly. A release's
+A ModelSpec declares inputs and dependent Python calls. Select the source and
+result explicitly with `spec.run(...)`. A release's
 forward call does not automatically normalize tensors using the spec. Match
 the training input contract before calling the model. See
 [model inputs](concepts/model-inputs.md) and [data flow](concepts/data-flow.md).

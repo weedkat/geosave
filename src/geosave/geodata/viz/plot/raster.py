@@ -72,7 +72,7 @@ def draw_raster(
     """
     band, rgb = _choose_variables(raster, band, rgb)
     if xlabel is None:
-        place = raster.gs.anchor.locate()
+        place = raster.gs.region.locate()
         xlabel = place.to_address() if place is not None else None
 
     y, x = SPATIAL_DIMENSIONS
@@ -112,7 +112,7 @@ def draw_raster(
         channels = raster[cast("str", band)].gs.colorize()
     else:
         channels = stretch_channels(
-            raster[list(cast("tuple", rgb))].gs.to_array(), clim
+            raster[list(cast("tuple", rgb))].gs.to_dataarray(), clim
         )
     plot = _draw_dates(
         channels,
@@ -143,12 +143,12 @@ def _choose_variables(
     if band is not None and rgb is not None:
         raise ValueError("name a band or a composite, not both")
     if band is None and rgb is None:
-        variables = [str(name) for name in raster.data_vars]
+        variables = list(raster.gs.raster_variables)
         if len(variables) == 1:
             band = variables[0]
-        elif raster.gs.rgb is not None:
-            rgb = raster.gs.rgb
         else:
+            rgb = raster.gs.rgb
+        if band is None and rgb is None:
             raise ValueError(
                 f"this raster holds {variables} and records no composite; name "
                 f"one band, ds.gs.plot('ndvi'), or a composite, "
@@ -160,7 +160,7 @@ def _choose_variables(
     if missing:
         raise KeyError(
             f"{missing} are not data variables of this raster; it carries "
-            f"{[str(name) for name in raster.data_vars]}"
+            f"{list(raster.gs.raster_variables)}"
         )
     return band, rgb
 

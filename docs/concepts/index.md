@@ -1,4 +1,4 @@
-# Advanced: concepts and behavior
+# Concepts and behavior
 
 These pages explain the rules behind the practical examples. Read the topic
 related to your next operation; you do not need all of them before using GeoSave.

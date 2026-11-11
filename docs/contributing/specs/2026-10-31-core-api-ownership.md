@@ -21,7 +21,7 @@ regions = mask.gs.vectorize()
 ```
 
 Values remain native xarray and GeoPandas objects. GeoSave classes are
-accessors except for existing value objects such as GeoAnchor. There is no
+accessors except for existing value objects such as GeoRegion. There is no
 create_vector factory: native GeoDataFrame construction suffices.
 
 ## Intent and constraints

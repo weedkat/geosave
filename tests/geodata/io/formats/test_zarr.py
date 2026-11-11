@@ -196,7 +196,7 @@ def test_a_remote_store_refuses_to_be_replaced_silently(bucket: str) -> None:
     assert saved == UPath(destination)
 
 
-def test_zarr_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
+def test_zarr_preserves_foreign_cf_coordinate_names(tmp_path: Path) -> None:
     from affine import Affine
     from odc.geo.geobox import GeoBox
     from odc.geo.xr import xr_coords
@@ -211,7 +211,7 @@ def test_zarr_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
 
     restored = zarr.open_zarr(tmp_path / "foreign.zarr", chunks={})
 
-    assert restored.red.dims == ("y", "x")
+    assert restored.red.dims == ("latitude", "longitude")
     assert restored.gs.geobox == grid
     assert restored.red.chunks is not None
     restored.close()
@@ -241,12 +241,12 @@ def test_a_stacked_arrays_attrs_survive_storage(tmp_path):
     )
     source.attrs = {"units": "root-unit", "title": "scene"}
     source.red.attrs = {"units": "band-unit"}
-    stacked = source.gs.to_array()
+    stacked = source.gs.to_dataarray()
     assert isinstance(stacked.data, da.Array)
     path = zarr.write_zarr(stacked.to_dataset(name="pixels"), tmp_path / "bands.zarr")
 
     with open_raster(path, chunks={}) as reopened:
-        restored = reopened.pixels.gs.to_raster()
+        restored = reopened.pixels.gs.to_dataset(dim="band")
         assert restored.red.attrs == {"units": "band-unit"}
         assert restored.gs.geobox == grid
         assert isinstance(restored.red.data, da.Array)
@@ -272,13 +272,14 @@ def test_a_selected_stored_band_keeps_the_shared_attrs_and_lazy_pixels(tmp_path)
     source.red.attrs = {"nodata": 0, "long_name": "red", "units": "1"}
     source.nir.attrs = {"nodata": 1, "long_name": "nir", "units": "1"}
     path = zarr.write_zarr(
-        source.gs.to_array().to_dataset(name="pixels"), tmp_path / "bands.zarr"
+        source.gs.mask_and_scale().gs.to_dataarray().to_dataset(name="pixels"),
+        tmp_path / "bands.zarr",
     )
 
-    with open_raster(path, chunks={}) as reopened:
-        restored = reopened.pixels.sel(band=["nir"]).gs.to_raster()
+    with open_raster(path, chunks={}, mask_and_scale=True) as reopened:
+        restored = reopened.pixels.sel(band=["nir"]).gs.to_dataset(dim="band")
         assert list(restored.data_vars) == ["nir"]
-        # Bands of different nodata and names stack sharing only their units.
+        # Decoded bands share units, without inheriting incompatible storage fills.
         assert restored.nir.attrs == {"units": "1"}
         assert restored.gs.geobox == grid
         assert isinstance(restored.nir.data, da.Array)
@@ -301,7 +302,7 @@ def test_stored_nodata_preserves_child_crs_and_restacking(tmp_path):
         assert "spatial_ref" not in child.data_vars
         assert child.gs.geobox == grid
         assert child.time.values == source.time.values
-        rebuilt = build_tree({"prepared": child.gs.to_nan()})
+        rebuilt = build_tree({"prepared": child.gs.mask_and_scale()})
         assert rebuilt.gs.geobox == grid
 
 
@@ -332,10 +333,10 @@ def test_nan_band_metadata_survives_stacked_storage(tmp_path):
         nodata=np.nan,
     )
     path = zarr.write_zarr(
-        source.gs.to_array().to_dataset(name="pixels"), tmp_path / "nan-bands.zarr"
+        source.gs.to_dataarray().to_dataset(name="pixels"), tmp_path / "nan-bands.zarr"
     )
     with open_raster(path, chunks={}) as reopened:
-        restored = reopened.pixels.gs.to_raster()
+        restored = reopened.pixels.gs.to_dataset(dim="band")
         assert np.isnan(restored.red.gs.nodata)
 
 
@@ -362,10 +363,10 @@ def test_a_tree_round_trips_through_one_zarr_store(tmp_path):
 
     assert store == tmp_path / "scene.zarr"
     with open_raster(store) as restored:
-        assert list(restored.gs.rasters) == ["s2/r10m", "s2/r20m"]
+        assert list(restored.gs.datasets) == ["s2/r10m", "s2/r20m"]
         assert restored["s2"].attrs["title"] == "Sentinel-2"
-        for path, raster in tree.gs.rasters.items():
-            loaded = restored.gs.rasters[path]
+        for path, raster in tree.gs.datasets.items():
+            loaded = restored.gs.datasets[path]
             assert loaded.gs.geobox == raster.gs.geobox
             np.testing.assert_array_equal(loaded.time.values, raster.time.values)
             xr.testing.assert_equal(

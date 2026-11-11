@@ -73,8 +73,8 @@ class DataModule(supervised.DataModule):
     keep the same pixels in place.
 
     Args:
-        spec: Model spec, or its file, declaring `inputs`, `pixels`, and
-            `transforms`.
+        spec: Recipe, or its file, with `from_tensor` and `normalized` calls.
+        pixels: Names of tensors that share augmentation and normalization.
         train: Labeled training dataset returning a `supervised.Sample`.
         val: Validation dataset returning a `supervised.Sample`.
         unlabeled: Unlabeled dataset returning an `Unlabeled` chip.
@@ -112,6 +112,7 @@ class DataModule(supervised.DataModule):
         size: int | tuple[int, int] = 224,
         batch_size: int = 8,
         num_workers: int = 4,
+        pixels: tuple[str, ...] = ("image",),
     ) -> None:
         super().__init__(
             spec,
@@ -122,6 +123,7 @@ class DataModule(supervised.DataModule):
             size=size,
             batch_size=batch_size,
             num_workers=num_workers,
+            pixels=pixels,
         )
         self.unlabeled_dataset = unlabeled
         self.strong_augmenter = ImageAugmenter(
@@ -164,19 +166,19 @@ class DataModule(supervised.DataModule):
         labeled = super().on_after_batch_transfer(batch["labeled"], dataloader_idx)
 
         inputs = dict(batch["unlabeled"]["inputs"])
-        names = self.spec.pixels
+        names = self.pixels
         keys: list[DataKey] = ["input"] * len(names)
 
         # Draw shared spatial augmentation once before splitting the views.
         images = self.augmenter(*(inputs[name] for name in names), data_keys=keys)
         tensors = (images,) if isinstance(images, torch.Tensor) else images
         inputs.update(zip(names, tensors, strict=True))
-        weak = self.spec.transform(inputs, batched=True)
+        weak = self.normalize_inputs(inputs)
 
         images = self.strong_augmenter(
             *(inputs[name] for name in names), data_keys=keys
         )
         tensors = (images,) if isinstance(images, torch.Tensor) else images
         inputs.update(zip(names, tensors, strict=True))
-        strong = self.spec.transform(inputs, batched=True)
+        strong = self.normalize_inputs(inputs)
         return {"labeled": labeled, "unlabeled": {"weak": weak, "strong": strong}}

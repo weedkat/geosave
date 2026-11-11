@@ -39,7 +39,7 @@ The complete contracts are grouped by [data](generated/data.md),
 documentation gap. [Documentation maintenance](../contributing/documentation.md)
 explains how to refresh the reference and audit those gaps.
 
-Start with the [practical guides](../index.md#find-your-task) when you want a
+Start with the [practical guides](../activities.md) when you want a
 complete example. Read [Concepts](../concepts/index.md) for behavior shared
 by several operations.
 

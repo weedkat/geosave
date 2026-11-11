@@ -13,7 +13,8 @@ from shapely.geometry import box, mapping
 from geosave.geodata import open_vector
 from tests.conftest import build_dataset, build_tree
 from geosave.geodata.core import GeoCatalog
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
+from geosave.geodata.stac.item import TIMELESS
 from tests.geodata.conftest import item_table, write_collection_cogs
 from tests.geodata.conftest import create_file_items, create_test_collection
 
@@ -101,7 +102,7 @@ def create_item(item_id: str, collection: str, footprint) -> pystac.Item:
         properties={},
         collection=collection,
     )
-    item.add_asset("data", pystac.Asset(href=f"{item_id}.tif", roles=["data"]))
+    item.add_asset("data", pystac.Asset(href=f"/data/{item_id}.tif", roles=["data"]))
     return item
 
 
@@ -113,7 +114,7 @@ def catalog():
     collections = []
     for collection in ("s2", "s1", "label"):
         collections.append(create_test_collection(collection, description=collection))
-    return from_items(entries, collections=collections)
+    return create_catalog(entries, collections=collections)
 
 
 def read_sample_ids(samples) -> list[list[str]]:
@@ -127,14 +128,13 @@ def read_sample_ids(samples) -> list[list[str]]:
 def create_scene_items(raster, root, collection=None):
     """Build native Items from files written through the public raster API."""
 
-    template = "{time:%Y%m%d}_{band}.tif" if "time" in raster.dims else "label.tif"
-    scenes = raster.gs.to_cog(root, path_format=template)
+    template = "{time:%Y%m%d}_{variable}.tif" if "time" in raster.dims else "label.tif"
+    scenes = raster.gs.to_cog(root, format_paths=template)
     return list(
         create_file_items(
             scenes,
             collection=collection,
             id_format="forest_{start:%Y%m%dT%H%M%S}",
-            datetime=datetime(2025, 6, 1, tzinfo=UTC),
         )
     )
 
@@ -163,10 +163,11 @@ def write_items(root, collection, variable, left, resolution, dates):
             {variable: (("y", "x"), rng.random(grid.shape, dtype="float32"))}, grid
         )
         template = f"{collection}_{left}.tif"
-        span = (datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC))
-        options = {"datetime": span}
-    scenes = raster.gs.write_nodata(np.nan).gs.to_cog(root, path_format=template)
+        options = {"datetime": TIMELESS}
+    scenes = raster.gs.write_nodata(np.nan).gs.to_cog(root, format_paths=template)
     id_format = f"{collection}_{left}_{{start:%Y%m%d}}"
+    if not dates:
+        id_format = f"{collection}_{left}_timeless"
     return list(
         create_file_items(scenes, collection=collection, id_format=id_format, **options)
     )
@@ -186,4 +187,4 @@ def tiles(tmp_path_factory):
     collections = []
     for name in ("s2", "s1", "dem"):
         collections.append(create_test_collection(name, description=name))
-    return from_items(entries, collections=collections)
+    return create_catalog(entries, collections=collections)

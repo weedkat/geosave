@@ -11,13 +11,18 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pystac
-from pystac.utils import make_absolute_href, make_relative_href
+from pystac.utils import make_absolute_href
 from stac_geoparquet.arrow import parse_stac_items_to_arrow, to_parquet
 
 from geosave.geodata.io import storage
 from geosave.geodata.io.formats import geoparquet
 from geosave.geodata.io.storage import absolute_location
-from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
+from geosave.geodata.stac.catalog import (
+    FOOTER_KEY,
+    ITEM_COLUMNS,
+    merge_collections,
+    to_items,
+)
 
 if TYPE_CHECKING:
     from upath import UPath
@@ -75,14 +80,14 @@ def write_stac_geoparquet(
 
     Selected by `rows.gs.to_geoparquet` from its catalog metadata. Asset hrefs are stored relative to
     the file, so a table and its assets move together. The table's
-    Collections, overridden by any given, go in the file's footer metadata as
-    stac-geoparquet stores them, each with the extent of its rows.
+    Collections, reconciled with any supplied definitions, go in the file's footer metadata as
+    stac-geoparquet stores their supplied definitions without recalculating extents.
 
     Args:
-        rows: Item table, as `from_items` or `open_vector` returns it.
+        rows: Item table, as `create_catalog` or `open_vector` returns it.
         path: Output path or URL ending in `.parquet` or `.geoparquet`.
-        collections: Collections replacing the table's own of the same id.
-            Ones no row names are ignored; extents are updated on copies.
+        collections: Additional definitions; conflicting definitions of the same ID fail.
+            Ones no row names are ignored; supplied definitions are preserved.
         overwrite: Replace an existing file when true.
         storage_options: Options for the filesystem a URL names.
         **write_options: Shared GeoParquet options, with STAC representation
@@ -97,13 +102,11 @@ def write_stac_geoparquet(
         ValueError: `rows` is not an item table, or the suffix is wrong.
 
     Examples:
-        >>> catalog = ds.gs.to_catalog("samples", path_format="forest_{time:%Y%m%d}.tif")
+        >>> catalog = ds.gs.to_catalog("samples", format_paths="forest_{time:%Y%m%d}_{asset}.tif")
         >>> write_stac_geoparquet(catalog, "data/forest.parquet")
         PosixUPath('data/forest.parquet')
     """
-    missing = set(ITEM_COLUMNS) - set(rows.columns)
-    if missing:
-        raise ValueError(f"an item table needs STAC columns {sorted(missing)}")
+    rows.gs.validate(geometry=False, stac_item=True)
     footer = rows.attrs.get(FOOTER_KEY)
     if not isinstance(footer, Mapping):
         raise ValueError("catalog stac-geoparquet metadata must be a mapping")
@@ -143,35 +146,29 @@ def write_stac_geoparquet(
         )
     row_group_size = write_options.pop("row_group_size", None)
 
-    catalog = rows.gs
     location = absolute_location(path)
-    items = catalog.to_items()
-    collections_by_id = catalog.collections
-    for collection in collections or ():
-        collections_by_id[collection.id] = collection
+    items = to_items(rows)
+    definitions = []
+    for fields in footer.get("collections", {}).values():
+        definitions.append(pystac.Collection.from_dict(fields))
+    definitions.extend(collections or ())
+    collections_by_id = merge_collections(definitions)
     stored = {}
     prepared = prepare_collections(items, collections_by_id.values())
     for collection_id, collection in prepared.items():
-        stored[collection_id] = collection.to_dict(
-            include_self_link=False, transform_hrefs=False
-        )
+        stored[collection_id] = collection.to_dict(transform_hrefs=False)
 
     for item in items:
         item.set_self_href(location)
         item.make_asset_hrefs_relative()
-        item.remove_links(pystac.RelType.COLLECTION)
-        # STAC requires an Item stating a collection to link to it; the
-        # Collection lives in this file's footer, so the link names the file.
-        if item.collection_id is not None:
-            item.add_link(
-                pystac.Link(
-                    pystac.RelType.COLLECTION, make_relative_href(location, location)
-                )
-            )
+        link = item.get_single_link(pystac.RelType.COLLECTION)
+        if link is not None and link.get_href() is None:
+            # The footer carries the definition; no JSON document URL is invented.
+            item.remove_links(pystac.RelType.COLLECTION)
     records = [
         item.to_dict(include_self_link=False, transform_hrefs=False) for item in items
     ]
-    table = parse_stac_items_to_arrow(records).read_all()
+    table = parse_stac_items_to_arrow(records, drop_invalid_properties=False).read_all()
     # The dependency writes each Arrow batch as a row group; keep its footer encoder.
     batches = (
         table
@@ -201,7 +198,7 @@ def read_collections(
 
     Returns:
         {
-            "<collection id>": its Collection, with the extent of its rows,
+            "<collection id>": its supplied Collection definition,
         }
         Empty where the file carries none.
 
@@ -239,41 +236,9 @@ def parse_collections(value: bytes | str) -> dict[str, pystac.Collection]:
 def prepare_collections(
     items: list[pystac.Item], collections: Iterable[pystac.Collection] | None
 ) -> dict[str, pystac.Collection]:
-    """Copy the given Collections that Items name, each with the extent of its Items.
-
-    Args:
-        items: Items naming their collection ids.
-        collections: Collections to copy fields from, by id. They are not
-            changed. Ones no Item names are ignored.
-
-    Returns:
-        Collection id mapped to a copy with updated extent and absolute asset
-        hrefs. Catalog hierarchy links are removed; descriptive links remain.
-    """
-    import pystac
-
-    by_id = {collection.id: collection for collection in collections or ()}
-    grouped: dict[str, list[pystac.Item]] = {}
-    for item in items:
-        if item.collection_id is not None:
-            grouped.setdefault(item.collection_id, []).append(item)
-
-    built = {}
-    for collection_id, members in grouped.items():
-        if collection_id not in by_id:
-            continue
-        # Client Collection subclasses require an API root; publish native values.
-        fields = by_id[collection_id].to_dict(transform_hrefs=False)
-        collection = pystac.Collection.from_dict(fields)
-        collection.extent = pystac.Extent.from_items(members)
-
-        collection.make_asset_hrefs_absolute()
-        for link in collection.links:
-            if link.rel not in ("root", "parent", "self", "item", "child"):
-                link.target = link.get_absolute_href() or link.target
-        for rel in ("root", "parent", "self", "item", "child"):
-            collection.remove_links(rel)
-
-        built[collection_id] = collection
-
-    return built
+    """Copy referenced Collections without changing their authoritative extents."""
+    definitions = merge_collections(collections or ())
+    referenced = {item.collection_id for item in items}
+    return {
+        key: collection for key, collection in definitions.items() if key in referenced
+    }

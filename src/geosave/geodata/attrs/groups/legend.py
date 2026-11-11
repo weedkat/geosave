@@ -37,7 +37,8 @@ class Legend(AttrsGroup):
     names them in order. `classes` reads an enumeration back keyed by value.
 
     Attributes:
-        flag_values: Pixel values, ascending and unique, one per class.
+        flag_values: Enumeration codes, ascending and unique without masks;
+            masked codes may repeat when their masks differ.
         flag_masks: Bit masks, for values packing several flags at once.
         flag_meanings: Space-separated class names, in listing order.
         color_map: `{pixel value: hex or RGB}`, keyed to listed values.
@@ -63,7 +64,7 @@ class Legend(AttrsGroup):
     @property
     def classes(self) -> dict[int, str] | None:
         """Return each pixel value mapped to its class, None for a bitfield or colours only."""
-        if self.flag_values is None or self.flag_meanings is None:
+        if self.flag_masks is not None or self.flag_values is None or self.flag_meanings is None:
             return None
         return dict(zip(self.flag_values, self.flag_meanings.split(), strict=True))
 
@@ -175,7 +176,7 @@ class Legend(AttrsGroup):
     def _check_values_ascending(self) -> Self:
         """Require pixel values in ascending order without repeats."""
         values = self.flag_values
-        if values is not None and values != sorted(set(values)):
+        if self.flag_masks is None and values is not None and values != sorted(set(values)):
             raise ValueError(
                 f"The legend's pixel values {values} must be ascending with no "
                 f"repeats. Sort the classes by pixel value and remove duplicates."

@@ -12,32 +12,32 @@ from tests.geodata.conftest import build_raster
 from tests.geodata.stac.extensions.conftest import _empty
 
 
-def _label(classes, colors=None):
+def _legend(classes, colors=None):
     label = build_raster()[["nir"]].astype("uint8").rename(nir="label")
-    return label.gs.write_legend(classes, colors, target="label").label
+    return label.gs.write_legend(classes, colors, target="label").label.gs.legend
 
 
 def test_a_class_name_stac_refuses_raises() -> None:
     with pytest.raises(ValueError, match="tree/shrub"):
-        classification.build_classes(_label({1: "tree/shrub"}))
+        classification.build_classes(_legend({1: "tree/shrub"}))
 
 
 def test_bit_masks_have_no_classes() -> None:
     qa = build_raster().nir.astype("uint8")
     qa.attrs.update(flag_masks=[1, 2], flag_meanings="cloud shadow")
 
-    assert classification.build_classes(qa) is None
+    assert classification.build_classes(qa.gs.legend) is None
 
 
 def test_classes_are_stamped_back_as_the_legend_that_made_them() -> None:
     classes = classification.build_classes(
-        _label({0: "background", 1: "forest"}, {1: "#00ff00"})
+        _legend({0: "background", 1: "forest"}, {1: "#00ff00"})
     )
 
     band = RasterBand.create(data_type="uint8")
     ClassificationExtension.ext(band).apply(classes=classes)
 
-    stamped = classification.stamp(_empty("label"), band)
+    stamped = _empty("label").assign_attrs(classification.read_attrs(band))
 
     legend = attrs.Legend.model_validate(stamped.attrs)
     assert legend.classes == {0: "background", 1: "forest"}

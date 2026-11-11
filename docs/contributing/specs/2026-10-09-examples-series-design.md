@@ -1,236 +1,224 @@
 # Examples series: one land-cover project
 
-Updated: 2026-10-16. Notebooks 0–3 exist; notebook 4 is next. Later lessons
-are planned and must be smoke-tested before their designs are settled.
-
-This plan follows the current files in `examples/`. The
-[examples guide](../../examples.md) describes the runnable lessons. Earlier
-numbering and API proposals are not requirements for the remaining lessons.
+Updated: 2026-11-06. This is the active teaching plan for `examples/`.
+The [examples guide](../../examples.md) describes the runnable lessons.
 
 ## Goal and reader
 
-Teach one land-cover mapping project from image files to a reusable model.
-The reader knows some Python and image modelling but may know no geospatial
-terminology. Each lesson starts with a problem the previous one leaves and
-produces a visible result using the same data and splits.
+Teach one land-cover mapping project from labeled images to a model another
+person can use. The reader knows some Python and image modelling but may know
+no geospatial terminology. Each lesson starts with a problem the preceding
+lesson leaves and produces a visible result using the same data and splits.
 
-The first four notebooks establish the workflow with native xarray and
-GeoPandas objects, a caller-owned torch Dataset, and ordinary Lightning.
-Notebook 4 extends the input declarations and introduces GeoSave's training tasks as ways
-to express work the reader already understands.
+Library coverage is an authoring check, not the table of contents. A notebook
+about storage, vectors, or chips in isolation is not a continuation of this
+project. Introduce each operation when the project needs it: save an image to
+reuse it, align a label so training is meaningful, merge predictions to map a
+forest, preserve a recipe so a later observation receives the same preparation.
 
 ## Teaching rules
 
-- Use `import geosave as gs` and current public APIs.
-- Keep the `DynamicWorld(Dataset)` name and tensor contract across notebooks
-  0, 1 and 3: `(image, label)` for training, an image for prediction.
-  All three accept image paths and optional label paths. Notebook 3 builds
-  a catalog, samples, frames and chips inside its constructor, and opens
-  and aligns each requested chip internally. No ModelSpec in these basic lessons.
-- Set up train, validation and test explicitly. Avoid dictionaries of split
-  rules, generic dispatch helpers and custom orchestration in these examples.
-- Show whole tables and native objects. Select columns or bands when an
-  operation needs them, rather than trimming every display.
-- Introduce geometry, dates, grids and metadata when they solve a concrete
-  problem. Follow explanations with code and useful output.
-- Use xarray directly: `image.assign(ndvi=ndvi)` adds a derived band already
-  on the image's grid. Align independent rasters explicitly before combining
-  their pixels.
-- Save raster files before creating Items that point to them. Explain that
-  asset hrefs are stored relative to the Parquet catalog, resolved when read,
-  and can also be published as ordinary STAC JSON.
-- Keep plain DataLoaders and the notebook's `Segmenter` through notebook 3.
-  Introduce task Modules, DataModules and their sample contract in notebook 4.
-- Start each notebook in a fresh kernel. Files carry forward; variables do not.
-- Reuse local data after acquisition. Identify remote queries and weight
-  downloads, and distinguish cached checks from live remote execution.
-- Use short training runs to demonstrate behavior, validation for comparisons,
-  and held-out test data for final evaluation. Estimate any normalization
-  statistics from the training split only.
-- Keep exercises after the completed workflow. Readable steps determine cell
-  count; there is no arbitrary five-cell limit.
+- Use real project inputs and current public APIs. Native xarray and GeoPandas
+  objects remain visible; a project-owned Dataset supplies ordinary tensors.
+- Start with the question, the files carried forward, and the result the reader
+  will make. Explain the next decision briefly, then show code and its output.
+- Retain the same geographic splits, band order, class IDs, and missing-pixel
+  policy unless the lesson explicitly makes one of them the experiment.
+- Introduce one substantial project problem at a time. Do not add a different
+  dataset just to demonstrate another feature.
+- Make each step easy to follow. Inspect and convert one prepared image/label pair
+  before introducing the Dataset that reads it. Keep split selection visible before
+  constructing loaders. Use intermediate values and explicit loops; some
+  repetition is preferable to an abstraction that obscures the work.
+- Separate meaningful steps with blank lines inside cells, functions, and loops.
+  Give distinct responsibilities their own cells with connecting prose. Judge
+  simplicity by whether readers can follow the work, not by line count.
+- Keep acquisition, alignment, and missing-data preparation outside training
+  Datasets. Use prepared inputs in the basics lesson. Scale imagery, never class
+  IDs. Introduce preparation when acquired data makes it necessary, rather than
+  adding defensive checks and repair modes to every sample read.
+- Pass changing inputs and configuration into functions explicitly. Imports,
+  other definitions, and genuine project constants may be referenced directly;
+  a client, query, collection, or selected band list must not be captured from
+  unrelated notebook cells. Do not disguise changing values as constants.
+- Keep one route to a completed project result in the main lesson. Alternative
+  decoders, model widths, model discovery, and NDVI review belong in optional
+  extensions with a stated reason to try them.
+- Start in a fresh kernel; files carry forward, variables do not. Keep setup
+  explicit rather than executing or extracting another notebook's cells.
+- Keep acquisition, sample grouping, alignment, tensor conversion, model
+  execution, and output interpretation explicit. Do not hide these in a generic
+  framework or infer a grid from matching array shapes.
+- Use short runs to demonstrate a workflow. Compare models on validation data;
+  reserve held-out test data for final evaluation. Label cached checks and live
+  remote checks separately.
+- Finish the workflow before **More things you can do**. Supplements suggest
+  plausible extensions of this project and may include a short runnable example.
+  No quizzes, difficulty ladders, hidden solutions, or empty answer cells.
+- Browser/server tools are optional. Run All must not launch a desktop browser
+  or start TensorBoard merely to complete the lesson.
 
-## Sequence
+## Current sequence
 
-| # | File | Status | Question | Visible result |
-| --- | --- | --- | --- | --- |
-| 0 | `00_basics.ipynb` | Existing | Can I inspect these images and train a baseline? | Data summaries, validation curves, a prediction beside its label. |
-| 1 | `01_model.ipynb` | Existing | How do I change the model while keeping the data fixed? | A composed model, augmentation and comparable training runs. |
-| 2 | `02_sources.ipynb` | Existing | How do I build this dataset from labels or a geometry? | Saved image/label pairs, a season over a GeoJSON outline, NDVI and STAC catalogs. |
-| 3 | `03_inputs.ipynb` | Existing | How do catalog rows become model inputs and maps? | Chips, plain Lightning training, daily scene predictions using the same Dataset, merged onto their grids and catalogued. |
-| 4 | `04_recipe.ipynb` | Next | How do I save and automate the input recipe? | A saved ModelSpec, prepared catalog and a run using GeoSave's supervised task. |
-| 5 | `05_pretrained.ipynb` | Planned | What changes when I use a pretrained encoder? | An explicit input contract and a controlled comparison with the small CNN. |
-| 6 | `06_multisource.ipynb` | Planned | How do I combine observations from different sensors and dates? | Quality masks, temporal composites and explicitly aligned optical/radar inputs. |
-| 7 | `07_workspace.ipynb` | Planned | How do I turn the working experiment into a repeatable project? | The same data recipe and model configuration run from a generated workspace. |
-| 8 | `08_release.ipynb` | Planned | How can someone else load the trained model and its input recipe? | A local model release reloaded for prediction; optional Hub publication. |
+| # | File | Project question | Result carried forward |
+| --- | --- | --- | --- |
+| 0 | `00_basics.ipynb` | Can I learn land cover from these labeled images? | Baseline predictions and training logs; optional per-class review. |
+| 1 | `01_model.ipynb` | Which model changes are worth investigating on these same tiles? | A composed model, paired augmentation, and a second validation run. |
+| 2 | `02_sources.ipynb` | How do I obtain the right imagery for my labels and my forest? | Aligned image/label pairs with fixed splits, six forest observations, and catalogs. |
+| 3 | `03_inputs.ipynb` | How do I train on those pairs and make complete forest maps? | Merged dated predictions, held-out evaluation, and the trained architecture/weights/classes. |
+| 4 | `04_recipe.ipynb` | How do I map another observation without changing what the model's inputs mean? | A saved preparation recipe, equivalence against the existing inputs and scores, and a georeferenced review image/map pair. |
 
-## What the existing lessons establish
+### What 0–3 already establish
 
-### 0 · Explore and train a baseline
+Notebook 0 uses eight complete training pairs and two validation pairs from the
+pinned Dynamic World subset, ordinary Dataset and DataLoader objects, and plain
+Lightning. Labels are expert annotations with ten
+classes including cloud and nodata 255; they are not the automated Dynamic World
+product. Predictions use native xarray coordinates and the label legend.
 
-Download the Dynamic World teaching dataset into
-`data/dynamic_world/<split>/{images,labels}/`. Open and plot an image and label,
-inspect reflectance and class balance, then use `DynamicWorld` and named
-DataLoaders to train an encoder/decoder/head model with plain Lightning.
-Put a prediction back on the label's grid with `gs.raster` and its legend.
-The loss and metrics ignore label code 255.
+Notebook 1 keeps the data fixed while introducing model composition and paired
+augmentation. Its changes motivate controlled follow-up experiments, not claims
+that one short run proves a better architecture.
 
-No catalog, ModelSpec or GeoSave training task is needed here.
+Notebook 2 searches with `GeoRegion`, loads selected Items onto a native
+`GeoBox`, and writes paired rasters and STAC GeoParquet. `to_catalog` writes the
+assets it describes. The acquisition and metadata workflow is already taught;
+later lessons reuse the files rather than repeating remote searches.
 
-### 1 · Improve the model
+Notebook 3 groups catalog rows with `sample(collections=..., freq="D")` and opens
+native DataTrees. It prepares imagery and categorical labels before constructing
+matching chips. Its Dataset only returns tensor pairs. Non-overlapping evaluation
+chips count each original pixel once, with padded labels ignored. Forest inference
+uses overlapping chips and merges their keyed scores outside the training classes.
+The caller restores spatial coordinates, dates, and observation masks. `gs.Chips`
+reads windows on demand; the notebook explicitly loads its small source collection.
 
-Keep notebook 0's Dataset, splits and tensor contract. Introduce `chain_step`,
-`Published`, `ModelChain`, `build_model` and registered parts through visible
-changes to that model. Add joint image/label flips inside the notebook's
-`Segmenter` and compare validation curves in TensorBoard.
+Its handoff in `data/landcover/` contains `model.yaml`, `weights.pt`, and
+`classes.yaml`. These are the actual trained chain, not a new random model.
+Lightning checkpoints remain separate artifacts for resuming training.
 
-Pretrained weights and new data sources wait for their own lessons.
+### 4 · Keep the preparation with the trained model
 
-### 2 · Build a dataset from STAC
+The motivating problem is input drift when the model is reused: weights alone
+cannot recover band order, scaling, or missing-pixel handling. This lesson
+records notebook 3's existing preparation using the **current** ModelSpec v3;
+it does not redesign ModelSpec or introduce a library training abstraction.
 
-A label supplies a grid and date. Search its day, load a matching scene,
-save the pair, then create Items and a catalog. Build the train, validation
-and test splits explicitly, combine their tables, and save
-`data/my_dataset/catalog.parquet`.
+1. Reload notebook 3's architecture, trained weights, and class definitions.
+2. Select a 128-pixel validation window and show the familiar manual preparation.
+3. Save the same preparation as a recipe. Keep decoded reflectance without
+   adding new normalization to an already-trained model.
+4. Deliberately reorder source variables, then compare the recipe's tensor and
+   scores with the manual path. Preserve missing-pixel masks separately.
+5. Reload the recipe and make a prediction for a review window in the latest
+   saved forest observation. Keep its grid, date, class IDs, legend, and nodata.
+6. Export the input crop and prediction together for inspection in a GIS.
 
-Next, read a geometry from `khdtk.geojson`, create an anchor, and load a
-season over that grid. Add NDVI with `assign` and explore it. Keep the
-four-band imagery as the model input. Save the season in `data/khdtk/` and
-show both GeoParquet and STAC JSON publication.
+This lesson uses a small review window to establish equivalence. It does not
+replace notebook 3's full-scene chipping/merging workflow or claim new accuracy.
+The project still owns file reads, observation selection, and augmentation.
+Recipe execution calls installed Python operations; reviewed local recipes are
+used throughout. Publication of arbitrary processing code remains unresolved.
 
-This lesson fetches and explores data; it does not introduce training tasks.
+## Planned continuations
 
-### 3 · Turn catalog rows into inputs and maps
+These are project outlines, not implemented notebooks. Inspect and smoke-test
+one complete flow before settling each lesson. Keep numbering provisional until
+its prerequisite artifacts and current APIs have been verified.
 
-Read notebook 2's catalog and collect each split's image and label TIFF
-paths. Pass them to `DynamicWorld(images, labels=None)`. Its constructor
-builds a catalog from existing file headers, groups by label time with
-`tolerance="1D"`, frames by day and chips at 128 pixels. With no labels or an
-empty label list, it prepares image-only inference. Its `table` property
-returns the chip GeoDataFrame; `frames` retains the original merge grids.
-`__getitem__` opens and aligns the requested row and returns tensors.
-`Segmenter.__init__` builds the model, evolving the earlier external-builder
-pattern. Keep ModelSpec out of this basic notebook while it is in development.
+### 5 · Improve the forest model with pretrained knowledge
 
-Train with ordinary DataLoaders and a `Segmenter` following notebook 1.
-Evaluate the test split, predict chips over the saved geometry season, merge
-the scores onto each acquisition day's grid, and save the maps before cataloguing them.
-Keep input scenes in `data/khdtk/` and prediction rasters and their
-GeoParquet catalog in `data/khdtk_pred/`. Show prediction, score indexing
-and merging in separate cells with the familiar evaluation loop. STAC JSON
-publication remains in notebook 2.
+Reuse the geographic splits and compare against the existing small CNN. Select
+one supported encoder whose weights can actually be obtained and whose input
+contract is known. The current TIFFs contain B02/B03/B04/B08: a six-band encoder
+requires acquiring the missing bands, not pretending the four-band files fit.
 
-This completes the basic workflow. Frames, chips, geometry ingestion and data
-publication are already taught; later lessons use them rather than
-reintroduce them as missing steps.
+Make the change in band order, normalization, spatial size, or context explicit
+in a new recipe. Inspect a real forward pass, train for a stated budget, and
+compare class metrics and the same validation maps. Keep weight-download cost
+and access requirements visible. Save the trained run and recipe, not just an
+architecture showcase.
 
-## Remaining lessons
+### 6 · Make forest mapping more reliable through cloudy months
 
-### 4 · One recipe for model inputs — next
+Start from dates where the optical imagery limits the project's map. Acquire
+quality information and, if it answers the project question, radar over the
+same places. Inspect dates, units, quality flags, and native grids first.
 
-Use the standard PyTorch Dataset as the boundary for ModelSpec management.
-The Dataset owns the sequence of sample, frame and chip calls; its native
-GeoDataFrames are preparation state retained for inspection and merging.
-Keep table construction in the constructor and raster reads in `__getitem__`.
-Extend notebook 3's Dataset rather than inventing a separate preparation
-flow. The ModelSpec declares requirements; the Dataset uses them for both
-training and inference.
+Apply quality masks before temporal reduction, retain valid-observation counts,
+and align continuous and categorical layers with appropriate resampling.
+Respect the labels' temporal meaning when using composites. Compare the new
+inputs against the optical-only experiment on the same splits. The outcome is
+a supported seasonal mapping experiment, not a tour of temporal operations.
 
-Start from notebook 3's working preparation and training code. The problem is
-keeping raster requirements, band selection, preprocessing and tensor inputs
-consistent when the same model is trained and used over another place.
+### 7 · Rerun the experiment outside a notebook
 
-1. Show the preparation steps and the named input the existing model needs.
-2. Introduce `ModelSpec` after its API is settled, including preprocessing and named inputs. Distinguish the raster/input
-   recipe from the model architecture built with `build_model`.
-3. Compare a manually prepared sample with the declared preparation. Check
-   band order, tensor values, nodata and the resulting grid before proceeding.
-4. Use `prepare` to save the prepared rasters, catalog and spec. Reopen them
-   and show what was preserved.
-5. Introduce the supervised task's `Module` and `DataModule`, showing which
-   training behavior they take over. Make the Dataset contract change
-   explicit: `(image, label)` becomes a `Sample` containing named `inputs`
-   and `target`. Do not hide this change behind an adapter.
-6. Train briefly and predict over the existing geometry with the same input
-   recipe. Save the spec and a checkpoint for subsequent lessons.
+Move a working experiment into an editable generated workspace, preserving its
+actual Dataset behavior, recipe, model configuration, and evaluation protocol.
+Current templates live under `modules/<task>/<method>/`; there is no `ml.tasks`
+package. Explain any change from tuple batches to named `Sample` dictionaries
+and test preparation equivalence before training.
 
-Keep the same optical data, splits and class definitions. Add no pretrained
-encoder, second sensor, workspace or deployment flow in this lesson.
+Run through LightningCLI, inspect saved effective configuration and logs, and
+resume a checkpoint deliberately. A template's default pretrained model or
+normalization must not silently replace this experiment. No Prefect orchestration
+is needed to demonstrate a repeatable local training project.
 
-### 5 · Use a pretrained encoder
+### 8 · Hand the trained forest model to a colleague
 
-Reuse notebook 4's prepared data and task setup. Select one supported
-pretrained encoder and make its required band order, spatial size and
-normalization explicit. Select the needed bands from the existing imagery,
-adapt the input recipe, and inspect a forward pass before training.
+Package the actual trained registered chain, input recipe, class meaning, and
+reference case. Reload in a separate process and reproduce the reference scores,
+then map another saved observation while retaining output georeferencing.
 
-Compare with the small CNN using the same geographic splits and a stated
-training budget. Show validation metrics and maps; a short teaching run is
-not a benchmark. Weight download is the new external dependency, with later
-runs using its cache.
+Explain what the recipient needs installed and what the release does not include
+(training data, optimizer state, arbitrary Python implementations). Local export
+and reload complete the project. Hub publication is an optional explicit action,
+not a cell that runs during normal notebook execution.
 
-### 6 · Combine sources and dates
+## Changes from the October plan
 
-Extend the dataset-building workflow with optical quality information and
-Sentinel-1 observations over the same places. Inspect each source before
-combining it: cloud/shadow validity, acquisition dates, variable names,
-units and native grids.
+- Replace `GeoAnchor`, `gs.raster`, and the old sample/frame/chip table workflow
+  with the current `GeoRegion`, native xarray, row grouping, and NumPy Chips APIs.
+- Remove the proposed library-owned supervised task and hidden `Sample` adapter.
+  Training implementations belong to generated projects, and ModelSpec redesign
+  remains on hold. Notebook 4 uses existing v3 behavior only.
+- Do not require `prepare` to persist arbitrary intermediate processing state.
+  The project saves deliberate raster outputs, recipe files, and model weights.
+- Remove exercises; supplements now extend the completed land-cover project.
+- Reject the six standalone feature notebooks added during the first revision.
+  Their replacement follows this sequence rather than renaming those notebooks.
 
-Show quality masking, a temporal composite and calendar pairing as explicit
-operations. Keep sources in separate DataTree groups until a shared grid is
-needed, then align explicitly. Display the result, save and catalogue the
-new inputs, and update the model's input recipe. Combine optical and radar
-into a model input only after their band and normalization choices are
-visible. Compare against the optical-only run on the same splits.
+## Implementation and verification
 
-### 7 · Move the experiment into a workspace
+- [x] Remove the standalone additions and their test registrations and links.
+- [x] Keep useful 0–3 API corrections; rewrite supplements around the project.
+- [x] Smoke-test the saved recipe against real cached validation pixels and the
+  trained notebook-3 checkpoint before writing notebook 4.
+- [x] Add the trained-model handoff to notebook 3 and write notebook 4.
+- [x] Execute notebook 4 in a fresh kernel with the actual trained handoff.
+- [x] Verify input/score equivalence, then reopen the image and prediction to
+  check pixels, grid, dates, class legend, and nodata.
+- [x] Run the scoped notebook regression, formatting, structure, and link checks.
 
-Start from a working notebook configuration. Generate a workspace, place the
-Dataset code with the task, and carry the existing ModelSpec, model recipe
-and training settings into its configuration. Run the same experiment through
-LightningCLI, inspect its logs, and demonstrate checkpoint resume.
+Further coverage should arise from these project decisions. Prefect scheduling,
+remote training data, serving, and monitoring need concrete use cases after the
+local project is complete; they are not independent feature lessons to append
+just to cover exports.
 
-The workspace composes GeoSave and Lightning; it does not introduce a second
-implementation of preparation or training. No Prefect flow is needed here.
+### Verification for this revision
 
-### 8 · Save and load a model release
+Notebooks 0, 1, 3, and 4 completed in fresh kernels using cached source data
+and isolated output folders. These runs included training, evaluation, forest
+mapping, and the notebook-3 handoff consumed by notebook 4. Notebook 0's later
+revision uses eight complete training pairs and two validation pairs, also used
+by notebook 1. Notebook 3 uses separate preparation, non-overlapping evaluation
+chips, and an explicit forest prediction loop. No fresh acquisition was claimed.
 
-Distinguish a checkpoint for resuming training, a catalog of raster outputs,
-and a model release containing architecture, trained weights and an input
-recipe. Use registered model parts from the preceding lessons.
-
-Save a release locally, reload it in a fresh process, and compare its prediction
-with the trained model on the same input. Then prepare and predict another
-place with the loaded recipe, preserving the output grid and class legend.
-Make Hub upload an optional, explicitly authorized final step; local export
-and reload complete the lesson without publishing to an account.
-
-## Later directions
-
-Prefect orchestration, remote training data, serving and monitoring need their
-own use cases and designs after the local workflow is complete. They have no
-assigned notebook numbers yet. Other prediction tasks and large benchmark
-studies are separate learning paths; this series remains about land cover.
-
-## Implementation and verification order
-
-Build notebook 4 next, then revisit each later outline using what that lesson
-reveals. The roadmap does not authorize implementing all remaining notebooks
-at once.
-
-For each lesson:
-
-1. Inspect the current public APIs and the notebook it builds on.
-2. Smoke-test the complete flow as a small script before settling its design.
-3. Fix any necessary library defect in its owning module, with focused tests;
-   do not put workarounds into the teaching code.
-4. Write the standalone notebook with visible outputs and exercises.
-5. Execute its teaching cells in a fresh kernel, check its saved artifacts,
-   and add or update its test in `tests/examples/test_notebooks.py`.
-6. Validate notebook structure, formatting, and links from the examples guide
-   and README. Mark a lesson existing only when its file and checks exist.
-
-Exercise persistence and lazy-execution promises used by the lesson. Record
-whether verification used cached data or live services. Keep completed lessons
-stable when adding advanced task APIs; update their descriptions only when
-their actual behavior changes.
+Input tensors and model scores matched the manual path. Reopened review TIFFs
+retained the exact source pixels and packing, matching grid/date, valid class
+IDs, legend, and nodata. The local catalog/chip and paired-input regressions
+passed (5 passed, 5 slow tests deselected), including image-only prediction and
+helper execution without notebook configuration globals. All five notebooks passed structure,
+syntax, and Ruff check/format checks; the scoped diff-whitespace check passed.
+Full live notebook-2 acquisition and the complete integration suite were not
+rerun.

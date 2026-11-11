@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from functools import partial
 from typing import Any, cast
 
 import datashader as ds
@@ -14,13 +12,11 @@ import geoviews as gv
 import holoviews as hv
 import numpy as np
 import pandas as pd
-import panel as pn
 import param
 from matplotlib.colors import to_hex
 from odc.geo.geom import BoundingBox
 from shapely.geometry import Point
 
-from geosave.geodata.stac.catalog import ITEM_COLUMNS
 from geosave.geodata.utils.datetime import find_overlapping, read_row_spans
 from geosave.geodata.viz import shapes
 from geosave.geodata.utils.color import CATEGORY_PALETTE
@@ -28,7 +24,6 @@ from geosave.geodata.viz.colors import DEFAULT_CMAP
 
 from ..mercator import is_known_range, to_web_mercator
 from .layer import Layer
-from .raster import RasterLayer
 
 # Colour of features no column colours, and of selected features.
 FEATURE_COLOR = "#1f77b4"
@@ -49,12 +44,8 @@ SAMPLED_COUNTS = {"Point": 50_000, "LineString": 5_000, "Polygon": 5_000}
 class VectorLayer(Layer):
     """One vector on the map: its features, coloured by a column or one colour.
 
-    Row lists index `data`: `shown_rows` are the rows the table's filters
-    show, `footprint_rows` those whose polygons the table's checkboxes draw,
-    `picked_rows` those a map click picked, and `raster_rows` those whose
-    rasters are on the map, offered when the rows carry STAC assets. Checking
-    a raster row opens its raster lazily, off the page's thread when a page
-    is running; a row already open keeps its raster.
+    Row positions select the features drawn and identified on the map.
+    Tables and raster loading belong to the Explorer.
     """
 
     heading = "Vectors"
@@ -82,11 +73,6 @@ class VectorLayer(Layer):
     picked_rows = param.List(default=[], item_type=int)
     shown_rows = param.List(default=[], item_type=int)
     footprint_rows = param.List(default=[], item_type=int)
-    raster_rows = param.List(default=[], item_type=int)
-    # Rasters of the checked raster rows, by row position, in check order.
-    rasters = param.Dict(default={}, precedence=-1)
-    # Why the last checked raster row failed to open; empty when it opened.
-    error = param.String(default="", precedence=-1)
     period = param.CalendarDateRange(default=None, label="Dates")
 
     def __init__(
@@ -113,22 +99,10 @@ class VectorLayer(Layer):
                 GeometryCollection.
             KeyError: `column` is no number or text column.
         """
-        self._load_generation = 0
         # 1. The rows, in the map's Web Mercator, by geometry type
         if frame.crs is None:
             raise ValueError("a map needs a CRS; use set_crs first")
         self.data = frame.reset_index(drop=True)
-        # Rows carrying STAC assets are catalog rows, whose rasters can open.
-        self.has_rasters = True
-        for key in ITEM_COLUMNS:
-            if key not in self.data:
-                self.has_rasters = False
-        if self.has_rasters:
-            self.heading = "Catalogs"
-            self.icon = "layers"
-            self.row_noun = "item"
-            self.default_name = "catalog"
-            self.hidden_hover_columns = {"id", "type", "stac_version"}
         # The map's extent of these features, in Web Mercator metres.
         self.bbox = to_web_mercator(
             BoundingBox(*self.data.total_bounds, crs=self.data.crs).polygon
@@ -199,11 +173,9 @@ class VectorLayer(Layer):
 
     @property
     def summary(self) -> str:
-        """Return the row count, and open rasters of a catalog, such as `12 items · 2 open`."""
+        """Return the feature count."""
         plural = "" if len(self.data) == 1 else "s"
         summary = f"{len(self.data):,} {self.row_noun}{plural}"
-        if self.has_rasters:
-            summary += f" · {len(self.rasters)} open"
         return summary
 
     @property
@@ -227,97 +199,6 @@ class VectorLayer(Layer):
 
     def _create_copy(self):
         return type(self)(self.data, name=self.name)
-
-    def copy(self) -> VectorLayer:
-        """Return a layer on the same rows, its open rasters copied with their settings."""
-        copied = super().copy()
-        # The copy shows rasters of its own, so their settings stay independent.
-        rasters = {}
-        for position, raster in self.rasters.items():
-            rasters[position] = raster.copy()
-        copied.rasters = rasters
-        return copied
-
-    def open_row_raster(self, position: int) -> RasterLayer:
-        """Open one catalog row lazily, titled by its collection and date."""
-        row = self.data.iloc[position]
-        title = str(row.get("collection") or row.get("id", position))
-        date = row.get("datetime", row.get("start_datetime"))
-        if pd.notna(date) and hasattr(date, "strftime"):
-            title += f" · {date:%Y-%m-%d}"
-        return RasterLayer(row.gs.to_datatree().gs.to_dataset(), row=row, name=title)
-
-    @param.depends("raster_rows", watch=True)
-    def open_checked_rows(self) -> None:
-        """Open the rasters of newly checked rows, and drop the unchecked rows'."""
-        self._load_generation += 1
-        generation = self._load_generation
-        checked_rows = list(self.raster_rows)
-        new_rows = []
-        for position in checked_rows:
-            if position not in self.rasters:
-                new_rows.append(position)
-        if not new_rows:
-            self._keep_rasters(checked_rows, {})
-            return
-        # Metadata reads can wait on remote files; a running page stays live.
-        pn.state.execute(
-            partial(self._open_new_rows, checked_rows, new_rows, generation)
-        )
-
-    async def _open_new_rows(
-        self, checked_rows: list[int], new_rows: list[int], generation: int
-    ) -> None:
-        if generation != self._load_generation:
-            return
-        try:
-            rasters_by_row = await asyncio.to_thread(self._open_rows, new_rows)
-        except (OSError, ValueError, KeyError, TypeError, NotImplementedError) as error:
-            if generation != self._load_generation:
-                return
-            # Preserve already open rows when this request fails.
-            self.error = str(error)
-            self.raster_rows = sorted(self.rasters)
-            return
-        # A later check superseded this one while its rows opened.
-        if generation != self._load_generation:
-            return
-        self.error = ""
-        self._keep_rasters(checked_rows, rasters_by_row)
-
-    def cancel_loads(self) -> None:
-        """Invalidate pending reads and keep only successfully opened rows checked."""
-        self._load_generation += 1
-        self.raster_rows = list(self.rasters)
-
-    def _open_rows(self, positions: list[int]) -> dict[int, RasterLayer]:
-        rasters_by_row = {}
-        for position in positions:
-            rasters_by_row[position] = self.open_row_raster(position)
-        return rasters_by_row
-
-    def _keep_rasters(
-        self, checked_rows: list[int], rasters_by_row: dict[int, RasterLayer]
-    ) -> None:
-        # The checked rows' rasters already open, then the newly opened ones.
-        rasters = {}
-        for position, raster in self.rasters.items():
-            if position in checked_rows:
-                rasters[position] = raster
-        rasters.update(rasters_by_row)
-        if rasters.keys() != self.rasters.keys():
-            self.rasters = rasters
-
-    def uncheck_row_of(self, raster: RasterLayer) -> None:
-        """Uncheck the row that opened `raster`, closing its raster."""
-        for position, opened_raster in self.rasters.items():
-            if opened_raster is raster:
-                remaining = []
-                for row in self.raster_rows:
-                    if row != position:
-                        remaining.append(row)
-                self.raster_rows = remaining
-                return
 
     @property
     def is_sampled(self):

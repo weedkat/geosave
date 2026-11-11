@@ -2,38 +2,179 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from geosave.geodata.conventions import TIME_COORDINATE, require_yx
-from geosave.geodata.core.raster.time import read_bounds
+from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
 
 if TYPE_CHECKING:
-    import geopandas as gpd
-    from collections.abc import Mapping
+    from collections.abc import Callable
 
     from odc.geo import CRS, BoundingBox, Resolution
     from odc.geo.gcp import GCPGeoBox
     from odc.geo.geobox import GeoBox
-    from odc.geo.geom import Geometry
 
-    from odc.geo import SomeResolution
-
-    from geosave.geodata.transform.warp import Resampling, Target
     from geosave.geodata.utils.datetime import DateRange
 
-    from geosave.geodata.core.anchor import GeoAnchor
+    from geosave.geodata.core.region import GeoRegion
 
 
-class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
+class RasterTime[DataT: xr.DataArray | xr.Dataset]:
+    """Read and write temporal coordinates on one native raster.
+
+    A label that covers a period carries it as `start_datetime` and
+    `end_datetime` coordinates, the names STAC Items use. They follow the
+    temporal dimension, or are scalar endpoints shared by every observation.
+    """
+
+    _data: DataT
+
+    @property
+    def time_coordinate(self) -> xr.DataArray | None:
+        """Read the unambiguous CF temporal coordinate, falling back to `time`.
+
+        Raises:
+            ValueError: Multiple coordinates declare temporal identity.
+        """
+        names = set(self._data.cf.coordinates.get("time", []))
+        names.update(self._data.cf.axes.get("T", []))
+        if len(names) > 1:
+            raise ValueError(f"Multiple temporal coordinates are declared: {names}")
+        if names:
+            return self._data.coords[names.pop()]
+        return self._data.coords.get(TIME_COORDINATE)
+
+    def write_time_bounds(
+        self,
+        freq: str,
+        *,
+        label: Literal["left", "right"] = "left",
+        dim: str | None = None,
+    ) -> DataT:
+        """State each time label's cell as one frequency step, without reading pixels.
+
+        Args:
+            freq: Pandas offset alias the cells span, such as "MS".
+            label: "left" when each label starts its cell, "right" when it
+                ends it.
+            dim: Coordinate holding the labels; defaults to the temporal
+                coordinate.
+
+        Returns:
+            New raster with `start_datetime` and `end_datetime` coordinates on
+            the temporal coordinate's dimensions; scalar ones for a scalar label.
+
+        Raises:
+            KeyError: No time coordinate exists.
+            ValueError: A label is not on an edge of `freq`.
+
+        Examples:
+            >>> monthly.gs.write_time_bounds("MS").end_datetime.values[0]
+            numpy.datetime64('2025-02-01T00:00:00.000000000')
+        """
+        from pandas.tseries.frequencies import to_offset
+
+        labels = self.time_coordinate if dim is None else self._data.coords[dim]
+        if labels is None:
+            raise KeyError("No temporal coordinate is declared")
+        step = to_offset(freq)
+        values = pd.DatetimeIndex(np.atleast_1d(labels.values))
+        # Fixed-length steps such as "10D" accept every instant as an edge.
+        for value in values:
+            if not step.is_on_offset(value):
+                raise ValueError(f"time label {value} is not on a {freq} edge")
+        if label == "left":
+            starts, ends = values, values + step
+        else:
+            starts, ends = values - step, values
+        starts = starts.to_numpy().reshape(labels.shape)
+        ends = ends.to_numpy().reshape(labels.shape)
+        return self._data.assign_coords(
+            {START_DATETIME: (labels.dims, starts), END_DATETIME: (labels.dims, ends)}
+        )
+
+    @property
+    def time_bounds(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """Return each label's start and end as 1-D arrays, None for instants.
+
+        A scalar period gives arrays of length one. NaT marks a label that
+        covers no observation.
+
+        Raises:
+            ValueError: Bounds are incomplete, reversed, or on unrelated dimensions.
+        """
+        coords = self._data.coords
+        if START_DATETIME not in coords and END_DATETIME not in coords:
+            return None
+        if START_DATETIME not in coords or END_DATETIME not in coords:
+            raise ValueError(
+                "a period needs both start_datetime and end_datetime "
+                "coordinates; add the missing one or drop both"
+            )
+        start = coords[START_DATETIME]
+        end = coords[END_DATETIME]
+        labels = self.time_coordinate
+        for endpoint in (start, end):
+            if endpoint.ndim and (
+                labels is None or endpoint.dims != labels.dims or labels.ndim != 1
+            ):
+                raise ValueError(
+                    "observation endpoints must follow the temporal coordinate's dimension"
+                )
+
+        starts = np.atleast_1d(start.values)
+        ends = np.atleast_1d(end.values)
+        starts, ends = np.broadcast_arrays(starts, ends)
+        if np.any(np.isnat(starts) != np.isnat(ends)) or np.any(starts > ends):
+            raise ValueError("time bounds must be ordered pairs or paired NaT")
+        return starts, ends
+
+    def _read_coverage(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """Read observation coverage for whole-object summaries."""
+        return self.time_bounds
+
+    @property
+    def timespan(self) -> DateRange | None:
+        """Return inclusive coverage from bounds, falling back to time labels.
+
+        Empty time axes, absent temporal information and NaT coverage return
+        None. Only temporal coordinates are read, never raster pixels.
+        """
+        labels = self.time_coordinate
+        if labels is not None and labels.size == 0:
+            return None
+
+        bounds = self._read_coverage()
+        if bounds is None:
+            if labels is None:
+                return None
+            starts = ends = np.atleast_1d(labels.values)
+        else:
+            starts, ends = bounds
+
+        if starts.size == 0 or ends.size == 0:
+            return None
+
+        present = ~np.isnat(starts) & ~np.isnat(ends)
+        if not present.any():
+            return None
+        first, last = starts[present].min(), ends[present].max()
+
+        # Microseconds convert to datetime; nanoseconds would convert to int.
+        return first.astype("datetime64[us]").item(), last.astype(
+            "datetime64[us]"
+        ).item()
+
+
+class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
     """Spatial, attrs, and pixel members every `gs` raster accessor shares.
 
     Concrete accessors bind their xarray object to `_data`; this class is
-    never built directly. Each pixel operation delegates to `transform`,
-    which treats a band, a raster, and a tree alike.
+    never built directly. Concrete accessors own pixel operations and traversal.
     """
 
     _data: DataT
@@ -43,47 +184,33 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
 
         Args:
             data: Band, raster, or tree to read through this accessor.
-
-        Raises:
-            ValueError: Its grid, or a group's, spans dimensions other than
-                `y` and `x`.
         """
-        require_yx(data)
         self._data = data
 
     @property
+    @abstractmethod
+    def spatial_dims(self) -> tuple[str, str] | None:
+        """Return spatial axes in vertical, horizontal order when all rasters agree."""
+
+    @abstractmethod
+    def validate(self, *, georeferenced: bool = False) -> None:
+        """Check raster validity and optionally require geographic placement."""
+
+    @property
+    @abstractmethod
     def geobox(self) -> GeoBox | GCPGeoBox | None:
-        """Read the pixel grid, if this object carries one.
-
-        Same lookup as `.odc.geobox`, since `gs` is built on odc-geo: None is
-        a normal answer, not a refused one. A caller that needs ground
-        position checks for None and a regular `GeoBox` itself.
-
-        Returns:
-            Grid including CRS, transform, bounds, and shape; a `GCPGeoBox`
-            if placed by ground control points rather than a transform; or
-            None if this object carries no CRS or spatial dims. A tree's is
-            the one grid all its grid nodes share, or None where they differ.
-        """
-        if not isinstance(self._data, xr.DataTree):
-            return self._data.odc.geobox
-        # A DataTree carries no `.odc` accessor, and its root holds no grid.
-        shared = None
-        for node in self._data.leaves:
-            grid = node.to_dataset(inherit="all_coords").odc.geobox
-            if grid is None or (shared is not None and grid != shared):
-                return None
-            shared = grid
-        return shared
+        """Return the common grid, or None for missing or differing placement."""
 
     @property
     def is_georeferenced(self) -> bool:
         """Whether this object carries a locatable grid.
 
         Returns:
-            True when `geobox` resolves to one.
+            True when `geobox` resolves to a grid with a CRS. A tree with
+            differing grids has no shared grid and returns False.
         """
-        return self.geobox is not None
+        grid = self.geobox
+        return grid is not None and grid.crs is not None
 
     @property
     def crs(self) -> CRS | None:
@@ -118,6 +245,24 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         return f"EPSG:{crs.epsg}" if crs.epsg else crs.proj.name
 
     @property
+    def grid_mapping_coords(self) -> tuple[str, ...]:
+        """Name every scalar coordinate that carries a CRS, as CF grid mappings do.
+
+        A raster normally carries one; one written by several tools can carry
+        stale extras, which placing it on a new grid must drop.
+
+        Examples:
+            >>> scene.gs.grid_mapping_coords
+            ('spatial_ref',)
+        """
+        markers = {"crs_wkt", "spatial_ref", "grid_mapping_name"}
+        names = []
+        for name, coord in self._data.coords.items():
+            if not coord.dims and not markers.isdisjoint(coord.attrs):
+                names.append(str(name))
+        return tuple(names)
+
+    @property
     def bounds(self) -> BoundingBox | None:
         """Read the grid's extent in its own CRS, if this object carries one.
 
@@ -140,31 +285,14 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
         return None if geobox is None else geobox.resolution
 
     @property
+    @abstractmethod
     def timespan(self) -> DateRange | None:
-        """Read inclusive temporal coverage.
+        """Read inclusive temporal coverage using the concrete raster's rules."""
 
-        A composite carries `start_datetime` and `end_datetime`, so its span runs from the earliest
-        start to the latest end. Plain instants span from the oldest to the
-        newest label.
-
-        Returns:
-            First and last covered instant, or None for timeless data.
-        """
-        coords = getattr(self._data, "coords", None)
-        if coords is None or TIME_COORDINATE not in coords:
-            return None
-        bounds = read_bounds(coords)
-        if bounds is None:
-            starts = ends = np.atleast_1d(coords[TIME_COORDINATE].values)
-        else:
-            starts, ends = bounds
-        first, last = starts.min(), ends.max()
-        if np.isnat(first) or np.isnat(last):
-            return None
-        # Microsecond units convert to datetime; nanosecond ones would give an int.
-        return first.astype("datetime64[us]").item(), last.astype(
-            "datetime64[us]"
-        ).item()
+    @property
+    @abstractmethod
+    def time_coordinate(self) -> xr.DataArray | None:
+        """Read the temporal coordinate owned by this raster or tree node."""
 
     @property
     def times(self) -> pd.DatetimeIndex | None:
@@ -177,177 +305,45 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree]:
             >>> ds.gs.times.strftime("%Y%m%d").tolist()
             ['20250601', '20250611']
         """
-        # ty misbinds the coords property on the bounded type parameter.
-        data = cast(xr.Dataset | xr.DataArray | xr.DataTree, self._data)
-        coords = data.coords
-        if TIME_COORDINATE not in coords:
+        labels = self.time_coordinate
+        if labels is None:
             return None
-        return pd.DatetimeIndex(np.atleast_1d(coords[TIME_COORDINATE].values))
+        return pd.DatetimeIndex(np.atleast_1d(labels.values))
 
     @property
-    def anchor(self) -> GeoAnchor:
-        """Read exact spatial and temporal coverage.
+    @abstractmethod
+    def region(self) -> GeoRegion:
+        """Read spatial extent and temporal coverage using the concrete raster's rules."""
 
-        Returns:
-            Anchor over this object's coverage and time span, which names its
-            centroid and place and formats both into a filename.
-
-        Raises:
-            ValueError: This object carries no locatable grid.
-
-        Examples:
-            >>> ds["ndvi"].gs.anchor.format("{lat:.2f}N_{lon:.2f}E_{start:%Y%m%d}")
-            '45.00N_13.00E_20250601'
-        """
-        from odc.geo.geobox import GeoBox
-
-        from geosave.geodata.core.anchor import GeoAnchor
-
-        geobox = self.geobox
-        if not isinstance(geobox, GeoBox):
-            raise ValueError(f"{type(self._data).__name__} carries no locatable grid")
-        return GeoAnchor(geobox.extent, timespan=self.timespan)
-
-    def unpack(self) -> DataT:
-        """Read physical values out of stored digital numbers.
-
-        Returns:
-            New object of physical values, a variable unchanged where it
-            carries neither `scale_factor` nor `add_offset`.
-
-        Examples:
-            >>> ds.gs.unpack().B04.max().item()
-            0.09
-        """
-        from geosave.geodata.transform import nodata
-
-        return nodata.unpack(self._data)
+    @abstractmethod
+    def _map_variables(self, change: Callable[[xr.DataArray], xr.DataArray]) -> DataT:
+        """Apply one per-variable change to every data variable this object holds."""
 
     def mask_and_scale(self) -> DataT:
-        """Decode stored nodata, scale, and offset into physical values.
-
-        Nodata is masked before scaling so its stored value cannot become
-        an ordinary reading. Already decoded variables pass through.
+        """Decode CF scale, offset and missing values using xarray.
 
         Returns:
-            New object of the same kind, preserving coordinates, descriptive
-            metadata, and laziness. Decoded storage metadata leaves attrs.
-
-        Examples:
-            >>> reflectance = ds.gs.mask_and_scale()
-            >>> reflectance.red.dtype
-            dtype('float32')
+            Same kind of object with decoded values and native per-variable
+            storage encoding. Already decoded variables pass through. Lazy
+            arrays remain lazy; coordinates and descriptive attrs are retained.
         """
-        from geosave.geodata.transform import nodata
+        from .transform import packing
 
-        return nodata.unpack(nodata.to_nan(self._data))
+        return self._map_variables(packing.mask_and_scale)
 
-    def mask(
-        self, valid: xr.DataArray | np.ndarray, *, fill: float | int | None = None
-    ) -> DataT:
-        """Make nodata every pixel `valid` does not keep.
-
-        Args:
-            valid: Boolean array, True where a pixel is real data. A DataArray
-                names its own axes and may span fewer, broadcasting over the
-                rest; a bare numpy array is read as the grid alone.
-            fill: Value the blanked pixels take, replacing nodata metadata
-                on each affected variable. None reads what each one carries.
+    def scale_and_fill(self) -> DataT:
+        """Restore stored values from each variable's CF encoding without I/O.
 
         Returns:
-            New object, its unkept pixels holding their variable's fill value.
+            Same kind of object with stored pixels and CF attrs. Consumed
+            conversion encoding is removed; unrelated encoding is retained.
+            Variables without conversion instructions pass through.
 
         Raises:
-            ValueError: `valid` is not boolean, does not span the grid, spans an
-                axis this object does not, `fill` does not fit a dtype, or a
-                variable carries no fill value and none is given.
-
-        Examples:
-            >>> clear = ds.gs.mask(ds.scl.isin([4, 5, 6, 7]))
+            ValueError: Attrs and encoding declare conflicting packing, or
+                encoded integer values overflow or collide with missing codes.
+                For lazy arrays, pixel checks run when evaluated.
         """
-        from geosave.geodata.transform import nodata
+        from .transform import packing
 
-        return nodata.mask(self._data, valid, fill=fill)
-
-    def to_nan(self) -> DataT:
-        """Replace each variable's fill value with NaN.
-
-        Returns:
-            New object holding NaN where the pixels were nodata, a variable
-            unchanged where it carries no fill value.
-
-        Examples:
-            >>> ds.gs.to_nan().red.dtype
-            dtype('float32')
-        """
-        from geosave.geodata.transform import nodata
-
-        return nodata.to_nan(self._data)
-
-    def reproject(
-        self,
-        target: Target,
-        *,
-        resampling: Resampling | Mapping[str, Resampling] = "nearest",
-        resolution: SomeResolution | None = None,
-    ) -> DataT:
-        """Warp pixels onto the grid a target names.
-
-        A target grid is adopted whole — CRS, resolution, and extent — while a
-        bare CRS only decides the projection, sizing the grid from this object.
-
-        Args:
-            target: Grid to land on, a raster already on one, or a CRS.
-            resampling: One GDAL kernel for every variable, or a mapping naming
-                each variable's own, which `"*"` answers the rest of.
-            resolution: Output pixel size, taken only for a CRS target. None
-                keeps the ground sampling as closely as the new CRS allows.
-
-        Returns:
-            New object on the target grid, carrying its own `spatial_ref` and
-            the CF semantics its axes earn.
-
-        Raises:
-            ValueError: This object or `target` sits on no locatable grid,
-                `resolution` contradicts a target grid, a variable does not
-                span the grid, or `resampling` would blend class codes.
-
-        Examples:
-            >>> ds.gs.reproject("EPSG:3857").gs.crs.epsg
-            3857
-            >>> srtm.gs.reproject(scene, resampling="bilinear")
-        """
-        from geosave.geodata.transform import warp
-
-        return warp.reproject(
-            self._data, target, resampling=resampling, resolution=resolution
-        )
-
-    def crop(
-        self, region: Geometry | gpd.GeoSeries | gpd.GeoDataFrame, *, mask: bool = True
-    ) -> DataT:
-        """Cut this object down to the extent of a region.
-
-        Args:
-            region: Geometry, or geometries, to cut against, reprojected onto
-                this object's CRS where they sit in another. Disconnected
-                geometries share one cut.
-            mask: Also make nodata the pixels outside the geometries, which
-                then take their own variable's fill value.
-
-        Returns:
-            New object covering the region's extent, its dtype unchanged.
-
-        Raises:
-            TypeError: `region` carries no CRS, as a bare shapely geometry.
-            ValueError: This object carries no CRS, `region` is empty or does
-                not overlap it, or `mask` is set while a variable carries no
-                fill value.
-
-        Examples:
-            >>> ds.gs.crop(field_boundaries)
-            >>> ds.gs.crop(box(10, 10, 30, 30, "EPSG:32633"))
-        """
-        from geosave.geodata.transform.extent import crop
-
-        return crop(self._data, region, mask=mask)
+        return self._map_variables(packing.scale_and_fill)

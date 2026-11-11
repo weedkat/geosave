@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "geosave"
 dynamic = ["version"]
-description = 'Library for geospatial machine learning, focusing providing pretrained model, and easy mlops flows'
+description = "Geospatial data preparation, interactive exploration, and Lightning-based machine learning with native Python objects."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-keywords = []
+keywords = ["geospatial", "remote-sensing", "satellite-imagery", "xarray", "machine-learning", "lightning"]
 authors = [
   { name = "Fatah Muria", email = "fatahmurbaut@gmail.com" },
 ]
@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "affine>=2.4",
     "bokeh>=3.8",
+    "cf-xarray>=0.11.3",
     "colorcet>=3.1",
     "cql2>=0.5.6",
     "dask>=2026.3",
@@ -90,13 +91,12 @@ mlflow = ["mlflow>=2.17.2"]
 all = ["geosave[ml,hub,flows,cloud,mlflow]"]
 
 [project.urls]
-Documentation = "https://github.com/weedkat/geosave#readme"
+Documentation = "https://weedkat.github.io/geosave-engine/"
 Issues = "https://github.com/weedkat/geosave/issues"
 Source = "https://github.com/weedkat/geosave"
 
 [project.scripts]
 geosave = "geosave.cli.main:app"
-geosave-flows = "geosave_flows.cli:app"
 
 [project.entry-points."xarray.backends"]
 geosave = "geosave.geodata.io.backend:GeoSaveBackendEntrypoint"

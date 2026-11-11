@@ -1,8 +1,7 @@
 import pytest
 import torch
 
-from geosave.geodata import Dataset, attrs
-from geosave.geodata.attrs import TimeSpec
+from geosave.geodata import Dataset
 from geosave.model.stages.encoder import clay
 
 
@@ -71,14 +70,6 @@ def test_model_context_reads_the_raster_it_encodes(scene):
     context = clay.model_context(scene.isel(time=0))
     torch.testing.assert_close(context["time"], torch.tensor([1.0, 14.0]))
     torch.testing.assert_close(context["latlon"], torch.tensor([51.0, 11.0]))
-
-
-def test_context_encodes_bucket_label_not_midpoint(scene: Dataset) -> None:
-    single = scene.isel(time=slice(1, 2))
-    monthly = single.assign_coords(
-        time=attrs.stamp_attrs(single.time, TimeSpec(time_freq="MS"))
-    )
-    torch.testing.assert_close(clay.time(monthly), torch.tensor([1.0, 3.0]))
 
 
 def test_clay_refuses_multiple_frames(scene: Dataset) -> None:

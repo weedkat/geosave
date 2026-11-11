@@ -15,5 +15,3 @@ See [Describe raster values](../basics/attrs.md) and [Metadata behavior](../conc
 ## Combine metadata
 
 ::: geosave.geodata.attrs.combine.combine_attrs
-
-::: geosave.geodata.attrs.combine.intersect

@@ -148,7 +148,7 @@ def test_geographic_file_renders_through_its_windows(tmp_path):
     values = np.random.default_rng(0).random((64, 64)).astype("float32")
     path = tmp_path / "geographic.tif"
     build_raster({"value": (("y", "x"), values)}, grid).gs.to_cog(
-        path.parent, path_format=path.name
+        path.parent, split_asset=(), format_paths=path.name
     )
 
     pixels = _render_pixels(RasterLayer(open_raster(path)))
@@ -296,7 +296,7 @@ def test_rgb_scene_overview_is_bounded(scene, tmp_path):
         grid,
     ).gs.write_rgb(*scene.gs.rgb)
     path = tmp_path / "rgb.tif"
-    data.gs.to_cog(path.parent, path_format=path.name)
+    data.gs.to_cog(path.parent, split_asset=(), format_paths=path.name)
     loaded = open_raster(path)
     layer = RasterLayer(loaded)
     sampled = loaded.isel(x=slice(0, 32), y=slice(0, 32)).compute()
@@ -373,3 +373,12 @@ def test_zero_cache_budget_releases_windows_and_reads_again(monkeypatch):
     assert len(reads) == 3
     layer.clear_cache()
     assert layer._cached_pixels is None
+
+
+def test_identify_uses_declared_spatial_dimensions():
+    scene = create_mercator_data().isel(y=slice(0, 2), x=slice(0, 2))
+    scene = scene.rename(y="row", x="col")
+    scene.row.attrs["axis"] = "Y"
+    scene.col.attrs["axis"] = "X"
+    layer = RasterLayer(scene)
+    assert layer.identify(float(scene.col[1]), float(scene.row[0])) == {"value": "1.0"}

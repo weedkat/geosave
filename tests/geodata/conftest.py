@@ -12,7 +12,7 @@ from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
 from geosave.geodata import configure_gdal
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_dataset as build
 from tests.conftest import build_tree
 from geosave.geodata.io import storage
@@ -46,29 +46,67 @@ def create_file_items(
     asset keys mapped to paths of one Item.
     """
     from collections.abc import Mapping
-    from os import PathLike
+    from contextlib import ExitStack
+    from datetime import datetime as DateTime
 
     import pystac
-    from upath import UPath
-
     from geosave.geodata import open_raster
-    from geosave.geodata.io.storage import location
-    from geosave.geodata.stac.item import create_item
-    from geosave.geodata.io.stac import group_files_by_date
+    from geosave.geodata.stac.publish import create_stac_item
 
-    name = collection.id if isinstance(collection, pystac.Collection) else collection
-    if isinstance(files, Mapping):
-        observations = [
-            {key: (location(path), open_raster(path)) for key, path in files.items()}
-        ]
-    else:
-        paths = [files] if isinstance(files, (str, PathLike, UPath)) else list(files)
-        opened = {location(path): open_raster(path) for path in paths}
-        observations = group_files_by_date(opened)
-    for observation in observations:
-        yield create_item(
-            observation, id_format=id_format, collection=name, datetime=datetime
-        )
+    with ExitStack() as opened:
+        groups = {}
+        paths = files.items() if isinstance(files, Mapping) else enumerate(flat(files))
+        for key, path in paths:
+            raster = opened.enter_context(open_raster(path))
+            span = raster.gs.timespan or (DateTime(2025, 6, 1), DateTime(2025, 6, 1))
+            group = None if isinstance(files, Mapping) else span
+            if not isinstance(files, Mapping):
+                key = (
+                    str(next(iter(raster.data_vars)))
+                    if len(raster.data_vars) == 1
+                    else "image"
+                )
+            groups.setdefault(group, {})[str(key)] = (path, raster, span)
+
+        for assets in groups.values():
+            paths = {}
+            spans = []
+            for key, (path, raster, span) in assets.items():
+                paths[key] = path
+                spans.append(span)
+            start = min(span[0] for span in spans)
+            end = max(span[1] for span in spans)
+            if datetime is not None:
+                if isinstance(datetime, tuple):
+                    start, end = datetime
+                else:
+                    start = end = datetime
+            raster = next(iter(assets.values()))[1]
+            values = {"start": start, "end": end}
+            centroid = raster.gs.geobox.extent.to_crs("EPSG:4326").centroid.coords[0]
+            values.update(lon=centroid[0], lat=centroid[1])
+            properties = {}
+            instant = start if start == end else None
+            if instant is None:
+                properties = {
+                    "start_datetime": pd.Timestamp(start).isoformat(),
+                    "end_datetime": pd.Timestamp(end).isoformat(),
+                }
+            entry = create_stac_item(
+                paths,
+                id=id_format.format_map(values),
+                input_datetime=instant,
+                properties=properties,
+                collection=collection.id
+                if isinstance(collection, pystac.Collection)
+                else collection,
+                with_proj=True,
+                with_raster=True,
+                with_eo=True,
+            )
+            if isinstance(collection, pystac.Collection):
+                entry.set_collection(collection)
+            yield entry
 
 
 def create_test_collection(collection_id, *, description, **fields):
@@ -85,19 +123,8 @@ def create_test_collection(collection_id, *, description, **fields):
 def item_table(paths, *, id=None, prefix=None, **options):
     """Describe native writer results with fixture-specific Item ids."""
     from collections.abc import Mapping
-    from datetime import UTC
     from pathlib import PurePath
-    from geosave.geodata import open_raster
 
-    spans = []
-    for path in flat(paths):
-        with open_raster(path) as raster:
-            if raster.gs.timespan is not None:
-                spans.append(raster.gs.timespan)
-    if spans and "datetime" not in options:
-        start = min(start for start, _ in spans).replace(tzinfo=UTC)
-        end = max(end for _, end in spans).replace(tzinfo=UTC)
-        options["datetime"] = (start, end)
     selected = options.pop("collection", None)
     groups = paths if isinstance(paths, Mapping) else {selected: paths}
     items = []
@@ -110,7 +137,7 @@ def item_table(paths, *, id=None, prefix=None, **options):
             )
             item.id = name if prefix is None else f"{prefix}/{name}"
             items.append(item)
-    return from_items(
+    return create_catalog(
         items,
         collections=[
             create_test_collection(key, description=key)
@@ -242,20 +269,30 @@ def write_collection_cogs(tree, root, templates=None) -> dict[str, list]:
     files = {}
     for name in tree.gs.groups:
         files[name] = (
-            tree[name].gs.to_dataset().gs.to_cog(root, path_format=templates[name])
+            tree[name]
+            .gs.to_dataset()
+            .gs.to_cog(
+                root,
+                format_paths=templates[name],
+                split_asset=("variable",) if "{variable}" in templates[name] else (),
+            )
         )
     return files
 
 
 def read_items(rows):
     """Read one collection's rows as one raster: each a scene, joined along time."""
-    from geosave.geodata.io.stac import open_scene
-    from geosave.geodata.transform.temporal import concat
+    from geosave.geodata.stac.load import load_datatree
+    from geosave.geodata import attrs
 
     scenes = []
     for entry in rows.gs.to_items():
-        scenes.append(open_scene(entry).gs.to_dataset())
-    return concat(scenes) if len(scenes) > 1 else scenes[0]
+        scenes.append(load_datatree([entry]).gs.to_dataset())
+    if len(scenes) == 1:
+        return scenes[0]
+    return xr.concat(
+        scenes, dim="time", join="exact", combine_attrs=attrs.combine_attrs
+    )
 
 
 def titled(obj, title: str = "scene"):
@@ -366,3 +403,33 @@ def remote(request):
         folder = storage.location(prefix, options)
         if folder.exists():
             folder.fs.rm(folder.path, recursive=True)
+
+
+@pytest.fixture
+def nested_tree():
+    """Nested measurements with parent-node data and repeated grid labels."""
+    source = (
+        build_raster(times=2).chunk().assign_coords(cloud_fraction=("time", [0.1, 0.2]))
+    )
+    return xr.DataTree.from_dict(
+        {
+            "s2": xr.Dataset(attrs={"source": "sensor"}),
+            "s2/measurements": xr.Dataset(attrs={"description": "organization"}),
+            "s2/measurements/native": source,
+            "s2/measurements/native/qa": source[["red"]].rename(red="cloud"),
+            "s2/quality/native": source[["red"]].rename(red="confidence"),
+            "s2/empty": xr.Dataset(attrs={"description": "no raster"}),
+            "dem/native": build_raster()[["red"]].rename(red="height").chunk(),
+        }
+    )
+
+
+def assign_cells(raster, pairs):
+    """Assign one stated start/end pair per time label, as a reader would."""
+    labels = raster.gs.time_coordinate
+    starts = np.array([start for start, _ in pairs], dtype="datetime64[ns]")
+    ends = np.array([end for _, end in pairs], dtype="datetime64[ns]")
+    return raster.assign_coords(
+        start_datetime=(labels.dims, starts.reshape(labels.shape)),
+        end_datetime=(labels.dims, ends.reshape(labels.shape)),
+    )

@@ -13,6 +13,17 @@ from geosave.geodata import io
 from tests.geodata.conftest import _size
 
 
+def test_direct_geojson_writer_refuses_to_discard_catalog_metadata(tmp_path):
+    rows = gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)], crs=4326)
+    rows.attrs["stac-geoparquet"] = {"collections": {}}
+    path = tmp_path / "catalog.geojson"
+
+    with pytest.raises(ValueError, match="to_geoparquet"):
+        io.formats.geojson.write_geojson(rows, path)
+
+    assert not path.exists()
+
+
 def test_plain_geojson_nested_assets_remain_mappings(tmp_path):
     path = tmp_path / "field.geojson"
     path.write_text(

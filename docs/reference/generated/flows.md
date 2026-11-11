@@ -5,11 +5,13 @@
 below are rendered directly from the implementation. Configuration input
 fields appear as attributes, including their annotated types and defaults.
 
-::: geosave_flows.configs.anchor.AnchorConfig
+::: geosave_flows.configs.base.ConfigModel
     options:
       show_root_full_path: true
+      filters: []
+      members: false
 
-::: geosave_flows.configs.anchor.CoordinateAnchorConfig
+::: geosave_flows.configs.region.CoordinateRegionConfig
     options:
       show_root_full_path: true
       filters: []
@@ -23,7 +25,7 @@ fields appear as attributes, including their annotated types and defaults.
         - timespan
         - open
 
-::: geosave_flows.configs.anchor.GeoJSONAnchorConfig
+::: geosave_flows.configs.region.GeoJSONRegionConfig
     options:
       show_root_full_path: true
       filters: []
@@ -38,7 +40,7 @@ fields appear as attributes, including their annotated types and defaults.
         - require_grid_size
         - open
 
-::: geosave_flows.configs.anchor.RasterAnchorConfig
+::: geosave_flows.configs.region.RasterRegionConfig
     options:
       show_root_full_path: true
       filters: []
@@ -47,13 +49,7 @@ fields appear as attributes, including their annotated types and defaults.
         - path
         - open
 
-::: geosave_flows.configs.base.ConfigModel
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave_flows.ingest.ingest
+::: geosave_flows.configs.region.RegionConfig
     options:
       show_root_full_path: true
 

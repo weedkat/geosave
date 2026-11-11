@@ -1,9 +1,11 @@
-"""Cut sample trees into model-sized chips, and merge per-chip outputs back."""
+"""Tile layout over xarray sources, with native Tiler merging."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import cast
+from bisect import bisect_right
+from collections.abc import Iterable, Iterator, Sequence
+from operator import index as integer_index
+from typing import Literal, cast
 
 import numpy as np
 import xarray as xr
@@ -11,216 +13,181 @@ from affine import Affine
 from odc.geo.geobox import GeoBox
 from tiler import Merger, Tiler
 
+from .transform.extent import Padding
+
+type SampleIndex = int
+type TileId = int
+type ChipKey = tuple[SampleIndex, TileId]
+type Mode = Padding | Literal["drop"]
+type Window = Literal[
+    "boxcar",
+    "triang",
+    "blackman",
+    "hamming",
+    "hann",
+    "bartlett",
+    "parzen",
+    "bohman",
+    "blackmanharris",
+    "nuttall",
+    "barthann",
+    "overlap-tile",
+]
 
 
 class Chips:
-    """Cut trees into fixed-size chips, one grid each, and merge per-chip outputs back.
-
-    Each tree is laid out on its ground at `resolution`, in its groups' CRS,
-    and cut into `size`-pixel chips. Overlapping chips get a halo around the
-    tree, so a tapered merge weights every pixel of the tree away from a chip
-    edge at least once. The same layout cuts and merges.
+    """Lay fixed-size tiles over georeferenced sources and merge predictions back.
 
     Args:
-        trees: One tree per sample, such as `to_datatree` returns; a label may be
-            one more group.
-        size: Chip width and height in pixels.
-        resolution: Pixel size of the chips, in the units of the trees' CRS.
-        overlap: Pixels neighbouring chips share.
+        samples: Datasets or DataArrays, each on one regular grid.
+        size: Tile height and width in pixels.
+        overlap: Tiler overlap in pixels or as a fraction of tile size.
+        mode: How tiles past a source edge are filled, as in `numpy.pad`.
+            ``drop`` omits incomplete tiles instead.
+        constant_value: Fill value for ``constant`` mode.
 
-    Raises:
-        ValueError: A tree's groups lie in different CRSs, or a size is not
-            positive.
+    Indexing returns ``samples[i].gs.crop_to_grid(chips.geobox(key))``: a lazy xarray
+    chip whose coordinates, grid and extent describe the chip, keeping time and
+    other coordinates for model context. Construction reads only metadata.
+    Converting chips to arrays or tensors is the caller's step, such as
+    ``chip.gs.to_numpy()`` in a torch Dataset.
 
     Examples:
-        >>> chips = Chips(trees, size=256, resolution=10, overlap=32)
-        >>> tree_index, chip = chips[7]
-        >>> chips.add(7, model(chip.gs.to_tensor()))
-        >>> rasters = chips.merge()
+        >>> chips = Chips([scene], size=224, overlap=32, mode="reflect")
+        >>> chip = chips[3]
+        >>> chip.gs.region.extent.centroid
+        <Geometry ...>
+        >>> outputs = chips.merge((key, predict(chips[key])) for key in chips)
     """
 
     def __init__(
         self,
-        trees: Sequence[xr.DataTree],
+        samples: Sequence[xr.Dataset | xr.DataArray],
         size: int,
-        resolution: float,
-        overlap: int = 0,
+        overlap: int | float = 0,
+        *,
+        mode: Mode = "constant",
+        constant_value: int | float = 0,
     ) -> None:
-        """Lay each tree's ground into chips, remembering which tree each comes from."""
-        if size < 1 or resolution <= 0 or not 0 <= overlap < size:
+        if mode not in ("constant", "reflect", "edge", "wrap", "drop"):
             raise ValueError(
-                f"chips need size >= 1, resolution > 0 and 0 <= overlap < size; "
-                f"got size={size}, resolution={resolution}, overlap={overlap}"
+                "Chips requires a fixed-size mode: constant, reflect, edge, wrap or drop"
             )
-        self.trees = list(trees)
-        self.size = size
-        self.overlap = overlap
-        self.grids: list[GeoBox] = []
-        self.tilers: list[Tiler] = []
-        self.halos: list[list[tuple[int, int]]] = []
-        # Chip index -> (tree index, tile id in that tree's layout).
-        self.chip_sources: list[tuple[int, int]] = []
-        self.mergers: dict[int, Merger] = {}
-
-        for tree_index, tree in enumerate(self.trees):
-            grid = lay_grid(tree, resolution)
-            height, width = grid.shape
-            tiler, halo = lay_tiles((height, width), size, overlap)
-            self.grids.append(grid)
-            self.tilers.append(tiler)
-            self.halos.append(halo)
-            for tile_id in range(len(tiler)):
-                self.chip_sources.append((tree_index, tile_id))
+        self.xarray = tuple(samples)
+        self._mode = mode
+        self._constant_value = constant_value
+        self._tilers: list[Tiler] = []
+        self._offsets = [0]
+        for sample in self.xarray:
+            sample.gs.validate(affine=True)
+            grid = cast("GeoBox", sample.gs.geobox)
+            tiler = Tiler(
+                data_shape=tuple(grid.shape),
+                tile_shape=(size, size),
+                overlap=overlap,
+                mode=mode,
+                constant_value=constant_value,
+            )
+            self._tilers.append(tiler)
+            self._offsets.append(self._offsets[-1] + len(tiler))
 
     def __len__(self) -> int:
-        """Return the number of chips over all trees."""
-        return len(self.chip_sources)
+        """Return the total number of tiles across all samples."""
+        return self._offsets[-1]
 
-    def __getitem__(self, index: int) -> tuple[int, xr.DataTree]:
-        """Return the index of the chip's source tree, and the chip.
+    def key(self, index: int) -> ChipKey:
+        """Return the sample and tile ID for a flat, nonnegative chip index."""
+        index = integer_index(index)
+        if index < 0 or index >= len(self):
+            raise IndexError("chip index out of range")
+        sample_index = bisect_right(self._offsets, index) - 1
+        return sample_index, index - self._offsets[sample_index]
 
-        Args:
-            index: Chip index.
-
-        Returns:
-            The source tree's position in `trees`, and that tree aligned lazily
-            onto the chip's grid.
-        """
-        tree_index, _ = self.chip_sources[index]
-        chip = self.trees[tree_index].gs.align(target=self.grid(index))
-        return tree_index, cast("xr.DataTree", chip)
-
-    def grid(self, index: int) -> GeoBox:
-        """Return a chip's grid: its CRS, transform and shape.
+    def geobox(self, key: int | ChipKey) -> GeoBox:
+        """Return a chip's pixel grid, including padded edges, without reading pixels.
 
         Args:
-            index: Chip index.
+            key: Flat index or (sample_index, tile_id), as accepted by indexing.
 
         Returns:
-            The `size` × `size` grid, reaching past the tree's edge where the
-            chip pads.
-        """
-        tree_index, tile_id = self.chip_sources[index]
-        tree_grid = self.grids[tree_index]
-        halo = self.halos[tree_index]
-        first_corner, _ = self.tilers[tree_index].get_tile_bbox(tile_id)
-        # The layout counts pixels from the halo's corner; the grid from the tree's.
-        top = int(first_corner[0]) - halo[0][0]
-        left = int(first_corner[1]) - halo[1][0]
-        transform = tree_grid.transform * Affine.translation(left, top)
-        return GeoBox((self.size, self.size), transform, tree_grid.crs)
-
-    def add(self, index: int, output: np.ndarray) -> None:
-        """Accumulate the output of chip `index` into its source tree's raster.
-
-        Args:
-            index: Chip index.
-            output: ``(size, size)`` or ``(channels, size, size)`` values on the
-                chip's grid.
-        """
-        tree_index, tile_id = self.chip_sources[index]
-        channel_output = output if output.ndim == 3 else output[np.newaxis]
-        if tree_index not in self.mergers:
-            self.mergers[tree_index] = self.create_merger(
-                tree_index, channel_output.shape[0]
-            )
-        self.mergers[tree_index].add(tile_id, channel_output)
-
-    def create_merger(self, tree_index: int, channel_count: int) -> Merger:
-        """Return a Merger on a tree's layout, for outputs of `channel_count` channels.
-
-        Args:
-            tree_index: Tree the outputs belong to.
-            channel_count: Channels each output holds.
-
-        Returns:
-            A Merger tapering overlaps with a Hann window, or averaging without overlap.
-        """
-        height, width = self.grids[tree_index].shape
-        tiler = Tiler(
-            data_shape=(channel_count, height, width),
-            tile_shape=(channel_count, self.size, self.size),
-            overlap=self.overlap,
-            channel_dimension=0,
-        )
-        if self.overlap:
-            padded_shape, _ = tiler.calculate_padding()
-            tiler.recalculate(data_shape=padded_shape)
-        window = "hann" if self.overlap else None
-        return Merger(tiler, window=window)
-
-    def merge(self) -> list[xr.DataArray]:
-        """Return one merged raster per tree, in the order the trees were given.
-
-        Returns:
-            Each tree's outputs as ``(band, y, x)`` on that tree's grid.
+            Grid on the source CRS and pixel size, covering the full chip.
 
         Raises:
-            ValueError: A tree received no outputs.
+            IndexError: The chip index is outside the inventory.
         """
-        rasters = []
-        for tree_index, grid in enumerate(self.grids):
-            if tree_index not in self.mergers:
-                raise ValueError(
-                    f"tree {tree_index} received no outputs; add one per chip"
+        sample_index, tile_id = key if isinstance(key, tuple) else self.key(key)
+        if sample_index < 0:
+            raise IndexError("sample_index must be nonnegative")
+        grid = self.xarray[sample_index].gs.geobox
+        (top, left), (bottom, right) = self._tilers[sample_index].get_tile_bbox(tile_id)
+        transform = grid.transform * Affine.translation(int(left), int(top))
+        return GeoBox((int(bottom - top), int(right - left)), transform, grid.crs)
+
+    def __getitem__(self, key: int | ChipKey) -> xr.Dataset | xr.DataArray:
+        """Return one lazy chip by flat index or explicit (sample_index, tile_id)."""
+        sample_index, _ = key if isinstance(key, tuple) else self.key(key)
+        mode = "constant" if self._mode == "drop" else self._mode
+        return self.xarray[sample_index].gs.crop_to_grid(
+            self.geobox(key), mode=mode, constant_value=self._constant_value
+        )
+
+    def __iter__(self) -> Iterator[ChipKey]:
+        """Yield every chip key in sample order."""
+        for sample_index, tiler in enumerate(self._tilers):
+            for tile_id in range(len(tiler)):
+                yield sample_index, tile_id
+
+    def merge(
+        self,
+        predictions: Iterable[tuple[ChipKey, np.ndarray]],
+        *,
+        window: Window | np.ndarray | None = None,
+    ) -> list[np.ndarray | None]:
+        """Merge predictions with native Tiler weighting in sample order.
+
+        Args:
+            predictions: ``((sample_index, tile_id), pixels)`` pairs in any order.
+                Spatial axes trail. Leading shapes must agree within a sample.
+                Repeated tiles accumulate; missing tiles are allowed.
+            window: Forwarded to Merger. Array windows must match its tile shape,
+                with leading prediction axes flattened into one channel axis.
+
+        Returns:
+            One float32 NumPy array per sample, or None for a sample without
+            predictions. Merger normalization fills uncovered pixels with zero.
+            Place an output with ``xr.DataArray(...).gs.write_grid(sample.gs.geobox)``.
+            Merging allocates full outputs in memory; it is not a streaming writer.
+
+        Raises:
+            ValueError: Leading shapes differ within a sample.
+        """
+        mergers: dict[int, Merger] = {}
+        shapes: dict[int, tuple[int, ...]] = {}
+        for (sample_index, tile_id), pixels in predictions:
+            if sample_index < 0:
+                raise IndexError("sample_index must be nonnegative")
+            shape = pixels.shape[:-2]
+            if sample_index in shapes and shape != shapes[sample_index]:
+                raise ValueError("prediction leading shape must agree within a sample")
+            values = pixels.reshape((-1, *pixels.shape[-2:]))
+            if sample_index not in mergers:
+                layout = self._tilers[sample_index]
+                tiler = Tiler(
+                    data_shape=(values.shape[0], *layout.data_shape),
+                    tile_shape=(values.shape[0], *layout.tile_shape),
+                    channel_dimension=0,
+                    overlap=layout.overlap,
+                    mode=layout.mode,
                 )
-            halo = [(0, 0), *self.halos[tree_index]]
-            values = self.mergers[tree_index].merge(extra_padding=halo, unpad=True)
-            output = xr.DataArray(values, dims=("band", "y", "x"), name="output")
-            rasters.append(output.gs.write_grid(grid))
-        return rasters
+                mergers[sample_index] = Merger(tiler, window=window)
+                shapes[sample_index] = shape
+            mergers[sample_index].add(tile_id, values)
 
-
-def lay_grid(tree: xr.DataTree, resolution: float) -> GeoBox:
-    """Lay a grid at `resolution` over the ground every group of a tree covers.
-
-    Groups may sit on their own grids, such as optical at 10 m and radar at
-    20 m; the grid spans their joint bounding box in their shared CRS.
-
-    Args:
-        tree: Tree whose groups each sit on a grid.
-        resolution: Pixel size in the units of the groups' CRS.
-
-    Returns:
-        The covering grid.
-
-    Raises:
-        ValueError: A group sits on no grid, or the groups lie in different CRSs.
-    """
-    ground = None
-    for name, raster in tree.gs.rasters.items():
-        geobox = raster.gs.geobox
-        if geobox is None:
-            raise ValueError(f"group {name!r} sits on no grid to lay one over")
-        if ground is not None and geobox.crs != ground.crs:
-            raise ValueError(
-                f"the groups lie in {ground.crs} and {geobox.crs}; one grid needs one CRS"
-            )
-        ground = geobox.extent if ground is None else ground | geobox.extent
-    if ground is None:
-        raise ValueError("the tree holds no groups to lay a grid over")
-    return GeoBox.from_bbox(ground.boundingbox, ground.crs, resolution=resolution)
-
-
-def lay_tiles(
-    shape: tuple[int, int], size: int, overlap: int
-) -> tuple[Tiler, list[tuple[int, int]]]:
-    """Lay chips over a grid, with a halo around it when chips overlap.
-
-    Args:
-        shape: Grid height and width.
-        size: Chip width and height in pixels.
-        overlap: Pixels neighbouring chips share.
-
-    Returns:
-        The Tiler, and the halo pixels before and after `y`, then `x`.
-    """
-    tiler = Tiler(data_shape=shape, tile_shape=(size, size), overlap=overlap)
-    halo = [(0, 0), (0, 0)]
-    if overlap:
-        padded_shape, padding = tiler.calculate_padding()
-        tiler.recalculate(data_shape=padded_shape)
-        halo = []
-        for before, after in padding:
-            halo.append((int(before), int(after)))
-    return tiler, halo
+        outputs: list[np.ndarray | None] = []
+        for index in range(len(self._tilers)):
+            if index not in mergers:
+                outputs.append(None)
+                continue
+            pixels = mergers[index].merge()
+            outputs.append(pixels.reshape((*shapes[index], *pixels.shape[-2:])))
+        return outputs

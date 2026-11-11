@@ -1,58 +1,83 @@
-# GeoSave
+---
+hide:
+  - toc
+---
 
-GeoSave makes geospatial data feel like normal Python. Open an image, work
-with its bands, and save results that still know where they belong on Earth.
-When you're ready, use that same data to build and train a model.
+# Geospatial work, familiar Python
 
-Its strength is keeping the meaning of your data attached: pixel locations,
-band information, and missing values. You work with familiar Python objects,
-and large images can stay lazy so you can process the part you need.
+GeoSave helps you find satellite imagery, prepare geospatial datasets, explore
+maps, and build models with pretrained encoders. Work with **xarray, GeoPandas,
+and PyTorch Lightning**, while keeping geographic information attached.
 
-## A first look
+[Get started](first-raster.md){ .md-button .md-button--primary }
+[Install GeoSave](install.md){ .md-button }
 
-For a georeferenced image with bands named `red` and `nir`:
+## Python you already know
+
+With the [sample scene](first-raster.md#open-the-sample), a vegetation map is:
 
 ```python
 import geosave as gs
 
-image = gs.open_raster("scene.tif")
-ndvi = gs.features.ndvi(image, nir="nir", red="red").rename("ndvi")
-ndvi.gs.to_cog("output", path_format="ndvi.tif")
+scene = gs.open_raster("sample-scene.tif")
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+ndvi.gs.to_cog("output", format_paths="ndvi.tif")
 ```
 
-This calculates a vegetation index and saves a new image on the same grid.
-`image` is a normal xarray Dataset. GeoSave adds geospatial
-operations through `.gs`, so your data stays usable with the wider Python
-ecosystem.
+`scene` is an xarray Dataset. Select bands with `scene[["red", "nir"]]`, use
+ordinary xarray arithmetic, and call `.gs` for geospatial operations. You can
+bring GeoSave into an existing project one operation at a time.
 
-## Start small
+![Sentinel-2 imagery beside a vegetation index over agricultural fields near Davis, California](assets/vegetation.jpg){ .gs-home-preview }
 
-For a complete research learning path, follow
-[Learn geospatial AI by example](examples.md): train on satellite image/label
-pairs, swap model stages, improve the inputs, and put predictions back on a map.
-The notebooks use ordinary PyTorch and Lightning.
+*One scene, two views: Sentinel-2 natural color and NDVI. Contains modified
+Copernicus Sentinel data (2025). [Run this example](first-raster.md).*
 
-1. [Install GeoSave](install.md).
-2. [Try your first raster](first-raster.md): make a tiny image, calculate an
-   index, and save it. No downloads or data files needed.
-3. [Explore the basics](basics/index.md): images, polygons, missing values,
-   and file operations.
+## What you can do
 
-## Find your task
+<div class="grid cards" markdown>
 
-| I want to… | Start here |
-| --- | --- |
-| Open and prepare my files | [Ingest files](guides/ingest-files.md) |
-| Find satellite imagery | [Search and load imagery](guides/stac.md) |
-| Learn geospatial model development through a complete project | [Notebook learning path](examples.md) |
-| Turn imagery and labels into training chips | [Images to training chips](quickstart.md) |
-| Build a model using pretrained weights | [Pretrained models](guides/pretrained.md) |
-| Train a model on my data | [Training](guides/training.md) |
-| Save and reuse a trained model | [Model releases](guides/release.md) |
+-   **Find and download imagery**
 
-See [all activities](activities.md) for more tasks. Read
-[Advanced](concepts/index.md) when you need to understand the data flow,
-grids, or training behavior. Use [Common questions](faq.md) and the
-[API reference](reference/index.md) to look up details.
+    Search satellite catalogs by area and date. Select bands, read a small
+    region, and save a GeoTIFF you can use in Python or a GIS.
 
-GeoSave is in Alpha; these docs follow the current implementation.
+    [Download your first scene →](guides/download-imagery.md)
+
+-   **Explore on a map**
+
+    Inspect bands, browse footprints, and compare raster and vector layers.
+
+    [Open the explorer →](guides/explore.md)
+
+-   **Prepare geospatial data**
+
+    Crop, align, calculate spectral indices, and save results with their
+    georeferencing. Keep large rasters lazy until you need the pixels.
+
+    [Process your files →](guides/ingest-files.md)
+
+-   **Start from pretrained models**
+
+    Use supported Prithvi, Clay, and DINOv3 encoders for your own imagery.
+
+    [Choose an encoder →](guides/pretrained.md)
+
+-   **Make training samples**
+
+    Turn aligned imagery and labels into chips and ordinary PyTorch tensors.
+
+    [Prepare your first chips →](quickstart.md)
+
+-   **Train with Lightning**
+
+    Train on real imagery and labels, then export predictions as maps.
+
+    [Train on real imagery →](examples.md#real-land-cover-project)
+
+</div>
+
+!!! note "Alpha software"
+    GeoSave is in active development. These docs follow the source on `main`;
+    a published release may differ. The [installation guide](install.md)
+    explains releases, test builds, and checking your installed version.

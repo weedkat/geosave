@@ -69,7 +69,7 @@ def chain(stages: dict[str, dict[str, object]]) -> ModelChain:
 
 @pytest.fixture
 def spec() -> ModelSpec:
-    return ModelSpec(schema_version=3, rasters={})
+    return ModelSpec.from_yaml("schema_version: 1\ninputs: {}\n")
 
 
 def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
@@ -106,7 +106,10 @@ def test_save_writes_the_spec_beside_the_weights(
         "model.safetensors",
         ModelSpec.filename,
     }
-    assert ModelSpec.load(tmp_path / ModelSpec.filename) == spec
+    assert ModelSpec.load(tmp_path / ModelSpec.filename).save(tmp_path / "copy.yaml")
+    assert (tmp_path / "copy.yaml").read_text() == (
+        tmp_path / ModelSpec.filename
+    ).read_text()
 
 
 def test_push_uploads_model_spec_and_card_in_one_commit(

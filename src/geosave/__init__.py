@@ -20,7 +20,7 @@ from geosave.geodata import (
     DataArray,
     Dataset,
     DataTree,
-    GeoAnchor,
+    GeoRegion,
     GeoCatalog,
     GeoDataArray,
     GeoDataFrame,
@@ -34,7 +34,6 @@ from geosave.geodata import (
     open_raster,
     open_vector,
     statistics,
-    transform,
 )
 
 __all__ = [
@@ -42,7 +41,7 @@ __all__ = [
     "DataTree",
     "Dataset",
     "GeoDataFrame",
-    "GeoAnchor",
+    "GeoRegion",
     "GeoDataArray",
     "GeoDataset",
     "GeoDataTree",
@@ -52,6 +51,8 @@ __all__ = [
     "GeoCatalogItem",
     "StacClient",
     "StacQuery",
+    "create_catalog",
+    "create_stac_item",
     "attrs",
     "configure_gdal",
     "features",
@@ -61,14 +62,21 @@ __all__ = [
     "stac",
     "class_percent",
     "statistics",
-    "transform",
 ]
 
 # These bring their own heavy dependencies, so they load on first use.
-_LAZY = ("StacClient", "StacQuery", "features", "stac")
+_LAZY = (
+    "StacClient",
+    "StacQuery",
+    "features",
+    "stac",
+    "create_catalog",
+    "create_stac_item",
+)
 
 if TYPE_CHECKING:
     from geosave.geodata import StacClient, StacQuery, features, stac
+    from geosave.geodata.stac import create_catalog, create_stac_item
 
 
 def __getattr__(name: str) -> object:

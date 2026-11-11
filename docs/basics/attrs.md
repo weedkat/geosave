@@ -86,6 +86,7 @@ not. Do not choose a valid class as nodata unless you intend to exclude it.
 | `.gs.write_legend(classes)` | Integer codes mapped to names | New object with class metadata; existing pixels keep their values. |
 | `.gs.mask(valid)` | Boolean mask, `True` where pixels are valid | New object with invalid pixels replaced by each variable's nodata. |
 | `.gs.mask_and_scale()` | Stored values with optional nodata and packing | New object with missing values masked and packing decoded. |
+| `.gs.scale_and_fill()` | Decoded values with CF storage encoding | New object with stored pixels and CF attrs, without writing a file. |
 
 The writers return a new xarray object; assign their result to keep the change.
 Masking needs a declared nodata value or an explicit `fill=`. Attribute writers
@@ -101,7 +102,7 @@ stored = (
     xr.DataArray(np.array([[0, 1000], [2000, 3000]], dtype="uint16"), dims=("y", "x"))
     .gs.write_grid(grid[:2, :2])
     .gs.write_nodata(0)
-    .gs.write_packing(scale_factor=0.0001)
+    .gs.write_scale_offset(scale_factor=0.0001)
 )
 reflectance = stored.gs.mask_and_scale()
 reflectance.compute()
@@ -110,9 +111,9 @@ reflectance.compute()
 Output:
 
 ```text
-<xarray.DataArray (y: 2, x: 2)> Size: 16B
-array([[       nan, 0.09999999],
-       [0.19999999, 0.29999998]], dtype=float32)
+<xarray.DataArray (y: 2, x: 2)> Size: 32B
+array([[nan, 0.1],
+       [0.2, 0.3]])
 Coordinates:
   * y            (y) float64 16B 5e+06 5e+06
   * x            (x) float64 16B 5e+05 5e+05
@@ -122,12 +123,15 @@ Coordinates:
 `mask_and_scale()` masks nodata first, then applies
 `stored * scale_factor + add_offset`. The result uses floating-point values
 and NaN for missing pixels. It preserves lazy arrays and leaves `stored`
-unchanged. The result no longer carries nodata and packing attrs. This accessor
-does not retain the original storage encoding; when saving decoded values,
-choose the output dtype, nodata, and encoding explicitly.
+unchanged. The consumed nodata, scale and offset move from variable attrs to
+variable encoding, alongside the original storage dtype. Writers use that
+encoding to restore the stored representation. Supply explicit output encoding
+to choose a different representation. `reflectance.gs.scale_and_fill()` performs
+the same reverse conversion in memory and restores CF attrs without I/O.
 
 Readers return stored values by default. Use `gs.open_raster(path,
-mask_and_scale=True)` to decode while opening. Spectral indices already decode
+mask_and_scale=True)` to decode while opening; `stac.load_dataset` and
+`stac.load_datatree` support the same choice after ODC ingestion. Spectral indices already decode
 the bands they select; cloud-mask functions expect decoded reflectance.
 
 ## Add descriptive metadata
@@ -160,11 +164,25 @@ Ordinary keys such as `long_name`, `units`, and dataset `title` remain ordinary
 xarray attrs. Their preservation depends on the operation and output format;
 adding attrs does not change values or coordinates.
 
+GeoSave's Dataset-to-DataArray and DataTree-to-Dataset conversions accept
+xarray's `combine_attrs` policies. Their default, `"drop_conflicts"`, keeps
+nonconflicting keys, including keys present in only one input, and automatically
+warns about dropped keys. Use `combine_attrs="override"` to take the first
+input's attrs, or `"identical"` to require agreement. Attr groups validate
+declarations; they do not change how xarray combines keys.
+
+For ordinary concatenation and merging, call `xr.concat` or `xr.merge` directly.
+Their default is `"override"`; pass `combine_attrs=gs.attrs.combine_attrs` for
+GeoSave's drop-conflicts policy and warnings. Native joins do not check that
+stored pixels share packing, CRS, units or class meanings. Decode and align
+inputs explicitly before combining them. GeoSave's band stacking still requires
+compatible active CF packing.
+
 Dataset-level identity and discovery fields use ACDD metadata, available as
 `raster.gs.acdd` and written with `raster.gs.write_acdd(gs.attrs.ACDD(...))`.
 Band-level nodata, packing, spectral facts, and legends stay on the variables.
-When loading STAC, Collection descriptions become dataset ACDD metadata, while
-each Asset's band metadata describes its variables.
+When loading STAC, Collection metadata is retained as `StacMetadata` on the
+raster root, while each Asset's band metadata describes its variables.
 
 Read [metadata rules](../concepts/metadata.md) for validated groups, joins, and
 format boundaries. See the [attrs API](../reference/attrs.md) for direct parsing

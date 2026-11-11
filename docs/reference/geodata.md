@@ -6,7 +6,7 @@ xarray and GeoPandas reference for their native methods.
 
 | API | Purpose |
 | --- | --- |
-| [Constructors](rasters.md), [anchors](anchor.md) | Create rasters, trees, and targets. |
+| [Constructors](rasters.md), [regions](region.md) | Create rasters, trees, and targets. |
 | [Dataset](dataset-accessor.md), [DataArray](dataarray-accessor.md), [DataTree](datatree-accessor.md) | Raster accessor methods, including inherited methods. |
 | [Vectors](vectors.md) | GeoDataFrame accessor methods. |
 | [I/O](io.md) | Readers, writers, format options, and storage. |

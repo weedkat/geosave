@@ -21,7 +21,6 @@ def create_layer(data: GeoData | Layer, name: str | None = None, **style: Any) -
         return data
     if isinstance(data, xr.Dataset | xr.DataArray):
         return RasterLayer(data, name=name, **style)
-    # An item table's rows also open their rasters.
     if isinstance(data, gpd.GeoDataFrame):
         return VectorLayer(data, name=name, **style)
     raise TypeError(f"cannot explore {type(data).__name__}")

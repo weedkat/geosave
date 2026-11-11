@@ -212,7 +212,7 @@ def latlon(raster: xr.Dataset | xr.DataArray) -> torch.Tensor:
     Raises:
         ValueError: The raster has no locatable grid.
     """
-    longitude, latitude = raster.gs.anchor.lonlat
+    longitude, latitude = raster.gs.region.lonlat
     return torch.tensor([latitude, longitude], dtype=torch.float32)
 
 

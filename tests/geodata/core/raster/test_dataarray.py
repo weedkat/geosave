@@ -60,7 +60,7 @@ def test_to_tensor_copies_read_only_pixels(torch) -> None:
     np.testing.assert_array_equal(band.values, before)
 
 
-def test_to_raster_gives_every_band_the_arrays_attrs() -> None:
+def test_to_dataset_gives_every_band_the_arrays_attrs() -> None:
     box = geobox()
     built = build_dataset(
         {
@@ -71,7 +71,7 @@ def test_to_raster_gives_every_band_the_arrays_attrs() -> None:
     ).gs.write_nodata(0)
     built.attrs = {"title": "S2"}
 
-    split = built.gs.to_array().gs.to_raster()
+    split = built.gs.to_dataarray().gs.to_dataset(dim="band")
 
     assert split.attrs == {}
     assert split.B04.attrs == split.B03.attrs == {"_FillValue": 0}
@@ -101,26 +101,26 @@ def test_statistics_reads_a_lazy_source_once() -> None:
     assert len(reads) == 1
 
 
-def test_to_raster_names_an_unstacked_band_after_itself() -> None:
+def test_to_dataset_names_an_unstacked_band_after_itself() -> None:
     box = geobox()
     built = build_dataset(
         {"B04": (("y", "x"), np.zeros(box.shape, "uint16"))}, box
-    ).gs.write_packing(1e-4)
+    ).gs.write_scale_offset(1e-4)
 
-    split = built["B04"].gs.to_raster()
+    split = built["B04"].gs.to_dataset()
 
     assert split.gs.variables == ("B04",)
     assert split["B04"].attrs["scale_factor"] == pytest.approx(1e-4)
 
 
-def test_to_raster_refuses_bands_it_cannot_name() -> None:
+def test_to_dataset_refuses_bands_it_cannot_name() -> None:
     box = geobox()
     stacked = build_dataset(
         {"B04": (("y", "x"), np.zeros(box.shape, "uint16"))}, box
-    ).gs.to_array()
+    ).gs.to_dataarray()
 
     with pytest.raises(ValueError, match="labels none of them"):
-        stacked.drop_vars("band").gs.to_raster()
+        stacked.drop_vars("band").gs.to_dataset(dim="band")
 
 
 def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
@@ -131,7 +131,7 @@ def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
         }
     ).gs.write_nodata(0)
 
-    table = source.gs.to_array().gs.statistics()
+    table = source.gs.to_dataarray().gs.statistics()
 
     pd.testing.assert_frame_equal(table, source.gs.statistics())
     assert list(table.index) == ["nir", "red"]
@@ -159,14 +159,14 @@ def test_an_edit_on_the_stacked_array_reaches_every_band():
         },
         geobox(),
     ).gs.write_nodata(0)
-    restored = source.gs.to_array().gs.write_nodata(-1).gs.to_raster()
+    restored = source.gs.to_dataarray().gs.write_nodata(-1).gs.to_dataset(dim="band")
     assert restored.gs.nodata == {"red": -1, "nir": -1}
 
 
 def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
 
     band = build_raster(times=2)["red"].isel(time=0)
-    paths = band.gs.to_cog(tmp_path, path_format="red.tif")
+    paths = band.gs.to_cog(tmp_path, format_paths="red.tif")
 
     (item,) = create_file_items(paths, id_format="red")
 
@@ -175,19 +175,22 @@ def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
     assert item.assets["red"].href == str(paths[0])
 
 
-def test_to_raster_recovers_only_the_attrs_every_band_shared() -> None:
+def test_to_dataset_recovers_only_the_attrs_every_band_shared() -> None:
     scene = (
         build_raster()
-        .gs.write_packing(1e-4)
+        .gs.write_scale_offset(1e-4)
         .gs.write_nodata(0, target="red")
         .gs.write_nodata(65535, target="nir")
     )
 
-    restored = scene.gs.to_array().gs.to_raster()
+    decoded = scene.gs.mask_and_scale()
+    restored = decoded.gs.to_dataarray().gs.to_dataset(dim="band")
 
-    assert restored.gs.packing == scene.gs.packing
-    assert restored.gs.nodata == {"red": None, "nir": None}
-    shared = scene.gs.write_nodata(0).gs.to_array().gs.to_raster()
+    xr.testing.assert_allclose(restored.red, decoded.red)
+    xr.testing.assert_allclose(restored.nir, decoded.nir)
+    assert restored.red.gs.packing is None
+    assert restored.nir.gs.packing is None
+    shared = scene.gs.write_nodata(0).gs.to_dataarray().gs.to_dataset(dim="band")
     assert shared.gs.nodata == {"red": 0, "nir": 0}
 
 
@@ -263,3 +266,67 @@ def test_band_store_returns_native_path_after_deferred_write(tmp_path, method, s
     with open_raster(saved) as restored:
         np.testing.assert_array_equal(restored.red, band)
         assert restored.gs.geobox == band.gs.geobox
+
+
+def test_to_dataset_wraps_a_named_multiband_array_lazily() -> None:
+    import dask.array as da
+
+    source = xr.DataArray(
+        da.ones((2, 3, 4), chunks=(1, 3, 4)),
+        dims=("band", "y", "x"),
+        coords={"band": ["red", "nir"]},
+        name="reflectance",
+        attrs={"units": "1"},
+    )
+
+    wrapped = source.gs.to_dataset()
+    split = source.gs.to_dataset(dim="band")
+
+    assert list(wrapped.data_vars) == ["reflectance"]
+    xr.testing.assert_identical(wrapped.reflectance, source)
+    assert isinstance(wrapped.reflectance.data, da.Array)
+    assert list(split.data_vars) == ["red", "nir"]
+    assert isinstance(split.red.data, da.Array)
+    assert split.red.attrs == split.nir.attrs == {"units": "1"}
+
+
+def test_expand_rasters_splits_by_position_with_labels_as_scalar_coords():
+    import dask.array as da
+    from dask.callbacks import Callback
+
+    array = xr.DataArray(
+        da.arange(24).reshape((2, 3, 2, 2)),
+        dims=("time", "level", "y", "x"),
+        coords={"time": [10, 20]},
+        name="air",
+    )
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        slices = array.gs.expand_rasters(["time", "level"])
+    assert tasks == []
+    assert isinstance(slices, tuple)
+    assert len(slices) == 6
+    assert [piece.time.item() for piece in slices] == [10, 10, 10, 20, 20, 20]
+    # A dimension without coordinates labels each slice by its position.
+    assert [piece.level.item() for piece in slices] == [0, 1, 2, 0, 1, 2]
+    np.testing.assert_array_equal(slices[4], array.isel(time=1, level=1))
+    assert slices[4].dims == ("y", "x")
+    assert slices[0].chunks is not None
+    (whole,) = array.gs.expand_rasters(())
+    xr.testing.assert_identical(whole, array)
+
+
+def test_expand_rasters_keeps_repeated_labels_as_separate_slices():
+    array = xr.DataArray(np.ones((3, 2, 2)), dims=("time", "y", "x"))
+    array = array.assign_coords(time=[1, 1, 2])
+    assert [piece.time.item() for piece in array.gs.expand_rasters("time")] == [1, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("dim", "message"),
+    [("levle", "absent"), ("y", "spatial"), (("time", "time"), "repeat")],
+)
+def test_expand_rasters_rejects_unsplittable_dimensions(dim, message):
+    array = build_raster(times=2).red
+    with pytest.raises(ValueError, match=message):
+        array.gs.expand_rasters(dim)

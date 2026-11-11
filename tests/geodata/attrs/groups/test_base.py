@@ -13,7 +13,6 @@ from geosave.geodata import attrs
         attrs.Legend.model_validate({"classes": {0: "bg"}, "color_map": None}),
         attrs.Spectral(common_name="red", center_wavelength=None),
         attrs.GDALBand(variable_name="red", colorinterp=None),
-        attrs.TimeSpec(time_freq="MS", time_offset=None),
     ],
     ids=lambda value: type(value).__name__,
 )

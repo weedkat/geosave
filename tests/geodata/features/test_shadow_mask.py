@@ -98,9 +98,10 @@ def test_shadow_refuses_a_grid_that_does_not_measure_metres() -> None:
     )
     unreferenced = xr.Dataset({"cloud": (("y", "x"), np.ones((4, 4), dtype=bool))})
 
-    for held in (mask, unreferenced):
-        with pytest.raises(ValueError, match="metres"):
-            shadow_mask(held, cloud="cloud", sun_azimuth=180.0)
+    with pytest.raises(ValueError, match="metres"):
+        shadow_mask(mask, cloud="cloud", sun_azimuth=180.0)
+    with pytest.raises(ValueError, match="pixel placement"):
+        shadow_mask(unreferenced, cloud="cloud", sun_azimuth=180.0)
 
 
 def test_shadow_refuses_an_azimuth_that_does_not_match_the_mask() -> None:

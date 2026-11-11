@@ -12,13 +12,10 @@ import pandas as pd
 from pandas.tseries.frequencies import to_offset
 
 DateRange = tuple[dt, dt]
-AnchorDatetime = str | tuple[str, str] | DateRange
+RegionDatetime = str | tuple[str, str] | DateRange
 
 # Cadence a time axis is bucketed at — any pandas offset alias; the Literal is just IDE suggestions.
 type Freq = Literal["D", "W", "MS", "ME", "QS", "QE", "YS", "YE"] | str
-
-# Offsets pandas buckets closed/labelled on the right by default; everything else goes left.
-_END_ANCHORED = frozenset({"W", "ME", "QE", "YE", "BME", "BQE", "BYE"})
 
 # ISO ("2019-05-07T10:30:15") or compact ("20190507T103015") — "-" and ":" separators optional.
 _DATETIME_PATTERN = re.compile(
@@ -31,55 +28,6 @@ _DATETIME_PATTERN = re.compile(
     r")?(?P<timezone>Z|[+-]\d{2}:?\d{2})?"
     r")?)?)?$"
 )
-
-
-def _end_anchored(freq: Freq) -> bool:
-    """Whether pandas closes and labels `freq`'s buckets on their trailing edge.
-
-    `"W"`, `"ME"`, `"QE"`, `"YE"` and their business variants anchor to the
-    period end; every other offset anchors to the start.
-
-    Args:
-        freq: Any pandas offset alias, e.g. `"5D"`, `"ME"`.
-
-    Returns:
-        True for a period-end offset.
-
-    Raises:
-        ValueError: pandas doesn't know `freq`.
-    """
-    return to_offset(freq_offset(freq)).rule_code.split("-")[0] in _END_ANCHORED
-
-
-def edge_rules(
-    alias: str,
-    closed: Literal["left", "right"] | None,
-    label: Literal["left", "right"] | None,
-) -> tuple[Literal["left", "right"], Literal["left", "right"]]:
-    """Resolve which bucket edge is inclusive and which one labels the bucket.
-
-    pandas picks these per frequency, so they are resolved once here rather
-    than left open — otherwise a recorded grid cannot be reproduced.
-
-    Args:
-        alias: pandas offset alias, e.g. `"5D"`, `"ME"`.
-        closed: Caller's choice, or None to take pandas' own for `alias`.
-        label: Caller's choice, or None to take pandas' own for `alias`.
-
-    Returns:
-        `(closed, label)`, both resolved.
-
-    Raises:
-        ValueError: pandas doesn't know `alias`.
-
-    Examples:
-        >>> edge_rules("MS", None, None)  # month start anchors left
-        ('left', 'left')
-        >>> edge_rules("ME", None, None)  # month end anchors right
-        ('right', 'right')
-    """
-    edge: Literal["left", "right"] = "right" if _end_anchored(alias) else "left"
-    return closed or edge, label or edge
 
 
 def naive_utc(value: dt) -> dt:
@@ -167,7 +115,7 @@ def _parse_daterange(value: str) -> DateRange:
     return start, end - timedelta(microseconds=1)
 
 
-def parse_daterange(value: AnchorDatetime) -> DateRange:
+def parse_daterange(value: RegionDatetime) -> DateRange:
     """Read one inclusive `(start, end)` range off a datetime input.
 
     A partial timestamp covers the whole period it names, so `"2019-05"` is

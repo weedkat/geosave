@@ -47,7 +47,14 @@ class _Reassemble(nn.Module):
         super().__init__()
         self.proj_in = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
-        if tgt_stride < src_stride:
+        if src_stride % tgt_stride != 0 and tgt_stride % src_stride != 0:
+            # Preserve the exact scale for patch strides such as 14.
+            self.resample = nn.Upsample(
+                scale_factor=src_stride / tgt_stride,
+                mode="bilinear",
+                align_corners=False,
+            )
+        elif tgt_stride < src_stride:
             scale = src_stride // tgt_stride
             self.resample = nn.ConvTranspose2d(
                 out_channels, out_channels, kernel_size=scale, stride=scale

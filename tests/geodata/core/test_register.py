@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, assert_type
 
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 
 
 if TYPE_CHECKING:
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
         assert_type(item.to_datatree(), DataTree)
 
     def check_accessors(item: pystac.Item) -> None:
-        catalog = from_items([item])
+        catalog = create_catalog([item])
         assert_type(catalog.gs, GeoCatalog)
         assert_type(catalog.gs.to_datatree(), DataTree)
 
@@ -43,7 +43,7 @@ def test_native_containers_dispatch_in_a_fresh_process():
         import xarray as xr
         from shapely.geometry import box, mapping
         import geosave as gs
-        from geosave.geodata.stac.catalog import from_items
+        from geosave.geodata.stac.catalog import create_catalog
 
         band = xr.DataArray(np.zeros((2, 2)), dims=("y", "x"))
         dataset = band.to_dataset(name="red")
@@ -52,8 +52,8 @@ def test_native_containers_dispatch_in_a_fresh_process():
         item = pystac.Item(id="image", geometry=mapping(box(0, 0, 1, 1)),
                           bbox=[0, 0, 1, 1], datetime=datetime(2024, 1, 1, tzinfo=UTC),
                           properties={}, collection="image")
-        item.add_asset("image", pystac.Asset(href="image.tif"))
-        catalog = from_items([item])
+        item.add_asset("image", pystac.Asset(href="/data/image.tif"))
+        catalog = create_catalog([item])
         samples = catalog.gs.sample()
         assert samples[0].gs.to_items()[0].id == item.id
         for value, accessor in [(band, gs.GeoDataArray), (dataset, gs.GeoDataset),

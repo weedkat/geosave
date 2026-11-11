@@ -70,7 +70,12 @@ class _ReassembleBlock(nn.Module):
         super().__init__()
         self.proj_in = nn.Conv2d(in_channels, mid_channels, kernel_size=1)
 
-        if scale_factor > 1.0:
+        if scale_factor % 1 != 0 and (1 / scale_factor) % 1 != 0:
+            # Patch strides such as 14 do not divide the target pyramid strides.
+            self.resample = nn.Upsample(
+                scale_factor=scale_factor, mode="bilinear", align_corners=False
+            )
+        elif scale_factor > 1.0:
             self.resample = nn.ConvTranspose2d(
                 mid_channels,
                 mid_channels,

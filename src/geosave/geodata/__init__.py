@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import xarray as xr
 
-from . import attrs, io, transform
+from . import attrs, io
 from .core import (
     Chips,
     GeoSamples,
-    GeoAnchor,
+    GeoRegion,
     GeoCatalog,
     GeoDataArray,
     GeoDataset,
@@ -19,7 +19,8 @@ from .core import (
 )
 from .io import open_raster, open_vector
 from geosave.geodata.io.rasterio import configure_gdal
-from .utils.summary import class_percent, statistics
+from .errors import RasterValidationError, VectorValidationError
+from .core.raster.utils.statistics import class_percent, statistics
 
 if TYPE_CHECKING:
     from . import features, stac
@@ -70,7 +71,12 @@ else:
 
 # STAC brings its own heavy dependencies, so these load on first use.
 _LAZY = ("features", "stac")
-_LAZY_MEMBERS = {"StacClient": "stac", "StacQuery": "stac"}
+_LAZY_MEMBERS = {
+    "StacClient": "stac",
+    "StacQuery": "stac",
+    "create_catalog": "stac",
+    "create_stac_item": "stac",
+}
 
 
 def __getattr__(name: str) -> Any:
@@ -86,10 +92,12 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "RasterValidationError",
+    "VectorValidationError",
     "Chips",
     "GeoSamples",
     "attrs",
-    "GeoAnchor",
+    "GeoRegion",
     "GeoDataArray",
     "DataArray",
     "DataTree",
@@ -101,6 +109,8 @@ __all__ = [
     "GeoCatalogItem",
     "StacClient",
     "StacQuery",
+    "create_catalog",
+    "create_stac_item",
     "configure_gdal",
     "features",
     "io",
@@ -109,5 +119,4 @@ __all__ = [
     "stac",
     "class_percent",
     "statistics",
-    "transform",
 ]

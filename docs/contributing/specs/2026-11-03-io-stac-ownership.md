@@ -1,4 +1,4 @@
-# I/O, STAC and GeoAnchor ownership
+# I/O, STAC and GeoRegion ownership
 
 Status: implementation authorized. This document replaces the earlier iterative
 sketches, including the rejected optional-GeoBox anchor and to_geobox method.
@@ -7,28 +7,28 @@ Execution and checks: [implementation plan](../plans/2026-11-03-io-stac-ownershi
 ## Public workflow
 
 ```python
-from geosave.geodata import GeoAnchor, io
-from geosave.geodata.stac import StacClient, StacQuery, from_items
+from geosave.geodata import GeoRegion, io
+from geosave.geodata.stac import StacClient, StacQuery, create_catalog
 from odc.geo.geobox import GeoBox
 
-anchor = GeoAnchor.from_bbox((112.10, -8.10, 112.20, -8.00), timespan="2025-06")
+region = GeoRegion.from_bbox((112.10, -8.10, 112.20, -8.00), timespan="2025-06")
 client = StacClient.element84()
 query = StacQuery(collections=["sentinel-2-l2a"])
-query = query.set_anchor(anchor).set_filter("eo:cloud_cover <= 10")
+query = query.set_region(region).set_filter("eo:cloud_cover <= 10")
 items = client.search_items(query)
 collection = client.collection("sentinel-2-l2a")
 
 dataset = io.load_dataset(
-    items, geopolygon=anchor.geometry, crs="EPSG:32749", resolution=10,
+    items, region=region, crs="EPSG:32749", resolution=10,
     bands=["red", "nir"], collection=collection, patch_url=client.patch_url,
     with_properties=["eo:cloud_cover"], chunks={"x": 1024, "y": 1024},
 )
 
 # A shared native grid makes repeated loads align exactly.
-grid = GeoBox.from_geopolygon(anchor.geometry, crs="EPSG:32749", resolution=10)
+grid = GeoBox.from_geopolygon(region.geometry, crs="EPSG:32749", resolution=10)
 aligned = io.load_dataset(items, geobox=grid, collection=collection)
 tree = io.load_datatree(items, geobox=grid, collection=collection)
-catalog = from_items(items, collections=[collection])
+catalog = create_catalog(items, collections=[collection])
 ```
 
 Native `pystac_client.Client.search(...).items()` works as loader input too.
@@ -39,10 +39,10 @@ an endpoint, fetch a Collection, or reapply an anchor's dates to selected Items.
 
 ```text
 geodata/
-  core/anchor.py         CRS-aware geometry and optional time
+  core/region.py         CRS-aware geometry and optional time
   io/
     formats/            geotiff, netcdf, zarr, geojson, geopackage, geoparquet,
-                        stac_geoparquet, _geopandas, _stores
+                        stac_geoparquet, utils/ (geopandas, stores)
     rasterio.py         Rasterio reader and environment configuration
     paths.py            path expansion and lazy selections
     storage.py          UPath conversion, credentials, staging and transfer
@@ -63,8 +63,8 @@ There are no compatibility namespaces for io.raster, io.vector or stac.translate
 Canonical low-level format imports use io.formats; modules are not also exposed
 as io.geotiff/io.zarr. Typed read/write options remain exported through io.
 
-`_geopandas` prepares GeoJSON/GeoPackage engine keywords. Rasterio's GDAL
-environment does not configure the separate Pyogrio/Fiona binding. `_stores`
+`utils/geopandas.py` prepares GeoJSON/GeoPackage engine keywords. Rasterio's GDAL
+environment does not configure the separate Pyogrio/Fiona binding. `utils/stores.py`
 preflights NetCDF/Zarr suffixes, destination existence and encoding names without
 computing pixels. No generic Store wrapper or backend hierarchy is introduced.
 
@@ -77,11 +77,11 @@ STAC GeoParquet owns footer serialization, relative href persistence and
 Collection extent preparation. Catalog conversion is shared by search, accessors,
 writers and flows without importing a format implementation from core.
 
-## GeoAnchor
+## GeoRegion
 
 ```python
 @dataclass(frozen=True)
-class GeoAnchor:
+class GeoRegion:
     geometry: Geometry
     timespan: DateRange | None = None
 ```
@@ -97,23 +97,23 @@ for an output grid. A point needs an area or explicit grid before raster loading
 - Item row anchor: WGS84 Item geometry and instant/interval, even without projection.
 - Frame anchor: union in its active geometry CRS and envelope of dated rows.
   Timeless members, including GeoSave's STAC sentinel interval, do not widen it.
-- Samples continue returning native frames; samples[i].gs.anchor follows exactly
+- Samples continue returning native frames; samples[i].gs.region follows exactly
   the same rules as selecting those rows directly. Existing sample footprint
   intersection policy remains separate.
 
 A standalone Series loses its parent frame's CRS. Item row access requires
-WGS84 geometry; use projected.iloc[[i]].gs.anchor for projected rows. Empty or
+WGS84 geometry; use projected.iloc[[i]].gs.region for projected rows. Empty or
 invalid geometry, unknown frame CRS, and incomplete date intervals raise errors.
 Extracted anchors are snapshots, not cached state on mutable xarray/GeoPandas.
 
 Exact grids stay native GeoBoxes on raster accessors or as explicit load inputs.
-There is no GeoAnchor.geobox, resolution, set_grid or to_geobox. Its format method
+There is no GeoRegion.geobox, resolution, set_grid or to_geobox. Its format method
 retains geographic/time fields; resolution must be read from a separate grid.
 Rasterization accepts a native GeoBox or raster reference.
 
 ## Discovery and loading
 
-`StacQuery.set_anchor` returns a new query, replaces datetime and spatial
+`StacQuery.set_region` returns a new query, replaces datetime and spatial
 selectors with the anchor's WGS84 intersects, and clears bbox. A timeless anchor
 clears datetime. Collections, IDs, filters, ordering and pagination remain.
 

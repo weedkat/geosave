@@ -89,35 +89,15 @@ wraps the same chain with `GeoSaveModel.from_chain`.
 
 ```python
 spec = ModelSpec.load("model_spec.yaml")
-values = spec.encode(spec.preprocess({"optical": raster}))
-inputs = spec.transform(spec.model_inputs(values))
-prediction = model(**inputs)
-outputs = spec.decode(prediction, values)
+image = spec.run(entry="encoded", output="normalized", raster=raster)
+prediction = model(image=image)
 ```
 
-ModelSpec v3 has ordered `preprocessing`, `encoding`, `transforms`, `decoding`,
-and `postprocessing` call stages. Native values and intermediate inverse state
-stay in plain dictionaries. `inputs` binds only model arguments; `pixels` names
-image arguments a training method may augment. Optional tensor shape/dtype
-requirements validate the model boundary. No stage runs automatically when a
-model is called.
-
-Context is a normal named encoding result. For example, call
-`geosave.model.stages.encoder.prithvi.model_context` on the selected raster, then
-bind `context["temporal_coords"]` and `context["location_coords"]` as inputs.
-Encode after selecting the actual spatial/temporal sample. Clay's context
-function returns `time` and `latlon`, and requires one instant. Wavelengths and
-GSD remain explicit encoder configuration.
-
-Shared tensor normalization is an installed call such as
-`geosave.model.processing.normalize`. Training calls `spec.transform` after
-augmentation, inference calls the same method. The model package imports no
-training package. The caller owns batching, chip layouts, merge policy, and
-metadata semantics for augmentation. `decode` works per sample;
-`postprocess` works on merged outputs, such as argmax after merging logits.
-
-See `docs/guides/model-spec.md` and `tests/model/spec/test_processing.py` for the
-complete catalog/training/checkpoint/prediction round trip.
+Version 1 declares inputs and named calls with `call` and `kwargs`. References
+connect results; the selected dependency closure executes once per invocation.
+The call names above belong to generated recipes, not ModelSpec methods.
+Python functions own model-specific processing, batching and resources.
+See `docs/guides/model-spec.md` and `tests/model/spec/test_model.py`.
 
 ## Saving and loading native releases
 

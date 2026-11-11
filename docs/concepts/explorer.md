@@ -1,15 +1,19 @@
-# The interactive explorer
+# Explorer controls and behavior
+
+For a first map and a visual walkthrough, start with
+[Explore imagery on a map](../guides/explore.md).
 
 ```python
 scene.gs.explore("ndvi", basemap="Imagery")
 ```
 
 `explore` returns a native Panel Material UI app with a light/dark theme toggle.
-The compact sidebar groups catalogs, rasters and vectors separately, with
+The compact sidebar groups rasters and vectors separately, with
 visibility and zoom/remove actions on each layer. Style, Info and Identify tabs
 contain the selected layer’s controls, legend and metadata.
 The map sits beside it; a collapsible catalog or attribute table sits below
-the map. A row's checkbox draws its polygon; a catalog's **raster** column
+the map. Tables start with no selected rows and draw no footprints. Switching
+tabs preserves each table's selection. A row's checkbox draws its geometry; a catalog's **raster** column
 opens that row's raster with a click and removes it with another. Clicking the
 map picks features without opening rasters. Column filters and date ranges
 retain original row identity. Table guidance explains the two controls; checking
@@ -53,13 +57,23 @@ The RGB overview samples the whole scene and can touch every source chunk of a
 computed raster, while keeping the sampled array bounded.
 Display choices do not mutate the source raster or its RGB metadata.
 
-Layers compose with `scene.gs.explore() * prediction * fields`, or with
-`Explorer(scene, prediction, fields)`; `create_layer(fields, name="fields")`
-names one. Two explorers also compose:
-`raster1.gs.explore() * raster2.gs.explore()` lists both under Rasters, with
-independent display settings and no catalog table. Adding a catalog shows its
-checkbox table; adding a vector shows its attribute table. For local serving, put
-`scene.gs.explore().servable()` in a script and run `panel serve explore.py`.
+Pass configured layers and named tables separately:
+
+```python
+from geosave.geodata.viz.explore import Explorer, RasterLayer, VectorLayer
+
+viewer = Explorer(
+    layers=[RasterLayer(scene), VectorLayer(fields)],
+    tables={"Observations": catalog},
+)
+```
+
+Explicit layers display immediately. Tables create no raster layers until rows
+are opened. `catalog.gs.explore()` creates a table-only viewer.
+`scene.gs.explore() * RasterLayer(prediction)` combines independent layer settings.
+Two explorers also compose; their table names must be distinct.
+For local serving, put `scene.gs.explore().servable()` in a script and run
+`panel serve explore.py`.
 
 To launch directly from a notebook or Python script:
 

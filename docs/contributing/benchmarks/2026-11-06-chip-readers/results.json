@@ -1,0 +1,1568 @@
+{
+  "python": "3.14.9",
+  "platform": "Linux-6.18.60-1-lts-x86_64-with-glibc2.44",
+  "versions": {
+    "numpy": "2.4.4",
+    "xarray": "2026.4.0",
+    "dask": "2026.3.0",
+    "rasterio": "1.5.0",
+    "tiler": "0.6.0",
+    "psutil": "7.2.2"
+  },
+  "size": 4096,
+  "repeats": 3,
+  "source_bytes": 92657833,
+  "cache_bytes": 201965696,
+  "gdal_cache_mib": 32.0,
+  "dask_chunks": [
+    512,
+    512
+  ],
+  "block_size": 1024,
+  "workers": 4,
+  "cache": "OS caches not cleared",
+  "results": [
+    {
+      "method": "cache_create",
+      "seconds": 1.3065423750085756,
+      "bytes": 201965696,
+      "before": {
+        "rss_mib": 62.39453125,
+        "peak_mib": 80.48046875,
+        "RssAnon_mib": 28.91796875,
+        "RssFile_mib": 33.48046875
+      },
+      "after": {
+        "rss_mib": 98.578125,
+        "peak_mib": 320.46484375,
+        "RssAnon_mib": 53.34765625,
+        "RssFile_mib": 45.23046875
+      },
+      "repeat": 0
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.10523429000750184,
+      "read_s": 0.6031925790302921,
+      "close_s": 0.00024277300690300763,
+      "total_s": 0.708669642044697,
+      "first_chip_s": 0.14589645800879225,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.91015625,
+        "peak_mib": 247.32421875,
+        "RssAnon_mib": 156.26171875,
+        "RssFile_mib": 91.65234375
+      },
+      "after": {
+        "rss_mib": 308.109375,
+        "peak_mib": 311.21484375,
+        "RssAnon_mib": 202.140625,
+        "RssFile_mib": 105.96875
+      },
+      "repeat": 0
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 12,
+      "setup_s": 0.05944952301797457,
+      "read_s": 0.4819325789285358,
+      "close_s": 0.00019423200865276158,
+      "total_s": 0.5415763339551631,
+      "first_chip_s": 0.09132592301466502,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.98828125,
+        "peak_mib": 247.71875,
+        "RssAnon_mib": 156.3046875,
+        "RssFile_mib": 91.6875
+      },
+      "after": {
+        "rss_mib": 326.09765625,
+        "peak_mib": 334.16015625,
+        "RssAnon_mib": 220.04296875,
+        "RssFile_mib": 106.0546875
+      },
+      "repeat": 0
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.016036818007705733,
+      "read_s": 0.02185371791711077,
+      "close_s": 0.0005772479926235974,
+      "total_s": 0.0384677839174401,
+      "first_chip_s": 0.01812790200347081,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.75,
+        "peak_mib": 247.51171875,
+        "RssAnon_mib": 156.27734375,
+        "RssFile_mib": 91.4765625
+      },
+      "after": {
+        "rss_mib": 276.00390625,
+        "peak_mib": 275.90625,
+        "RssAnon_mib": 172.359375,
+        "RssFile_mib": 103.64453125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.002605124987894669,
+      "read_s": 0.010999917110893875,
+      "close_s": 0.002196476998506114,
+      "total_s": 0.01580151909729466,
+      "first_chip_s": 0.003374928986886516,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 248.05078125,
+        "peak_mib": 247.8125,
+        "RssAnon_mib": 156.26171875,
+        "RssFile_mib": 91.79296875
+      },
+      "after": {
+        "rss_mib": 377.48046875,
+        "peak_mib": 381.08203125,
+        "RssAnon_mib": 156.80078125,
+        "RssFile_mib": 220.6796875
+      },
+      "repeat": 0
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.0643227850086987,
+      "read_s": 0.6417296590225305,
+      "close_s": 0.00017125398153439164,
+      "total_s": 0.7062236980127636,
+      "first_chip_s": 0.10990591699373908,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.7890625,
+        "peak_mib": 247.36328125,
+        "RssAnon_mib": 156.31640625,
+        "RssFile_mib": 91.4765625
+      },
+      "after": {
+        "rss_mib": 309.25390625,
+        "peak_mib": 312.6328125,
+        "RssAnon_mib": 203.546875,
+        "RssFile_mib": 105.70703125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 8,
+      "setup_s": 0.06493292999221012,
+      "read_s": 0.5966448550170753,
+      "close_s": 0.0001683899899944663,
+      "total_s": 0.6617461749992799,
+      "first_chip_s": 0.11597991100279614,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.86328125,
+        "peak_mib": 247.6875,
+        "RssAnon_mib": 156.3046875,
+        "RssFile_mib": 91.55859375
+      },
+      "after": {
+        "rss_mib": 319.89453125,
+        "peak_mib": 323.6953125,
+        "RssAnon_mib": 213.9296875,
+        "RssFile_mib": 105.96484375
+      },
+      "repeat": 0
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.01580557000124827,
+      "read_s": 0.039353736996417865,
+      "close_s": 0.0007056890171952546,
+      "total_s": 0.05586499601486139,
+      "first_chip_s": 0.018801045982399955,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 248.02734375,
+        "peak_mib": 247.6015625,
+        "RssAnon_mib": 156.31640625,
+        "RssFile_mib": 91.7109375
+      },
+      "after": {
+        "rss_mib": 283.3515625,
+        "peak_mib": 283.01171875,
+        "RssAnon_mib": 179.48828125,
+        "RssFile_mib": 103.86328125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.002596605016151443,
+      "read_s": 0.010394659038865939,
+      "close_s": 0.0020663609902840108,
+      "total_s": 0.015057625045301393,
+      "first_chip_s": 0.0033368660078849643,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 248.0859375,
+        "peak_mib": 247.8125,
+        "RssAnon_mib": 156.30078125,
+        "RssFile_mib": 91.78515625
+      },
+      "after": {
+        "rss_mib": 365.45703125,
+        "peak_mib": 369.0,
+        "RssAnon_mib": 156.80078125,
+        "RssFile_mib": 208.65625
+      },
+      "repeat": 0
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.07337102299788967,
+      "read_s": 4.265513770922553,
+      "close_s": 0.00016748197958804667,
+      "total_s": 4.3390522759000305,
+      "first_chip_s": 0.10670510699856095,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.921875,
+        "peak_mib": 247.53125,
+        "RssAnon_mib": 156.296875,
+        "RssFile_mib": 91.625
+      },
+      "after": {
+        "rss_mib": 308.59765625,
+        "peak_mib": 312.36328125,
+        "RssAnon_mib": 202.98828125,
+        "RssFile_mib": 105.609375
+      },
+      "repeat": 0
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 20,
+      "setup_s": 0.06072869000490755,
+      "read_s": 1.6897432900441345,
+      "close_s": 0.00018040399299934506,
+      "total_s": 1.7506523840420414,
+      "first_chip_s": 0.1497562389995437,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.90625,
+        "peak_mib": 247.76953125,
+        "RssAnon_mib": 156.25390625,
+        "RssFile_mib": 91.65625
+      },
+      "after": {
+        "rss_mib": 370.91796875,
+        "peak_mib": 370.5625,
+        "RssAnon_mib": 265.0859375,
+        "RssFile_mib": 105.83203125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.018571193009847775,
+      "read_s": 0.36888383197947405,
+      "close_s": 0.0022355889959726483,
+      "total_s": 0.3896906139852945,
+      "first_chip_s": 0.021497036010259762,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 248.1640625,
+        "peak_mib": 247.9765625,
+        "RssAnon_mib": 156.3203125,
+        "RssFile_mib": 91.84375
+      },
+      "after": {
+        "rss_mib": 302.09375,
+        "peak_mib": 301.9296875,
+        "RssAnon_mib": 198.3046875,
+        "RssFile_mib": 103.7890625
+      },
+      "repeat": 0
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.004293219011742622,
+      "read_s": 0.11980336520355195,
+      "close_s": 0.003585575002944097,
+      "total_s": 0.12768215921823867,
+      "first_chip_s": 0.0052073170081712306,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.98046875,
+        "peak_mib": 247.80859375,
+        "RssAnon_mib": 156.28125,
+        "RssFile_mib": 91.703125
+      },
+      "after": {
+        "rss_mib": 448.78125,
+        "peak_mib": 452.3203125,
+        "RssAnon_mib": 156.859375,
+        "RssFile_mib": 291.921875
+      },
+      "repeat": 0
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.06584095401922241,
+      "read_s": 7.604137355810963,
+      "close_s": 0.00018305701087228954,
+      "total_s": 7.670161366841057,
+      "first_chip_s": 0.10703658103011549,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.9921875,
+        "peak_mib": 247.78515625,
+        "RssAnon_mib": 156.30078125,
+        "RssFile_mib": 91.69140625
+      },
+      "after": {
+        "rss_mib": 312.93359375,
+        "peak_mib": 315.96875,
+        "RssAnon_mib": 207.1953125,
+        "RssFile_mib": 105.73828125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 16,
+      "setup_s": 0.06719590001739562,
+      "read_s": 2.7186910890450235,
+      "close_s": 0.00018026400357484818,
+      "total_s": 2.786067253065994,
+      "first_chip_s": 0.2618652100209147,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.92578125,
+        "peak_mib": 247.78125,
+        "RssAnon_mib": 156.2578125,
+        "RssFile_mib": 91.671875
+      },
+      "after": {
+        "rss_mib": 387.69140625,
+        "peak_mib": 387.05859375,
+        "RssAnon_mib": 281.96875,
+        "RssFile_mib": 105.72265625
+      },
+      "repeat": 0
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.02087976800976321,
+      "read_s": 0.6188027136377059,
+      "close_s": 0.0016967539850156754,
+      "total_s": 0.6413792356324848,
+      "first_chip_s": 0.02418618299998343,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.97265625,
+        "peak_mib": 247.6484375,
+        "RssAnon_mib": 156.296875,
+        "RssFile_mib": 91.67578125
+      },
+      "after": {
+        "rss_mib": 298.59765625,
+        "peak_mib": 302.12890625,
+        "RssAnon_mib": 195.08984375,
+        "RssFile_mib": 103.5078125
+      },
+      "repeat": 0
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.005097735003801063,
+      "read_s": 0.20711643461254425,
+      "close_s": 0.0035350790130905807,
+      "total_s": 0.2157492486294359,
+      "first_chip_s": 0.005958124995231628,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.09765625,
+        "peak_mib": 247.80078125,
+        "RssAnon_mib": 156.30859375,
+        "RssFile_mib": 91.7890625
+      },
+      "after": {
+        "rss_mib": 448.87109375,
+        "peak_mib": 452.48828125,
+        "RssAnon_mib": 156.91015625,
+        "RssFile_mib": 291.9609375
+      },
+      "repeat": 0
+    },
+    {
+      "method": "cache_create",
+      "seconds": 0.9117868870089296,
+      "bytes": 201965696,
+      "before": {
+        "rss_mib": 62.48828125,
+        "peak_mib": 80.48046875,
+        "RssAnon_mib": 28.92578125,
+        "RssFile_mib": 33.56640625
+      },
+      "after": {
+        "rss_mib": 98.59375,
+        "peak_mib": 320.3515625,
+        "RssAnon_mib": 53.3515625,
+        "RssFile_mib": 45.2421875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 12,
+      "setup_s": 0.05891111298114993,
+      "read_s": 0.48880212087533437,
+      "close_s": 0.00026037299539893866,
+      "total_s": 0.5479736068518832,
+      "first_chip_s": 0.08717211795737967,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.9296875,
+        "peak_mib": 247.7109375,
+        "RssAnon_mib": 156.25,
+        "RssFile_mib": 91.6796875
+      },
+      "after": {
+        "rss_mib": 328.546875,
+        "peak_mib": 334.16015625,
+        "RssAnon_mib": 222.53515625,
+        "RssFile_mib": 106.01171875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.01687821201630868,
+      "read_s": 0.022850652982015163,
+      "close_s": 0.0006513510015793145,
+      "total_s": 0.04038021599990316,
+      "first_chip_s": 0.019192304025636986,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 248.109375,
+        "peak_mib": 247.515625,
+        "RssAnon_mib": 156.4140625,
+        "RssFile_mib": 91.6953125
+      },
+      "after": {
+        "rss_mib": 276.171875,
+        "peak_mib": 275.7109375,
+        "RssAnon_mib": 172.47265625,
+        "RssFile_mib": 103.69921875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.0027282579976599663,
+      "read_s": 0.014175864052958786,
+      "close_s": 0.003234825999243185,
+      "total_s": 0.020138948049861938,
+      "first_chip_s": 0.003813820978393778,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 248.140625,
+        "peak_mib": 247.7421875,
+        "RssAnon_mib": 156.390625,
+        "RssFile_mib": 91.75390625
+      },
+      "after": {
+        "rss_mib": 377.5546875,
+        "peak_mib": 381.01953125,
+        "RssAnon_mib": 156.9140625,
+        "RssFile_mib": 220.640625
+      },
+      "repeat": 1
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.07003632700070739,
+      "read_s": 0.41713874603738077,
+      "close_s": 0.00017055601347237825,
+      "total_s": 0.48734562905156054,
+      "first_chip_s": 0.09807097300654277,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.828125,
+        "peak_mib": 247.609375,
+        "RssAnon_mib": 156.296875,
+        "RssFile_mib": 91.53125
+      },
+      "after": {
+        "rss_mib": 307.765625,
+        "peak_mib": 310.89453125,
+        "RssAnon_mib": 202.14453125,
+        "RssFile_mib": 105.62109375
+      },
+      "repeat": 1
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 8,
+      "setup_s": 0.05929196500801481,
+      "read_s": 0.4186990990419872,
+      "close_s": 0.00021364798885770142,
+      "total_s": 0.4782047120388597,
+      "first_chip_s": 0.10521118401084095,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 248.13671875,
+        "peak_mib": 248.01171875,
+        "RssAnon_mib": 156.2578125,
+        "RssFile_mib": 91.8828125
+      },
+      "after": {
+        "rss_mib": 319.84765625,
+        "peak_mib": 323.63671875,
+        "RssAnon_mib": 213.7734375,
+        "RssFile_mib": 106.07421875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.01710492098936811,
+      "read_s": 0.04012033104663715,
+      "close_s": 0.000742636009817943,
+      "total_s": 0.0579678880458232,
+      "first_chip_s": 0.020036629983223975,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.9765625,
+        "peak_mib": 247.734375,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.6640625
+      },
+      "after": {
+        "rss_mib": 283.31640625,
+        "peak_mib": 283.1328125,
+        "RssAnon_mib": 179.484375,
+        "RssFile_mib": 103.83203125
+      },
+      "repeat": 1
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.0026031000015791506,
+      "read_s": 0.011584079940803349,
+      "close_s": 0.002850552002200857,
+      "total_s": 0.017037731944583356,
+      "first_chip_s": 0.0035738410078920424,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.90625,
+        "peak_mib": 247.58203125,
+        "RssAnon_mib": 156.3203125,
+        "RssFile_mib": 91.5859375
+      },
+      "after": {
+        "rss_mib": 365.296875,
+        "peak_mib": 368.82421875,
+        "RssAnon_mib": 156.8046875,
+        "RssFile_mib": 208.4921875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.06912236800417304,
+      "read_s": 0.5671201710356399,
+      "close_s": 0.00017858698265627027,
+      "total_s": 0.6364211260224693,
+      "first_chip_s": 0.0965593010187149,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.77734375,
+        "peak_mib": 247.59765625,
+        "RssAnon_mib": 156.3046875,
+        "RssFile_mib": 91.47265625
+      },
+      "after": {
+        "rss_mib": 309.9609375,
+        "peak_mib": 313.0625,
+        "RssAnon_mib": 204.30078125,
+        "RssFile_mib": 105.66015625
+      },
+      "repeat": 1
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 20,
+      "setup_s": 0.06255535699892789,
+      "read_s": 1.597383048851043,
+      "close_s": 0.0001985620183404535,
+      "total_s": 1.6601369678683113,
+      "first_chip_s": 0.1551603849802632,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.8828125,
+        "peak_mib": 247.6953125,
+        "RssAnon_mib": 156.2578125,
+        "RssFile_mib": 91.62890625
+      },
+      "after": {
+        "rss_mib": 370.77734375,
+        "peak_mib": 370.2578125,
+        "RssAnon_mib": 265.08203125,
+        "RssFile_mib": 105.6953125
+      },
+      "repeat": 1
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.018245240004034713,
+      "read_s": 0.36533732898533344,
+      "close_s": 0.0017589839990250766,
+      "total_s": 0.38534155298839323,
+      "first_chip_s": 0.020289948995923623,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 248.0625,
+        "peak_mib": 247.796875,
+        "RssAnon_mib": 156.30859375,
+        "RssFile_mib": 91.75390625
+      },
+      "after": {
+        "rss_mib": 302.09765625,
+        "peak_mib": 301.9296875,
+        "RssAnon_mib": 198.3046875,
+        "RssFile_mib": 103.79296875
+      },
+      "repeat": 1
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.0041577949887141585,
+      "read_s": 0.12804611379397102,
+      "close_s": 0.005834992974996567,
+      "total_s": 0.13803890175768174,
+      "first_chip_s": 0.005097037006635219,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.90234375,
+        "peak_mib": 247.59765625,
+        "RssAnon_mib": 156.296875,
+        "RssFile_mib": 91.60546875
+      },
+      "after": {
+        "rss_mib": 448.64453125,
+        "peak_mib": 452.1875,
+        "RssAnon_mib": 156.859375,
+        "RssFile_mib": 291.78515625
+      },
+      "repeat": 1
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.06766294100088999,
+      "read_s": 4.298000272916397,
+      "close_s": 0.00016133699682541192,
+      "total_s": 4.3658245509141125,
+      "first_chip_s": 0.09685299202101305,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.8984375,
+        "peak_mib": 247.66796875,
+        "RssAnon_mib": 156.31640625,
+        "RssFile_mib": 91.58203125
+      },
+      "after": {
+        "rss_mib": 309.0625,
+        "peak_mib": 312.20703125,
+        "RssAnon_mib": 203.46484375,
+        "RssFile_mib": 105.59765625
+      },
+      "repeat": 1
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 16,
+      "setup_s": 0.0631259020010475,
+      "read_s": 2.5696606214914937,
+      "close_s": 0.00019178699585609138,
+      "total_s": 2.6329783104883973,
+      "first_chip_s": 0.2542576320411172,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.05078125,
+        "peak_mib": 247.79296875,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.73828125
+      },
+      "after": {
+        "rss_mib": 387.66015625,
+        "peak_mib": 387.40234375,
+        "RssAnon_mib": 281.9765625,
+        "RssFile_mib": 105.68359375
+      },
+      "repeat": 1
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.01848486901144497,
+      "read_s": 0.5869067950698081,
+      "close_s": 0.00145104801049456,
+      "total_s": 0.6068427120917477,
+      "first_chip_s": 0.02069287101039663,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.0078125,
+        "peak_mib": 247.7578125,
+        "RssAnon_mib": 156.26953125,
+        "RssFile_mib": 91.7421875
+      },
+      "after": {
+        "rss_mib": 298.8515625,
+        "peak_mib": 302.40234375,
+        "RssAnon_mib": 195.09375,
+        "RssFile_mib": 103.7578125
+      },
+      "repeat": 1
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.005177635001018643,
+      "read_s": 0.21476603046176024,
+      "close_s": 0.005325911013642326,
+      "total_s": 0.2252695764764212,
+      "first_chip_s": 0.0061682810191996396,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.09765625,
+        "peak_mib": 247.9140625,
+        "RssAnon_mib": 156.30078125,
+        "RssFile_mib": 91.796875
+      },
+      "after": {
+        "rss_mib": 448.8984375,
+        "peak_mib": 452.4375,
+        "RssAnon_mib": 156.90234375,
+        "RssFile_mib": 291.99609375
+      },
+      "repeat": 1
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.06677594300708733,
+      "read_s": 8.068695851281518,
+      "close_s": 0.00018669001292437315,
+      "total_s": 8.13565848430153,
+      "first_chip_s": 0.09374598000431433,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.22265625,
+        "peak_mib": 248.01953125,
+        "RssAnon_mib": 156.37109375,
+        "RssFile_mib": 91.85546875
+      },
+      "after": {
+        "rss_mib": 313.06640625,
+        "peak_mib": 316.16796875,
+        "RssAnon_mib": 207.29296875,
+        "RssFile_mib": 105.7734375
+      },
+      "repeat": 1
+    },
+    {
+      "method": "cache_create",
+      "seconds": 0.9420240229810588,
+      "bytes": 201965696,
+      "before": {
+        "rss_mib": 62.4921875,
+        "peak_mib": 80.48046875,
+        "RssAnon_mib": 28.921875,
+        "RssFile_mib": 33.57421875
+      },
+      "after": {
+        "rss_mib": 98.6015625,
+        "peak_mib": 320.48828125,
+        "RssAnon_mib": 53.3515625,
+        "RssFile_mib": 45.25
+      },
+      "repeat": 2
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.016124052985105664,
+      "read_s": 0.02284485989366658,
+      "close_s": 0.0005022370023652911,
+      "total_s": 0.039471149881137535,
+      "first_chip_s": 0.018058550980640575,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.86328125,
+        "peak_mib": 247.56640625,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.55078125
+      },
+      "after": {
+        "rss_mib": 276.05859375,
+        "peak_mib": 275.796875,
+        "RssAnon_mib": 172.35546875,
+        "RssFile_mib": 103.703125
+      },
+      "repeat": 2
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.0027686969842761755,
+      "read_s": 0.013667274994077161,
+      "close_s": 0.004455115005839616,
+      "total_s": 0.020891086984192953,
+      "first_chip_s": 0.003755501995328814,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 247.9765625,
+        "peak_mib": 247.79296875,
+        "RssAnon_mib": 156.30859375,
+        "RssFile_mib": 91.66796875
+      },
+      "after": {
+        "rss_mib": 377.3359375,
+        "peak_mib": 380.9453125,
+        "RssAnon_mib": 156.80859375,
+        "RssFile_mib": 220.52734375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.08517923799809068,
+      "read_s": 0.5090484619722702,
+      "close_s": 0.000166016019647941,
+      "total_s": 0.5943937159900088,
+      "first_chip_s": 0.11338374298065901,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 248.03515625,
+        "peak_mib": 247.6875,
+        "RssAnon_mib": 156.31640625,
+        "RssFile_mib": 91.71875
+      },
+      "after": {
+        "rss_mib": 307.6796875,
+        "peak_mib": 310.6328125,
+        "RssAnon_mib": 201.76953125,
+        "RssFile_mib": 105.91015625
+      },
+      "repeat": 2
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 12,
+      "setup_s": 0.05922841199208051,
+      "read_s": 0.5548997989972122,
+      "close_s": 0.0001801229955162853,
+      "total_s": 0.614308333984809,
+      "first_chip_s": 0.10221019698656164,
+      "checksum": "562915ed45bfdcad2154625f1c9b6f4c2b9a07399b335ebe276624b7c6cfe98a",
+      "before": {
+        "rss_mib": 248.1484375,
+        "peak_mib": 247.90625,
+        "RssAnon_mib": 156.28125,
+        "RssFile_mib": 91.87109375
+      },
+      "after": {
+        "rss_mib": 328.7890625,
+        "peak_mib": 334.1796875,
+        "RssAnon_mib": 222.55078125,
+        "RssFile_mib": 106.23828125
+      },
+      "repeat": 2
+    },
+    {
+      "method": "rasterio",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.01685467700008303,
+      "read_s": 0.041583679034374654,
+      "close_s": 0.0009110950049944222,
+      "total_s": 0.059349451039452106,
+      "first_chip_s": 0.0199612730066292,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 248.23046875,
+        "peak_mib": 247.91015625,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.91796875
+      },
+      "after": {
+        "rss_mib": 283.42578125,
+        "peak_mib": 283.26171875,
+        "RssAnon_mib": 179.484375,
+        "RssFile_mib": 103.94140625
+      },
+      "repeat": 2
+    },
+    {
+      "method": "npy",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.0025660840037744492,
+      "read_s": 0.012383635970763862,
+      "close_s": 0.004104366002138704,
+      "total_s": 0.019054085976677015,
+      "first_chip_s": 0.0035620389971882105,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.9921875,
+        "peak_mib": 247.765625,
+        "RssAnon_mib": 156.265625,
+        "RssFile_mib": 91.73046875
+      },
+      "after": {
+        "rss_mib": 365.3984375,
+        "peak_mib": 368.94140625,
+        "RssAnon_mib": 156.80859375,
+        "RssFile_mib": 208.58984375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "chips",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 0,
+      "setup_s": 0.06314420400303788,
+      "read_s": 0.7156614979612641,
+      "close_s": 0.00016755200340412557,
+      "total_s": 0.7789732539677061,
+      "first_chip_s": 0.11000441398937255,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.8046875,
+        "peak_mib": 247.61328125,
+        "RssAnon_mib": 156.24609375,
+        "RssFile_mib": 91.5625
+      },
+      "after": {
+        "rss_mib": 309.99609375,
+        "peak_mib": 313.17578125,
+        "RssAnon_mib": 204.16015625,
+        "RssFile_mib": 105.8359375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "blocks",
+      "workload": "sparse",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 16,
+      "blocks": 8,
+      "setup_s": 0.06222675202297978,
+      "read_s": 0.5070397290110122,
+      "close_s": 0.000277623999863863,
+      "total_s": 0.5695441050338559,
+      "first_chip_s": 0.11461890902137384,
+      "checksum": "6c07503010f53ef7f1d3a61b98bfcbaab1a98d8c52f270f67aaf54812b5d097b",
+      "before": {
+        "rss_mib": 247.953125,
+        "peak_mib": 247.73046875,
+        "RssAnon_mib": 156.28125,
+        "RssFile_mib": 91.67578125
+      },
+      "after": {
+        "rss_mib": 320.09765625,
+        "peak_mib": 323.87890625,
+        "RssAnon_mib": 214.19921875,
+        "RssFile_mib": 105.8984375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.017475018015829846,
+      "read_s": 0.37012352197780274,
+      "close_s": 0.0018826750165317208,
+      "total_s": 0.3894812150101643,
+      "first_chip_s": 0.01938625902403146,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 248.1875,
+        "peak_mib": 247.87109375,
+        "RssAnon_mib": 156.25,
+        "RssFile_mib": 91.94140625
+      },
+      "after": {
+        "rss_mib": 302.11328125,
+        "peak_mib": 301.83984375,
+        "RssAnon_mib": 198.3046875,
+        "RssFile_mib": 103.80859375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.004052263015182689,
+      "read_s": 0.12554396479390562,
+      "close_s": 0.007335000991588458,
+      "total_s": 0.13693122880067676,
+      "first_chip_s": 0.005005752987926826,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 248.02734375,
+        "peak_mib": 247.60546875,
+        "RssAnon_mib": 156.29296875,
+        "RssFile_mib": 91.734375
+      },
+      "after": {
+        "rss_mib": 448.76953125,
+        "peak_mib": 452.0703125,
+        "RssAnon_mib": 156.85546875,
+        "RssFile_mib": 291.9140625
+      },
+      "repeat": 2
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 0,
+      "setup_s": 0.07008403702639043,
+      "read_s": 4.4965894070628565,
+      "close_s": 0.00019471999257802963,
+      "total_s": 4.566868164081825,
+      "first_chip_s": 0.10486288802349009,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.99609375,
+        "peak_mib": 247.75,
+        "RssAnon_mib": 156.25390625,
+        "RssFile_mib": 91.74609375
+      },
+      "after": {
+        "rss_mib": 309.16015625,
+        "peak_mib": 312.625,
+        "RssAnon_mib": 203.4609375,
+        "RssFile_mib": 105.69921875
+      },
+      "repeat": 2
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 0,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 272,
+      "blocks": 20,
+      "setup_s": 0.06944295298308134,
+      "read_s": 1.5229976810805965,
+      "close_s": 0.0001817299926187843,
+      "total_s": 1.5926223640562966,
+      "first_chip_s": 0.1507005359744653,
+      "checksum": "e5a27a1f65325208928bf5549070f5be439037fde37821e34ccb1aab16ddfb45",
+      "before": {
+        "rss_mib": 247.6875,
+        "peak_mib": 247.40625,
+        "RssAnon_mib": 156.2734375,
+        "RssFile_mib": 91.41796875
+      },
+      "after": {
+        "rss_mib": 370.5859375,
+        "peak_mib": 370.1875,
+        "RssAnon_mib": 265.07421875,
+        "RssFile_mib": 105.51171875
+      },
+      "repeat": 2
+    },
+    {
+      "method": "rasterio",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.018638175999512896,
+      "read_s": 0.5861959846515674,
+      "close_s": 0.0013108040147926658,
+      "total_s": 0.606144964665873,
+      "first_chip_s": 0.020559473981847987,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 248.1015625,
+        "peak_mib": 247.62890625,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.7890625
+      },
+      "after": {
+        "rss_mib": 298.8984375,
+        "peak_mib": 302.33984375,
+        "RssAnon_mib": 195.09375,
+        "RssFile_mib": 103.8046875
+      },
+      "repeat": 2
+    },
+    {
+      "method": "npy",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.005221008002990857,
+      "read_s": 0.21336024996708147,
+      "close_s": 0.008137631986755878,
+      "total_s": 0.2267188899568282,
+      "first_chip_s": 0.006366705027176067,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.6953125,
+        "peak_mib": 247.51953125,
+        "RssAnon_mib": 156.3125,
+        "RssFile_mib": 91.3828125
+      },
+      "after": {
+        "rss_mib": 448.48828125,
+        "peak_mib": 452.03515625,
+        "RssAnon_mib": 156.90234375,
+        "RssFile_mib": 291.5859375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "chips",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 0,
+      "setup_s": 0.06606082999496721,
+      "read_s": 7.368165277905064,
+      "close_s": 0.0001742570020724088,
+      "total_s": 7.434400364902103,
+      "first_chip_s": 0.09904081901186146,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.99609375,
+        "peak_mib": 247.7890625,
+        "RssAnon_mib": 156.26953125,
+        "RssFile_mib": 91.73046875
+      },
+      "after": {
+        "rss_mib": 312.953125,
+        "peak_mib": 316.31640625,
+        "RssAnon_mib": 207.20703125,
+        "RssFile_mib": 105.74609375
+      },
+      "repeat": 2
+    },
+    {
+      "method": "blocks",
+      "workload": "full",
+      "overlap": 64,
+      "shape": [
+        3,
+        4096,
+        4109
+      ],
+      "chips": 462,
+      "blocks": 16,
+      "setup_s": 0.06433606898644939,
+      "read_s": 2.7364457938529085,
+      "close_s": 0.00019835299463011324,
+      "total_s": 2.800980215833988,
+      "first_chip_s": 0.23290267499396577,
+      "checksum": "4d33d569202d8151e620da178e1ba74d247501c0545bb83344eb67d5fb08a280",
+      "before": {
+        "rss_mib": 247.9140625,
+        "peak_mib": 247.66796875,
+        "RssAnon_mib": 156.2578125,
+        "RssFile_mib": 91.65625
+      },
+      "after": {
+        "rss_mib": 387.85546875,
+        "peak_mib": 387.40234375,
+        "RssAnon_mib": 282.1328125,
+        "RssFile_mib": 105.72265625
+      },
+      "repeat": 2
+    }
+  ]
+}

@@ -571,6 +571,18 @@ wheels = [
 ]
 
 [[package]]
+name = "cf-xarray"
+version = "0.11.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "xarray" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cb/13/07f02aa2abb9204caa31f713ef5b3402f8344e0c962d28ca17d1ca9587c8/cf_xarray-0.11.3.tar.gz", hash = "sha256:0a896112fca0b09e449a45133d1ce1509c0e525606f41206aab8bddb17b4c7fa", size = 693996, upload-time = "2026-06-12T18:21:19.251Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/50/20a143566e20ecaf4f28302a92cc04252c224ab69200e254a282f7feb79a/cf_xarray-0.11.3-py3-none-any.whl", hash = "sha256:d5bff6bbba04de04f1a700a4395d379e1db4f767864fde82b30f874f208484e2", size = 80825, upload-time = "2026-06-12T18:21:17.869Z" },
+]
+
+[[package]]
 name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1586,6 +1598,7 @@ source = { editable = "." }
 dependencies = [
     { name = "affine" },
     { name = "bokeh" },
+    { name = "cf-xarray" },
     { name = "colorcet" },
     { name = "cql2" },
     { name = "dask" },
@@ -1701,6 +1714,7 @@ dev = [
 requires-dist = [
     { name = "affine", specifier = ">=2.4" },
     { name = "bokeh", specifier = ">=3.8" },
+    { name = "cf-xarray", specifier = ">=0.11.3" },
     { name = "colorcet", specifier = ">=3.1" },
     { name = "cql2", specifier = ">=0.5.6" },
     { name = "dask", specifier = ">=2026.3" },

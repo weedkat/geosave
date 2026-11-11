@@ -47,8 +47,8 @@ class DataModule(LightningDataModule):
     together while training, then the spec's configured input transforms.
 
     Args:
-        spec: Model spec, or its file, declaring `inputs`, `pixels`, and
-            `transforms`.
+        spec: Recipe, or its file, with `from_tensor` and `normalized` calls.
+        pixels: Names of tensors that share augmentation and normalization.
         train: Training dataset.
         val: Validation dataset.
         test: Test dataset. None leaves the test split unavailable.
@@ -79,15 +79,28 @@ class DataModule(LightningDataModule):
         size: int | tuple[int, int] = 224,
         batch_size: int = 8,
         num_workers: int = 4,
+        pixels: tuple[str, ...] = ("image",),
     ) -> None:
         super().__init__()
         self.spec = spec if isinstance(spec, ModelSpec) else ModelSpec.load(spec)
+        self.pixels = pixels
         self.train_dataset = train
         self.val_dataset = val
         self.test_dataset = test
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.augmenter = ImageAugmenter(augmentations or [], size)
+
+    def normalize_inputs(
+        self, inputs: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        """Normalize pixel tensors after augmentation, retaining auxiliary inputs."""
+        result = dict(inputs)
+        for name in self.pixels:
+            result[name] = self.spec.run(
+                entry="from_tensor", output="normalized", value=inputs[name]
+            )
+        return result
 
     def _loader(self, dataset: SampleDataset, *, shuffle: bool) -> DataLoader[Sample]:
         # A forked worker inherits open rasters and reader threads it cannot use.
@@ -142,7 +155,7 @@ class DataModule(LightningDataModule):
             remains the Dataset/model contract; values are not repaired.
         """
         inputs = dict(batch["inputs"])
-        names = self.spec.pixels
+        names = self.pixels
         target = batch["target"]
         if self.trainer is not None and self.trainer.training:
             # Availability belongs to target values, independently of inputs.
@@ -157,4 +170,4 @@ class DataModule(LightningDataModule):
             )
             target = torch.where(known > 0.5, values, torch.nan)
             inputs.update(zip(names, images, strict=True))
-        return {"inputs": self.spec.transform(inputs, batched=True), "target": target}
+        return {"inputs": self.normalize_inputs(inputs), "target": target}

@@ -4,8 +4,6 @@ import pystac
 
 
 def test_core_band_fields_are_read():
-    import xarray as xr
-
     from geosave.geodata.stac import band
 
     asset = pystac.Asset(
@@ -18,4 +16,4 @@ def test_core_band_fields_are_read():
         },
     )
     assert band.read_aliases(asset) == [("red", "red"), ("nir", "nir")]
-    assert band.read_attrs(xr.DataArray(0), asset, 0)["scale_factor"] == 0.01
+    assert band.read_attrs(asset, 0)["scale_factor"] == 0.01

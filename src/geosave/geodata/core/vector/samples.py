@@ -1,4 +1,4 @@
-"""Group an item table's rows into samples, each opened as one DataTree."""
+"""Group an Item table's rows by their original positions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import shapely
 
 if TYPE_CHECKING:
@@ -14,29 +15,50 @@ if TYPE_CHECKING:
 
 
 class GeoSamples:
-    """Hold an item table and, for each sample, the positions of its rows.
+    """Group native catalog rows by their original positions.
 
-    `GeoCatalog.sample` builds them. Samples may share rows: a swath belongs
-    to every footprint it covers, and a timeless Item to every window, which a
-    pandas GroupBy cannot hold. A sample is the table's rows at its positions,
-    so it opens as the item table does.
-
-    Args:
-        catalog: Item table the positions select from.
-        indices: For each sample, the positions of its rows.
+    The catalog table is copied to preserve row positions after source edits.
+    Nested Python values such as asset dictionaries remain shared.
+    Indexing and iteration return GeoDataFrames. Optional ``slots`` records
+    temporal membership as ordinary DataFrames with time, collection and indices
+    columns. Empty lists denote missing observations; NaT denotes static rows.
+    Grouping metadata is never attached to selected rows as execution settings.
 
     Examples:
-        >>> samples = items.gs.sample(pair=["s2", "s1"], tolerance="2D")
-        >>> samples.indices
-        [[0, 5, 9], [2, 6, 9], [3, 7, 9]]
-        >>> samples[0].gs.to_datatree().gs.groups
-        ('s2', 's1', 'dem')
+        >>> samples = items.gs.sample(collections=["optical"], freq="MS", window=3)
+        >>> rows = samples[0]
+        >>> rows.equals(items.iloc[samples.indices[0]])
+        True
+        >>> with rows.gs.to_datatree() as tree:
+        ...     print(tree.gs.groups)
+        ('optical',)
     """
 
-    def __init__(self, catalog: gpd.GeoDataFrame, indices: list[list[int]]) -> None:
-        """Keep the item table and each sample's row positions."""
-        self.catalog = catalog
+    def __init__(
+        self,
+        catalog: gpd.GeoDataFrame,
+        indices: list[list[int]],
+        *,
+        slots: list[pd.DataFrame] | None = None,
+        footprints: gpd.GeoSeries | None = None,
+    ) -> None:
+        """Keep source row positions and optional spatial/temporal membership."""
+        self.catalog = catalog.copy()
         self.indices = indices
+        self.slots = slots
+        self._footprints = footprints
+
+    @property
+    def times(self) -> list[pd.DatetimeIndex]:
+        """Return each window's ordered slot labels; spatial-only samples have none."""
+        if self.slots is None:
+            return []
+        times = []
+        for frame in self.slots:
+            times.append(
+                pd.DatetimeIndex(frame["time"].dropna().unique()).sort_values()
+            )
+        return times
 
     def __len__(self) -> int:
         """Return the number of samples."""
@@ -53,11 +75,20 @@ class GeoSamples:
 
     @property
     def footprints(self) -> GeoDataFrame:
-        """Return one row per sample: its Item count, and where its Items overlap.
+        """Return Item counts and the founding footprint of each planned group.
 
-        Items that only touch share a line, which no map or grid can use, so
-        such a sample takes its smallest Item's footprint instead.
+        For manually constructed groups without footprints, use the Items'
+        intersection, falling back to the smallest footprint for zero-area overlap.
         """
+        if self._footprints is not None:
+            return cast(
+                "GeoDataFrame",
+                gpd.GeoDataFrame(
+                    {"items": [len(rows) for rows in self.indices]},
+                    geometry=self._footprints.reset_index(drop=True),
+                    crs=self.catalog.crs,
+                ),
+            )
         item_counts = []
         footprints = []
         for rows in self:

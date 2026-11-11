@@ -14,10 +14,12 @@ The default encoder downloads pretrained weights; review that setting before use
 python main.py fit --config configs/segmentation-fixmatch.yaml
 ```
 
-The existing ModelSpec is at `configs/segmentation-fixmatch/model_spec.yaml`.
-Its future is on hold pending preprocessing/postprocessing code publication design.
-This migration preserves its current behavior. Required inference transforms
-must match training; random training augmentation is not inference preparation.
+The version 1 ModelSpec is at `configs/segmentation-fixmatch/model_spec.yaml`.
+Python functions in `processing.py` own band selection and preparation.
+Inference calls `spec.run(entry="encoded", output="normalized", raster=scene)`.
+Training uses `from_tensor` after augmentation; DataModule `pixels` names the
+tensors sharing that policy. Install the project modules when executing the
+recipe elsewhere; saving a recipe does not package its Python code.
 
 Add another task/method with `geosave add-task --task TASK --method METHOD`.
 Each method has separate Python, config, and script paths. To share a Dataset,

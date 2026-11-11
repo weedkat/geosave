@@ -1,0 +1,46 @@
+schema_version: 1
+entry: rasters
+output: normalized
+inputs:
+  regions: {}
+  catalog: {}
+  collection: {}
+  crs: {}
+  resolution: {}
+  bands: {}
+  mean: {}
+  std: {}
+  shape:
+    default: null
+  stac_cfg:
+    default: {}
+steps:
+  rasters:
+    call: geosave.model.ingestion.ingest_stac
+    kwargs:
+      regions: !ref regions
+      catalog: !ref catalog
+      collection: !ref collection
+      crs: !ref crs
+      resolution: !ref resolution
+      shape: !ref shape
+      bands: !ref bands
+      stac_cfg: !ref stac_cfg
+  images:
+    call: geosave.model.processing.encode_rasters
+    kwargs:
+      rasters: !ref entry
+      bands: !ref bands
+      dims: [band, time, y, x]
+  batch:
+    call: torch.stack
+    kwargs:
+      tensors: !ref images
+      dim: 0
+  normalized:
+    call: geosave.model.processing.normalize
+    kwargs:
+      value: !ref batch
+      mean: !ref mean
+      std: !ref std
+      dim: 1

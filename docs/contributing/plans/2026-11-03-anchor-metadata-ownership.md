@@ -1,10 +1,12 @@
 # Anchor formatting and raster metadata ownership
 
+> Historical plan. Geographic naming is now `GeoRegion`; temporal coverage lives in the concrete raster accessors, not the former `core/raster/time.py`. See [current architecture](../architecture.md).
+
 Implement the ownership design agreed in the review conversation.
 
 ## Contract
 
-- GeoAnchor formats location/time for users and STAC publication. Optional
+- GeoRegion formats location/time for users and STAC publication. Optional
   `geobox=` supplies epsg, width, height and res; lon/lat always come from the
   anchor. Without a geobox, existing formatting is unchanged.
 - STAC constructs its formatting anchor from its WGS84 union footprint and

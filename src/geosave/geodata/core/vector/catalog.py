@@ -1,11 +1,11 @@
-"""Explore, query and sample spatial catalog records on native GeoDataFrames."""
+"""Explore and sample spatial catalog records on native GeoDataFrames."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from os import PathLike
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import geopandas as gpd
 import pandas as pd
@@ -13,17 +13,8 @@ import xarray as xr
 from odc.geo.crs import CRS as OdcCRS
 from odc.geo.geom import Geometry
 
-from geosave.geodata.utils.datetime import (
-    AnchorDatetime,
-    DateRange,
-    find_overlapping,
-    parse_daterange,
-    read_row_spans,
-)
-from geosave.geodata.utils.geometry import SomeGeometry, to_shapely
-
-from geosave.geodata.stac.catalog import FOOTER_KEY
-from geosave.geodata.stac.catalog import ITEM_COLUMNS
+from geosave.geodata.errors import VectorValidationError
+from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 
 if TYPE_CHECKING:
@@ -33,41 +24,29 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
     from typing_extensions import Unpack
     from upath import UPath
-    from geosave.geodata import DataTree
+    from geosave.geodata import DataTree, Dataset
     from geosave.geodata.io.storage import Location
     from geosave.geodata.io.formats.geojson import GeoJSONWriteOptions
     from geosave.geodata.io.formats.geopackage import GeoPackageWriteOptions
     from geosave.geodata.io.formats.geoparquet import GeoParquetWriteOptions
 
     from geosave.geodata import GeoDataFrame
-    from geosave.geodata.core.anchor import GeoAnchor
+    from geosave.geodata.core.region import GeoRegion
     from geosave.geodata.viz.explore import Explorer
 
     from .samples import GeoSamples
 
-type SpatialPredicate = Literal[
-    "intersects", "within", "contains", "covers", "covered_by"
-]
-
-SPATIAL_PREDICATES = get_args(SpatialPredicate.__value__)
-
 
 class GeoCatalog:
-    """Place, draw, query, write and sample spatial records, including STAC Items.
+    """Place, draw, write and sample spatial records, including STAC Items.
 
-    The accessor of every GeoDataFrame, which it leaves as it is: geometry with
-    information attached, an active geometry column, a CRS, and any other
-    columns. Methods fall in two tiers.
+    Native GeoPandas masks select rows. Spatial operations request the geometry
+    and CRS guarantees they need through validate. The region combines geometry
+    and temporal coverage; sampling groups source rows without opening pixels.
 
-    - Spatial records need only a geometry: `crs`, `footprint`, `query`,
-      `sample`, `plot`, `explore`, `rasterize`, `concat`. Querying by date uses
-      the optional `datetime`, `start_datetime` and `end_datetime` columns. A
-      GeoJSON, GeoPackage or GeoParquet file of plain features is this.
-    - Item tables add the stac-geoparquet columns, one Item per row, with the
-      Collections in the `stac-geoparquet` attrs travelling with the rows:
-      `to_items`, `to_datatree`, `collections`, and a row's `anchor`. They come
-      from `to_catalog`, `StacClient.search` or a stac-geoparquet file, and
-      these methods check their columns when called.
+    Item conversion and raster loading additionally require STAC columns.
+    Collection definitions travel with rows in the stac-geoparquet attrs;
+    ordinary features need neither Item columns nor Collection metadata.
 
     Raises:
         AttributeError: `data` is not a GeoDataFrame, or has no active
@@ -94,11 +73,80 @@ class GeoCatalog:
             raise AttributeError("gs needs an active geometry column")
         self._data = data
 
+    def validate(
+        self,
+        *,
+        geometry: bool = True,
+        crs: bool = False,
+        stac_item: bool | None = None,
+        area: bool = False,
+        temporal: bool = False,
+    ) -> None:
+        """Check requested table structure without changing rows or opening assets.
+
+        Args:
+            geometry: Require present, nonempty, valid geometries in every row.
+                Empty tables pass; operations needing rows check that separately.
+            crs: Require a declared coordinate reference system.
+            stac_item: True requires STAC Item columns. False rejects STAC
+                columns or metadata to require ordinary features. None skips
+                this check. Does not validate full schemas or asset access.
+            area: Require valid geometries with positive area, even when
+                geometry=False. Points and lines cannot found spatial samples.
+            temporal: Require paired, ordered temporal bounds and a nominal
+                datetime within coverage. Undated rows remain valid.
+
+        Raises:
+            VectorValidationError: A requested check fails. Geometry errors
+                identify the row position, independent of index labels or IDs.
+
+        Examples:
+            >>> features.gs.validate(crs=True)
+            >>> items.gs.validate(geometry=False, crs=True, stac_item=True)
+        """
+        from geosave.geodata.core.vector.utils.geometry import validate_geometry
+        from geosave.geodata.core.vector.utils.time import validate_time
+
+        if geometry or area:
+            for position, shape in enumerate(self._data.geometry):
+                try:
+                    validate_geometry(shape, area=area)
+                except VectorValidationError as error:
+                    identity = self._data.iloc[position].get("id", position)
+                    raise VectorValidationError(
+                        f"Row at position {position} (Item {identity!r}): {error}"
+                    ) from error
+
+        if crs and self._data.crs is None:
+            raise VectorValidationError(
+                "The vector has no CRS. Assign the known coordinate reference "
+                "system with frame.set_crs(...); this does not reproject geometries."
+            )
+
+        if stac_item is True:
+            missing = set(ITEM_COLUMNS) - set(self._data.columns)
+            if missing:
+                raise VectorValidationError(
+                    f"STAC Item operations need columns {sorted(missing)}; item tables come "
+                    "from to_catalog, StacClient.search, or reading a stac-geoparquet file"
+                )
+
+        if stac_item is False:
+            if FOOTER_KEY in self._data.attrs or all(
+                column in self._data.columns for column in ITEM_COLUMNS
+            ):
+                raise VectorValidationError(
+                    "ordinary features required; write catalog rows with "
+                    "to_geoparquet to preserve STAC metadata"
+                )
+
+        if temporal:
+            validate_time(self._data)
+
     @property
     def crs(self) -> OdcCRS:
         """Return the coordinate reference system every geometry shares."""
-        if self._data.crs is None:
-            raise ValueError("this vector has no CRS")
+        self.validate(geometry=False, crs=True)
         return OdcCRS(self._data.crs)
 
     @property
@@ -112,50 +160,30 @@ class GeoCatalog:
             ValueError: The frame holds no row.
         """
         if self._data.empty:
-            raise ValueError("an empty vector has no footprint")
+            raise VectorValidationError(
+                "An empty vector has no footprint. Select at least one row."
+            )
+        self.validate()
         return Geometry(self._data.geometry.union_all(), crs=self.crs)
 
     @property
-    def anchor(self) -> GeoAnchor:
+    def region(self) -> GeoRegion:
         """Return feature union and the temporal envelope of dated rows.
 
         Timeless rows do not widen the envelope. No assets are opened and no
         pixel grid is inferred. Invalid geometry or incomplete dates raise.
         """
-        from geosave.geodata.core.anchor import GeoAnchor
-        from geosave.geodata.stac.item import read_timespan
+        from geosave.geodata.core.region import GeoRegion
+        from geosave.geodata.core.vector.utils.time import read_times
 
-        anchor = GeoAnchor.from_geometry(self._data)
-        columns = [
-            key
-            for key in ("datetime", "start_datetime", "end_datetime")
-            if key in self._data
-        ]
-        spans = []
-        for values in self._data[columns].itertuples(index=False, name=None):
-            properties = {}
-            for key, value in zip(columns, values, strict=True):
-                if not pd.isna(value):
-                    properties[key] = value
-            start = properties.get("start_datetime", properties.get("datetime"))
-            end = properties.get("end_datetime", properties.get("datetime"))
-            if (start is None) != (end is None):
-                raise ValueError("anchor rows need complete, ordered temporal bounds")
-            span = read_timespan({"properties": properties})
-            if span is not None:
-                if span[0] > span[1]:
-                    raise ValueError(
-                        "anchor rows need complete, ordered temporal bounds"
-                    )
-                spans.append(span)
-        if spans:
-            return anchor.replace(
-                timespan=(
-                    min(start for start, _ in spans),
-                    max(end for _, end in spans),
-                )
-            )
-        return anchor
+        region = GeoRegion.from_geometry(self.footprint)
+        self.validate(geometry=False, temporal=True)
+        times = read_times(self._data)
+        dated = times.loc[times["start"].notna()]
+        if dated.empty:
+            return region
+
+        return region.replace(timespan=(dated["start"].min(), dated["end"].max()))
 
     @classmethod
     def concat(cls, vectors: Iterable[gpd.GeoDataFrame]) -> GeoDataFrame:
@@ -170,11 +198,27 @@ class GeoCatalog:
 
         Raises:
             ValueError: No frames are supplied, their CRSs differ, or a frame
-                holds a second column named `geometry` beside its active one.
+                holds a second column named `geometry` beside its active one,
+                or STAC Item tables are mixed with ordinary features.
         """
         items = list(vectors)
         if not items:
             raise ValueError("concat needs at least one GeoDataFrame")
+        stac_frames = []
+        for item in items:
+            stac_frames.append(
+                FOOTER_KEY in item.attrs
+                or all(column in item for column in ITEM_COLUMNS)
+            )
+
+        if any(stac_frames) and not all(stac_frames):
+            raise ValueError(
+                "cannot concatenate STAC Item tables with ordinary features"
+            )
+
+        for item in items:
+            item.gs.validate(geometry=False, crs=True, stac_item=all(stac_frames))
+
         crs = OdcCRS(items[0].crs)
         mismatches = [str(item.crs) for item in items if OdcCRS(item.crs) != crs]
         if mismatches:
@@ -182,6 +226,8 @@ class GeoCatalog:
                 f"the vectors' CRSs differ from {crs}: {mismatches}; "
                 "call to_crs explicitly"
             )
+
+        # Normalize the active geometry name without overwriting a property.
         frames: list[gpd.GeoDataFrame] = []
         for item in items:
             frame = item.copy()
@@ -196,14 +242,24 @@ class GeoCatalog:
         result = gpd.GeoDataFrame(
             pd.concat(frames, ignore_index=True), geometry="geometry", crs=crs
         )
-        collections = {}
+
+        from geosave.geodata.stac.catalog import merge_collections
+
+        definitions = []
+        footer = {}
         for frame in items:
-            for key, value in (
-                frame.attrs.get(FOOTER_KEY, {}).get("collections", {}).items()
-            ):
-                collections.setdefault(key, value)
+            definitions.extend(frame.gs.collections.values())
+            for key, value in frame.attrs.get(FOOTER_KEY, {}).items():
+                if key == "collections":
+                    continue
+                if key in footer and footer[key] != value:
+                    raise ValueError(f"catalog footer metadata disagrees on {key!r}")
+                footer[key] = deepcopy(value)
         if any(FOOTER_KEY in frame.attrs for frame in items):
-            result.attrs[FOOTER_KEY] = {"collections": deepcopy(collections)}
+            footer["collections"] = {}
+            for key, collection in merge_collections(definitions).items():
+                footer["collections"][key] = collection.to_dict(transform_hrefs=False)
+            result.attrs[FOOTER_KEY] = footer
         return cast("GeoDataFrame", result)
 
     def plot(self, *, color: str = "tab:blue", alpha: float = 0.3) -> hv.Overlay:
@@ -224,7 +280,7 @@ class GeoCatalog:
 
         Examples:
             >>> plots.gs.plot()
-            >>> scene.gs.plot() * plots.to_crs(anchor.crs).gs.plot()
+            >>> scene.gs.plot() * plots.to_crs(region.crs).gs.plot()
         """
         from geosave.geodata.viz.plot import draw_vector
 
@@ -238,11 +294,11 @@ class GeoCatalog:
         color: str = "tab:blue",
         alpha: float = 0.3,
     ) -> Explorer:
-        """Open this vector on a web map with a sidebar to explore it.
+        """Construct a web map viewer with a sidebar to explore this vector.
 
         Features have hover and click identification. Property and date filters
-        narrow the table and map. Checking catalog rows opens their rasters;
-        unchecking removes them.
+        narrow the table and map. Rows start unselected. Selecting a row
+        draws its geometry; the Raster control opens Item assets separately.
 
         Args:
             column: Column that colours the features, or None for one colour.
@@ -252,7 +308,7 @@ class GeoCatalog:
             alpha: Opacity of polygon fill; 0 draws boundaries only.
 
         Returns:
-            Explorer, shown by a notebook or served with `.servable()`.
+            Explorer, shown by a notebook or started with `.serve()`.
 
         Raises:
             KeyError: `column` is not a column of the frame.
@@ -263,14 +319,19 @@ class GeoCatalog:
             >>> fields.gs.explore(column="crop")
             >>> fields.gs.explore(alpha=0.0, basemap="Imagery")  # boundaries only
         """
-        from geosave.geodata.viz.explore import Explorer, create_layer
+        from matplotlib.colors import to_hex
+        from geosave.geodata.viz.explore import Explorer
 
-        layer = create_layer(self._data, column=column, color=color, alpha=alpha)
-        return Explorer(layer, basemap=basemap)
+        viewer = Explorer(tables={"Features": self._data}, basemap=basemap)
+        layer = viewer.tables.tables["Features"].footprints
+        layer.column = column
+        layer.color = to_hex(color)
+        layer.alpha = alpha
+        return viewer
 
     def rasterize(
         self,
-        like: GeoBox | xr.DataArray | xr.Dataset | xr.DataTree,
+        like: GeoBox | xr.DataArray | xr.Dataset,
         *,
         column: str | None = None,
         fill: int | float | bool = 0,
@@ -280,7 +341,7 @@ class GeoCatalog:
         """Burn geometries or one property onto an existing exact grid.
 
         Args:
-            like: Anchor or geolocated xarray object supplying the target grid.
+            like: GeoBox or geolocated xarray object supplying the target grid.
             column: Property to burn. None returns a boolean presence mask.
             fill: Value outside geometries. A presence mask takes only 0 or
                 False, since it is False outside them.
@@ -288,8 +349,7 @@ class GeoCatalog:
             all_touched: Burn every touched pixel instead of pixel centres.
 
         Returns:
-            Eager geolocated array on the exact target grid. A dated anchor
-            dates it with a scalar `time` at the start of its timespan.
+            Eager geolocated array on the exact target grid.
 
         Raises:
             KeyError: The selected property is absent.
@@ -297,16 +357,40 @@ class GeoCatalog:
                 cannot be represented by the dtype, or `column` is None with a
                 truthy `fill`.
         """
-        from geosave.geodata.transform.vector import rasterize
+        from odc.geo.geobox import GeoBox
 
-        return rasterize(
-            self._data,
-            like,
-            column=column,
-            fill=fill,
-            dtype=dtype,
-            all_touched=all_touched,
+        from geosave.geodata.conventions import SPATIAL_DIMENSIONS
+        from geosave.geodata.core.vector.utils.rasterize import (
+            burn_column,
+            burn_presence,
         )
+
+        if isinstance(like, GeoBox):
+            if like.crs is None:
+                raise ValueError("rasterize target grid carries no CRS")
+            geobox = like
+        else:
+            like.gs.validate(georeferenced=True, affine=True)
+            geobox = cast("GeoBox", like.gs.geobox)
+
+        self.validate(crs=True)
+        frame = self._data.to_crs(cast("OdcCRS", geobox.crs))
+        if column is None:
+            pixels = burn_presence(frame, geobox, fill, all_touched)
+        else:
+            pixels = burn_column(frame, geobox, column, fill, dtype, all_touched)
+
+        raster = xr.DataArray(
+            pixels, dims=SPATIAL_DIMENSIONS, name=column or "mask"
+        ).gs.write_grid(geobox)
+        if isinstance(like, GeoBox):
+            return raster
+
+        # Sliced coordinates can drift from regenerated affine coordinates.
+        coords = {}
+        for dim in SPATIAL_DIMENSIONS:
+            coords[dim] = like.coords[dim]
+        return raster.assign_coords(coords)
 
     @property
     def collections(self) -> dict[str, pystac.Collection]:
@@ -319,98 +403,9 @@ class GeoCatalog:
             collections[collection_id] = pystac.Collection.from_dict(fields)
         return collections
 
-    def query(
-        self,
-        where: GeoAnchor
-        | xr.DataArray
-        | xr.Dataset
-        | xr.DataTree
-        | SomeGeometry
-        | None = None,
-        *,
-        when: AnchorDatetime | None = None,
-        predicate: SpatialPredicate = "intersects",
-    ) -> GeoDataFrame:
-        """Select rows related to a place and a time span.
-
-        One rule serves every vector, Items and features alike: the predicate
-        reads from each row to `where`, and a row's span, from
-        `start_datetime` and `end_datetime` each falling back to `datetime`,
-        must share an instant with `when`. A missing bound is open, so an
-        undated row matches any time.
-
-        Args:
-            where: Anchor or geolocated xarray object, whose ground and span
-                are used; or a geometry: an odc Geometry carries its CRS, any
-                other geometry is read as WGS84. None selects by time alone.
-            when: Time span, as `parse_daterange` reads it, such as `"2024-03"`.
-                None takes the span of an anchor `where`, else selects by
-                place alone.
-            predicate: Exact relation from each row to `where`.
-
-        Returns:
-            Matching original rows, preserving their index, order and metadata.
-
-        Raises:
-            ValueError: The predicate is unsupported, `where` carries no
-                locatable grid, or a date column holds invalid values.
-
-        Examples:
-            >>> items.gs.query(scene)["id"].tolist()
-            ['s2_20240308', 'label']
-            >>> items.gs.query(field, when="2024-03")["id"].tolist()
-            ['s2_20240308', 's2_20240328', 'label']
-        """
-        if predicate not in SPATIAL_PREDICATES:
-            raise ValueError(
-                f"predicate must be one of {list(SPATIAL_PREDICATES)}, got {predicate!r}"
-            )
-        ground, timespan = self._read_ground_and_timespan(where)
-        if when is not None:
-            timespan = parse_daterange(when)
-
-        rows = self._data
-        if ground is not None and not rows.empty:
-            rows = self._select_by_ground(rows, ground, predicate)
-        if timespan is not None and not rows.empty:
-            start_instants, end_instants = read_row_spans(rows)
-            rows = rows.loc[find_overlapping(start_instants, end_instants, timespan)]
-        return cast("GeoDataFrame", rows.copy())
-
-    @staticmethod
-    def _read_ground_and_timespan(
-        where: GeoAnchor
-        | xr.DataArray
-        | xr.Dataset
-        | xr.DataTree
-        | SomeGeometry
-        | None,
-    ) -> tuple[Geometry | None, DateRange | None]:
-        """Return the ground a query target covers and the span it is dated by."""
-        from geosave.geodata.core.anchor import GeoAnchor
-
-        if isinstance(where, xr.DataArray | xr.Dataset | xr.DataTree):
-            where = cast("GeoAnchor", where.gs.anchor)
-        if isinstance(where, GeoAnchor):
-            return where.geometry, where.timespan
-        if where is None or isinstance(where, Geometry):
-            return where, None
-        return Geometry(to_shapely(where), crs="EPSG:4326"), None
-
-    def _select_by_ground(
-        self, rows: gpd.GeoDataFrame, ground: Geometry, predicate: SpatialPredicate
-    ) -> gpd.GeoDataFrame:
-        """Keep the rows whose geometry relates to `ground` as `predicate` says."""
-        shape = ground.to_crs(self.crs).geom
-        # The spatial index finds candidates by bounding box; the predicate decides.
-        candidate_positions = sorted(set(rows.sindex.query(shape)))
-        candidate_rows = rows.iloc[candidate_positions]
-        matches = getattr(candidate_rows.geometry, predicate)(shape)
-        return cast("gpd.GeoDataFrame", candidate_rows.loc[matches])
-
     def to_geojson(
         self,
-        path: str | PathLike[str],
+        path: Location,
         *,
         overwrite: bool = False,
         **options: Unpack[GeoJSONWriteOptions],
@@ -438,14 +433,13 @@ class GeoCatalog:
             >>> plots.gs.to_geojson("plots.geojson")
             PosixUPath('plots.geojson')
         """
-        self._require_features()
         from geosave.geodata.io.formats import geojson
 
         return geojson.write_geojson(self._data, path, overwrite=overwrite, **options)
 
     def to_geopackage(
         self,
-        path: str | PathLike[str],
+        path: Location,
         *,
         layer: str | None = None,
         overwrite: bool = False,
@@ -471,7 +465,6 @@ class GeoCatalog:
             >>> plots.gs.to_geopackage("survey.gpkg", layer="plots")
             PosixUPath('survey.gpkg')
         """
-        self._require_features()
         from geosave.geodata.io.formats import geopackage
 
         return geopackage.write_geopackage(
@@ -525,374 +518,260 @@ class GeoCatalog:
     def sample(
         self,
         *,
-        pair: Sequence[str] | None = None,
-        tolerance: str | pd.Timedelta = "0D",
+        collections: Sequence[str] | None = None,
+        match: Literal["exact", "overlap"] = "overlap",
+        overlap: float = 0.9,
+        date_range: tuple[str | datetime | None, str | datetime | None] | None = None,
+        freq: str | pd.offsets.BaseOffset | None = None,
         window: int = 1,
         step: int = 1,
-        freq: str | None = None,
-        keep: Literal["first", "last"] = "last",
-        overlap: float = 0.9,
+        interval: Literal["raise", "first", "last", "overlap", "drop"] = "raise",
+        missing: Literal["drop", "keep"] = "drop",
     ) -> GeoSamples:
-        """Group Items into samples: by footprint, then into windows of paired Items.
+        """Plan spatial samples and consecutive temporal windows without reading pixels.
 
-        No file is opened. A sample is a group of this table's rows; samples
-        may share rows, so a swath or a DEM belongs to several.
+        Collections populate slots independently. No collection supplies reference
+        dates for another. With ``freq``, calendar slots are left-closed and
+        labelled by their start. Otherwise exact observation timestamps define
+        the timeline. Empty calendar slots remain between observations.
 
-        Footprint. Visited from smallest to largest, a footprint covering at
-        least `overlap` of a smaller one repeats it; the others are distinct.
-        Each distinct footprint gathers every Item sharing at least `overlap`
-        of its area, so a large footprint joins every one it covers::
-
-            s2 tile A, every date   ▭▭▭▭           -> sample of tile A
-            s2 tile B               ▭▭▭▭           -> sample of tile B
-            s1 swath           ▭▭▭▭▭▭▭▭▭▭▭▭        -> joins A and B
-
-        Pair. Each Item of the first `pair` collection is one pair, joined by
-        the nearest Item of every other `pair` collection within `tolerance`::
-
-            s2      ● Jan 5        ● Feb 4        ● Mar 8
-            s1       ● Jan 6      ● Feb 3          ● Mar 9      tolerance="2D"
-            pair    [Jan 5]       [Feb 4]        [Mar 8]
-
-        Window. `window` consecutive slots form one sample, a new one every
-        `step` slots, as `pandas.Series.rolling` takes rows. Without `freq` each
-        pair is a slot; with it, a slot is a `resample` bucket, filled by its
-        `keep` pair, and a window holding an empty bucket is skipped::
-
-            freq="MS", window=2      [── Jan ──)[── Feb ──)[── Mar ──)
-                                       Jan 5      Feb 4      Mar 8
-            windows                  └──── 1 ────┘
-                                                └──── 2 ────┘
-
-        Timeless Items, such as a DEM, join every window of their footprint.
-        Dated Items of a collection outside `pair` join none.
+        With all temporal options at their defaults, return one raw sample per
+        spatial group. Indexing returns source rows. Open them with
+        ``samples[i].gs.to_datatree()``; loading retains their original dates.
+        Slot labels describe membership, not rewritten observation timestamps.
 
         Args:
-            pair: Collections paired into one time step; the first one's Items
-                set the pairs. None makes each footprint one sample.
-            tolerance: Largest gap between a pair's Items, as `pd.Timedelta`
-                reads it.
-            window: Slots per sample.
-            step: Slots between window starts.
-            freq: Slot span as `resample` reads it, such as ``"MS"``. None
-                makes each pair a slot.
-            keep: Which pair fills a slot holding several.
-            overlap: Fraction of a footprint's area an Item must share to join
-                it, and a footprint must cover to repeat a smaller one.
+            collections: Required collection names. None selects all. Unselected
+                static collections are not implicitly included.
+            match: Equal footprints, or smallest-first overlap grouping.
+            overlap: Required area fraction for overlap grouping.
+            date_range: Inclusive lower and exclusive upper selection bounds;
+                None means unbounded. The lower bound anchors relative frequencies.
+                Anchored frequencies such as "MS" retain their calendar boundaries.
+            freq: Pandas frequency string or offset. Relative DateOffset values
+                require a lower date_range bound. None uses exact instants;
+                interval-only Items then require an explicit frequency.
+            window: Positive count of consecutive slots in each sample.
+            step: Positive count of slots between window starts.
+            interval: Assignment for interval-only Items crossing slots: raise,
+                first, last, overlap (reuse in every intersected slot), or drop.
+                Item endpoints are inclusive. An existing datetime takes priority
+                for assignment; its full coverage is still preserved.
+            missing: Drop windows lacking required observations, or retain them
+                with empty slot membership. This never fills pixels or creates
+                placeholder catalog rows.
 
         Returns:
-            Samples of this table, each its rows: a window's pairs in time
-            order, then its footprint's timeless Items.
+            Samples retaining original catalog positions, slot membership and
+            spatial footprints. No valid windows produces an empty result.
 
         Raises:
-            KeyError: A `pair` collection names no row's collection.
-            ValueError: A window option is given without `pair`, a number is
-                out of range, an Item's footprint has no area, or no footprint
-                holds a complete window.
-
-        Warns:
-            DroppedRowsWarning: Items without a partner, windows holding an
-                empty slot, and footprints holding fewer than `window` slots.
+            ValueError: Options or temporal coverage are invalid, or an interval
+                crosses slots with interval='raise'. Errors identify the Item.
+            KeyError: A requested collection is absent.
+            VectorValidationError: Geometry is missing, invalid, empty or has no area.
 
         Examples:
-            >>> samples = items.gs.sample(pair=["s2", "s1"], tolerance="2D", window=3, freq="MS")
-            >>> samples[0]["collection"].tolist()
-            ['s2', 's1', 's2', 's1', 's2', 's1', 'dem']
-            >>> samples[0].gs.to_datatree().gs.groups
-            ('s2', 's1', 'dem')
-            >>> explorer.add(samples.footprints, samples[0])
+            >>> samples = items.gs.sample(
+            ...     collections=["optical", "radar"], match="exact",
+            ...     freq="MS", window=6, interval="raise",
+            ... )
+            >>> samples[0]  # original Item rows, without opening assets
+            <GeoDataFrame ...>
+            >>> with samples[0].gs.to_datatree() as tree:
+            ...     print(tree.gs.groups)
+            ('optical', 'radar')
         """
-        import shapely
-
         from .samples import GeoSamples
-
-        if not 0 < overlap <= 1:
-            raise ValueError(
-                f"overlap is a fraction of a footprint's area, got {overlap}"
-            )
-        if pair is None and (window != 1 or step != 1 or freq is not None):
-            raise ValueError(
-                "window, step and freq cut windows of pairs; name them with pair="
-            )
-        if window < 1 or step < 1:
-            raise ValueError(
-                f"window and step count slots, got window={window}, step={step}"
-            )
-        if pair is not None:
-            missing_fields = {"collection", "datetime"} - set(self._data.columns)
-            if missing_fields:
-                raise ValueError(f"pairing needs columns {sorted(missing_fields)}")
-            missing_collections = set(pair) - set(self._data["collection"].dropna())
-            if missing_collections:
-                raise KeyError(f"no Item belongs to {sorted(missing_collections)}")
-
-        # Index labels are row positions from here on, as GeoSamples selects them.
-        items = cast("gpd.GeoDataFrame", self._data.reset_index(drop=True))
-        # Items join a footprint by shared area, which a point or line has none of.
-        has_no_area = shapely.area(items.geometry.to_numpy()) == 0
-        if has_no_area.any():
-            arealess_ids = items.loc[has_no_area, "id"].tolist()
-            raise ValueError(
-                f"sampling groups Items by shared area; {arealess_ids} have none"
-            )
-
-        footprints = self._find_distinct_footprints(items.geometry, overlap)
-        members = self._find_footprint_items(items, footprints, overlap)
-        if pair is None:
-            indices = members.groupby("footprint")["row"].agg(list).tolist()
-        else:
-            largest_gap = cast("pd.Timedelta", pd.Timedelta(tolerance))
-            indices = self._cut_windows(
-                items, members, pair, largest_gap, window, step, freq, keep
-            )
-        return GeoSamples(self._data, indices)
-
-    @staticmethod
-    def _find_distinct_footprints(
-        footprints: gpd.GeoSeries, overlap: float
-    ) -> gpd.GeoSeries:
-        """Return the footprints that do not cover `overlap` of a smaller one, in row order.
-
-        Footprints are visited from smallest to largest, so a swath covering
-        whole tiles never stands for a sample of its own: each tile does.
-        """
-        import numpy as np
-        import shapely
-
-        geometries = footprints.to_numpy()
-        distinct_rows = []
-        distinct_geometries = []
-        for position in np.argsort(shapely.area(geometries), kind="stable"):
-            geometry = geometries[position]
-            # A footprint repeats a distinct one when it covers `overlap` of its area
-            shared_areas = shapely.area(
-                shapely.intersection(geometry, distinct_geometries)
-            )
-            minimum_areas = overlap * shapely.area(distinct_geometries)
-            if not np.any(shared_areas >= minimum_areas):
-                distinct_rows.append(footprints.index[position])
-                distinct_geometries.append(geometry)
-        return cast("gpd.GeoSeries", footprints.loc[sorted(distinct_rows)])
-
-    @staticmethod
-    def _find_footprint_items(
-        items: gpd.GeoDataFrame, footprints: gpd.GeoSeries, overlap: float
-    ) -> pd.DataFrame:
-        """Return one row per footprint and Item sharing `overlap` of its area.
-
-        Returns:
-            `footprint`, the footprint's number in `footprints`, and `row`, the
-            Item's row, sorted by both.
-        """
-        import shapely
-
-        # 1. Find the Items intersecting each footprint
-        footprint_frame = gpd.GeoDataFrame(
-            {"footprint": range(len(footprints))},
-            geometry=footprints.to_numpy(),
-            crs=items.crs,
-        )
-        candidates = items[[items.geometry.name]].sjoin(
-            footprint_frame, predicate="intersects"
+        from .utils.time import read_times
+        from .utils.sampling import (
+            assign_slots,
+            build_timeline,
+            clip_observations,
+            group_footprints,
+            read_frequency,
+            read_range,
+            select_collections,
+            select_range,
+            select_windows,
+            validate_options,
         )
 
-        # 2. Keep the candidates sharing at least `overlap` of the footprint's area
-        footprint_numbers = candidates["footprint"].to_numpy()
-        footprint_geometries = footprints.to_numpy()[footprint_numbers]
-        shared_areas = shapely.area(
-            shapely.intersection(candidates.geometry.to_numpy(), footprint_geometries)
+        validate_options(
+            collections=collections,
+            match=match,
+            overlap=overlap,
+            window=window,
+            step=step,
+            interval=interval,
+            missing=missing,
         )
-        joins = shared_areas >= overlap * shapely.area(footprint_geometries)
-        members = pd.DataFrame(
-            {
-                "footprint": footprint_numbers[joins],
-                "row": candidates.index.to_numpy()[joins],
-            }
+        bounds = read_range(date_range)
+        offset = read_frequency(freq, bounds[0])
+        temporal = (
+            collections is not None
+            or freq is not None
+            or window != 1
+            or step != 1
+            or interval != "raise"
+            or missing != "drop"
         )
-        return members.sort_values(["footprint", "row"], ignore_index=True)
 
-    @staticmethod
-    def _cut_windows(
-        items: gpd.GeoDataFrame,
-        members: pd.DataFrame,
-        pair: Sequence[str],
-        tolerance: pd.Timedelta,
-        window: int,
-        step: int,
-        freq: str | None,
-        keep: Literal["first", "last"],
-    ) -> list[list[int]]:
-        """Cut each footprint's Items into windows of paired Items, as `sample` explains.
+        # The working index is source position, independent of duplicate user
+        # labels. Filtering and slot assignment retain it until construction.
+        rows = self._data.copy()
+        rows.index = pd.RangeIndex(len(rows))
+        rows = select_collections(rows, collections)
+        times = None
+        if temporal or bounds != (None, None):
+            rows.gs.validate(geometry=False, temporal=True)
+            times = select_range(read_times(rows), bounds)
+            rows = rows.loc[times.index]
 
-        Returns:
-            For each window, its rows: its pairs in time order, then the
-            footprint's timeless Items.
-        """
-        import warnings
+        footprints, groups = group_footprints(rows, match, overlap)
+        if not temporal:
+            return GeoSamples(self._data, groups, footprints=footprints)
 
-        from geosave.geodata.warnings import DroppedRowsWarning
+        names = list(collections) if collections is not None else []
+        if len(rows):
+            if "collection" not in rows:
+                raise ValueError("Temporal sampling requires a collection column")
+            if not names:
+                names = list(rows["collection"].drop_duplicates())
+            if any(not isinstance(name, str) or not name for name in names):
+                raise ValueError("Temporal sampling requires nonempty collection names")
 
-        # 1. Date each footprint's Items; pyarrow datetimes have no merge_asof
-        #    or resample support
-        times = pd.to_datetime(items["datetime"]).iloc[members["row"]]
-        collection_names = items["collection"].iloc[members["row"]]
-        members = members.assign(
-            time=times.reset_index(drop=True),
-            collection=collection_names.reset_index(drop=True),
+        # Date filtering can use plain features; only calendar membership needs
+        # collection names and row identity alongside the temporal values.
+        assert times is not None
+        observations = times.assign(
+            row=rows.index,
+            id=rows.get("id", pd.Series(rows.index, index=rows.index)),
+            collection=rows.get("collection", pd.Series(index=rows.index, dtype=str)),
         )
-        is_dated = members["time"].notna()
+        observations = clip_observations(observations, bounds)
 
-        # 2. Pair each Item of the first collection with the nearest Item of
-        #    every other, within its footprint
-        is_first = is_dated & (members["collection"] == pair[0])
-        pairs = members.loc[is_first, ["footprint", "time", "row"]]
-        pairs = pairs.rename(columns={"row": pair[0]}).sort_values("time")
-        for collection in pair[1:]:
-            is_partner = is_dated & (members["collection"] == collection)
-            partners = members.loc[is_partner, ["footprint", "time", "row"]]
-            pairs = pd.merge_asof(
-                pairs,
-                partners.rename(columns={"row": collection}).sort_values("time"),
-                on="time",
-                by="footprint",
-                direction="nearest",
-                tolerance=tolerance,
-            )
-        complete_pairs = pairs.dropna().sort_values(["footprint", "time"])
-        unpaired_count = len(pairs) - len(complete_pairs)
-
-        # 3. Lay the pairs into slots; with `freq`, each bucket takes its `keep`
-        #    pair, and an empty bucket holds NaN
-        slots = complete_pairs
-        if freq is not None:
-            pairs_by_footprint = complete_pairs.set_index("time").groupby("footprint")
-            buckets = pairs_by_footprint[list(pair)].resample(freq)
-            bucket_pairs = buckets.last() if keep == "last" else buckets.first()
-            slots = bucket_pairs.reset_index()
-
-        # 4. Roll windows of `window` consecutive slots, a new one every `step`,
-        #    each joined by its footprint's timeless Items
         indices = []
-        broken_count = 0
-        short_count = 0
-        for footprint in members["footprint"].unique():
-            slot_rows = slots.loc[slots["footprint"] == footprint, list(pair)]
-            is_timeless = (members["footprint"] == footprint) & ~is_dated
-            timeless_rows = members.loc[is_timeless, "row"].tolist()
-            if len(slot_rows) < window:
-                short_count += 1
-            for start in range(0, len(slot_rows) - window + 1, step):
-                window_rows = slot_rows.iloc[start : start + window]
-                if window_rows.isna().any(axis=None):
-                    broken_count += 1
-                    continue
-                # Row-major order: each pair's collections, pair after pair
-                rows = window_rows.astype("int64").to_numpy().ravel().tolist()
-                indices.append(rows + timeless_rows)
+        windows = []
+        shapes = []
+        for shape, members in zip(footprints, groups, strict=True):
+            group = observations.loc[observations.index.isin(members)]
+            timeline = build_timeline(group, offset, bounds)
+            slots = assign_slots(group, timeline, interval)
+            frames = select_windows(
+                slots,
+                timeline,
+                names,
+                window,
+                step,
+                missing,
+                trim=bounds == (None, None),
+            )
+            for frame in frames:
+                positions = []
+                for membership in frame["indices"]:
+                    for position in membership:
+                        if position not in positions:
+                            positions.append(position)
+                indices.append(positions)
+                windows.append(frame)
+                shapes.append(shape)
 
-        if unpaired_count:
-            warnings.warn(
-                f"{unpaired_count} {pair[0]} Items have no partner within {tolerance}",
-                DroppedRowsWarning,
-                stacklevel=3,
-            )
-        if broken_count:
-            warnings.warn(
-                f"{broken_count} windows hold an empty slot",
-                DroppedRowsWarning,
-                stacklevel=3,
-            )
-        if short_count:
-            warnings.warn(
-                f"{short_count} footprints hold fewer than {window} slots",
-                DroppedRowsWarning,
-                stacklevel=3,
-            )
-        if not indices:
-            raise ValueError(
-                f"no footprint holds {window} consecutive pairs of {list(pair)}"
-            )
-        return indices
+        return GeoSamples(
+            self._data,
+            indices,
+            slots=windows,
+            footprints=gpd.GeoSeries(shapes, crs=rows.crs),
+        )
 
     def to_datatree(self, **options: Any) -> DataTree:
-        """Open the Items lazily as `/{collection}/{res}`, each grid node on its native grid.
+        """Load the Items lazily as ``{collection}/{asset}`` nodes on native grids.
 
-        Each row opens as one scene, as `GeoCatalogItem.to_datatree` opens it;
-        a collection's scenes join along `time` in date order, node by node,
-        and a collection of one timeless Item has no `time` axis. Collections
-        follow their first appearance.
+        Each collection loads with `stac.load_datatree`: each STAC asset is a node
+        on the grid it states, and the collection's time sits on its own node.
+        Collections follow their first appearance. Merge assets on one grid
+        with `tree.gs.group_grid()`.
 
         Args:
-            **options: Forwarded to each asset's GDAL reader, such as
-                `chunks` or `mask_and_scale`.
+            **options: Forwarded to `stac.load_datatree`, such as `groupby`
+                or `chunks`.
 
         Returns:
             DataTree of collection nodes, each carrying its Collection and
-            extension schemas as `StacMetadata` attrs, over their grid nodes;
-            closing it closes every file.
+            extension schemas as `StacMetadata` attrs, over their asset nodes.
+            Each collection's region is its Items' geometry, beside the whole
+            grids.
 
         Raises:
-            ValueError: An Item names no collection, or a collection's scenes
-                differ in grid nodes, grids or variables.
+            ValueError: An Item names no collection, or a band states no grid.
 
         Examples:
-            >>> tree = items.gs.query(when="2024-03-08").gs.to_datatree()
+            >>> tree = items.gs.to_datatree()
             >>> tree.gs.groups
             ('s2', 'dem')
-            >>> list(tree.gs.rasters)
+            >>> list(tree.gs.datasets)
+            ['s2/B04', 's2/B11', 'dem/elevation']
+            >>> list(tree.gs.group_grid().gs.datasets)
             ['s2/r10m', 's2/r20m', 'dem/r30m']
         """
-        from contextlib import ExitStack
+        from geosave.geodata.stac.load import load_datatree
+        from geosave.geodata.stac.item import read_footprint
 
-        from geosave.geodata.io.stac import open_scene
-        from geosave.geodata.stac.item import read_instant
-        from geosave.geodata.stac.item import build_stac_metadata
-        from geosave.geodata.transform.temporal import concat
-
-        # 1. Each collection's Items, in date order, timeless last
         items_by_collection: dict[str, list[pystac.Item]] = {}
         for entry in self.to_items():
-            if entry.collection_id is None:
+            if not entry.collection_id:
                 raise ValueError(
-                    f"Item {entry.id!r} needs a collection to name its group"
+                    f"Item {entry.id!r} needs a collection to name its node"
                 )
             items_by_collection.setdefault(entry.collection_id, []).append(entry)
-
-        # 2. One scene tree per row; a collection's scenes along time, node by node
         collections = self.collections
-        with ExitStack() as opened:
-            nodes: dict[str, xr.Dataset] = {}
-            for collection_id, items in items_by_collection.items():
-                dated = []
-                timeless = []
-                for entry in items:
-                    instant = read_instant(entry)
-                    if instant is None:
-                        timeless.append(entry)
-                    else:
-                        dated.append((instant, entry))
-                dated.sort(key=lambda pair: pair[0])
-                dated_items = []
-                for _, entry in dated:
-                    dated_items.append(entry)
-                dated_items.extend(timeless)
-                scenes = []
-                for entry in dated_items:
-                    scene = open_scene(entry, **options)
-                    opened.callback(scene.close)
-                    scenes.append(scene)
-                series = concat(scenes) if len(scenes) > 1 else scenes[0]
-                metadata = build_stac_metadata(
-                    dated_items, collections.get(collection_id)
-                )
-                # Each collection node states its own Collection.
-                nodes[collection_id] = xr.Dataset(attrs=metadata.to_attrs())
-                for name, raster in series.gs.rasters.items():
-                    nodes[f"{collection_id}/{name}"] = raster
+        # Each collection loads on its own grids; their nodes join as siblings.
+        nodes = {}
+        for identity, entries in items_by_collection.items():
+            tree = load_datatree(
+                entries, collection=collections.get(identity), **options
+            )
+            # The Items' geometry is their region; the grid stays whole.
+            footprint = read_footprint(entries)
+            if footprint is not None:
+                tree = tree.gs.write_extent(footprint)
+            for path, node in tree.subtree_with_keys:
+                if path != ".":
+                    nodes[path] = node.to_dataset(inherit=False)
+        return cast("DataTree", xr.DataTree.from_dict(nodes))
 
-            tree = xr.DataTree.from_dict(nodes)
-            tree.set_close(opened.pop_all().close)
-            return cast("DataTree", tree)
+    def to_dataset(self, geobox: GeoBox, **options: Any) -> Dataset:
+        """Load one collection's Items lazily onto one grid.
+
+        Args:
+            geobox: Grid every band lands on.
+            **options: Forwarded to `stac.load_dataset`, such as `groupby`,
+                `bands` or `chunks`.
+
+        Returns:
+            Dataset on `geobox`, carrying its Collection as `StacMetadata` attrs.
+
+        Raises:
+            ValueError: The rows hold more than one collection; load each with
+                its own `to_dataset`, or all of them with `to_datatree`.
+
+        Examples:
+            >>> scene = items.gs.to_dataset(grid)
+            >>> scene.gs.geobox == grid
+            True
+        """
+        from geosave.geodata.stac.load import load_dataset
+
+        entries = self.to_items()
+        identities = list(dict.fromkeys(entry.collection_id for entry in entries))
+        if len(identities) > 1:
+            raise ValueError(
+                f"to_dataset loads one collection, the rows hold {identities}"
+            )
+        collection = self.collections.get(identities[0]) if identities else None
+        return cast(
+            "Dataset", load_dataset(entries, geobox, collection=collection, **options)
+        )
 
     def to_items(self) -> list[pystac.Item]:
         """Build the pystac Item each row states, in row order.
@@ -904,22 +783,7 @@ class GeoCatalog:
             >>> [item.id for item in rows.iloc[[0]].gs.to_items()]
             ['s0']
         """
-        self._require_items()
+        self.validate(geometry=False, crs=True, stac_item=True)
         from geosave.geodata.stac.catalog import to_items
 
         return to_items(self._data)
-
-    def _require_items(self) -> None:
-        """Require the columns used to reconstruct STAC Items."""
-        from geosave.geodata.stac.catalog import require_item_columns
-
-        require_item_columns(self._data.columns)
-
-    def _require_features(self) -> None:
-        """Prevent ordinary vector writers from discarding Item metadata."""
-        if FOOTER_KEY in self._data.attrs or all(
-            column in self._data for column in ITEM_COLUMNS
-        ):
-            raise ValueError(
-                "write catalog rows with to_geoparquet to preserve STAC metadata"
-            )

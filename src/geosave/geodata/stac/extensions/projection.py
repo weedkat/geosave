@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Required, TypedDict
 
 import pystac
 from affine import Affine
@@ -11,7 +11,19 @@ from odc.geo.geobox import GeoBox
 from pystac.extensions.projection import AssetProjectionExtension, ProjectionExtension
 
 
-def build_fields(grid: GeoBox | None) -> dict[str, Any]:
+ProjectionFields = TypedDict(
+    "ProjectionFields",
+    {
+        "proj:shape": Required[list[int]],
+        "proj:transform": Required[list[float]],
+        "proj:code": str,
+        "proj:wkt2": str,
+    },
+    total=False,
+)
+
+
+def build_fields(grid: GeoBox | None) -> ProjectionFields:
     """Spell a grid as the Projection fields an asset carries.
 
     Args:
@@ -34,7 +46,7 @@ def build_fields(grid: GeoBox | None) -> dict[str, Any]:
             "keep it in an ordinary reference table instead"
         )
     epsg = grid.crs.epsg
-    stated: dict[str, Any] = {
+    stated: ProjectionFields = {
         "proj:shape": list(grid.shape),
         "proj:transform": list(grid.transform)[:6],
     }

@@ -43,22 +43,40 @@ def test_an_item_row_reads_its_pixels_onto_a_grid(items, wide_grid):
     stored = (
         radar_row.gs.to_datatree()
         .gs.to_dataset()
-        .vv.gs.to_nan()
+        .vv.gs.mask_and_scale()
         .astype("float32")
+        .isel(time=0)
         .values
     )
     np.testing.assert_array_equal(pixels.vv.values, stored)
 
 
 def test_a_row_on_mixed_grids_reads_each_grid_as_a_node(tmp_path):
-    from geosave.geodata.stac.catalog import from_items
-    from tests.geodata.io.test_stac import write_mixed_scene
+    from geosave.geodata.stac.catalog import create_catalog
+    from tests.geodata.stac.test_publish import write_mixed_scene
 
-    rows = from_items([write_mixed_scene(tmp_path)])
+    rows = create_catalog([write_mixed_scene(tmp_path)])
 
-    scene = rows.iloc[0].gs.to_datatree()
-    tree = rows.gs.to_datatree()
+    scene = rows.iloc[0].gs.to_datatree().gs.group_grid()
+    tree = rows.gs.to_datatree().gs.group_grid()
 
-    assert list(scene.gs.rasters) == ["r10m", "r20m"]
-    assert list(tree.gs.rasters) == ["s2/r10m", "s2/r20m"]
-    assert abs(tree["s2"].gs.to_dataset().odc.geobox.resolution.x) == 10
+    # A row opens as a one-row catalog does.
+    assert list(scene.gs.datasets) == list(tree.gs.datasets) == ["s2/r10m", "s2/r20m"]
+    scene = tree["s2"].gs.to_dataset(grid="r10m")
+    assert abs(scene.odc.geobox.resolution.x) == 10
+
+
+def test_record_validation_checks_geometry_and_item_fields_independently():
+    import geopandas as gpd
+    import pytest
+    from shapely.geometry import Point
+
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(geometry=[Point(0, 0), None], index=["site", "missing"])
+    assert rows.iloc[0].gs.validate() is None
+    with pytest.raises(VectorValidationError, match="STAC Item operations need"):
+        rows.iloc[0].gs.validate(stac_item=True)
+    assert rows.iloc[1].gs.validate(geometry=False) is None
+    with pytest.raises(VectorValidationError, match="Record 'missing'.*missing"):
+        rows.iloc[1].gs.validate()

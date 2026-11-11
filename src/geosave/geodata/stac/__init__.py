@@ -1,11 +1,12 @@
-"""Build native STAC metadata and discover Items through APIs or tables."""
+"""Discover, load and publish STAC Items as native xarray and STAC objects."""
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .catalog import from_items
-    from .item import create_item
+    from .catalog import create_catalog
+    from .load import StacLoadOptions, load_dataset, load_datatree
+    from .publish import create_stac_item, publish_items
     from .search.api import StacClient, StacProvider
     from .search.query import StacQuery
     from .search.table import StacTable
@@ -15,8 +16,12 @@ _LAZY = {
     "StacProvider": ".search.api",
     "StacQuery": ".search.query",
     "StacTable": ".search.table",
-    "from_items": ".catalog",
-    "create_item": ".item",
+    "create_catalog": ".catalog",
+    "StacLoadOptions": ".load",
+    "load_dataset": ".load",
+    "load_datatree": ".load",
+    "create_stac_item": ".publish",
+    "publish_items": ".publish",
 }
 
 
@@ -27,7 +32,7 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *_LAZY})
+    return sorted({*globals(), *__all__})
 
 
 __all__ = [
@@ -35,6 +40,10 @@ __all__ = [
     "StacProvider",
     "StacQuery",
     "StacTable",
-    "from_items",
-    "create_item",
+    "create_catalog",
+    "StacLoadOptions",
+    "load_dataset",
+    "load_datatree",
+    "create_stac_item",
+    "publish_items",
 ]

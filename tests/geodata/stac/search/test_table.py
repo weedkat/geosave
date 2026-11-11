@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
 from geosave.geodata.errors import CollectionNotFoundError
 from geosave.geodata.stac import StacClient, StacQuery
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 from geosave.geodata.stac.search.table import StacTable
 from tests.geodata.conftest import create_file_items, create_test_collection
 
@@ -22,14 +23,14 @@ def catalog(scene, tmp_path: Path):
         "forest", description="Forest samples", license="CC-BY-4.0"
     )
     paths = scene.gs.to_cog(
-        tmp_path, path_format="forest_{time:%Y%m%dT%H%M%S}/{band}.tif"
+        tmp_path, format_paths="forest_{time:%Y%m%dT%H%M%S}/{variable}.tif"
     )
     first, second = create_file_items(
         paths, id_format="forest_{start:%Y%m%dT%H%M%S}", collection=forest
     )
     first.properties["eo:cloud_cover"] = 5.0
     second.properties["eo:cloud_cover"] = 40.0
-    path = from_items([first, second]).gs.to_geoparquet(
+    path = create_catalog([first, second]).gs.to_geoparquet(
         tmp_path / "catalog" / "items.parquet", collections=[forest]
     )
     return path, (first, second)
@@ -88,11 +89,11 @@ def test_a_table_states_its_collections(catalog) -> None:
 
 def test_a_source_loads_from_a_table(catalog, scene) -> None:
     folder, _ = catalog
-    from geosave.geodata.io import load_dataset
+    from geosave.geodata.stac.load import load_dataset
 
     client = StacTable(str(folder))
     items = client.search_items(
-        StacQuery(collections=["forest"]).set_anchor(scene.gs.anchor)
+        StacQuery(collections=["forest"]).set_region(scene.gs.region)
     )
     loaded = load_dataset(
         items,
@@ -187,8 +188,12 @@ server.serve_forever()
 
 def test_search_returns_an_item_table(scene, tmp_path) -> None:
     forest = create_test_collection("forest", description="Forest samples")
-    paths = scene.gs.to_cog(tmp_path, path_format="forest_{time:%Y%m%dT%H%M%S}.tif")
-    rows = from_items(create_file_items(paths, collection=forest), collections=[forest])
+    paths = scene.gs.to_cog(
+        tmp_path, split_asset=(), format_paths="forest_{time:%Y%m%dT%H%M%S}.tif"
+    )
+    rows = create_catalog(
+        create_file_items(paths, collection=forest), collections=[forest]
+    )
     path = rows.gs.to_geoparquet(tmp_path / "catalog.parquet", collections=[forest])
     client = StacTable(path)
 
@@ -199,6 +204,36 @@ def test_search_returns_an_item_table(scene, tmp_path) -> None:
     assert [item.id for item in found.gs.to_items()] == rows.id.tolist()
     assert none.empty
     assert none.gs.to_items() == []
+
+
+def test_search_reads_collection_metadata_once(catalog, tmp_path):
+    _, items = catalog
+    forest = create_test_collection(
+        "forest", description="Forest samples", license="CC-BY-4.0"
+    )
+    water = create_test_collection("water", description="Water samples")
+    first, second = items
+    second = second.clone()
+    second.set_collection(water)
+    path = create_catalog([first, second]).gs.to_geoparquet(
+        tmp_path / "mixed.parquet", collections=[forest, water]
+    )
+    import rustac
+
+    session = Mock(wraps=rustac.DuckdbClient())
+    client = StacTable(path, duckdb=session)
+    found = client.search(StacQuery(collections=["forest", "water"]))
+
+    assert set(found.id) == {first.id, second.id}
+    assert found.gs.collections["forest"].license == "CC-BY-4.0"
+    assert found.gs.collections["water"].description == "Water samples"
+    assert session.get_collections.call_count == 1
+    assert session.query_to_table.call_count == 1
+
+    session.reset_mock()
+    assert client.search(StacQuery(collections=["absent"])).empty
+    session.get_collections.assert_not_called()
+    session.query_to_table.assert_not_called()
 
 
 def test_stac_client_opens_a_parquet_table_like_an_api(catalog) -> None:

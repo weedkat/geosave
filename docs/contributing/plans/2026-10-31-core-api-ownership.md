@@ -38,7 +38,7 @@
 - Tests: tests/geodata/io/vector/test_stac_geoparquet.py
 - Tests: tests/geodata/io/vector/test_geoparquet.py
 
-**Interfaces:** Preserve from_items(items, *, collections=()) -> GeoDataFrame[GeoCatalog], to_items(rows) -> list[pystac.Item], and all reader/writer signatures. Readers restore canonical in-memory Item columns and Collection metadata when upstream file metadata identifies a STAC table.
+**Interfaces:** Preserve create_catalog(items, *, collections=()) -> GeoDataFrame[GeoCatalog], to_items(rows) -> list[pystac.Item], and all reader/writer signatures. Readers restore canonical in-memory Item columns and Collection metadata when upstream file metadata identifies a STAC table.
 
 - [x] Add an interoperability test that builds Arrow through parse_stac_items_to_arrow, writes with upstream to_parquet(collections=...), then asserts gs.open_vector returns a native GeoDataFrame with GeoCatalog and the same Collection id/definition. Use one actual asset reference; opening pixels is unnecessary.
 - [x] Repeat with omitted type/stac_version and pin the reader's normalization to type="Feature" and stac_version="1.1.0" only when absent on an upstream STAC-metadata-bearing file. Preserve existing values. Assert ordinary id/assets tables without STAC evidence remain GeoVector. Keep existing reader sample recognition.

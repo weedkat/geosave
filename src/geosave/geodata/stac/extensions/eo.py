@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
+
 import pystac
 import xarray as xr
 from pystac.extensions.eo import Band, EOExtension
@@ -35,41 +38,35 @@ def build_band(variable: xr.DataArray) -> Band:
     )
 
 
-def stamp(variable: xr.DataArray, band: Band) -> xr.DataArray:
-    """Stamp what an EO band states onto the variable it belongs to.
+class SpectralAttrs(TypedDict, total=False):
+    """Spectral and descriptive attrs translated from one EO band."""
 
-    Args:
-        variable: Pixel-free variable.
-        band: Its band.
+    common_name: str
+    center_wavelength: float
+    full_width_half_max: float
+    long_name: str
 
-    Returns:
-        The variable carrying the band's spectral facts, and its description
-        as `long_name`.
 
-    Examples:
-        >>> stamp(variable, Band.create(name="B04", common_name="red")).attrs
-        {'common_name': 'red'}
-    """
-    # PySTAC's getters raise where a band leaves a field out.
+def read_attrs(band: Band) -> SpectralAttrs:
+    """Translate an EO band's spectral facts and description into attrs."""
     stated = band.properties
-    found = attrs.Spectral(
+    facts = attrs.Spectral(
         common_name=stated.get("common_name"),
         center_wavelength=stated.get("center_wavelength"),
         full_width_half_max=stated.get("full_width_half_max"),
-    ).to_attrs()
+    )
+    fields: SpectralAttrs = {}
+    if facts.common_name is not None:
+        fields["common_name"] = facts.common_name
+    if facts.center_wavelength is not None:
+        fields["center_wavelength"] = facts.center_wavelength
+    if facts.full_width_half_max is not None:
+        fields["full_width_half_max"] = facts.full_width_half_max
     if stated.get("description") is not None:
-        found["long_name"] = stated["description"]
-    return variable.assign_attrs(found)
+        fields["long_name"] = stated["description"]
+    return fields
 
 
 def write_asset(asset: pystac.Asset, bands: list[Band]) -> None:
     """Write spectral bands and declare the EO schema on the owner."""
     EOExtension.ext(asset, add_if_missing=True).bands = bands
-
-
-def stamp_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
-    """Read either core or extension band spelling."""
-    return stamp(
-        variable,
-        Band({key.removeprefix("eo:"): value for key, value in fields.items()}),
-    )

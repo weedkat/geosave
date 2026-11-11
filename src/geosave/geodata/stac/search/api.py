@@ -14,7 +14,7 @@ from urllib3.util import Retry
 
 from geosave.geodata.errors import CollectionNotFoundError
 
-from .query import StacQuery
+from .query import SearchParams, StacQuery
 
 if TYPE_CHECKING:
     import rustac
@@ -135,7 +135,7 @@ class StacClient:
         """
         return cls(Client.open(ELEMENT84_URL, stac_io=_default_io()))
 
-    def search(self, query: StacQuery | dict[str, Any]) -> GeoDataFrame:
+    def search(self, query: StacQuery | SearchParams) -> GeoDataFrame:
         """Run one search to completion as an item table.
 
         Args:
@@ -150,7 +150,7 @@ class StacClient:
             >>> client.search(StacQuery(collections=["forest"]))["id"].tolist()
             ['forest_20250601', 'forest_20250611']
         """
-        from geosave.geodata.stac.catalog import from_items
+        from geosave.geodata.stac.catalog import create_catalog
 
         items = self.search_items(query)
         collection_ids = dict.fromkeys(
@@ -159,9 +159,9 @@ class StacClient:
         collections = []
         for collection_id in collection_ids:
             collections.append(self.collection(collection_id))
-        return from_items(items, collections=collections)
+        return create_catalog(items, collections=collections)
 
-    def search_items(self, query: StacQuery | dict[str, Any]) -> list[pystac.Item]:
+    def search_items(self, query: StacQuery | SearchParams) -> list[pystac.Item]:
         """Run one search to completion as pystac Items, for loaders.
 
         Args:
@@ -171,7 +171,9 @@ class StacClient:
             Every matching item, in the order the API returns them, capped at
             the query's `max_items`.
         """
-        params = query.to_search_params() if isinstance(query, StacQuery) else query
+        params: dict[str, Any] = dict(
+            query.to_search_params() if isinstance(query, StacQuery) else query
+        )
         return list(self._client.search(**params).items())
 
     def collections(self) -> set[str]:

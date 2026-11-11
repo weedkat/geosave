@@ -1,9 +1,10 @@
 [project]
 site_name = "GeoSave"
-site_description = "Native geospatial data, model composition, and Lightning-based model development"
+site_description = "Find imagery, explore maps, prepare datasets, and train geospatial models in familiar Python."
 site_author = "Fatah Muria"
 docs_dir = "docs"
 site_dir = "site"
+extra_css = ["assets/stylesheets/docs.css"]
 site_url = "https://weedkat.github.io/geosave-engine"
 
 copyright = "Copyright © 2026 GeoSave contributors"
@@ -12,9 +13,13 @@ nav = [
     { "Home" = "index.md" },
     { "Getting started" = [
         { "Installation" = "install.md" },
-        { "Learn geospatial AI by example" = "examples.md" },
-        { "Your first raster" = "first-raster.md" },
+        { "Your first vegetation map" = "first-raster.md" },
+        { "Download satellite imagery" = "guides/download-imagery.md" },
+        { "Explore imagery on a map" = "guides/explore.md" },
+        { "Compare vegetation by area" = "guides/vegetation-zones.md" },
         { "From images to training chips" = "quickstart.md" },
+        { "Train and map predictions" = "guides/training.md" },
+        { "Real-world examples" = "examples.md" },
     ] },
     { "Basics" = [
         { "Overview" = "basics/index.md" },
@@ -23,7 +28,7 @@ nav = [
         { "Describe raster values" = "basics/attrs.md" },
         { "Read and save data" = "basics/io.md" },
     ] },
-    { "Activities" = [
+    { "How-to guides" = [
         { "Find your task" = "activities.md" },
         { "Ingest existing files" = "guides/ingest-files.md" },
         { "Search and load STAC data" = "guides/stac.md" },
@@ -32,24 +37,26 @@ nav = [
         { "Build a model" = "guides/models.md" },
         { "Build from pretrained" = "guides/pretrained.md" },
         { "Declare model inputs" = "guides/model-spec.md" },
-        { "Train a segmentation model" = "guides/training.md" },
         { "Save and publish a model" = "guides/release.md" },
         { "Create a training workspace" = "guides/workspaces.md" },
         { "Optional ingestion flows" = "guides/workflows.md" },
     ] },
-    { "Advanced" = [
+    { "Concepts" = [
         { "Overview" = "concepts/index.md" },
         { "How the library works" = "concepts/data-flow.md" },
         { "Raster grids" = "concepts/raster-grids.md" },
         { "Metadata and pixel values" = "concepts/metadata.md" },
         { "Lazy execution" = "concepts/lazy-data.md" },
         { "Storage and file layouts" = "concepts/storage.md" },
-        { "The interactive explorer" = "concepts/explorer.md" },
+        { "Explorer controls and behavior" = "concepts/explorer.md" },
         { "Catalogs and windows" = "concepts/catalog-windows.md" },
         { "Model input contracts" = "concepts/model-inputs.md" },
         { "Training contracts" = "concepts/training.md" },
     ] },
-    { "Common questions" = "faq.md" },
+    { "Help" = [
+        { "Troubleshooting" = "troubleshooting.md" },
+        { "Common questions" = "faq.md" },
+    ] },
     { "API reference" = [
         { "Overview" = "reference/index.md" },
         { "Command-line inputs and outputs" = "reference/cli.md" },
@@ -66,7 +73,7 @@ nav = [
             { "Dataset accessor" = "reference/dataset-accessor.md" },
             { "DataArray accessor" = "reference/dataarray-accessor.md" },
             { "DataTree accessor" = "reference/datatree-accessor.md" },
-            { "Spatial and temporal targets" = "reference/anchor.md" },
+            { "Spatial and temporal targets" = "reference/region.md" },
             { "Vector accessor" = "reference/vectors.md" },
             { "Readers, writers, and options" = "reference/io.md" },
             { "Transforms" = "reference/transforms.md" },
@@ -105,7 +112,6 @@ features = [
   "announce.dismiss",
   "content.code.copy",
   "navigation.footer",
-  "navigation.sections",
   "navigation.top",
   "navigation.tracking",
   "search.highlight"

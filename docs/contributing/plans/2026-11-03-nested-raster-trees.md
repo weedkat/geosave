@@ -1,5 +1,17 @@
 # Nested Raster Trees Implementation Plan
 
+Conversion update (2026-11-05): the historical steps below are superseded for
+raster conversion. Use native `xr.DataTree.from_dict` with explicit paths and
+parent attrs, `Dataset.gs.to_dataarray()`, and `DataArray.gs.to_dataset()`
+(explicit `dim="band"` to split bands). Tree `gs.to_dataset()` merges only
+compatible same-grid nodes; mixed grids require explicit `gs.align(how=...,
+resampling=...)`. Catalog-row `gs.to_datatree()` remains a reader.
+
+
+Historical implementation plan. Its strict depth and `{res}` conventions are
+superseded by the [current raster-tree contract](../specs/2026-11-03-nested-raster-trees.md).
+Use that contract for current APIs and publication behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace GeoSave's flat raster trees with `/{collection}/{res}` trees, read catalog rows into them, convert one collection to a Dataset, and lay trees out as files through one chain of template axes.
@@ -210,7 +222,7 @@ def test_a_store_template_is_refused_for_catalogs(tree, tmp_path)             # 
 
 **Files:** `src/geosave/geodata/stac/source.py`; test `tests/geodata/stac/test_source.py`
 
-**Interfaces:** `StacSource.load_datatree(anchor: GeoAnchor) -> DataTree` (`/{collection}/{res}`)
+**Interfaces:** `StacSource.load_datatree(anchor: GeoRegion) -> DataTree` (`/{collection}/{res}`)
 
 - [ ] **Step 1: Failing tests:** a two-resolution local collection loads as `r10m` on `anchor.geobox` and `r20m` on `anchor.geobox.zoom_out(2)`; band metadata and `StacMetadata` as `load_dataset` stamps them.
 - [ ] **Step 2:** implement: group the bands by their stated native pixel size (`proj:*` per asset), `odc.stac.load(items, bands=group, geobox=anchor.geobox.zoom_to(resolution=size))` per group, then the same stamping as `load_dataset`, built into a tree with `create_datatree`.

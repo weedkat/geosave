@@ -11,8 +11,7 @@ import zarr
 from upath import UPath
 from xarray.core.types import T_Chunks
 
-from geosave.geodata.conventions import to_yx
-from geosave.geodata.io.formats._stores import check_store
+from geosave.geodata.io.formats.utils.stores import check_store
 from geosave.geodata.io.storage import (
     Location,
     StorageOptions,
@@ -147,7 +146,7 @@ def _in_written_order(ds: xr.Dataset) -> xr.Dataset:
         return ds
     named = [name for name in order if name in ds.data_vars]
     trailing = [name for name in ds.data_vars if name not in named]
-    ordered = ds[[*named, *trailing]]
+    ordered = ds[[*named, *trailing]].assign_coords(ds.coords)
     # The order is restored, so the attr would only leak into other formats.
     ordered.attrs = {
         key: value for key, value in ds.attrs.items() if key != _VARIABLE_ORDER_ATTR
@@ -304,7 +303,7 @@ def open_zarr(
         and variable order. Closing the result releases the store.
 
     Examples:
-        >>> list(open_zarr("scene.zarr").gs.rasters)
+        >>> list(open_zarr("scene.zarr").gs.datasets)
         ['s2/r10m', 's2/r20m']
     """
     options: dict[str, Any] = dict(open_options)
@@ -347,7 +346,7 @@ def _read_in_written_order(node: xr.DataTree, nodes: dict[str, xr.Dataset]) -> N
     """Add `node` and its descendants to `nodes`, groups and variables as written."""
     dataset = _in_written_order(node.to_dataset(inherit=False))
     order = dataset.attrs.pop(_GROUP_ORDER_ATTR, [])
-    nodes[node.path] = to_yx(dataset)
+    nodes[node.path] = dataset
     names = [name for name in order if name in node.children]
     for name in node.children:
         if name not in names:
@@ -381,10 +380,16 @@ def fill_encoding(raster: xr.Dataset) -> dict[str, dict[str, Any]]:
     declared: dict[str, dict[str, Any]] = {}
     for name, variable in raster.data_vars.items():
         fill = variable.gs.nodata
+        if fill is None:
+            fill = variable.encoding.get("_FillValue")
         if fill is not None:
             # xarray consumes coordinates before backend options, but grid_mapping after.
             encoding = variable.encoding
             declared[str(name)] = {"fill_value": fill}
-            if "grid_mapping" in encoding:
-                declared[str(name)]["grid_mapping"] = encoding["grid_mapping"]
+            for key in (
+                "grid_mapping", "dtype", "scale_factor", "add_offset",
+                "_FillValue", "missing_value",
+            ):
+                if key in encoding:
+                    declared[str(name)][key] = encoding[key]
     return declared

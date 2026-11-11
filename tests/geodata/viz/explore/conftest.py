@@ -4,7 +4,7 @@ import pytest
 import xarray as xr
 from shapely.geometry import Point, box
 
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_dataset, build_dataset as build_raster
 from tests.geodata.viz.conftest import ORIGIN, create_grid
 from tests.geodata.conftest import create_file_items, create_test_collection
@@ -56,10 +56,10 @@ def catalog(monthly: xr.Dataset, tmp_path) -> gpd.GeoDataFrame:
     """An item table of the monthly scene, one COG per date."""
 
     files = monthly[["B04"]].gs.to_cog(
-        tmp_path, path_format="s_{time:%Y%m%d}_{band}.tif"
+        tmp_path, format_paths="s_{time:%Y%m%d}_{variable}.tif"
     )
     collection = create_test_collection("monthly", description="Monthly imagery")
-    return from_items(
+    return create_catalog(
         create_file_items(files, id_format="s_{start:%Y%m%d}", collection=collection),
         collections=[collection],
     )
@@ -79,9 +79,9 @@ def rgb_catalog(scene: xr.Dataset, tmp_path):
         scene.gs.geobox,
         time=np.datetime64("2024-03-05"),
     ).gs.write_rgb("red", "green", "blue")
-    files = image.gs.to_cog(tmp_path, path_format="rgb.tif")
+    files = image.gs.to_cog(tmp_path, format_paths="rgb.tif")
     collection = create_test_collection("rgb", description="Browser RGB fixture")
-    items = from_items(
+    items = create_catalog(
         create_file_items(files, id_format="rgb", collection=collection),
         collections=[collection],
     )

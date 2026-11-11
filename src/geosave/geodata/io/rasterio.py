@@ -26,7 +26,7 @@ from rasterio.enums import ColorInterp, MaskFlags
 
 import geosave.geodata.attrs as attrs
 from geosave import __path__ as _package_paths
-from geosave.geodata.conventions import TIME_COORDINATE
+from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
 from geosave.geodata.io.storage import (
     Location,
     StorageOptions,
@@ -35,7 +35,6 @@ from geosave.geodata.io.storage import (
     localize,
     is_local,
 )
-from geosave.geodata.core.raster.time import assign_bounds
 from geosave.geodata.utils.datetime import parse_stem_dates
 from geosave.geodata.warnings import UnreadMaskWarning
 
@@ -126,7 +125,7 @@ def open_raster(
     """
     path = location(source, storage_options)
     options = dict(path.storage_options)
-    raster_options = dict(open_options)
+    raster_options: dict[str, Any] = dict(open_options)
     with ExitStack() as handles:
         if not is_local(path) and (options or path.protocol == "memory"):
             address = str(handles.enter_context(localize(path)))
@@ -171,9 +170,7 @@ def open_raster(
                 # Decoded pixels are physical, so the file's packing lives in encoding alone.
                 cube = cube.assign(
                     {
-                        name: attrs.clear_attrs(
-                            attrs.clear_attrs(band, attrs.Packing), attrs.Nodata
-                        )
+                        name: attrs.clear_attrs(band, attrs.Packing)
                         for name, band in cube.data_vars.items()
                     }
                 )
@@ -200,21 +197,26 @@ def open_raster(
             # One file holds one instant, so its date is a scalar coordinate; the
             # attrs only carried it there, and a write states them again from it.
             if instant is not None:
-                cube = cube.assign_coords({TIME_COORDINATE: instant})
+                cube = cube.assign_coords(
+                    {
+                        TIME_COORDINATE: xr.DataArray(
+                            instant, attrs={"standard_name": "time", "axis": "T"}
+                        )
+                    }
+                )
             if (
                 coverage is not None
                 and coverage.time_coverage_start is not None
                 and coverage.time_coverage_end is not None
                 and coverage.time_coverage_start != coverage.time_coverage_end
             ):
-                cube = assign_bounds(
-                    cube,
-                    [
-                        (
-                            np.datetime64(coverage.time_coverage_start),
-                            np.datetime64(coverage.time_coverage_end),
-                        )
-                    ],
+                cube = cube.assign_coords(
+                    {
+                        START_DATETIME: np.datetime64(
+                            coverage.time_coverage_start, "ns"
+                        ),
+                        END_DATETIME: np.datetime64(coverage.time_coverage_end, "ns"),
+                    }
                 )
             for key in ("TIFFTAG_DATETIME", "time_coverage_start", "time_coverage_end"):
                 cube.attrs.pop(key, None)
@@ -403,6 +405,31 @@ def configure_gdal(
             os.environ[key] = value
 
 
+def read_legend(src: rasterio.DatasetReader, index: int) -> attrs.Legend | None:
+    """Read a band's legend from its CF tags and GDAL colour table.
+
+    Args:
+        src: Open raster.
+        index: One-based band index.
+
+    Returns:
+        The band's legend, or None where its tags list no `flag_values`. A
+        palette band takes the colours of its listed values from its table.
+    """
+    tags = src.tags(index)
+    if "flag_values" not in tags:
+        return None
+    legend = attrs.Legend.model_validate(tags)
+    if src.colorinterp[index - 1] is not ColorInterp.palette or not legend.flag_values:
+        return legend
+    colours = src.colormap(index)
+    palette = {}
+    for value in legend.flag_values:
+        if value in colours:
+            palette[value] = colours[value][:3]
+    return attrs.Legend.model_validate({**tags, "color_map": palette})
+
+
 def _attrs(
     src: rasterio.DatasetReader,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -456,12 +483,11 @@ def _attrs(
 
         # GDAL keeps packing and fill as band properties; they read as CF's attrs.
         packing = attrs.Packing(
-            scale_factor=src.scales[position], add_offset=src.offsets[position]
+            scale_factor=src.scales[position],
+            add_offset=src.offsets[position],
+            fill_value=src.nodatavals[position],
         )
         band.update(packing.to_attrs())
-        fill = src.nodatavals[position]
-        if fill is not None:
-            band.update(attrs.Nodata(fill_value=fill).to_attrs())
 
         identity = attrs.GDALBand.model_validate(band)
         name = identity.variable_name or f"band_{index}"
@@ -469,17 +495,10 @@ def _attrs(
         if band.get("long_name") == name:
             del band["long_name"]
 
-        legend = attrs.Legend.model_validate(band) if "flag_values" in band else None
-        if interpretation is ColorInterp.palette and legend and legend.flag_values:
-            colours = src.colormap(index)
-            palette = {
-                value: colours[value][:3]
-                for value in legend.flag_values
-                if value in colours
-            }
+        legend = read_legend(src, index)
+        if legend is not None and legend.color_map is not None:
             # Spelled as the Legend writes it: text, which every format's attrs hold.
-            coloured = attrs.Legend.model_validate({**band, "color_map": palette})
-            band.update(coloured.to_attrs())
+            band.update(legend.to_attrs())
 
         if name in bands:
             raise ValueError(

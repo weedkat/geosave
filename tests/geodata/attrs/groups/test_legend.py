@@ -76,7 +76,7 @@ def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
     from geosave.geodata import open_raster
 
     labelled = _labelled()
-    (file,) = flat(labelled.gs.to_cog(tmp_path, path_format="label.tif"))
+    (file,) = flat(labelled.gs.to_cog(tmp_path, format_paths="label.tif"))
     restored = open_raster(file)
 
     joined = attrs.combine_attrs([restored.label.attrs, labelled.label.attrs])
@@ -95,7 +95,7 @@ def test_a_legend_survives_each_raster_format(tmp_path, suffix) -> None:
     elif suffix == "nc":
         written = labelled.gs.to_netcdf(path)
     else:
-        (file,) = flat(labelled.gs.to_cog(path.parent, path_format=path.name))
+        (file,) = flat(labelled.gs.to_cog(path.parent, format_paths=path.name))
         written = str(file)
 
     assert open_raster(written).label.gs.legend == labelled.label.gs.legend
@@ -119,3 +119,16 @@ def test_colors_keep_given_colours_and_fill_the_rest_by_position() -> None:
 def test_colors_need_classes() -> None:
     with pytest.raises(ValueError, match="no classes"):
         attrs.Legend(color_map={0: "#000000"}).colors
+
+
+def test_combined_flags_keep_repeated_codes_and_native_mask_meanings():
+    import xarray as xr
+    from geosave.geodata.attrs import Legend
+
+    legend = Legend(
+        flag_values=[1, 1], flag_masks=[1, 3], flag_meanings="bit_set code_one"
+    )
+    assert legend.classes is None
+    flags = xr.DataArray([0, 1, 2, 3], dims="pixel", attrs=legend.to_attrs())
+    assert (flags.cf == "bit_set").values.tolist() == [False, True, False, True]
+    assert (flags.cf == "code_one").values.tolist() == [False, True, False, False]

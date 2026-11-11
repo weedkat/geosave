@@ -10,8 +10,7 @@ import xarray as xr
 from dotenv import load_dotenv
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.core.anchor import GeoAnchor
-from geosave.model.spec import ModelSpec, RasterRequirement
+from geosave.geodata.core.region import GeoRegion
 
 
 def build_dataset(variables, reference=None, *, nodata=None, **coords):
@@ -47,7 +46,9 @@ def build_dataarray(pixels, reference=None, *, dims, nodata=None, **coords):
 
 def build_tree(rasters):
     """Merge rasters keyed by collection, or by `collection/res` path, into one tree."""
-    trees = []
+    from geosave.geodata.io.paths import format_resolution
+
+    nodes = {}
     for key, raster in rasters.items():
         dataset = (
             raster.to_dataset(name=raster.name or key.rsplit("/", 1)[-1])
@@ -56,12 +57,15 @@ def build_tree(rasters):
         )
         if "/" in key:
             collection = key.split("/", 1)[0]
-            trees.append(
-                xr.DataTree.from_dict({collection: xr.Dataset(), key: dataset})
-            )
+            if collection not in nodes:
+                nodes[collection] = xr.Dataset()
+            nodes[key] = dataset
         else:
-            trees.append(dataset.gs.to_datatree(key))
-    return xr.merge(trees)
+            nodes[key] = xr.Dataset(attrs=dict(dataset.attrs))
+            node = dataset.copy()
+            node.attrs = {}
+            nodes[f"{key}/{format_resolution(dataset.gs.geobox)}"] = node
+    return xr.DataTree.from_dict(nodes)
 
 
 @pytest.fixture(autouse=True)
@@ -96,16 +100,6 @@ def pytest_configure(config):
 
 
 @pytest.fixture
-def spec():
-    return ModelSpec(
-        schema_version=3,
-        rasters={
-            "optical": RasterRequirement(variables=("nir", "red"), require_crs=True)
-        },
-    )
-
-
-@pytest.fixture
 def raw():
     box = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
     return {
@@ -125,8 +119,8 @@ def grid(raw):
 
 
 @pytest.fixture
-def anchor(raw):
-    return GeoAnchor(raw["optical"].gs.geobox.extent)
+def region(raw):
+    return GeoRegion(raw["optical"].gs.geobox.extent)
 
 
 @pytest.fixture

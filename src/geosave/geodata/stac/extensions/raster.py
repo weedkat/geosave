@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from math import isfinite
+from typing import TypedDict, cast
+
 
 import pystac
 import xarray as xr
@@ -38,51 +40,37 @@ def build_band(variable: xr.DataArray) -> RasterBand:
     return RasterBand.create(
         nodata=fill,
         data_type=DataType(dtype) if dtype in list(DataType) else DataType.OTHER,
-        scale=None if packing is None else packing.scale_factor,
-        offset=None if packing is None else packing.add_offset,
+        scale=None if packing is None else variable.attrs.get("scale_factor"),
+        offset=None if packing is None else variable.attrs.get("add_offset"),
         unit=variable.attrs.get("units"),
     )
 
 
-def stamp(variable: xr.DataArray, band: RasterBand) -> xr.DataArray:
-    """Stamp the packing and unit a Raster band states onto its variable.
+class RasterAttrs(TypedDict, total=False):
+    """CF storage attrs translated from one Raster band."""
 
-    `data_type` and `nodata` are the file's, which states them itself
-    when opened, so neither is stamped.
+    scale_factor: float
+    add_offset: float
+    units: str
 
-    Args:
-        variable: Variable the band belongs to.
-        band: Its band.
 
-    Returns:
-        The variable carrying the band's packing as `scale_factor` and
-        `add_offset`, and its unit as `units`.
+def read_attrs(band: RasterBand) -> RasterAttrs:
+    """Translate a band's packing and units into CF attrs.
 
-    Examples:
-        >>> stamp(variable, RasterBand.create(scale=0.0001, unit="1")).attrs
-        {'scale_factor': 0.0001, 'add_offset': 0.0, 'units': '1'}
+    Stored dtype and nodata belong to the file reader and are not copied.
     """
+    fields: RasterAttrs = {}
     if band.scale is not None or band.offset is not None:
         packing = attrs.Packing(
             scale_factor=1.0 if band.scale is None else band.scale,
             add_offset=0.0 if band.offset is None else band.offset,
         )
-        variable = variable.assign_attrs(packing.to_attrs())
+        fields = cast("RasterAttrs", packing.to_attrs())
     if band.unit is not None:
-        variable = variable.assign_attrs(units=band.unit)
-    return variable
+        fields["units"] = band.unit
+    return fields
 
 
 def write_asset(asset: pystac.Asset, bands: list[RasterBand]) -> None:
     """Write storage bands and declare their schema on the owner."""
     RasterExtension.ext(asset, add_if_missing=True).bands = bands
-
-
-def stamp_fields(variable: xr.DataArray, fields: dict) -> xr.DataArray:
-    """Read core or extension band metadata."""
-    return stamp(
-        variable,
-        RasterBand(
-            {key.removeprefix("raster:"): value for key, value in fields.items()}
-        ),
-    )

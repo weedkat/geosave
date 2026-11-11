@@ -1,68 +1,90 @@
-# Land-cover mapping examples
+# Map land cover, one project at a time
 
-Run the notebooks in order. Use the repository environment (`uv sync`) as the
-kernel and `examples/` as the working directory. Start each notebook in a fresh
-kernel; files carry forward between lessons.
+Start with labeled satellite images. Train a baseline, investigate a different
+model, acquire imagery for your own forest, and turn predictions into maps.
+Each notebook tackles the next problem in that project and leaves files or
+results you can use in the next lesson.
 
-| Notebook | What you do |
-| --- | --- |
-| [0 · Explore and train](00_basics.ipynb) | Inspect images and labels, then train a small model. |
-| [1 · Change the model](01_model.ipynb) | Swap model parts and compare training runs. |
-| [2 · Build a dataset](02_sources.ipynb) | Fetch images, save and catalog image/label pairs, and pair them into samples. |
-| [3 · Train and predict](03_inputs.ipynb) | Make chips, train, predict without labels, and save maps. |
+## Follow the project
 
-The first download is about 400 MB. Notebook 2 also needs Planetary Computer
-access. Later runs reuse local files. Maps and TensorBoard need a browser.
+| Lesson | The problem you solve | What you leave with |
+| --- | --- | --- |
+| [0 · Explore and train](00_basics.ipynb) | Can these images and labels teach a model to recognize land cover? | A baseline prediction and training logs; optional per-class review. |
+| [1 · Compare models](01_model.ipynb) | What should I change when the baseline misses things? | A second training run and concrete experiments to compare. |
+| [2 · Build a dataset](02_sources.ipynb) | How do I find matching imagery for my labels and my forest? | Aligned training pairs, six forest observations, and catalogs. |
+| [3 · Train and predict](03_inputs.ipynb) | How do I turn those images into complete land-cover maps? | Dated forest maps, evaluation results, and the trained model. |
+| [4 · Keep the input recipe](04_recipe.ipynb) | How do I map the next observation without changing what the model sees? | A saved preparation recipe and an image/prediction pair for review. |
 
-## From files to model inputs
+Run them in order. Notebook 1 can reuse the downloaded teaching data without
+rerunning notebook 0; notebook 3 needs notebook 2's acquired files; notebook 4
+needs notebook 3's **Keep this trained model** cell. Start a fresh kernel for
+each lesson: files carry forward, Python variables do not.
 
-Notebook 2 saves rasters with `to_catalog`, which writes the files and returns
-their catalog; no STAC Item or Collection is built by hand. `catalog.gs.sample()`
-groups catalog rows into samples by place and date without opening a file, and
-each sample opens with `.gs.to_datatree()` as a lazy DataTree, `/{collection}/{res}`.
+Each lesson ends with **More things you can do**: ways to extend this land-cover
+project, such as reviewing difficult classes, expanding the observation period,
+or preparing a map for a forest manager. There are no quizzes or answer cells.
 
-Notebook 3 uses one `DynamicWorld` Dataset for every split and for inference.
-It takes DataTrees, each a sample opened from a catalog: image/label pairs from
-notebook 2's `data/my_dataset/catalog.parquet`, or dated forest scenes from notebook 2's. Training reads complete tiles and applies random crops.
-Setting `chip_size` cuts the trees with `gs.Chips` into fixed windows.
+## Before you start
 
-Validation and test collect chip scores and call `dataset.merge()` at epoch end.
-Metrics count each valid pixel once on the restored grid. These loaders run in
-Dataset order and cover every chip; the short validation split contains two
-complete tiles.
+From a repository checkout:
 
-For KHDTK inference:
-
-```python
-items = gs.open_vector("data/khdtk/catalog.parquet")
-trees = []
-for rows in items.gs.sample(pair=["sentinel-2-l2a"]):
-    trees.append(rows.gs.to_datatree())
-forest = DynamicWorld(trees, chip_size=128, overlap=64)
-loader = DataLoader(forest, batch_size=8)
-module.eval()
-batches = []
-with torch.inference_mode():
-    for image in loader:
-        batches.append(module(image.to(module.device)).cpu())
-merged = forest.merge(torch.cat(batches).numpy())
-forest_cover = postprocess(merged, forest.trees)
+```bash
+uv sync
 ```
 
-`postprocess()` adds dates, class IDs, colours and nodata from `classes.yaml`.
-KHDTK is used only for inference.
+Open the notebooks in Jupyter or VS Code, select the repository `.venv` as the
+kernel, and use `examples/` as the working directory. Run cells top to bottom.
+The teaching-data download is about 400 MB. CPU training is supported; the short
+runs demonstrate the workflow rather than produce a validated operational map.
+Notebook 2 additionally makes live Planetary Computer queries and reads imagery;
+this can take longer than training. Notebook 4 uses existing files with no new
+download or training run.
 
-## Saved files
+Plots render in the notebook. TensorBoard and the Explorer server are optional
+snippets you can run separately. Rerunning training starts a fresh run unless
+you explicitly supply a checkpoint. Use a different logger version to keep
+experiments separate. Cells with `overwrite=True` replace their example outputs.
 
-- `data/dynamic_world/`: training data used by notebooks 0, 1 and 3.
-- `data/my_dataset/`: train/validation/test pairs and catalog built in notebook 2.
-- `data/khdtk/`: forest imagery and catalog for prediction.
-- `data/khdtk_pred/`: predicted rasters in `land_cover/` and `catalog.parquet`.
+## The data and what it means
 
-Catalogs point to saved rasters using relative paths. Move the catalog and its
-raster folders together.
+The pinned teaching subset pairs Sentinel-2 imagery with **expert-annotated
+Dynamic World training labels**, not the automated Dynamic World product.
+It has ten classes including cloud, nodata 255, and four bands in the order
+B02, B03, B04, B08. Each notebook links the dataset card and original source;
+retain their attribution when sharing derived work.
 
-These short runs demonstrate the workflow. Use validation to choose models
-and keep test data for final evaluation. Training resumes the notebook's last
-checkpoint; choose a new logger version and omit `ckpt_path="last"` for a fresh
-experiment. Exercises at the end of each notebook are optional.
+Notebooks 0 and 1 use the same eight complete training pairs and two validation
+pairs for a short experiment. Their Datasets read prepared data and convert it
+to tensors. Notebook 3 handles missing coverage in newly acquired imagery before
+constructing its Dataset; categorical labels are never reflectance-scaled.
+
+Keep the train/validation/test splits fixed before cutting chips. Inspect
+geographic overlap before claiming generalization. Compare experiments on
+validation data and reserve the test split for final evaluation. The forest
+observations have no reference labels: use them to apply and inspect the model,
+not to measure its accuracy. Predicted differences between dates do not by
+themselves establish forest loss.
+
+## Files that connect the lessons
+
+| Folder | What it carries |
+| --- | --- |
+| `data/dynamic_world/` | Downloaded teaching images, labels, and class definitions |
+| `data/my_dataset/` | Notebook 2's acquired pairs and fixed split catalog |
+| `data/khdtk/` | The forest observations from notebook 2 |
+| `data/khdtk_pred/` | Notebook 3's dated land-cover maps and catalog |
+| `data/landcover/` | Notebook 3's trained architecture, weights, and classes; notebook 4 adds the input recipe and review maps |
+| `lightning_logs/` | Training curves and checkpoints for resuming experiments |
+
+Keep catalogs with the image folders their relative paths reference. Notebook 3
+loads its small collection before preparation. `Chips` reads windows on demand;
+merging predictions allocates full output maps. Prepare larger projects in batches.
+
+## Where the project goes next
+
+The [series plan](../docs/contributing/specs/2026-10-09-examples-series-design.md)
+continues with improving this model using pretrained weights, handling cloudy
+months with additional observations, moving the experiment into a workspace,
+and handing the trained model to a colleague. These later lessons are planned,
+not yet runnable notebooks. Each will keep the project question, data, and
+comparison visible instead of teaching a library subsystem in isolation.

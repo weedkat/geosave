@@ -6,7 +6,7 @@
 **Goal:** Remove refactor residue and make maintained code, tests, documentation,
 and all four example notebooks agree with the current public API.
 
-**Architecture:** GeoAnchor describes geometry/time; native GeoBox describes a
+**Architecture:** GeoRegion describes geometry/time; native GeoBox describes a
 pixel grid. Clients discover Items, io loaders read them, io.formats owns file
 formats, and stac owns metadata. Native xarray and GeoPandas remain public values.
 
@@ -32,10 +32,10 @@ formats, and stac owns metadata. Native xarray and GeoPandas remain public value
   src/geosave/geodata/stac/translate, and their three mirrored test directories.
   Each was inspected first; no source files were removed by this operation.
 - Import/signature smoke confirmed StacClient.source and GeoCatalog.to_xarray are
-  absent; GeoAnchor.from_geometry accepts no resolution. GeoCatalog.concat still
+  absent; GeoRegion.from_geometry accepts no resolution. GeoCatalog.concat still
   exists and must not be removed from examples merely because it looks old.
 - examples/02_sources.ipynb uses source/set_config/set_query/load, anchor {res},
-  GeoAnchor.from_geometry(..., resolution=10), and old catalog write arguments.
+  GeoRegion.from_geometry(..., resolution=10), and old catalog write arguments.
 - examples/03_inputs.ipynb uses to_xarray and assumes pixels directly on collection
   parents; current saved catalogs load /collection/grid leaves.
 - Both notebook 2 and 3 use template= for to_catalog; the current name is path_format.
@@ -67,7 +67,7 @@ was removed and why. No speculative new public API.
 ## Task 2 — Consolidate tests around observable contracts
 
 Files: tests/geodata/io/test_odc*.py, test_stac*.py, formats/;
-tests/geodata/stac/, tests/geodata/core/test_anchor.py, tests/examples/test_notebooks.py.
+tests/geodata/stac/, tests/geodata/core/test_region.py, tests/examples/test_notebooks.py.
 
 - [x] Map overlapping tests to the failure each prevents. Merge repeated setup
   and remove duplicate assertions only when a surviving test protects the same
@@ -88,7 +88,7 @@ tests/geodata/stac/, tests/geodata/core/test_anchor.py, tests/examples/test_note
 Files: examples/{00_basics,01_model,02_sources,03_inputs}.ipynb,
 examples/README.md, tests/examples/test_notebooks.py.
 
-- [x] Notebook 2: build StacQuery and call set_anchor; select Items explicitly;
+- [x] Notebook 2: build StacQuery and call set_region; select Items explicitly;
   call io.load_dataset with collection metadata, patch_url and typed load options.
   Use label.gs.geobox for image/label alignment. Format resolution from the grid.
 - [x] Change fetch_image to accept the anchor and explicit grid; reuse one region
@@ -121,7 +121,7 @@ docs/reference/, docs/contributing/architecture.md, src/geosave/geodata/io/backe
 
 - [x] Correct the module map and ownership paragraphs in repository guidance,
   preserving every unrelated instruction and local edit.
-- [x] Explain geometry/time versus exact grid, set_anchor replacement semantics,
+- [x] Explain geometry/time versus exact grid, set_region replacement semantics,
   selected Items, signing, typed options, per-time properties and DataTree leaves.
 - [x] Remove unused anchor variables introduced into grid-only examples and update
   printed outputs whenever shape, coordinates or object representation changed.

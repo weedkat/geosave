@@ -94,7 +94,10 @@ class Map(Viewer):
         self._extent = None
         # The last plot size in pixels, to keep the map's aspect on resize.
         self._shape = None
-        extent = frame_bbox(bbox_union(layer.bbox for layer in explorer.layers))
+        bounds = [layer.bbox for layer in explorer.layers]
+        for table in explorer.tables.tables.values():
+            bounds.append(table.footprints.bbox)
+        extent = frame_bbox(bbox_union(bounds))
         self._anchor = gv.Points(
             [(extent.left, extent.bottom), (extent.right, extent.top)],
             crs=gv.tile_sources.OSM.crs,

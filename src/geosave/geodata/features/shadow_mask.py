@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import xarray as xr
+from odc.geo.crs import CRS
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata.conventions import TIME_COORDINATE
@@ -48,12 +51,9 @@ def shadow_mask(
     mask = scene[cloud]
     if mask.dtype != bool:
         raise ValueError(f"cloud mask is {mask.dtype}, not boolean")
-    geobox = mask.gs.geobox
-    if (
-        not isinstance(geobox, GeoBox)
-        or geobox.crs is None
-        or geobox.crs.units != ("metre", "metre")
-    ):
+    mask.gs.validate(georeferenced=True, affine=True)
+    geobox = cast("GeoBox", mask.gs.geobox)
+    if cast("CRS", geobox.crs).units != ("metre", "metre"):
         raise ValueError(
             "cloud mask sits on no grid measured in metres, so a shadow distance "
             "in metres spans no known pixels; reproject it to a projected CRS first"

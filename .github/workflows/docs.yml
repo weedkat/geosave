@@ -5,11 +5,14 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "examples/vegetation_zones.py"
+      - "README.md"
       - "zensical.toml"
       - "src/geosave/**/*.py"
       - "src/geosave_flows/**/*.py"
       - "scripts/api_reference.py"
       - "scripts/opener_docstrings.py"
+      - "scripts/check_doc_examples.py"
       - "scripts/references/storage-options.txt"
       - "pyproject.toml"
       - "uv.lock"
@@ -43,6 +46,12 @@ jobs:
 
       - name: Check opener docstring freshness
         run: uv run python scripts/opener_docstrings.py --check
+
+      - name: Check introductory examples
+        run: uv run python scripts/check_doc_examples.py
+
+      - name: Run offline vegetation analysis
+        run: uv run python examples/vegetation_zones.py --output /tmp/geosave-zones
 
       - name: Build site
         run: uv run zensical build

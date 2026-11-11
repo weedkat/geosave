@@ -1,5 +1,13 @@
 # Native Construction and Writers Implementation Plan
 
+Conversion update (2026-11-05): the historical steps below are superseded for
+raster conversion. Use native `xr.DataTree.from_dict` with explicit paths and
+parent attrs, `Dataset.gs.to_dataarray()`, and `DataArray.gs.to_dataset()`
+(explicit `dim="band"` to split bands). Tree `gs.to_dataset()` merges only
+compatible same-grid nodes; mixed grids require explicit `gs.align(how=...,
+resampling=...)`. Catalog-row `gs.to_datatree()` remains a reader.
+
+
 **Spec:** `docs/contributing/specs/2026-11-03-native-construction-and-writers.md`
 
 **Global constraints:** edits stay uncommitted on main; no compatibility aliases;
@@ -55,7 +63,7 @@ build rasters through the public steps (conftest helpers may chain them).
   - A tree keeps a bare root; `tree.gs.geobox` reads the grid nodes. `chips.merge`,
     `rasterize` and the STAC loaders place pixels with `write_grid`.
   - `open_raster` refuses a list with a message pointing to the catalog.
-- `create_catalog` and `core/ctor/` are removed. `from_items` moved to the public
+- `create_catalog` and `core/ctor/` are removed. `create_catalog` moved to the public
   `io/vector/stac_geoparquet` module because `ModelSpec` and the flows, outside
-  `geodata`, use it. `require_item_columns` words the missing-column error once.
+  `geodata`, use it. `gs.validate(stac_item=True)` checks required Item fields at conversion boundaries.
 - `write_grid` takes a grid only; dates are set when the object is built.

@@ -6,6 +6,29 @@ The project is in active Alpha development. Prefer simple, replaceable designs. 
 
 Lead with code. Explain after showing the implementation. When comparing design options, show each option as the code a caller and a maintainer would see, then explain the difference. Always do smoke test before the design is settled. Ignore ipynb file unless asked to. Choose variable and parameter name carefully, don't make naming too verbose. Name a function with a verb for what it does, and a variable for the value it holds, never for its role. Write loops out in full; no comprehension with more than one `for`, no clever one-liners. Put behavior on the class that owns it, and return a plain value rather than a throwaway container class.
 
+## Function Design
+
+Slimmer code comes from removing cases, stale paths and duplicate mechanisms,
+not from compact expressions, clever constructs or premature DRY. Readable code
+may take more lines.
+
+* Each function has one responsibility. A long function is fine when it follows
+  one straightforward path; complexity is the number of cases it serves, not its
+  line count.
+* When a function becomes complex, split it into steps that each own one
+  operation a reader can name, follow and test on its own. Do not create private
+  helpers that only relocate lines without adding reuse or readability.
+* A union type hint beyond optional `| None`, such as `str | Sequence[str]` or
+  `xr.Dataset | xr.DataArray`, is a warning that one function serves several
+  cases. Prefer one function per case unless the behavior is genuinely identical.
+* Do not pass or return a `dict` or `Mapping` whose keys carry the structure.
+  Use the native object (Dataset, GeoDataFrame, pystac Item), a typed value or
+  separate parameters. A mapping is acceptable only for genuinely open-ended
+  key-value content, such as attrs or STAC properties, or where a dependency's
+  API requires one.
+* Prefer showing over explaining: code, printed xarray structures, tables and
+  diagrams instead of prose, in docs, plans and reviews.
+
 ## Commands
 
 ```bash
@@ -31,11 +54,10 @@ src/geosave/
 └── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
-├── core/         # `gs` accessors, GeoAnchor and Chips; raster/ (dataarray, dataset, datatree, chips), ctor/ (create_* constructors), vector/ (vector base, frame, catalog, sampling)
+├── core/         # `gs` accessors, GeoRegion and Chips; raster/ (dataarray, dataset, datatree, chips), ctor/ (create_* constructors), vector/ (vector base, frame, catalog, sampling)
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
 ├── stac/         # extensions/ per schema, catalog/item/asset/band metadata, search/
-├── transform/    # explicit operations, one module per thing changed: warp, extent, combine, nodata, temporal, color, vector
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
@@ -51,6 +73,12 @@ It contains `common/` startup and `tasks/` templates copied by `geosave add-task
 Public geospatial I/O lives in `geodata/io/`. Internal helpers stay with their
 owning package.
 
+`core/raster/transform` owns substantial pixel-changing implementations;
+`core/raster/utils` owns structural support such as grid placement. Accessors
+own variant-specific checks and traversal. Internal functions used across
+modules have plain names; underscore names are module-local. Supported public
+API is declared explicitly, not inferred from implementation filenames.
+
 Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`, so a release loads and preprocesses without the training stack.
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
@@ -58,9 +86,9 @@ Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`,
 STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
-`io.load_dataset` and `io.load_datatree` load selected Items through ODC. Format
+`stac.load_dataset` and `stac.load_datatree` load selected Items through ODC. Format
 readers/writers live in `io/formats/`, and `io/stac.py` owns raster asset I/O.
-`GeoAnchor` describes geometry/time; native `GeoBox` defines exact pixel placement.
+`GeoRegion` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Design
 

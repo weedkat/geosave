@@ -1,88 +1,117 @@
-"""Conventions for the dimension and coordinate names a GeoSave xarray object carries.
+"""Xarray raster structure and coordinate names used by GeoSave.
 
-Every raster spans `y` and `x`, and every name below sits beside them: `band` where variables or channels stack, `time` where
-observations repeat, `spatial_ref` where the CRS is written.
+A Dataset holds named measurements and their CF support variables. Here
+reflectance varies with time, elevation does not, and ``time_bounds``
+delimits each time label's cell rather than being another image band::
 
-Examples:
-    A DataArray holds one band's pixels. `band` and `time` lead, the spatial
-    pair trails, and `spatial_ref` rides along carrying the CRS:
-
-    >>> xr.DataArray(pixels, dims=("time", "band", "y", "x"),
-    ...       coords={"time": labels, "band": ["red", "green", "blue"]}).gs.write_grid(geobox)
-    <xarray.DataArray (time: 2, band: 3, y: 512, x: 512)>
+    >>> scene
+    <xarray.Dataset> Size: 164B
+    Dimensions:      (time: 2, y: 2, x: 3, bounds: 2)
     Coordinates:
-      * time         (time) datetime64[ns] 2025-06-01 2025-06-11
-      * band         (band) <U5 'red' 'green' 'blue'
-      * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
-      * x            (x) float64 3e+05 3e+05 ... 3.051e+05
-        spatial_ref  int32 32633
-
-    A Dataset holds several variables on one grid. They need not span the same
-    axes — `red` repeats over `time`, `dem` does not:
-
-    >>> xr.Dataset({"red": (("time", "y", "x"), cube),
-    ...         "dem": (("y", "x"), flat)}, coords={"time": labels}).gs.write_grid(geobox)
-    <xarray.Dataset>
-    Dimensions:      (y: 512, x: 512, time: 2)
-    Coordinates:
-      * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
-      * x            (x) float64 3e+05 3e+05 ... 3.051e+05
-      * time         (time) datetime64[ns] 2025-06-01 2025-06-11
-        spatial_ref  int32 32633
+      * time         (time) datetime64[ns] 16B 2025-06-01 2025-06-11
+      * y            (y) float64 16B 5e+06 5e+06
+      * x            (x) float64 24B 5e+05 5e+05 5e+05
+        time_bounds  (time, bounds) datetime64[ns] 32B 2025-05-31 ... 2025-06-12
+        spatial_ref  int32 4B 32633
+    Dimensions without coordinates: bounds
     Data variables:
-        red          (time, y, x) uint16 ...
-        dem          (y, x) float32 ...
+        red          (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
+        nir          (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
+        dem          (y, x) float32 24B dask.array<chunksize=(2, 3), meta=np.ndarray>
+    Attributes:
+        title:    Reflectance and elevation
 
-    A DataTree holds collections, each over its grid nodes. Every grid node
-    carries its own grid, and the root and collection nodes carry none:
+A DataArray holds one variable, its coordinates, and its own attrs. It cannot
+hold ``time_bounds``, whose ``bounds`` dimension no pixel variable has::
 
-    >>> xr.merge([optical.gs.to_datatree("sentinel-2-l2a"), dem.gs.to_datatree("dem")])
-    <xarray.DataTree>
-    Group: /
-    ├── Group: /sentinel-2-l2a
-    │   └── Group: /sentinel-2-l2a/r10m
-    │           Dimensions:      (time: 2, y: 512, x: 512)
-    │           Coordinates:
-    │             * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
-    │             * x            (x) float64 3e+05 3e+05 ... 3.051e+05
-    │             * time         (time) datetime64[ns] 2025-06-01 2025-06-11
-    │               spatial_ref  int32 32633
-    │           Data variables:
-    │               red          (time, y, x) uint16 ...
-    └── Group: /dem
-        └── Group: /dem/r10m
-                Dimensions:      (y: 512, x: 512)
-                Coordinates:
-                  * y            (y) float64 5.005e+06 5.005e+06 ... 5e+06
-                  * x            (x) float64 3e+05 3e+05 ... 3.051e+05
-                    spatial_ref  int32 32633
-                Data variables:
-                    dem          (y, x) float32 ...
+    >>> scene["red"]
+    <xarray.DataArray 'red' (time: 2, y: 2, x: 3)> Size: 24B
+    dask.array<zeros_like, shape=(2, 2, 3), dtype=uint16, chunksize=(1, 2, 3), chunktype=numpy.ndarray>
+    Coordinates:
+      * time         (time) datetime64[ns] 16B 2025-06-01 2025-06-11
+      * y            (y) float64 16B 5e+06 5e+06
+      * x            (x) float64 24B 5e+05 5e+05 5e+05
+        spatial_ref  int32 4B 32633
+    Attributes:
+        long_name:     Red reflectance
+        units:         1
+        scale_factor:  0.0001
+        _FillValue:    0
 
-    Without `write_grid` odc resolves no grid, so the pixels keep their shape and
-    claim no ground position. The spatial pair is named but carries no labels:
+The CF storage structure behind those printouts (selected attrs shown). Every
+entry is a variable; ``coords`` and ``data_vars`` are xarray's grouping::
 
-    >>> xr.DataArray(pixels, dims=("y", "x"))
-    <xarray.DataArray (y: 512, x: 512)>
-    Dimensions without coordinates: y, x
+    scene: xr.Dataset
+    ├── attrs
+    │   └── title: "Reflectance and elevation"
+    ├── coords
+    │   ├── x(x), y(y)
+    │   │   └── attrs: axis, standard_name ("projection_x_coordinate"), units
+    │   ├── time(time)
+    │   │   ├── data: datetime64[ns] [2025-06-01, 2025-06-11]
+    │   │   └── attrs: axis "T", standard_name "time",
+    │   │              bounds "time_bounds" ──► coords["time_bounds"]
+    │   ├── time_bounds(time, bounds)            CF boundary variable
+    │   │   └── data: [[2025-05-31, 2025-06-02], [2025-06-10, 2025-06-12]]
+    │   └── spatial_ref()                        CF grid mapping, written by ODC
+    │       └── attrs: grid_mapping_name, crs_wkt, projection parameters
+    └── data_vars
+        ├── red(time, y, x)
+        │   ├── data: lazy uint16 pixels
+        │   ├── attrs: long_name, units, scale_factor, _FillValue
+        │   └── encoding: grid_mapping "spatial_ref" ──► coords["spatial_ref"]
+        ├── nir(time, y, x)
+        └── dem(y, x)
 
-Every raster spans `y` and `x`, whatever its CRS. Geographic coordinates carry
-CF standard names `latitude` and `longitude` and degree units; projected
-coordinates carry projection standard names and linear units. CF reads those
-attrs, not the dimension names. Readers rename a foreign grid on the way in
-with `to_yx`, and the `gs` accessors refuse one with `require_yx`.
+``.cf`` reads this structure; it stores no separate metadata::
+
+    scene.cf.axes                    {"X": ["x"], "Y": ["y"], "T": ["time"]}
+    scene.cf.get_bounds("time")      scene["time_bounds"], never estimated
+    scene.cf.grid_mappings           spatial_ref, with its CRS
+
+A reference such as ``bounds`` or ``grid_mapping`` lives in attrs or, once a
+file is decoded, in encoding; ``.cf`` reads either. Decoding likewise moves
+consumed ``scale_factor`` and ``_FillValue`` from attrs into encoding. GeoSave
+adds structure through ``gs.write_*`` methods, which state it as these attrs,
+encodings and variables.
+
+Selection keeps a coordinate only when the selected variables have all of its
+dimensions, so ``time_bounds`` follows ``drop_vars`` and ``.cf`` selection::
+
+    scene[["red"]]               red, time, x, y, spatial_ref
+    scene.cf[["red"]]            + time_bounds   (unreferenced coordinates dropped)
+    scene.drop_vars(["nir", "dem"])  + time_bounds   (every other variable kept)
+
+Time cells come from what GeoSave knows: a loaded Item's period, where one
+label is one Item, or a composite's resample bin. STAC metadata stays in its
+own shape beside the CF structure::
+
+    scene.coords["stac_properties"] (time)  JSON Item properties per observation
+    scene.attrs["stac_collection"]          JSON Collection
+    scene.attrs["stac_extensions"]          JSON extension schema URIs
+    scene.gs.stac_common_properties         intersection over observations
+
+STAC's ``start_datetime`` and ``end_datetime`` appear only on Items, where
+loading reads and publication writes them.
+
+GeoSave creators use ``y``/``x``, ``time``, and ``band`` when channels are
+stacked in one DataArray. Native inputs can retain other names: CF attrs
+identify their axes; ``to_yx`` explicitly renames the spatial pair.
+DataTree nodes hold Datasets and inherit parent coordinates;
+``to_dataset(inherit="all_coords")`` includes a parent's ``time_bounds``.
+Independent grids can occupy sibling nodes.
+
+See https://cf-xarray.readthedocs.io/en/latest/quickstart.html.
 """
 
 from __future__ import annotations
 
 from typing import cast
 
-import rioxarray  # noqa: F401  — registers the .rio accessor
+import cf_xarray  # noqa: F401 registers .cf
 import xarray as xr
-from odc.geo.xr import spatial_dims
-from rioxarray.exceptions import MissingSpatialDimensionError
 
-# Spatial dimensions of every raster, georeferenced or not.
+# Canonical spatial names for rasters GeoSave creates.
 SPATIAL_DIMENSIONS = ("y", "x")
 
 # Scalar coordinate holding the CRS, which CF reaches through `grid_mapping`.
@@ -94,9 +123,8 @@ BAND_DIMENSION = "band"
 # Axis a raster spans when it carries observations over time.
 TIME_COORDINATE = "time"
 
-# Coordinates along `time` holding the inclusive first and last instant each
-# label covers. Two plain coordinates rather than CF `time_bnds`, whose extra
-# `bnds` dimension a DataArray cannot carry.
+# The period a time label covers, one value per label along `time`, named as
+# STAC Items name it. These observations are distinct from CF cell bounds.
 START_DATETIME = "start_datetime"
 END_DATETIME = "end_datetime"
 
@@ -104,70 +132,28 @@ END_DATETIME = "end_datetime"
 # text: one mapping per date, which NetCDF and Zarr store as a string.
 STAC_PROPERTIES = "stac_properties"
 
-# A STAC Item's id by default: its time and the centre of its grid, which
-# together name one observation of a collection.
-ITEM_ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{lat:.4f}_{lon:.4f}"
 
-
-def _spatial_pair(data: xr.DataArray | xr.Dataset) -> tuple[str, str] | None:
-    """Find the spatial pair by a conventional name, then by its CF attrs."""
-    dims = spatial_dims(data)  # y, x | latitude, longitude | lat, lon
-    if dims is None:
-        try:
-            # Any name, where the coordinates carry CF `axis` or `standard_name`.
-            dims = (str(data.rio.y_dim), str(data.rio.x_dim))
-        except MissingSpatialDimensionError:
-            return None
-    return dims
-
-
-def _rename_yx[T: xr.DataArray | xr.Dataset](data: T) -> T:
-    dims = _spatial_pair(data)
-    if dims in (None, SPATIAL_DIMENSIONS):
-        return data
-    return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))
-
-
-def to_yx[T: xr.DataArray | xr.Dataset | xr.DataTree](data: T) -> T:
+def to_yx[T: (xr.DataArray, xr.Dataset)](data: T) -> T:
     """Rename a foreign spatial pair to `y` and `x`.
 
     The pair is found by name (`latitude`/`longitude`, `lat`/`lon`) or, under
     any other name, by the CF `axis` or `standard_name` its coordinates carry.
 
     Args:
-        data: Band, raster, or tree as a loader named its grid.
+        data: Band or raster as a loader named its grid.
 
     Returns:
         Renamed view sharing its pixels, lazily. A band or raster already on
-        `y` and `x`, or carrying no grid, comes back as itself.
+        `y` and `x`, or without identifiable spatial dimensions, comes back
+        as itself. A tree normalizes node by node with
+        ``tree.map_over_datasets(to_yx)``.
 
     Examples:
         >>> to_yx(xr.open_dataset("era5.nc")).t2m.dims
         ('time', 'y', 'x')
     """
-    if isinstance(data, xr.DataTree):
-        return cast("T", data.map_over_datasets(lambda ds: _rename_yx(ds)))
-    return _rename_yx(data)
+    dims = data.gs.spatial_dims
+    if dims in (None, SPATIAL_DIMENSIONS):
+        return data
+    return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))
 
-
-def require_yx(data: xr.DataArray | xr.Dataset | xr.DataTree) -> None:
-    """Refuse a grid spanning anything but `y` and `x`.
-
-    Args:
-        data: Band, raster, or tree about to be read through `gs`.
-
-    Raises:
-        ValueError: Its spatial dimensions, or a group's, carry another pair.
-    """
-    if isinstance(data, xr.DataTree):
-        for node in data.subtree:
-            require_yx(node.dataset)
-        return
-
-    dims = _spatial_pair(data)
-    if dims not in (None, SPATIAL_DIMENSIONS):
-        fix = dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))
-        raise ValueError(
-            f"the grid spans {dims}, but gs reads {SPATIAL_DIMENSIONS} for every "
-            f"CRS; rename it first with .rename({fix})"
-        )

@@ -1,0 +1,59 @@
+schema_version: 1
+entry: from_raster
+output: classes
+
+# Required only when referenced by the selected source/result path.
+inputs:
+  raster: {}
+  path: {}
+  geometry: {}
+  time: {}
+  longitude: {}
+  latitude: {}
+  width_m: {}
+  height_m: {}
+  batch_size: {default: 2}
+  destination: {}
+
+steps:
+  from_raster:
+    call: tests.model.spec.operations.accept
+    kwargs: {raster: !ref raster}
+
+  from_path:
+    call: tests.model.spec.operations.open_raster
+    kwargs: {path: !ref path}
+
+  # These two acquisitions are explicitly synthetic in this study.
+  from_area:
+    call: tests.model.spec.operations.acquire_area
+    kwargs: {geometry: !ref geometry, time: !ref time}
+
+  from_center:
+    call: tests.model.spec.operations.acquire_center
+    kwargs:
+      longitude: !ref longitude
+      latitude: !ref latitude
+      width_m: !ref width_m
+      height_m: !ref height_m
+      time: !ref time
+
+  checked:
+    call: tests.model.spec.operations.validate
+    kwargs: {raster: !ref entry}
+
+  prepared:
+    call: tests.model.spec.operations.prepare
+    kwargs: {raster: !ref checked}
+
+  scores:
+    call: tests.model.spec.operations.predict
+    kwargs: {raster: !ref prepared, batch_size: !ref batch_size}
+
+  classes:
+    call: tests.model.spec.operations.classify
+    kwargs: {scores: !ref scores}
+
+  saved:
+    call: tests.model.spec.operations.save
+    kwargs: {raster: !ref classes, path: !ref destination}

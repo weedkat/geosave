@@ -12,20 +12,34 @@ expects WGS84 coordinates; use a frame selection when reprojection or CRS
 context is needed. A search matching nothing returns an empty item table with
 its schema and CRS, although the explorer currently requires geometry to draw.
 
+Select rows using native GeoPandas masks. Spatial targets must use the frame's
+CRS; GeoSave does not infer a temporal filter from the target:
+
+```python
+shape = region.extent.to_crs(catalog.crs).geom
+selected = catalog.loc[catalog.geometry.intersects(shape)]
+selected.gs.validate(crs=True, temporal=True)
+```
+
+`temporal=True` requires paired, ordered bounds and a nominal `datetime` within
+coverage, while permitting timeless rows. `area=True` requires valid geometries
+with positive area. Geometry, CRS, temporal and Item-column checks can be
+requested independently; `geometry=False` skips the default geometry check.
+
 ## Publish raster assets
 
 ```python
 import geosave as gs
 
 catalog = ds.gs.to_catalog(
-    "data", path_format="{collection}/{time:%Y%m%d}/{band}.tif", collection="s2"
+    "data", format_paths="{collection}/{time:%Y%m%d}/{variable}.tif", collection="s2"
 )
 catalog.gs.to_geoparquet("data/catalog.parquet")
 ```
 
 The path names raster assets. Its suffix chooses COG, Zarr or NetCDF. Templates
-use the same path expansion as `to_cog`: `{collection}`, `{time}` and `{band}`
-control file splitting. DataTrees use group names as collections and accept
+use the same path fields as `to_cog`, such as `{collection}`, `{time}` and
+`{variable}`; `split_item` and `split_asset` control file splitting. DataTrees use group names as collections and accept
 one template or a mapping of group names to templates. A Dataset can receive
 a collection id or a PySTAC Collection; the latter is retained in the GDF.
 Each Item describes one observation, so multiple dates require `{time}` even
@@ -43,18 +57,30 @@ A saved catalog opens again with `open_vector`.
 ## Group samples and open pixels
 
 ```python
-samples = catalog.gs.sample(pair=["s2"], window=2)
-tree = samples[0].gs.to_datatree()
-chips = gs.Chips([tree], size=128, resolution=10)
+samples = catalog.gs.sample(collections=["s2"], window=2)
+tree = samples[0].gs.to_datatree().gs.group_grid()
+scene = tree["s2"].gs.to_dataset(grid="r10m")
+chips = gs.Chips([scene], size=128, constant_value=0)
 ```
 
 Sampling groups Items without opening pixels and returns `GeoSamples`: the
-item table and each sample's row positions. `samples[i]` is one sample's rows,
-whose `gs.to_datatree()` opens a lazy DataTree, `/{collection}/{res}`: each
-collection's bands on their native grids, one node per grid (`r10m`, `r20m`).
-One Item row's `gs.to_datatree()` opens its scene as grid nodes, and
-`.gs.to_dataset()` converts it, or one collection `tree["s2"]`, to one Dataset. Chipping
-belongs to the raster tree, not the GDF.
+item table, slot membership and each sample's row positions. `samples[i]` returns
+one sample's native rows,
+whose `gs.to_datatree()` opens a lazy DataTree, `/{collection}/{asset}`: one
+node per STAC asset on the grid it states. `tree.gs.group_grid()` merges assets
+sharing one grid into nodes named by pixel size (`r10m`, `r20m`).
+One Item row's `gs.to_datatree()` opens its scene the same way, and
+`.gs.to_dataset()` combines all raster nodes in the selected subtree, including
+organizational groups, only when they share an exact grid. Select `tree["s2"]`
+to limit the inputs and explicitly align mixed grids before conversion.
+Variables must have unique names and compatible coordinates.
+Chips accepts prepared Datasets or DataArrays, each on one regular grid, and
+returns each chip as a lazy xarray object from `gs.crop_to_grid`. Select and align
+the scene before chipping; convert chips with `gs.to_numpy(dtype=...)`.
+`chips.xarray[i]` retains the original prepared source; `chips.merge(...)`
+returns NumPy arrays in the same source order.
+Construct output xarray objects explicitly with the coordinates and metadata
+appropriate for predictions.
 
 Persist the Item catalog and sample it again after opening. `GeoCatalog.concat`
 merges Collection metadata; for repeated Collection ids, the first definition
@@ -88,4 +114,4 @@ GeoParquet output because it would remove required geometry metadata.
 Catalog constructors and file readers attach the metadata marker. Selected
 columns retain it, so rewriting an incomplete catalog raises for missing fields.
 Item-shaped rows whose metadata was lost must be reconstructed explicitly with
-`stac.from_items(...)`; the writer does not guess a catalog from column names.
+`stac.create_catalog(...)`; the writer does not guess a catalog from column names.

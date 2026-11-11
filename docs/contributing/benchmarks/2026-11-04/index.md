@@ -1,5 +1,11 @@
 # Local performance measurements — 2026-11-04
 
+The recorded timings describe the 2026-11-04 implementation. The runnable
+script now uses native tree construction and explicit alignment before
+mixed-grid conversion; those operations have new benchmark names. Historical
+timings below have not been rerun for the conversion redesign.
+
+
 GeoSave's metadata-only conversions are inexpensive and remain lazy in these
 cases. Full multiband COG reading and excessive small Dask chunks are the
 clearest measured optimization opportunities. NetCDF adds little overhead over
@@ -242,7 +248,7 @@ Windows. Assets use nonresolving example URLs and **are never opened**. This
 measures metadata conversion, grouping and GeoParquet persistence, not STAC
 service latency or raster loading. Catalogs have a small fixed metadata schema.
 
-| Items | `from_items` ms | `sample` ms | GeoParquet write ms | Open ms |
+| Items | `create_catalog` ms | `sample` ms | GeoParquet write ms | Open ms |
 | --- | ---: | ---: | ---: | ---: |
 | 100 | 33.05 | 36.77 | 62.99 | 26.16 |
 | 1,000 | 92.88 | 294.98 | 360.74 | 45.96 |

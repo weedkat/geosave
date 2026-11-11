@@ -139,77 +139,43 @@ which resizes logits to that configured size. Keep chip size, encoder
 
 ## Prepare bands, values, and context together
 
-Save this as `model_spec.yaml` for Sentinel-2 variables corresponding to the
-six pretrained bands:
-
-```yaml
-schema_version: 3
-rasters:
-  optical:
-    variables: [B02, B03, B04, B8A, B11, B12]
-    coordinates: [time, x, y]
-    require_crs: true
-preprocessing:
-  image:
-    call: !ref optical.gs.mask_and_scale
-encoding:
-  tensor:
-    call: geosave.model.processing.to_tensor
-    kwargs: {raster: !ref image, dims: [time, band, y, x]}
-  context:
-    call: geosave.model.stages.encoder.prithvi.model_context
-    kwargs: {raster: !ref image}
-inputs:
-  image: !ref tensor
-  temporal_coords: !ref 'context["temporal_coords"]'
-  location_coords: !ref 'context["location_coords"]'
-pixels: [image]
-transforms:
-  image:
-    call: geosave.model.processing.normalize
-    kwargs:
-      value: !ref image
-      mean: [0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363]
-      std: [0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049]
-      dim: -3
-```
-
-The normalization uses
-[TerraTorch's Prithvi EO 2 statistics](https://github.com/torchgeo/terratorch/blob/main/terratorch/models/backbones/prithvi_vit.py),
-divided by 10,000 for fractional reflectance. It assumes `mask_and_scale`
-decodes the stored pixels to those units using their scale/offset metadata.
-Check the source's units and metadata before using these values.
-
-`bands` configures the encoder's input channels and pretrained weight slices;
-it does not select or reorder raster variables. `variables` performs that
-selection. Their orders must describe the same physical bands. `NIR_NARROW`
-maps to Sentinel-2 B8A; B08 is `NIR_BROAD`. A different or misspelled band name
-gets a random patch-embedding slice, so check names before building the model.
-
-All selected variables must already share a spatial grid. Loading or warping
-them onto that grid is explicit; this spec does not resample bands to align them.
-
-Given one already cut 224 × 224 Dataset `scene`, with these variables, a length-one
-acquisition `time` dimension, and a geospatial grid, a direct inference call is:
+Use a project function when preparing pixels and a context mapping together:
 
 ```python
-from geosave.model.spec import ModelSpec
+from geosave.model.processing import normalize, to_tensor, validate_raster
+from geosave.model.stages.encoder.prithvi import model_context
 
-spec = ModelSpec.load("model_spec.yaml")
-values = spec.encode(spec.preprocess({"optical": scene}))
-bound = spec.model_inputs(values)
-inputs = {}
-for name, value in bound.items():
-    inputs[name] = value.unsqueeze(0)
-inputs = spec.transform(inputs, batched=True)
-inputs["image"] = torch.nan_to_num(inputs["image"])
+
+def prepare_inputs(scene):
+    selected = scene[["B02", "B03", "B04", "B8A", "B11", "B12"]]
+    validate_raster(selected)
+    reflectance = selected.gs.mask_and_scale()
+    image = to_tensor(reflectance, dims=["time", "band", "y", "x"])
+    image = normalize(
+        image,
+        mean=[0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363],
+        std=[0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049],
+        dim=-3,
+    )
+    inputs = {"image": image, **model_context(reflectance)}
+    return {name: value.unsqueeze(0) for name, value in inputs.items()}
+
+
+inputs = prepare_inputs(scene)
 with torch.inference_mode():
     logits = chain(**inputs)
 ```
 
-Encoding derives pixels and context from the same prepared chip. Missing time
-or grid metadata raises. Tensor conversion reads pixel values; `transform`
-applies the same normalization as training. Track invalid pixels separately when
-interpreting predictions; replacing NaN with zero only makes a tensor usable by
-the network. Include any such replacement in your actual shared recipe when it
-is part of the model's processing contract.
+This example assumes one already selected chip with a time dimension and
+fractional reflectance decoded from valid scale/offset metadata. The statistics
+come from [TerraTorch's Prithvi EO 2 implementation](https://github.com/torchgeo/terratorch/blob/main/terratorch/models/backbones/prithvi_vit.py),
+divided by 10,000. Check units and missing-value policy for your dataset.
+
+`bands` configures pretrained encoder channels; the explicit Dataset selection
+sets their order. B8A is `NIR_NARROW`, whereas B08 is `NIR_BROAD`. All selected
+variables must already share a grid. Reprojection and resampling are explicit.
+Derive context from each actual chip, after spatial and temporal selection.
+
+A [ModelSpec recipe](model-spec.md) can call this installed project function
+and pass its entire returned dictionary to another function. Dictionary indexing
+does not need to become a reference language feature.

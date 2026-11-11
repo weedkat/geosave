@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from geosave.geodata.core.raster.transform.packing import mask_missing
+
 from typing import cast
 
 import geoviews as gv
@@ -14,7 +16,6 @@ import xarray as xr
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata.attrs import stamp_attrs
-from geosave.geodata.transform.color import colorize
 from geosave.geodata.viz.colors import (
     CMAPS,
     DEFAULT_CMAP,
@@ -131,7 +132,7 @@ class RasterLayer(Layer):
         # 1. A Dataset with a grid a web map can place
         if isinstance(raster, xr.DataArray):
             raster = (
-                raster.gs.to_raster()
+                raster.gs.to_dataset(dim="band")
                 if "band" in raster.dims
                 else raster.to_dataset(name=raster.name or "band")
             )
@@ -143,15 +144,18 @@ class RasterLayer(Layer):
 
         # 2. The spatial bands, and the band and composite chosen among them
         self.bands = []
-        for band_name, variable in raster.data_vars.items():
-            if {"y", "x"} <= set(variable.dims):
+        for band_name in raster.gs.raster_variables:
+            variable = raster[band_name]
+            if variable.gs.spatial_dims is not None:
                 self.bands.append(str(band_name))
         if not self.bands:
             raise ValueError("the raster has no spatial bands")
         for choice in [band, *(rgb or ())]:
             if choice is not None and choice not in self.bands:
                 raise KeyError(f"{choice!r} is not a spatial band")
-        channels = rgb or raster.gs.rgb
+        channels = rgb
+        if channels is None:
+            channels = raster.gs.rgb
         if channels is not None and any(name not in self.bands for name in channels):
             raise KeyError("the declared RGB includes a non-spatial band")
         super().__init__(
@@ -189,8 +193,7 @@ class RasterLayer(Layer):
     @staticmethod
     def _check_mappable(raster: xr.Dataset) -> None:
         """Refuse a raster a web map cannot place."""
-        if raster.gs.geobox is None:
-            raise ValueError("a map needs a raster with a CRS and spatial grid")
+        raster.gs.validate(georeferenced=True, same_grid=True)
         bounds = raster.gs.bounds
         if raster.gs.crs.geographic and bounds.right > 180:
             # Web Mercator reads longitudes past 180° as the ones they wrap to,
@@ -420,7 +423,7 @@ class RasterLayer(Layer):
             # Classes take their legend's colours, as `.gs.plot` draws them;
             # a pixel no class names is transparent.
             classes = stamp_attrs(sampled[self.band], legend)
-            red, green, blue = colorize(classes).values
+            red, green, blue = classes.gs.colorize().values
             shown = np.isfinite(red).astype("float32")
             red, green, blue = (
                 np.nan_to_num(channel) for channel in (red, green, blue)
@@ -542,10 +545,11 @@ class RasterLayer(Layer):
         bounds = grid.boundingbox
         if not (bounds.left <= x <= bounds.right and bounds.bottom <= y <= bounds.top):
             return {}
+        y_dim, x_dim = self.data.gs.spatial_dims
         data = (
             self.select_shown_bands()
-            .gs.to_nan()
-            .sel(x=x, y=y, method="nearest")
+            .gs._map_variables(mask_missing)
+            .sel({x_dim: x, y_dim: y}, method="nearest")
             .compute()
         )
         return {str(name): str(value.item()) for name, value in data.data_vars.items()}

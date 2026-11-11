@@ -7,13 +7,18 @@ pred = pred.gs.write_grid(chip.gs.geobox).gs.write_nodata(255)
 scene = xr.Dataset({"red": (("time", "y", "x"), red)}, coords={"time": dates})
 scene = scene.gs.write_grid(anchor.geobox)
 
-tree = xr.merge([scene.gs.to_datatree("s2"), dem.gs.to_datatree("dem")])
+tree = xr.DataTree.from_dict({
+    "/s2": xr.Dataset(attrs=scene.attrs),
+    "/s2/r10m": scene,
+    "/dem": xr.Dataset(attrs=dem.attrs),
+    "/dem/r10m": dem,
+})
 tree["s2"].gs.to_dataset()
 
 scene.gs.to_cog("out")                                   # out/20250601T000000/red.tif ...
-tree.gs.to_cog("s3://bucket/out", storage_options={...}) # out/s2/20250601T000000/red.tif ...
+tree.gs.to_cog("s3://bucket/out", collections=["s2"], storage_options={...}) # out/s2/20250601T000000/red.tif ...
 scene.isel(time=0).gs.to_cog("out", path_format="scene.tif")
-rows = tree.gs.to_catalog("out")                         # same files, plus one Item per collection and date
+rows = tree.gs.to_catalog("out", collections=["s2"])                         # same files, plus one Item per collection and date
 tree.gs.to_zarr("scene.zarr")
 open_raster("out/scene.tif")                             # one file or store
 ```
@@ -40,10 +45,14 @@ since crop, align, chips and concat work through coordinates.
   is placed the same way, without CF axes.
 - `write_crs(crs)` on DataArray and Dataset: the reference only, for
   coordinates that exist.
-- `to_datatree(collection)` on Dataset and DataArray: `/{collection}/{name_grid}`.
-  The Dataset's attrs go on the collection node, so it inverts `to_dataset`.
-- Trees combine with `xr.merge`, which keeps the first collection's attrs where
-  two disagree.
+- Build trees with native `xr.DataTree` or `xr.DataTree.from_dict` and explicit
+  paths. Put collection attrs on explicit parent Datasets when needed; raster
+  accessors do not construct tree hierarchies.
+- `Dataset.gs.to_dataarray()` stacks variables with GeoSave metadata.
+  `DataArray.gs.to_dataset()` wraps a named array as one variable; explicitly
+  pass `dim="band"` to split band coordinates into variables.
+- `DataTree.gs.to_dataset()` merges compatible same-grid nodes. Align mixed
+  grids explicitly with `tree.gs.align(how=reference, resampling=...)` first.
 
 A grid is a `GeoBox` (CRS, transform, shape), and `write_grid` takes only that.
 Dates are a coordinate, set where the xarray object is built.
@@ -61,7 +70,7 @@ Item tables come from, when called. A GeoJSON is an ordinary vector file:
 `open_vector` returns plain features and does not look for STAC.
 
 Item tables come from `to_catalog`, `StacClient.search`, reading a stac-geoparquet
-file, and `stac_geoparquet.from_items(items, collections=())`, the one PySTAC
+file, and `stac_geoparquet.create_catalog(items, collections=())`, the one PySTAC
 conversion, which search, `to_catalog`, `ModelSpec` and the flows share. With no
 Items it returns the empty table with the Item columns that a search matching
 nothing needs.
@@ -79,7 +88,7 @@ Two kinds of persistence:
 `path_format` is filled with `str.format`, as `id_format` is. Its default is
 `{collection}/{time:%Y%m%dT%H%M%S}/{band}.tif`, dropping `{collection}/` for a
 raster of no collection and `{time:...}/` for one without dates. One file per
-band is one STAC asset per band, and never needs `{res}`.
+band is one STAC asset per band, and never needs `{grid}`.
 
 Catalog assets are GeoTIFFs. `writers.py` is removed: layout lives in
 `paths.py`, the GeoTIFF batch writer in `geotiff.py`, store writing in

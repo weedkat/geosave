@@ -25,8 +25,9 @@ writes ordinary feature tables with GeoPandas encoding. See the
 
 ## Extensions
 
-Each extension module builds one PySTAC value from an xarray variable and
-stamps it back onto one; the band translator composes them for an attached Asset.
+Each extension module builds a native PySTAC value from an xarray variable
+and translates it back into named attrs. The band translator composes these
+attrs for an Asset; the loader applies them to the raster.
 
 ::: geosave.geodata.stac.extensions.projection
     options:
@@ -34,15 +35,15 @@ stamps it back onto one; the band translator composes them for an attached Asset
 
 ::: geosave.geodata.stac.extensions.raster
     options:
-      members: [build_band, stamp]
+      members: [build_band, read_attrs]
 
 ::: geosave.geodata.stac.extensions.eo
     options:
-      members: [build_band, stamp]
+      members: [build_band, read_attrs]
 
 ::: geosave.geodata.stac.extensions.classification
     options:
-      members: [build_classes, stamp]
+      members: [build_classes, read_attrs]
 
 ## STAC levels and their GeoSave counterparts
 
@@ -56,11 +57,13 @@ and asset paths.
 
 ::: geosave.geodata.stac.item
     options:
-      members: [create_item, check_single_date, stamp_properties_coordinate, read_properties_coordinate, select_item_properties, read_timespan, read_instant, read_variable_names, stamp_item_time, TIMELESS]
+      members: [ItemTime, normalize_time, create_item, select_item_properties, read_timespan, read_instant, read_variable_names, TIMELESS]
 
-::: geosave.geodata.stac.asset
+::: geosave.geodata.stac.raster
     options:
-      members: [build_asset]
+      members: [stamp_properties_coordinate, read_properties_coordinate, stamp_item_time, stamp_item_properties, build_stac_metadata]
+
+::: geosave.geodata.stac.publish.create_stac_item
 
 ::: geosave.geodata.stac.band
 

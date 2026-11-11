@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Required, TypedDict, cast
 
 import geopandas as gpd
 import pandas as pd
@@ -20,29 +20,60 @@ ITEM_COLUMNS = ("id", "links", "assets", "stac_extensions")
 FOOTER_KEY = "stac-geoparquet"
 
 
-def require_item_columns(columns: Iterable[Any]) -> None:
-    """Refuse a table that is not an item table, saying where item tables come from.
+def merge_collections(
+    collections: Iterable[pystac.Collection],
+) -> dict[str, pystac.Collection]:
+    """Copy Collections by ID, rejecting conflicting definitions.
 
-    Raises:
-        ValueError: A stac-geoparquet column is missing.
+    Navigation links do not define Collection identity. All other fields,
+    including extents and descriptive links, must agree for the same ID.
+    Inputs and their links are never changed.
     """
-    missing = set(ITEM_COLUMNS) - set(columns)
-    if missing:
-        raise ValueError(
-            f"STAC Item operations need columns {sorted(missing)}; item tables come "
-            "from to_catalog, StacClient.search, or reading a stac-geoparquet file"
-        )
+    from copy import deepcopy
+
+    import pystac
+
+    merged = {}
+    definitions = {}
+    navigation = {"self", "root", "parent", "child", "item"}
+    for collection in collections:
+        fields = deepcopy(collection.to_dict(transform_hrefs=False))
+        definition = deepcopy(fields)
+        definition["links"] = [
+            link for link in fields.get("links", []) if link["rel"] not in navigation
+        ]
+
+        previous = definitions.get(collection.id)
+        if previous is not None:
+            differences = []
+            for field in sorted(previous.keys() | definition.keys()):
+                if previous.get(field) != definition.get(field):
+                    differences.append(field)
+            if differences:
+                raise ValueError(
+                    f"Collection {collection.id!r} disagrees on: {', '.join(differences)}"
+                )
+            continue
+
+        definitions[collection.id] = definition
+        merged[collection.id] = pystac.Collection.from_dict(fields)
+
+    return merged
 
 
 def to_item(row: pd.Series) -> pystac.Item:
-    """Convert one Item record to PySTAC, reconstructing its geometry bbox."""
+    """Convert one WGS84 Item record to PySTAC, reconstructing its bbox.
+
+    A Series does not carry its parent CRS. Use to_items with a one-row
+    GeoDataFrame when the source geometry needs reprojection.
+    """
     import shapely
     from stac_geoparquet import to_dict
 
-    require_item_columns(row.index)
+    row.gs.validate(geometry=False, stac_item=True)
     item_json = to_dict(row.to_dict())
     item_json["bbox"] = shapely.bounds(row["geometry"]).tolist()
-    return build_item(item_json)
+    return build_item(cast("ItemDocument", item_json))
 
 
 def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
@@ -51,7 +82,18 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
     import pyarrow as pa
     from stac_geoparquet.arrow import stac_table_to_items
 
+    import pystac
+
+    rows.gs.validate(geometry=False, stac_item=True)
+    if rows.empty:
+        return []
+    collections = {}
+    for key, fields in rows.attrs.get(FOOTER_KEY, {}).get("collections", {}).items():
+        collections[key] = pystac.Collection.from_dict(fields)
+
     rows = rows.to_crs("EPSG:4326")
+    if rows.active_geometry_name != "geometry":
+        rows = rows.rename_geometry("geometry")
     # GeoPandas names bounds minx..maxy; the Arrow bbox struct uses xmin..ymax.
     bounds = rows.geometry.bounds.rename(
         columns={"minx": "xmin", "miny": "ymin", "maxx": "xmax", "maxy": "ymax"}
@@ -60,11 +102,29 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
     table = pa.table(rows.assign(bbox=bbox).to_arrow(index=False))
     items = []
     for fields in stac_table_to_items(table):
-        items.append(build_item(fields))
+        item = build_item(cast("ItemDocument", fields))
+        if item.collection_id in collections:
+            item.set_collection(collections[item.collection_id])
+        items.append(item)
     return items
 
 
-def build_item(item_json: dict[str, Any]) -> pystac.Item:
+class ItemDocument(TypedDict, total=False):
+    """JSON Item fields produced by the STAC GeoParquet decoder."""
+
+    type: str
+    stac_version: str
+    id: str
+    geometry: dict[str, Any] | None
+    bbox: list[float] | None
+    properties: Required[dict[str, Any]]
+    assets: dict[str, dict[str, Any]]
+    links: list[dict[str, Any]]
+    stac_extensions: list[str]
+    collection: str
+
+
+def build_item(item_json: ItemDocument) -> pystac.Item:
     """Build a pystac Item from the dict stac-geoparquet makes of one row.
 
     Args:
@@ -89,15 +149,17 @@ def build_item(item_json: dict[str, Any]) -> pystac.Item:
         if isinstance(value, datetime):
             value = value.isoformat()
         properties[key] = value
-    item_json["properties"] = properties
+    item_json = {**item_json, "properties": properties}
     # stac-geoparquet makes these optional; a JSON Item needs them.
     item_json.setdefault("type", "Feature")
     item_json.setdefault("stac_version", pystac.get_stac_version())
-    return pystac.Item.from_dict(item_json)
+    return pystac.Item.from_dict(dict(item_json))
 
 
-def from_items(
-    items: Iterable[pystac.Item], *, collections: Iterable[pystac.Collection] = ()
+def create_catalog(
+    items: pystac.Item | Sequence[pystac.Item],
+    *,
+    collections: Iterable[pystac.Collection] = (),
 ) -> GeoDataFrame:
     """Lay Items out as an item table, one row per Item, as stac-geoparquet does.
 
@@ -107,8 +169,9 @@ def from_items(
     reads it as an ordinary GeoDataFrame.
 
     Args:
-        items: Items whose assets carry absolute hrefs, or a self href that
-            resolves relative ones. They are not changed.
+        items: One native Item or a sequence of Items. Assets must carry
+            absolute hrefs, or an Item self href that resolves relative ones.
+            Inputs are not changed.
         collections: Collections the table carries, as a stac-geoparquet
             file's footer metadata does.
 
@@ -121,31 +184,48 @@ def from_items(
         ValueError: Two Items share an id within one collection.
 
     Examples:
-        >>> from_items(searched_items, collections=[collection])["id"].tolist()
+        >>> create_catalog(searched_items, collections=[collection])["id"].tolist()
         ['S2A_33TUM_20250115', 'S2B_33TUM_20250125']
     """
     from copy import deepcopy
 
     from stac_geoparquet.arrow import parse_stac_items_to_arrow
+    from pystac.utils import is_absolute_href
+
+    import pystac
+
+    if isinstance(items, pystac.Item):
+        items = [items]
 
     records = []
     identities = set()
+    definitions = list(collections)
     for item in items:
+        link = item.get_single_link(pystac.RelType.COLLECTION)
+        if link is not None and isinstance(link.target, pystac.Collection):
+            definitions.append(link.target)
         identity = (item.collection_id, item.id)
         if identity in identities:
             raise ValueError(
                 f"duplicate Item identity {identity!r}; give observations distinct "
-                "ids with id_format"
+                "ids with format_id"
             )
         identities.add(identity)
         # A row keeps no self href, so a relative href is resolved while it can be.
         if item.get_self_href() is not None:
             item = item.clone()
             item.make_asset_hrefs_absolute()
+        for key, asset in item.assets.items():
+            if not is_absolute_href(asset.href):
+                raise ValueError(
+                    f"Item {item.id!r} asset {key!r} has an unresolved relative href"
+                )
         # Transforming link hrefs reads a searched Item's API root over HTTP.
         records.append(item.to_dict(include_self_link=False, transform_hrefs=False))
     if records:
-        table = parse_stac_items_to_arrow(records).read_all()
+        table = parse_stac_items_to_arrow(
+            records, drop_invalid_properties=False
+        ).read_all()
         # Arrow's own column types are kept, as `open_vector` keeps them. The
         # `bbox` covering goes, as geopandas drops it on read: geometry states it.
         rows = gpd.GeoDataFrame.from_arrow(
@@ -158,7 +238,7 @@ def from_items(
             crs="EPSG:4326",
         )
     stored_collections = {}
-    for collection in collections:
+    for collection in merge_collections(definitions).values():
         # A copy, so editing the Collection afterwards leaves the table unchanged.
         fields = deepcopy(collection.to_dict(transform_hrefs=False))
         stored_collections[collection.id] = fields

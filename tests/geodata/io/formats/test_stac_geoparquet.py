@@ -12,13 +12,14 @@ import numpy as np
 import pyarrow.parquet as pq
 import pystac
 import pytest
+
+from geosave.geodata.stac.load import load_datatree
 from pystac.extensions.raster import RasterExtension
 from stac_geoparquet.arrow import stac_table_to_items
 
 from geosave.geodata import GeoCatalog, attrs, open_vector
-from geosave.geodata.io import stac as stac_io
 from geosave.geodata.io.formats import stac_geoparquet as table
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_tree
 from tests.geodata.conftest import (
     build_raster,
@@ -65,7 +66,7 @@ def _refuse(*args, **kwargs):
 
 def _per_band(template: str) -> str:
     """Write one file per band, so each asset is one band named by its key."""
-    return template.replace(".tif", "_{band}.tif")
+    return template.replace(".tif", "_{variable}.tif")
 
 
 def _cog_items(scene, root, name="forest", **options):
@@ -73,7 +74,7 @@ def _cog_items(scene, root, name="forest", **options):
     template = _per_band(cog_template(name, dated=dated))
     id = f"{name}_{{start:%Y%m%dT%H%M%S}}" if dated else name
     return (
-        item_table(scene.gs.to_cog(root, path_format=template), id=id, **options)
+        item_table(scene.gs.to_cog(root, format_paths=template), id=id, **options)
     ).gs.to_items()
 
 
@@ -83,7 +84,10 @@ def _stack_items(scene, label, root, name="s0"):
     saved = write_collection_cogs(
         sample, root / name, {group: _per_band(t) for group, t in templates.items()}
     )
-    return (item_table(saved, prefix=name)).gs.to_items()
+    items = item_table(saved, prefix=name).gs.to_items()
+    for item in items:
+        item.remove_links("collection")
+    return items
 
 
 def _save(items, path, **options):
@@ -95,7 +99,7 @@ def _save(items, path, **options):
             if key is not None
         ],
     )
-    return from_items(items).gs.to_geoparquet(path, **options)
+    return create_catalog(items).gs.to_geoparquet(path, **options)
 
 
 def _collections():
@@ -116,7 +120,7 @@ def test_items_linking_to_an_api_root_convert_without_reading_it(
     for item in items:
         item.add_link(pystac.Link(pystac.RelType.ROOT, unreachable))
 
-    rows = from_items(items)
+    rows = create_catalog(items)
     path = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
     assert len(open_vector(path)) == len(items)
@@ -167,9 +171,7 @@ def test_each_group_of_a_tree_loads_alone(scene, label, tmp_path) -> None:
     classes.close()
 
 
-def test_collections_ride_in_the_table_with_the_extent_of_their_rows(
-    scene, label, tmp_path
-) -> None:
+def test_collections_keep_their_authoritative_extents(scene, label, tmp_path) -> None:
     given = _collections()
     path = _save(
         _stack_items(scene, label, tmp_path),
@@ -181,13 +183,7 @@ def test_collections_ride_in_the_table_with_the_extent_of_their_rows(
 
     assert sorted(stored) == ["label", "optical"]
     assert stored["optical"].license == "CC-BY-4.0"
-    assert stored["optical"].extent.spatial.bboxes[0] == pytest.approx(
-        tuple(scene.gs.geobox.extent.to_crs("EPSG:4326").boundingbox)
-    )
-    assert stored["optical"].extent.temporal.to_dict()["interval"] == [
-        ["2025-06-01T00:00:00Z", "2025-06-11T00:00:00Z"]
-    ]
-    # The Collections handed in keep the open extent they came with.
+    assert stored["optical"].extent.to_dict() == given[0].extent.to_dict()
     assert given[0].extent.spatial.bboxes == [[-180.0, -90.0, 180.0, 90.0]]
 
 
@@ -230,7 +226,7 @@ def test_a_batch_concatenated_onto_a_table_reads_back_whole(
         tmp_path / "items.parquet",
         collections=_collections(),
     )
-    more = from_items(_stack_items(scene, label, tmp_path, "s1"))
+    more = create_catalog(_stack_items(scene, label, tmp_path, "s1"))
 
     grown = GeoCatalog.concat([open_vector(path), more])
     grown.gs.to_geoparquet(
@@ -286,7 +282,9 @@ def test_a_vector_that_is_not_an_item_table_does_not_write_as_one(tmp_path) -> N
 def test_filtered_rows_do_not_gain_their_index_as_a_property(
     scene, label, tmp_path
 ) -> None:
-    rows = from_items(_stack_items(scene, label, tmp_path), collections=_collections())
+    rows = create_catalog(
+        _stack_items(scene, label, tmp_path), collections=_collections()
+    )
 
     (item,) = (rows[rows["collection"] == "label"]).gs.to_items()
 
@@ -304,7 +302,7 @@ def test_selected_columns_of_an_item_table_read_as_selected(
 
 
 def test_unused_collection_definitions_are_not_written(scene, tmp_path) -> None:
-    rows = from_items(_cog_items(scene, tmp_path))
+    rows = create_catalog(_cog_items(scene, tmp_path))
     path = rows.gs.to_geoparquet(
         tmp_path / "filtered.parquet", collections=_collections()
     )
@@ -314,7 +312,9 @@ def test_unused_collection_definitions_are_not_written(scene, tmp_path) -> None:
 def test_writing_leaves_the_rows_and_collections_unchanged(
     scene, label, tmp_path
 ) -> None:
-    rows = from_items(_stack_items(scene, label, tmp_path), collections=_collections())
+    rows = create_catalog(
+        _stack_items(scene, label, tmp_path), collections=_collections()
+    )
     given = _collections()
     before = (
         [item.to_dict() for item in rows.gs.to_items()],
@@ -355,10 +355,10 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     )
     when = datetime(2025, 6, 1, tzinfo=UTC)
     optical_scenes = optical.gs.to_cog(
-        tmp_path, path_format="optical_{time:%Y%m%d}_{band}.tif"
+        tmp_path, format_paths="optical_{time:%Y%m%d}_{variable}.tif"
     )
-    (label_scene,) = label.gs.to_cog(tmp_path, path_format="{band}.tif")
-    rows = from_items(
+    (label_scene,) = label.gs.to_cog(tmp_path, format_paths="{variable}.tif")
+    rows = create_catalog(
         [
             *create_file_items(optical_scenes, id_format="optical_{start:%Y%m%d}"),
             *create_file_items(label_scene, id_format="label", datetime=when),
@@ -368,8 +368,8 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     saved = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
     restored = (open_vector(saved)).gs.to_items()
-    red = stac_io.open_scene(restored[0]).gs.to_dataset().red
-    label = stac_io.open_scene(restored[-1]).gs.to_dataset().label
+    red = load_datatree([restored[0]]).gs.to_dataset().red
+    label = load_datatree([restored[-1]]).gs.to_dataset().label
     assert RasterExtension.ext(restored[0].assets["red"]).bands[0].data_type == "uint16"
     assert red.attrs["units"] == "1"
     assert red.gs.packing.scale_factor == pytest.approx(1e-4)
@@ -385,7 +385,7 @@ def test_collection_survives_read_filter_rewrite(tmp_path):
         "optical", description="Surface reflectance", license="CC-BY-4.0"
     )
     collection.extra_fields["custom:version"] = "v1"
-    rows = from_items([entry()], collections=[collection])
+    rows = create_catalog([entry()], collections=[collection])
     saved = rows.gs.to_geoparquet(tmp_path / "first.parquet")
     restored = open_vector(saved)
     second = restored.iloc[:1].gs.to_geoparquet(tmp_path / "second.parquet")
@@ -405,7 +405,7 @@ def test_collection_links_and_nested_fields_survive_publication(tmp_path):
         "optical", description="Reflectance", keywords=["optical"]
     )
     collection.add_link(pystac.Link("license", "https://example.com/license"))
-    rows = from_items([entry()], collections=[collection])
+    rows = create_catalog([entry()], collections=[collection])
     collection.keywords.append("changed")
     assert rows.gs.collections["optical"].keywords == ["optical"]
     saved = rows.gs.to_geoparquet(tmp_path / "links.parquet")
@@ -424,7 +424,7 @@ def test_a_written_table_retains_item_and_asset_properties(tmp_path):
     second.properties["new:property"] = 7
     second.assets["other"] = second.assets.pop("reflectance")
 
-    saved = from_items([second, first]).gs.to_geoparquet(tmp_path / "items.parquet")
+    saved = create_catalog([second, first]).gs.to_geoparquet(tmp_path / "items.parquet")
 
     restored = list(stac_table_to_items(pq.read_table(saved)))
     assert [entry["id"] for entry in restored] == ["second", "first"]
@@ -434,7 +434,7 @@ def test_a_written_table_retains_item_and_asset_properties(tmp_path):
 
 def test_a_table_keeps_its_bbox_through_read_and_rewrite(tmp_path):
     entry, _ = create_native_item(tmp_path)
-    first = from_items([entry]).gs.to_geoparquet(tmp_path / "catalog.parquet")
+    first = create_catalog([entry]).gs.to_geoparquet(tmp_path / "catalog.parquet")
     second = open_vector(first).gs.to_geoparquet(tmp_path / "again.parquet")
 
     for path in (first, second):
@@ -444,7 +444,7 @@ def test_a_table_keeps_its_bbox_through_read_and_rewrite(tmp_path):
 
 def test_an_edited_geometry_changes_the_bbox_written(tmp_path):
     entry, _ = create_native_item(tmp_path)
-    rows = from_items([entry])
+    rows = create_catalog([entry])
     rows = rows.set_geometry(rows.geometry.translate(xoff=1.0))
 
     (restored,) = stac_table_to_items(
@@ -459,7 +459,7 @@ def test_native_table_follows_its_assets_when_moved(tmp_path, folder):
     home = tmp_path / folder
     home.mkdir()
     entry, _ = create_native_item(home)
-    saved = from_items([entry]).gs.to_geoparquet(home / "catalog.parquet")
+    saved = create_catalog([entry]).gs.to_geoparquet(home / "catalog.parquet")
     stored = pq.read_table(saved).column("assets")[0].as_py()
     assert stored["reflectance"]["href"] == "./scene.tif"
     assert stored["thumbnail"]["href"] == "https://example.com/thumb.jpg"
@@ -473,6 +473,14 @@ def test_native_table_follows_its_assets_when_moved(tmp_path, folder):
 
 
 def test_a_catalog_writes_stac_geoparquet_that_validates(rows, tmp_path) -> None:
+    items = rows.gs.to_items()
+    for item in items:
+        collection = item.get_collection()
+        if collection is not None:
+            # Standalone JSON validation needs an actual Collection document.
+            collection.set_self_href(str(tmp_path / f"{collection.id}.json"))
+            collection.save_object()
+    rows = create_catalog(items)
     path = rows.gs.to_geoparquet(tmp_path / "catalog.parquet")
 
     restored = (open_vector(path)).gs.to_items()

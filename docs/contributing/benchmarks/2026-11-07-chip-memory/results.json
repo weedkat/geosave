@@ -1,0 +1,3274 @@
+{
+  "sizes": [
+    2048,
+    4096
+  ],
+  "epochs": 3,
+  "repeats": 3,
+  "results": [
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 1.020663147995947,
+      "epochs_s": [
+        0.07265272297081538,
+        0.06524758198065683,
+        0.05764786299550906
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 682.85546875,
+          "peak_mib": 682.00390625,
+          "RssAnon_mib": 397.1484375,
+          "RssFile_mib": 285.7109375,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 682.86328125,
+              "pss_mib": 497.4912109375,
+              "uss_mib": 439.77734375
+            }
+          ],
+          "tree_pss_mib": 497.4912109375
+        },
+        "prepared": {
+          "rss_mib": 767.49609375,
+          "peak_mib": 828.25,
+          "RssAnon_mib": 468.02734375,
+          "RssFile_mib": 299.46875,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 767.49609375,
+              "pss_mib": 571.6923828125,
+              "uss_mib": 511.015625
+            }
+          ],
+          "tree_pss_mib": 571.6923828125
+        },
+        "epoch_1": {
+          "rss_mib": 844.92578125,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 352.3203125,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 844.92578125,
+              "pss_mib": 646.833984375,
+              "uss_mib": 585.33984375
+            }
+          ],
+          "tree_pss_mib": 646.833984375
+        },
+        "epoch_2": {
+          "rss_mib": 844.92578125,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 352.3203125,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 844.92578125,
+              "pss_mib": 646.833984375,
+              "uss_mib": 585.33984375
+            }
+          ],
+          "tree_pss_mib": 646.833984375
+        },
+        "epoch_3": {
+          "rss_mib": 844.92578125,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 352.3203125,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 844.92578125,
+              "pss_mib": 646.833984375,
+              "uss_mib": 585.33984375
+            }
+          ],
+          "tree_pss_mib": 646.833984375
+        },
+        "closed": {
+          "rss_mib": 796.6171875,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 304.01171875,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 796.6171875,
+              "pss_mib": 598.525390625,
+              "uss_mib": 537.03125
+            }
+          ],
+          "tree_pss_mib": 598.525390625
+        },
+        "scope_exited": {
+          "rss_mib": 796.6171875,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 304.01171875,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 796.6171875,
+              "pss_mib": 598.525390625,
+              "uss_mib": 537.03125
+            }
+          ],
+          "tree_pss_mib": 598.525390625
+        },
+        "collected": {
+          "rss_mib": 796.6171875,
+          "peak_mib": 844.3125,
+          "RssAnon_mib": 492.60546875,
+          "RssFile_mib": 304.01171875,
+          "processes": [
+            {
+              "pid": 9,
+              "rss_mib": 796.6171875,
+              "pss_mib": 598.51953125,
+              "uss_mib": 537.03125
+            }
+          ],
+          "tree_pss_mib": 598.51953125
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 1.073539900011383,
+      "epochs_s": [
+        0.09421923101763241,
+        0.0829172890225891,
+        0.08389040699694306
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 684.16796875,
+          "peak_mib": 683.39453125,
+          "RssAnon_mib": 397.1640625,
+          "RssFile_mib": 287.00390625,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 684.16796875,
+              "pss_mib": 498.7705078125,
+              "uss_mib": 441.015625
+            }
+          ],
+          "tree_pss_mib": 498.7705078125
+        },
+        "prepared": {
+          "rss_mib": 776.29296875,
+          "peak_mib": 826.39453125,
+          "RssAnon_mib": 475.69921875,
+          "RssFile_mib": 300.59375,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 776.29296875,
+              "pss_mib": 580.525390625,
+              "uss_mib": 519.81640625
+            }
+          ],
+          "tree_pss_mib": 580.525390625
+        },
+        "epoch_1": {
+          "rss_mib": 805.3359375,
+          "peak_mib": 851.21875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.0546875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3359375,
+              "pss_mib": 607.306640625,
+              "uss_mib": 545.80859375
+            }
+          ],
+          "tree_pss_mib": 607.306640625
+        },
+        "epoch_2": {
+          "rss_mib": 805.3359375,
+          "peak_mib": 851.71875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.0546875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3359375,
+              "pss_mib": 607.306640625,
+              "uss_mib": 545.80859375
+            }
+          ],
+          "tree_pss_mib": 607.306640625
+        },
+        "epoch_3": {
+          "rss_mib": 805.3359375,
+          "peak_mib": 851.71875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.0546875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3359375,
+              "pss_mib": 607.306640625,
+              "uss_mib": 545.6875
+            }
+          ],
+          "tree_pss_mib": 607.306640625
+        },
+        "closed": {
+          "rss_mib": 805.3359375,
+          "peak_mib": 851.71875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.0546875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3359375,
+              "pss_mib": 607.306640625,
+              "uss_mib": 545.6328125
+            }
+          ],
+          "tree_pss_mib": 607.306640625
+        },
+        "scope_exited": {
+          "rss_mib": 805.3359375,
+          "peak_mib": 851.71875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.0546875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3359375,
+              "pss_mib": 607.306640625,
+              "uss_mib": 545.41015625
+            }
+          ],
+          "tree_pss_mib": 607.306640625
+        },
+        "collected": {
+          "rss_mib": 805.3984375,
+          "peak_mib": 851.71875,
+          "RssAnon_mib": 500.28125,
+          "RssFile_mib": 305.1171875,
+          "processes": [
+            {
+              "pid": 15,
+              "rss_mib": 805.3984375,
+              "pss_mib": 607.369140625,
+              "uss_mib": 545.87109375
+            }
+          ],
+          "tree_pss_mib": 607.369140625
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 0
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 0.8525987439788878,
+      "epochs_s": [
+        0.03847311303252354,
+        0.0361419070395641,
+        0.03669715498108417
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 683.9375,
+          "peak_mib": 683.4453125,
+          "RssAnon_mib": 397.19140625,
+          "RssFile_mib": 286.75,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 683.9453125,
+              "pss_mib": 498.712890625,
+              "uss_mib": 441.10546875
+            }
+          ],
+          "tree_pss_mib": 498.712890625
+        },
+        "prepared": {
+          "rss_mib": 821.2109375,
+          "peak_mib": 911.33203125,
+          "RssAnon_mib": 520.76953125,
+          "RssFile_mib": 300.44140625,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 821.2109375,
+              "pss_mib": 625.5810546875,
+              "uss_mib": 565.00390625
+            }
+          ],
+          "tree_pss_mib": 625.5810546875
+        },
+        "epoch_1": {
+          "rss_mib": 916.5,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 395.66796875,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 916.5,
+              "pss_mib": 718.59765625,
+              "uss_mib": 657.21484375
+            }
+          ],
+          "tree_pss_mib": 718.59765625
+        },
+        "epoch_2": {
+          "rss_mib": 916.5,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 395.66796875,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 916.5,
+              "pss_mib": 776.7666015625,
+              "uss_mib": 658.14453125
+            }
+          ],
+          "tree_pss_mib": 776.7666015625
+        },
+        "epoch_3": {
+          "rss_mib": 916.5,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 395.66796875,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 916.5,
+              "pss_mib": 776.7666015625,
+              "uss_mib": 658.14453125
+            }
+          ],
+          "tree_pss_mib": 776.7666015625
+        },
+        "closed": {
+          "rss_mib": 825.74609375,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 304.9140625,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 825.74609375,
+              "pss_mib": 686.0126953125,
+              "uss_mib": 567.390625
+            }
+          ],
+          "tree_pss_mib": 686.0126953125
+        },
+        "scope_exited": {
+          "rss_mib": 825.74609375,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 304.9140625,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 825.74609375,
+              "pss_mib": 686.0126953125,
+              "uss_mib": 567.390625
+            }
+          ],
+          "tree_pss_mib": 686.0126953125
+        },
+        "collected": {
+          "rss_mib": 825.74609375,
+          "peak_mib": 916.0078125,
+          "RssAnon_mib": 520.83203125,
+          "RssFile_mib": 304.9140625,
+          "processes": [
+            {
+              "pid": 21,
+              "rss_mib": 825.74609375,
+              "pss_mib": 686.0126953125,
+              "uss_mib": 567.390625
+            }
+          ],
+          "tree_pss_mib": 686.0126953125
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 0.9273931079951581,
+      "epochs_s": [
+        0.04853374301455915,
+        0.06278967799153179,
+        0.04457959902356379
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 696.8984375,
+          "peak_mib": 696.265625,
+          "RssAnon_mib": 410.265625,
+          "RssFile_mib": 286.63671875,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 696.90234375,
+              "pss_mib": 675.640625,
+              "uss_mib": 662.41015625
+            }
+          ],
+          "tree_pss_mib": 675.640625
+        },
+        "prepared": {
+          "rss_mib": 837.453125,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.91796875,
+          "RssFile_mib": 300.53515625,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 837.453125,
+              "pss_mib": 810.6533203125,
+              "uss_mib": 792.05859375
+            }
+          ],
+          "tree_pss_mib": 810.6533203125
+        },
+        "epoch_1": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        },
+        "epoch_2": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        },
+        "epoch_3": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        },
+        "closed": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        },
+        "scope_exited": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        },
+        "collected": {
+          "rss_mib": 841.9765625,
+          "peak_mib": 864.40625,
+          "RssAnon_mib": 536.98046875,
+          "RssFile_mib": 304.99609375,
+          "processes": [
+            {
+              "pid": 27,
+              "rss_mib": 841.9765625,
+              "pss_mib": 814.982421875,
+              "uss_mib": 796.31640625
+            }
+          ],
+          "tree_pss_mib": 814.982421875
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 1.0122555709967855,
+      "epochs_s": [
+        0.08774725694092922,
+        0.06852284996421076,
+        0.0704171939578373
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 693.484375,
+          "peak_mib": 693.06640625,
+          "RssAnon_mib": 406.6640625,
+          "RssFile_mib": 286.82421875,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 693.5,
+              "pss_mib": 672.189453125,
+              "uss_mib": 658.9296875
+            }
+          ],
+          "tree_pss_mib": 672.189453125
+        },
+        "prepared": {
+          "rss_mib": 787.9296875,
+          "peak_mib": 838.90625,
+          "RssAnon_mib": 487.21484375,
+          "RssFile_mib": 300.71484375,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 787.9296875,
+              "pss_mib": 761.0849609375,
+              "uss_mib": 742.46484375
+            }
+          ],
+          "tree_pss_mib": 761.0849609375
+        },
+        "epoch_1": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 862.890625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        },
+        "epoch_2": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 863.265625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        },
+        "epoch_3": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 863.265625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        },
+        "closed": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 863.265625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        },
+        "scope_exited": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 863.265625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        },
+        "collected": {
+          "rss_mib": 816.9609375,
+          "peak_mib": 863.265625,
+          "RssAnon_mib": 511.78515625,
+          "RssFile_mib": 305.17578125,
+          "processes": [
+            {
+              "pid": 33,
+              "rss_mib": 816.9609375,
+              "pss_mib": 789.9208984375,
+              "uss_mib": 771.23046875
+            }
+          ],
+          "tree_pss_mib": 789.9208984375
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 0.7385381620260887,
+      "epochs_s": [
+        0.05464993207715452,
+        0.04634354406152852,
+        0.04640116298105568
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 689.1484375,
+          "peak_mib": 689.01953125,
+          "RssAnon_mib": 402.68359375,
+          "RssFile_mib": 286.46875,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 689.15625,
+              "pss_mib": 667.81640625,
+              "uss_mib": 654.50390625
+            }
+          ],
+          "tree_pss_mib": 667.81640625
+        },
+        "prepared": {
+          "rss_mib": 782.35546875,
+          "peak_mib": 838.16796875,
+          "RssAnon_mib": 482.1328125,
+          "RssFile_mib": 300.22265625,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 782.35546875,
+              "pss_mib": 755.5244140625,
+              "uss_mib": 736.875
+            }
+          ],
+          "tree_pss_mib": 755.5244140625
+        },
+        "epoch_1": {
+          "rss_mib": 859.6875,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 352.984375,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 859.6875,
+              "pss_mib": 832.671875,
+              "uss_mib": 813.953125
+            }
+          ],
+          "tree_pss_mib": 832.671875
+        },
+        "epoch_2": {
+          "rss_mib": 859.6875,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 352.984375,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 859.6875,
+              "pss_mib": 832.671875,
+              "uss_mib": 813.953125
+            }
+          ],
+          "tree_pss_mib": 832.671875
+        },
+        "epoch_3": {
+          "rss_mib": 859.6875,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 352.984375,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 859.6875,
+              "pss_mib": 832.671875,
+              "uss_mib": 813.953125
+            }
+          ],
+          "tree_pss_mib": 832.671875
+        },
+        "closed": {
+          "rss_mib": 811.37890625,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 304.67578125,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 811.37890625,
+              "pss_mib": 784.36328125,
+              "uss_mib": 765.64453125
+            }
+          ],
+          "tree_pss_mib": 784.36328125
+        },
+        "scope_exited": {
+          "rss_mib": 811.37890625,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 304.67578125,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 811.37890625,
+              "pss_mib": 784.36328125,
+              "uss_mib": 765.64453125
+            }
+          ],
+          "tree_pss_mib": 784.36328125
+        },
+        "collected": {
+          "rss_mib": 811.37890625,
+          "peak_mib": 859.30078125,
+          "RssAnon_mib": 506.703125,
+          "RssFile_mib": 304.67578125,
+          "processes": [
+            {
+              "pid": 39,
+              "rss_mib": 811.37890625,
+              "pss_mib": 784.36328125,
+              "uss_mib": 765.64453125
+            }
+          ],
+          "tree_pss_mib": 784.36328125
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 1
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 1.0832365110109095,
+      "epochs_s": [
+        0.06655901402700692,
+        0.0480774590105284,
+        0.049830718024168164
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.43359375,
+          "peak_mib": 686.99609375,
+          "RssAnon_mib": 400.78515625,
+          "RssFile_mib": 286.65234375,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 687.44140625,
+              "pss_mib": 666.09765625,
+              "uss_mib": 652.83203125
+            }
+          ],
+          "tree_pss_mib": 666.09765625
+        },
+        "prepared": {
+          "rss_mib": 828.234375,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.68359375,
+          "RssFile_mib": 300.55078125,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 828.234375,
+              "pss_mib": 801.357421875,
+              "uss_mib": 782.78125
+            }
+          ],
+          "tree_pss_mib": 801.357421875
+        },
+        "epoch_1": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 718.501953125,
+              "uss_mib": 621.13671875
+            }
+          ],
+          "tree_pss_mib": 718.501953125
+        },
+        "epoch_2": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 685.9619140625,
+              "uss_mib": 557.92578125
+            }
+          ],
+          "tree_pss_mib": 685.9619140625
+        },
+        "epoch_3": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 681.3291015625,
+              "uss_mib": 548.80078125
+            }
+          ],
+          "tree_pss_mib": 681.3291015625
+        },
+        "closed": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 681.3291015625,
+              "uss_mib": 548.80078125
+            }
+          ],
+          "tree_pss_mib": 681.3291015625
+        },
+        "scope_exited": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 677.7587890625,
+              "uss_mib": 548.66796875
+            }
+          ],
+          "tree_pss_mib": 677.7587890625
+        },
+        "collected": {
+          "rss_mib": 832.78125,
+          "peak_mib": 855.5703125,
+          "RssAnon_mib": 527.74609375,
+          "RssFile_mib": 305.03515625,
+          "processes": [
+            {
+              "pid": 45,
+              "rss_mib": 832.78125,
+              "pss_mib": 675.6044921875,
+              "uss_mib": 548.17578125
+            }
+          ],
+          "tree_pss_mib": 675.6044921875
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 1.06161425501341,
+      "epochs_s": [
+        0.041118825029116124,
+        0.03294087198446505,
+        0.03747680698870681
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 689.49609375,
+          "peak_mib": 689.21484375,
+          "RssAnon_mib": 402.6953125,
+          "RssFile_mib": 286.8046875,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 689.50390625,
+              "pss_mib": 500.625,
+              "uss_mib": 403.42578125
+            }
+          ],
+          "tree_pss_mib": 500.625
+        },
+        "prepared": {
+          "rss_mib": 828.9453125,
+          "peak_mib": 919.03125,
+          "RssAnon_mib": 528.3125,
+          "RssFile_mib": 300.6328125,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 828.9453125,
+              "pss_mib": 629.4990234375,
+              "uss_mib": 531.41015625
+            }
+          ],
+          "tree_pss_mib": 629.4990234375
+        },
+        "epoch_1": {
+          "rss_mib": 924.25,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 395.875,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 924.25,
+              "pss_mib": 723.40234375,
+              "uss_mib": 625.33984375
+            }
+          ],
+          "tree_pss_mib": 723.40234375
+        },
+        "epoch_2": {
+          "rss_mib": 924.25,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 395.875,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 924.25,
+              "pss_mib": 722.2998046875,
+              "uss_mib": 625.1640625
+            }
+          ],
+          "tree_pss_mib": 722.2998046875
+        },
+        "epoch_3": {
+          "rss_mib": 924.25,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 395.875,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 924.25,
+              "pss_mib": 721.560546875,
+              "uss_mib": 623.95703125
+            }
+          ],
+          "tree_pss_mib": 721.560546875
+        },
+        "closed": {
+          "rss_mib": 833.49609375,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 305.12109375,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 833.49609375,
+              "pss_mib": 630.806640625,
+              "uss_mib": 533.203125
+            }
+          ],
+          "tree_pss_mib": 630.806640625
+        },
+        "scope_exited": {
+          "rss_mib": 833.49609375,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 305.12109375,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 833.49609375,
+              "pss_mib": 630.806640625,
+              "uss_mib": 533.203125
+            }
+          ],
+          "tree_pss_mib": 630.806640625
+        },
+        "collected": {
+          "rss_mib": 833.49609375,
+          "peak_mib": 923.73046875,
+          "RssAnon_mib": 528.375,
+          "RssFile_mib": 305.12109375,
+          "processes": [
+            {
+              "pid": 51,
+              "rss_mib": 833.49609375,
+              "pss_mib": 630.806640625,
+              "uss_mib": 533.203125
+            }
+          ],
+          "tree_pss_mib": 630.806640625
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 0.713244473998202,
+      "epochs_s": [
+        0.0585411440115422,
+        0.04805119297816418,
+        0.04822370698093437
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 691.62109375,
+          "peak_mib": 690.87109375,
+          "RssAnon_mib": 404.671875,
+          "RssFile_mib": 286.953125,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 691.62890625,
+              "pss_mib": 540.3486328125,
+              "uss_mib": 405.8125
+            }
+          ],
+          "tree_pss_mib": 540.3486328125
+        },
+        "prepared": {
+          "rss_mib": 785.30078125,
+          "peak_mib": 837.32421875,
+          "RssAnon_mib": 484.45703125,
+          "RssFile_mib": 300.84375,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 785.30078125,
+              "pss_mib": 625.287109375,
+              "uss_mib": 485.75390625
+            }
+          ],
+          "tree_pss_mib": 625.287109375
+        },
+        "epoch_1": {
+          "rss_mib": 862.78515625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 353.7578125,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 862.78515625,
+              "pss_mib": 701.142578125,
+              "uss_mib": 560.12109375
+            }
+          ],
+          "tree_pss_mib": 701.142578125
+        },
+        "epoch_2": {
+          "rss_mib": 862.78515625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 353.7578125,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 862.78515625,
+              "pss_mib": 701.142578125,
+              "uss_mib": 560.12109375
+            }
+          ],
+          "tree_pss_mib": 701.142578125
+        },
+        "epoch_3": {
+          "rss_mib": 862.78515625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 353.7578125,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 862.78515625,
+              "pss_mib": 701.080078125,
+              "uss_mib": 559.99609375
+            }
+          ],
+          "tree_pss_mib": 701.080078125
+        },
+        "closed": {
+          "rss_mib": 814.4765625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 305.44921875,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 814.4765625,
+              "pss_mib": 652.771484375,
+              "uss_mib": 511.6875
+            }
+          ],
+          "tree_pss_mib": 652.771484375
+        },
+        "scope_exited": {
+          "rss_mib": 814.4765625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 305.44921875,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 814.4765625,
+              "pss_mib": 652.771484375,
+              "uss_mib": 511.6875
+            }
+          ],
+          "tree_pss_mib": 652.771484375
+        },
+        "collected": {
+          "rss_mib": 814.4765625,
+          "peak_mib": 862.171875,
+          "RssAnon_mib": 509.02734375,
+          "RssFile_mib": 305.44921875,
+          "processes": [
+            {
+              "pid": 57,
+              "rss_mib": 814.4765625,
+              "pss_mib": 652.771484375,
+              "uss_mib": 511.6875
+            }
+          ],
+          "tree_pss_mib": 652.771484375
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 2
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 1.0241902949928772,
+      "epochs_s": [
+        0.08143885206663981,
+        0.08196015696739778,
+        0.07094324493664317
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.5859375,
+          "peak_mib": 687.53125,
+          "RssAnon_mib": 400.78125,
+          "RssFile_mib": 286.80859375,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 687.59375,
+              "pss_mib": 666.2939453125,
+              "uss_mib": 653.02734375
+            }
+          ],
+          "tree_pss_mib": 666.2939453125
+        },
+        "prepared": {
+          "rss_mib": 777.52734375,
+          "peak_mib": 832.92578125,
+          "RssAnon_mib": 476.984375,
+          "RssFile_mib": 300.54296875,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 777.52734375,
+              "pss_mib": 750.845703125,
+              "uss_mib": 732.23046875
+            }
+          ],
+          "tree_pss_mib": 750.845703125
+        },
+        "epoch_1": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 852.76171875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        },
+        "epoch_2": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 853.13671875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        },
+        "epoch_3": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 853.13671875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        },
+        "closed": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 853.13671875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        },
+        "scope_exited": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 853.13671875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        },
+        "collected": {
+          "rss_mib": 806.6796875,
+          "peak_mib": 853.13671875,
+          "RssAnon_mib": 501.5546875,
+          "RssFile_mib": 305.125,
+          "processes": [
+            {
+              "pid": 63,
+              "rss_mib": 806.6796875,
+              "pss_mib": 779.8095703125,
+              "uss_mib": 761.125
+            }
+          ],
+          "tree_pss_mib": 779.8095703125
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 2
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 0.9780105240060948,
+      "epochs_s": [
+        0.03955162095371634,
+        0.03269251200254075,
+        0.032073008973384276
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 691.3046875,
+          "peak_mib": 690.8671875,
+          "RssAnon_mib": 404.3671875,
+          "RssFile_mib": 286.94140625,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 691.30859375,
+              "pss_mib": 670.001953125,
+              "uss_mib": 656.7734375
+            }
+          ],
+          "tree_pss_mib": 670.001953125
+        },
+        "prepared": {
+          "rss_mib": 829.0,
+          "peak_mib": 919.02734375,
+          "RssAnon_mib": 528.23046875,
+          "RssFile_mib": 300.76953125,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 829.0,
+              "pss_mib": 802.1591796875,
+              "uss_mib": 783.5703125
+            }
+          ],
+          "tree_pss_mib": 802.1591796875
+        },
+        "epoch_1": {
+          "rss_mib": 924.421875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 396.12890625,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 924.421875,
+              "pss_mib": 897.3701171875,
+              "uss_mib": 878.70703125
+            }
+          ],
+          "tree_pss_mib": 897.3701171875
+        },
+        "epoch_2": {
+          "rss_mib": 924.421875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 396.12890625,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 924.421875,
+              "pss_mib": 897.3857421875,
+              "uss_mib": 878.71875
+            }
+          ],
+          "tree_pss_mib": 897.3857421875
+        },
+        "epoch_3": {
+          "rss_mib": 924.421875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 396.12890625,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 924.421875,
+              "pss_mib": 897.3857421875,
+              "uss_mib": 878.71875
+            }
+          ],
+          "tree_pss_mib": 897.3857421875
+        },
+        "closed": {
+          "rss_mib": 833.66796875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 305.375,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 833.66796875,
+              "pss_mib": 806.6318359375,
+              "uss_mib": 787.96484375
+            }
+          ],
+          "tree_pss_mib": 806.6318359375
+        },
+        "scope_exited": {
+          "rss_mib": 833.66796875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 305.375,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 833.66796875,
+              "pss_mib": 806.6318359375,
+              "uss_mib": 787.96484375
+            }
+          ],
+          "tree_pss_mib": 806.6318359375
+        },
+        "collected": {
+          "rss_mib": 833.66796875,
+          "peak_mib": 923.76171875,
+          "RssAnon_mib": 528.29296875,
+          "RssFile_mib": 305.375,
+          "processes": [
+            {
+              "pid": 69,
+              "rss_mib": 833.66796875,
+              "pss_mib": 806.6318359375,
+              "uss_mib": 787.96484375
+            }
+          ],
+          "tree_pss_mib": 806.6318359375
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 2
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 0.8886029650166165,
+      "epochs_s": [
+        0.0435753240599297,
+        0.04326263998518698,
+        0.04165493295295164
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 693.3671875,
+          "peak_mib": 693.12109375,
+          "RssAnon_mib": 406.65234375,
+          "RssFile_mib": 286.71875,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 693.37109375,
+              "pss_mib": 672.041015625,
+              "uss_mib": 658.77734375
+            }
+          ],
+          "tree_pss_mib": 672.041015625
+        },
+        "prepared": {
+          "rss_mib": 833.859375,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3046875,
+          "RssFile_mib": 300.5546875,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 833.859375,
+              "pss_mib": 807.0361328125,
+              "uss_mib": 788.4453125
+            }
+          ],
+          "tree_pss_mib": 807.0361328125
+        },
+        "epoch_1": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        },
+        "epoch_2": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        },
+        "epoch_3": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        },
+        "closed": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        },
+        "scope_exited": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        },
+        "collected": {
+          "rss_mib": 838.53125,
+          "peak_mib": 861.0625,
+          "RssAnon_mib": 533.3671875,
+          "RssFile_mib": 305.1640625,
+          "processes": [
+            {
+              "pid": 75,
+              "rss_mib": 838.53125,
+              "pss_mib": 811.4970703125,
+              "uss_mib": 792.83203125
+            }
+          ],
+          "tree_pss_mib": 811.4970703125
+        }
+      },
+      "checksum": "37ecbadbebaa0a77971eb54fd374e349c0f2ac1558059ab9be42f3dca12cc5fb",
+      "size": 2048,
+      "repeat": 2
+    },
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 2.9701700439909473,
+      "epochs_s": [
+        0.19426156804547645,
+        0.1750778830028139,
+        0.1813827199221123
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.98828125,
+          "peak_mib": 687.68359375,
+          "RssAnon_mib": 400.79296875,
+          "RssFile_mib": 287.19921875,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 687.9921875,
+              "pss_mib": 666.7001953125,
+              "uss_mib": 653.40625
+            }
+          ],
+          "tree_pss_mib": 666.7001953125
+        },
+        "prepared": {
+          "rss_mib": 877.2578125,
+          "peak_mib": 1069.25390625,
+          "RssAnon_mib": 576.4296875,
+          "RssFile_mib": 300.828125,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 877.2578125,
+              "pss_mib": 850.490234375,
+              "uss_mib": 831.89453125
+            }
+          ],
+          "tree_pss_mib": 850.490234375
+        },
+        "epoch_1": {
+          "rss_mib": 1098.44140625,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 498.0234375,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 1098.44140625,
+              "pss_mib": 1071.4853515625,
+              "uss_mib": 1052.8203125
+            }
+          ],
+          "tree_pss_mib": 1071.4853515625
+        },
+        "epoch_2": {
+          "rss_mib": 1098.44140625,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 498.0234375,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 1098.44140625,
+              "pss_mib": 1071.4853515625,
+              "uss_mib": 1052.8203125
+            }
+          ],
+          "tree_pss_mib": 1071.4853515625
+        },
+        "epoch_3": {
+          "rss_mib": 1098.44140625,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 498.0234375,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 1098.44140625,
+              "pss_mib": 1071.4853515625,
+              "uss_mib": 1052.8203125
+            }
+          ],
+          "tree_pss_mib": 1071.4853515625
+        },
+        "closed": {
+          "rss_mib": 905.828125,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 305.41015625,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 905.828125,
+              "pss_mib": 878.8720703125,
+              "uss_mib": 860.20703125
+            }
+          ],
+          "tree_pss_mib": 878.8720703125
+        },
+        "scope_exited": {
+          "rss_mib": 905.828125,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 305.41015625,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 905.828125,
+              "pss_mib": 878.8720703125,
+              "uss_mib": 860.20703125
+            }
+          ],
+          "tree_pss_mib": 878.8720703125
+        },
+        "collected": {
+          "rss_mib": 905.828125,
+          "peak_mib": 1097.78515625,
+          "RssAnon_mib": 600.41796875,
+          "RssFile_mib": 305.41015625,
+          "processes": [
+            {
+              "pid": 81,
+              "rss_mib": 905.828125,
+              "pss_mib": 878.8720703125,
+              "uss_mib": 860.20703125
+            }
+          ],
+          "tree_pss_mib": 878.8720703125
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 3.5183637620066293,
+      "epochs_s": [
+        0.4328940979321487,
+        0.42297224304638803,
+        0.4206505369802471
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 689.59375,
+          "peak_mib": 689.1484375,
+          "RssAnon_mib": 402.69921875,
+          "RssFile_mib": 286.8984375,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 689.6015625,
+              "pss_mib": 668.3115234375,
+              "uss_mib": 655.0625
+            }
+          ],
+          "tree_pss_mib": 668.3115234375
+        },
+        "prepared": {
+          "rss_mib": 874.41015625,
+          "peak_mib": 918.8828125,
+          "RssAnon_mib": 573.68359375,
+          "RssFile_mib": 300.7265625,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 874.41015625,
+              "pss_mib": 847.5859375,
+              "uss_mib": 828.9765625
+            }
+          ],
+          "tree_pss_mib": 847.5859375
+        },
+        "epoch_1": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        },
+        "epoch_2": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        },
+        "epoch_3": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        },
+        "closed": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        },
+        "scope_exited": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        },
+        "collected": {
+          "rss_mib": 902.99609375,
+          "peak_mib": 1038.97265625,
+          "RssAnon_mib": 597.67578125,
+          "RssFile_mib": 305.3203125,
+          "processes": [
+            {
+              "pid": 87,
+              "rss_mib": 902.99609375,
+              "pss_mib": 875.970703125,
+              "uss_mib": 857.2890625
+            }
+          ],
+          "tree_pss_mib": 875.970703125
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 0
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.8204397940135095,
+      "epochs_s": [
+        0.1451764180092141,
+        0.12470650995965116,
+        0.11859311410808004
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.88671875,
+          "peak_mib": 687.55078125,
+          "RssAnon_mib": 400.76171875,
+          "RssFile_mib": 287.12890625,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 687.890625,
+              "pss_mib": 666.59765625,
+              "uss_mib": 653.29296875
+            }
+          ],
+          "tree_pss_mib": 666.59765625
+        },
+        "prepared": {
+          "rss_mib": 857.90234375,
+          "peak_mib": 1203.84375,
+          "RssAnon_mib": 557.0625,
+          "RssFile_mib": 300.83984375,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 857.90234375,
+              "pss_mib": 831.1669921875,
+              "uss_mib": 812.59375
+            }
+          ],
+          "tree_pss_mib": 831.1669921875
+        },
+        "epoch_1": {
+          "rss_mib": 1209.05078125,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 651.9296875,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 1209.05078125,
+              "pss_mib": 1182.1240234375,
+              "uss_mib": 1163.48046875
+            }
+          ],
+          "tree_pss_mib": 1182.1240234375
+        },
+        "epoch_2": {
+          "rss_mib": 1209.05078125,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 651.9296875,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 1209.05078125,
+              "pss_mib": 1182.1240234375,
+              "uss_mib": 1163.48046875
+            }
+          ],
+          "tree_pss_mib": 1182.1240234375
+        },
+        "epoch_3": {
+          "rss_mib": 1209.05078125,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 651.9296875,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 1209.05078125,
+              "pss_mib": 1182.1240234375,
+              "uss_mib": 1163.48046875
+            }
+          ],
+          "tree_pss_mib": 1182.1240234375
+        },
+        "closed": {
+          "rss_mib": 862.546875,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 305.42578125,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 862.546875,
+              "pss_mib": 835.6201171875,
+              "uss_mib": 816.9765625
+            }
+          ],
+          "tree_pss_mib": 835.6201171875
+        },
+        "scope_exited": {
+          "rss_mib": 862.546875,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 305.42578125,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 862.546875,
+              "pss_mib": 835.6201171875,
+              "uss_mib": 816.9765625
+            }
+          ],
+          "tree_pss_mib": 835.6201171875
+        },
+        "collected": {
+          "rss_mib": 862.546875,
+          "peak_mib": 1208.45703125,
+          "RssAnon_mib": 557.12109375,
+          "RssFile_mib": 305.42578125,
+          "processes": [
+            {
+              "pid": 93,
+              "rss_mib": 862.546875,
+              "pss_mib": 835.6201171875,
+              "uss_mib": 816.9765625
+            }
+          ],
+          "tree_pss_mib": 835.6201171875
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.894399740995141,
+      "epochs_s": [
+        0.17080685507971793,
+        0.16725856496486813,
+        0.1666517031553667
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 693.51953125,
+          "peak_mib": 693.1015625,
+          "RssAnon_mib": 406.34375,
+          "RssFile_mib": 287.1796875,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 693.52734375,
+              "pss_mib": 672.208984375,
+              "uss_mib": 658.89453125
+            }
+          ],
+          "tree_pss_mib": 672.208984375
+        },
+        "prepared": {
+          "rss_mib": 858.94140625,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.03515625,
+          "RssFile_mib": 300.90625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 858.94140625,
+              "pss_mib": 832.1806640625,
+              "uss_mib": 813.59765625
+            }
+          ],
+          "tree_pss_mib": 832.1806640625
+        },
+        "epoch_1": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        },
+        "epoch_2": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        },
+        "epoch_3": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        },
+        "closed": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        },
+        "scope_exited": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        },
+        "collected": {
+          "rss_mib": 863.5703125,
+          "peak_mib": 890.0390625,
+          "RssAnon_mib": 558.09375,
+          "RssFile_mib": 305.4765625,
+          "processes": [
+            {
+              "pid": 99,
+              "rss_mib": 863.5703125,
+              "pss_mib": 836.6318359375,
+              "uss_mib": 817.98046875
+            }
+          ],
+          "tree_pss_mib": 836.6318359375
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 0
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 3.433684314979473,
+      "epochs_s": [
+        0.46749355999054387,
+        0.49053506591008045,
+        0.47219284702441655
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.41796875,
+          "peak_mib": 686.7578125,
+          "RssAnon_mib": 400.75390625,
+          "RssFile_mib": 286.66796875,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 687.42578125,
+              "pss_mib": 666.11328125,
+              "uss_mib": 652.83984375
+            }
+          ],
+          "tree_pss_mib": 666.11328125
+        },
+        "prepared": {
+          "rss_mib": 880.76171875,
+          "peak_mib": 923.0703125,
+          "RssAnon_mib": 580.41015625,
+          "RssFile_mib": 300.3515625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 880.76171875,
+              "pss_mib": 854.0732421875,
+              "uss_mib": 835.46484375
+            }
+          ],
+          "tree_pss_mib": 854.0732421875
+        },
+        "epoch_1": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        },
+        "epoch_2": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        },
+        "epoch_3": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        },
+        "closed": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        },
+        "scope_exited": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        },
+        "collected": {
+          "rss_mib": 909.3359375,
+          "peak_mib": 1045.1875,
+          "RssAnon_mib": 604.39453125,
+          "RssFile_mib": 304.94140625,
+          "processes": [
+            {
+              "pid": 105,
+              "rss_mib": 909.3359375,
+              "pss_mib": 882.453125,
+              "uss_mib": 863.7734375
+            }
+          ],
+          "tree_pss_mib": 882.453125
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 3.201416349009378,
+      "epochs_s": [
+        0.18995092308614403,
+        0.16816281096544117,
+        0.1657438099209685
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 691.89453125,
+          "peak_mib": 691.0625,
+          "RssAnon_mib": 404.7734375,
+          "RssFile_mib": 287.125,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 691.90234375,
+              "pss_mib": 670.578125,
+              "uss_mib": 657.2734375
+            }
+          ],
+          "tree_pss_mib": 670.578125
+        },
+        "prepared": {
+          "rss_mib": 877.6171875,
+          "peak_mib": 1069.8203125,
+          "RssAnon_mib": 576.77734375,
+          "RssFile_mib": 300.83984375,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 877.6171875,
+              "pss_mib": 850.8515625,
+              "uss_mib": 832.27734375
+            }
+          ],
+          "tree_pss_mib": 850.8515625
+        },
+        "epoch_1": {
+          "rss_mib": 1098.82421875,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 498.05859375,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 1098.82421875,
+              "pss_mib": 1071.8505859375,
+              "uss_mib": 1053.203125
+            }
+          ],
+          "tree_pss_mib": 1071.8505859375
+        },
+        "epoch_2": {
+          "rss_mib": 1098.82421875,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 498.05859375,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 1098.82421875,
+              "pss_mib": 1071.8505859375,
+              "uss_mib": 1053.203125
+            }
+          ],
+          "tree_pss_mib": 1071.8505859375
+        },
+        "epoch_3": {
+          "rss_mib": 1098.82421875,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 498.05859375,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 1098.82421875,
+              "pss_mib": 1071.849609375,
+              "uss_mib": 1053.203125
+            }
+          ],
+          "tree_pss_mib": 1071.849609375
+        },
+        "closed": {
+          "rss_mib": 906.2109375,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 305.4453125,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 906.2109375,
+              "pss_mib": 878.6416015625,
+              "uss_mib": 860.578125
+            }
+          ],
+          "tree_pss_mib": 878.6416015625
+        },
+        "scope_exited": {
+          "rss_mib": 906.2109375,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 305.4453125,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 906.2109375,
+              "pss_mib": 879.2373046875,
+              "uss_mib": 860.58984375
+            }
+          ],
+          "tree_pss_mib": 879.2373046875
+        },
+        "collected": {
+          "rss_mib": 906.2109375,
+          "peak_mib": 1098.37890625,
+          "RssAnon_mib": 600.765625,
+          "RssFile_mib": 305.4453125,
+          "processes": [
+            {
+              "pid": 111,
+              "rss_mib": 906.2109375,
+              "pss_mib": 879.2373046875,
+              "uss_mib": 860.58984375
+            }
+          ],
+          "tree_pss_mib": 879.2373046875
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 1
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.560111399972811,
+      "epochs_s": [
+        0.16841668603592552,
+        0.16412339199450798,
+        0.16135726793436334
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.89453125,
+          "peak_mib": 687.52734375,
+          "RssAnon_mib": 400.8984375,
+          "RssFile_mib": 287.0,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 687.8984375,
+              "pss_mib": 666.53125,
+              "uss_mib": 653.21875
+            }
+          ],
+          "tree_pss_mib": 666.53125
+        },
+        "prepared": {
+          "rss_mib": 858.64453125,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.0546875,
+          "RssFile_mib": 300.58984375,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 858.64453125,
+              "pss_mib": 831.9072265625,
+              "uss_mib": 813.26171875
+            }
+          ],
+          "tree_pss_mib": 831.9072265625
+        },
+        "epoch_1": {
+          "rss_mib": 863.3125,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.11328125,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.3125,
+              "pss_mib": 836.3642578125,
+              "uss_mib": 817.64453125
+            }
+          ],
+          "tree_pss_mib": 836.3642578125
+        },
+        "epoch_2": {
+          "rss_mib": 863.3125,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.11328125,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.3125,
+              "pss_mib": 836.3642578125,
+              "uss_mib": 817.64453125
+            }
+          ],
+          "tree_pss_mib": 836.3642578125
+        },
+        "epoch_3": {
+          "rss_mib": 863.31640625,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.1171875,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.31640625,
+              "pss_mib": 836.3681640625,
+              "uss_mib": 817.6484375
+            }
+          ],
+          "tree_pss_mib": 836.3681640625
+        },
+        "closed": {
+          "rss_mib": 863.31640625,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.1171875,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.31640625,
+              "pss_mib": 836.3681640625,
+              "uss_mib": 817.6484375
+            }
+          ],
+          "tree_pss_mib": 836.3681640625
+        },
+        "scope_exited": {
+          "rss_mib": 863.31640625,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.1171875,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.31640625,
+              "pss_mib": 836.3681640625,
+              "uss_mib": 817.6484375
+            }
+          ],
+          "tree_pss_mib": 836.3681640625
+        },
+        "collected": {
+          "rss_mib": 863.31640625,
+          "peak_mib": 889.60546875,
+          "RssAnon_mib": 558.1171875,
+          "RssFile_mib": 305.19921875,
+          "processes": [
+            {
+              "pid": 117,
+              "rss_mib": 863.31640625,
+              "pss_mib": 836.3681640625,
+              "uss_mib": 817.6484375
+            }
+          ],
+          "tree_pss_mib": 836.3681640625
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.603273407003144,
+      "epochs_s": [
+        0.15334624200477265,
+        0.14631846296833828,
+        0.13029697991441935
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.67578125,
+          "peak_mib": 687.10546875,
+          "RssAnon_mib": 400.80078125,
+          "RssFile_mib": 286.87890625,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 687.68359375,
+              "pss_mib": 666.359375,
+              "uss_mib": 653.109375
+            }
+          ],
+          "tree_pss_mib": 666.359375
+        },
+        "prepared": {
+          "rss_mib": 857.16796875,
+          "peak_mib": 1202.96875,
+          "RssAnon_mib": 556.4609375,
+          "RssFile_mib": 300.70703125,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 857.16796875,
+              "pss_mib": 830.3095703125,
+              "uss_mib": 811.69921875
+            }
+          ],
+          "tree_pss_mib": 830.3095703125
+        },
+        "epoch_1": {
+          "rss_mib": 1208.33984375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 651.8203125,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 1208.33984375,
+              "pss_mib": 1181.2705078125,
+              "uss_mib": 1162.5859375
+            }
+          ],
+          "tree_pss_mib": 1181.2705078125
+        },
+        "epoch_2": {
+          "rss_mib": 1208.33984375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 651.8203125,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 1208.33984375,
+              "pss_mib": 1008.0087890625,
+              "uss_mib": 816.08203125
+            }
+          ],
+          "tree_pss_mib": 1008.0087890625
+        },
+        "epoch_3": {
+          "rss_mib": 1208.33984375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 651.8203125,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 1208.33984375,
+              "pss_mib": 1008.0087890625,
+              "uss_mib": 816.08203125
+            }
+          ],
+          "tree_pss_mib": 1008.0087890625
+        },
+        "closed": {
+          "rss_mib": 861.8359375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 305.31640625,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 861.8359375,
+              "pss_mib": 834.7568359375,
+              "uss_mib": 816.08203125
+            }
+          ],
+          "tree_pss_mib": 834.7568359375
+        },
+        "scope_exited": {
+          "rss_mib": 861.8359375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 305.31640625,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 861.8359375,
+              "pss_mib": 834.7568359375,
+              "uss_mib": 816.08203125
+            }
+          ],
+          "tree_pss_mib": 834.7568359375
+        },
+        "collected": {
+          "rss_mib": 861.8359375,
+          "peak_mib": 1207.60546875,
+          "RssAnon_mib": 556.51953125,
+          "RssFile_mib": 305.31640625,
+          "processes": [
+            {
+              "pid": 123,
+              "rss_mib": 861.8359375,
+              "pss_mib": 834.7568359375,
+              "uss_mib": 816.08203125
+            }
+          ],
+          "tree_pss_mib": 834.7568359375
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 1
+    },
+    {
+      "policy": "retain",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 2.896703002974391,
+      "epochs_s": [
+        0.20601465395884588,
+        0.18235999502940103,
+        0.17437732996768318
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 693.59765625,
+          "peak_mib": 693.3984375,
+          "RssAnon_mib": 406.69921875,
+          "RssFile_mib": 286.90234375,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 693.6015625,
+              "pss_mib": 672.2841796875,
+              "uss_mib": 659.046875
+            }
+          ],
+          "tree_pss_mib": 672.2841796875
+        },
+        "prepared": {
+          "rss_mib": 877.4140625,
+          "peak_mib": 1069.171875,
+          "RssAnon_mib": 576.68359375,
+          "RssFile_mib": 300.73046875,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 877.4140625,
+              "pss_mib": 850.5634765625,
+              "uss_mib": 831.96484375
+            }
+          ],
+          "tree_pss_mib": 850.5634765625
+        },
+        "epoch_1": {
+          "rss_mib": 1098.62109375,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 497.94921875,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 1098.62109375,
+              "pss_mib": 1071.5595703125,
+              "uss_mib": 1052.88671875
+            }
+          ],
+          "tree_pss_mib": 1071.5595703125
+        },
+        "epoch_2": {
+          "rss_mib": 1098.62109375,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 497.94921875,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 1098.62109375,
+              "pss_mib": 1071.5595703125,
+              "uss_mib": 1052.88671875
+            }
+          ],
+          "tree_pss_mib": 1071.5595703125
+        },
+        "epoch_3": {
+          "rss_mib": 1098.62109375,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 497.94921875,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 1098.62109375,
+              "pss_mib": 1071.5595703125,
+              "uss_mib": 1052.88671875
+            }
+          ],
+          "tree_pss_mib": 1071.5595703125
+        },
+        "closed": {
+          "rss_mib": 906.0078125,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 305.3359375,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 906.0078125,
+              "pss_mib": 878.9462890625,
+              "uss_mib": 860.2734375
+            }
+          ],
+          "tree_pss_mib": 878.9462890625
+        },
+        "scope_exited": {
+          "rss_mib": 906.0078125,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 305.3359375,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 906.0078125,
+              "pss_mib": 878.9462890625,
+              "uss_mib": 860.2734375
+            }
+          ],
+          "tree_pss_mib": 878.9462890625
+        },
+        "collected": {
+          "rss_mib": 906.0078125,
+          "peak_mib": 1097.8515625,
+          "RssAnon_mib": 600.671875,
+          "RssFile_mib": 305.3359375,
+          "processes": [
+            {
+              "pid": 129,
+              "rss_mib": 906.0078125,
+              "pss_mib": 878.9462890625,
+              "uss_mib": 860.2734375
+            }
+          ],
+          "tree_pss_mib": 878.9462890625
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 2
+    },
+    {
+      "policy": "release",
+      "layout": "cache",
+      "loader_workers": 0,
+      "prepare_s": 3.4303151719796006,
+      "epochs_s": [
+        0.41071778995683417,
+        0.39788734787725843,
+        0.39142536095459945
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 691.640625,
+          "peak_mib": 691.52734375,
+          "RssAnon_mib": 404.6796875,
+          "RssFile_mib": 286.96484375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 691.6484375,
+              "pss_mib": 670.359375,
+              "uss_mib": 657.12109375
+            }
+          ],
+          "tree_pss_mib": 670.359375
+        },
+        "prepared": {
+          "rss_mib": 905.44921875,
+          "peak_mib": 950.69921875,
+          "RssAnon_mib": 604.65625,
+          "RssFile_mib": 300.79296875,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 905.44921875,
+              "pss_mib": 878.6259765625,
+              "uss_mib": 860.02734375
+            }
+          ],
+          "tree_pss_mib": 878.6259765625
+        },
+        "epoch_1": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        },
+        "epoch_2": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        },
+        "epoch_3": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        },
+        "closed": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        },
+        "scope_exited": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        },
+        "collected": {
+          "rss_mib": 934.0234375,
+          "peak_mib": 1069.7890625,
+          "RssAnon_mib": 628.65234375,
+          "RssFile_mib": 305.37109375,
+          "processes": [
+            {
+              "pid": 135,
+              "rss_mib": 934.0234375,
+              "pss_mib": 907.01171875,
+              "uss_mib": 888.34375
+            }
+          ],
+          "tree_pss_mib": 907.01171875
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 2
+    },
+    {
+      "policy": "retain",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.8580154759984,
+      "epochs_s": [
+        0.1364134469476994,
+        0.12168174496036954,
+        0.11968278003041632
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 687.71875,
+          "peak_mib": 687.5390625,
+          "RssAnon_mib": 400.80078125,
+          "RssFile_mib": 286.921875,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 687.73046875,
+              "pss_mib": 666.4326171875,
+              "uss_mib": 653.17578125
+            }
+          ],
+          "tree_pss_mib": 666.4326171875
+        },
+        "prepared": {
+          "rss_mib": 857.25390625,
+          "peak_mib": 1203.17578125,
+          "RssAnon_mib": 556.58984375,
+          "RssFile_mib": 300.6640625,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 857.25390625,
+              "pss_mib": 830.51953125,
+              "uss_mib": 811.93359375
+            }
+          ],
+          "tree_pss_mib": 830.51953125
+        },
+        "epoch_1": {
+          "rss_mib": 1208.40234375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 651.75390625,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 1208.40234375,
+              "pss_mib": 1181.4765625,
+              "uss_mib": 1162.8203125
+            }
+          ],
+          "tree_pss_mib": 1181.4765625
+        },
+        "epoch_2": {
+          "rss_mib": 1208.40234375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 651.75390625,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 1208.40234375,
+              "pss_mib": 1181.4765625,
+              "uss_mib": 1162.8203125
+            }
+          ],
+          "tree_pss_mib": 1181.4765625
+        },
+        "epoch_3": {
+          "rss_mib": 1208.40234375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 651.75390625,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 1208.40234375,
+              "pss_mib": 1181.4765625,
+              "uss_mib": 1162.8203125
+            }
+          ],
+          "tree_pss_mib": 1181.4765625
+        },
+        "closed": {
+          "rss_mib": 861.8984375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 305.25,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 861.8984375,
+              "pss_mib": 834.97265625,
+              "uss_mib": 816.31640625
+            }
+          ],
+          "tree_pss_mib": 834.97265625
+        },
+        "scope_exited": {
+          "rss_mib": 861.8984375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 305.25,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 861.8984375,
+              "pss_mib": 834.97265625,
+              "uss_mib": 816.31640625
+            }
+          ],
+          "tree_pss_mib": 834.97265625
+        },
+        "collected": {
+          "rss_mib": 861.8984375,
+          "peak_mib": 1207.82421875,
+          "RssAnon_mib": 556.6484375,
+          "RssFile_mib": 305.25,
+          "processes": [
+            {
+              "pid": 141,
+              "rss_mib": 861.8984375,
+              "pss_mib": 834.97265625,
+              "uss_mib": 816.31640625
+            }
+          ],
+          "tree_pss_mib": 834.97265625
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 2
+    },
+    {
+      "policy": "release",
+      "layout": "saved",
+      "loader_workers": 0,
+      "prepare_s": 5.930193193984451,
+      "epochs_s": [
+        0.158316163928248,
+        0.15622284199343994,
+        0.15437990293139592
+      ],
+      "points": {
+        "before": {
+          "rss_mib": 694.6015625,
+          "peak_mib": 694.4375,
+          "RssAnon_mib": 407.20703125,
+          "RssFile_mib": 287.3984375,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 694.60546875,
+              "pss_mib": 673.255859375,
+              "uss_mib": 659.95703125
+            }
+          ],
+          "tree_pss_mib": 673.255859375
+        },
+        "prepared": {
+          "rss_mib": 861.2578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.14453125,
+          "RssFile_mib": 301.11328125,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 861.2578125,
+              "pss_mib": 805.064453125,
+              "uss_mib": 765.7734375
+            }
+          ],
+          "tree_pss_mib": 805.064453125
+        },
+        "epoch_1": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 708.8740234375,
+              "uss_mib": 568.88671875
+            }
+          ],
+          "tree_pss_mib": 708.8740234375
+        },
+        "epoch_2": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 838.923828125,
+              "uss_mib": 820.28125
+            }
+          ],
+          "tree_pss_mib": 838.923828125
+        },
+        "epoch_3": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 838.923828125,
+              "uss_mib": 820.28125
+            }
+          ],
+          "tree_pss_mib": 838.923828125
+        },
+        "closed": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 838.923828125,
+              "uss_mib": 820.28125
+            }
+          ],
+          "tree_pss_mib": 838.923828125
+        },
+        "scope_exited": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 838.923828125,
+              "uss_mib": 820.28125
+            }
+          ],
+          "tree_pss_mib": 838.923828125
+        },
+        "collected": {
+          "rss_mib": 865.92578125,
+          "peak_mib": 892.4609375,
+          "RssAnon_mib": 560.203125,
+          "RssFile_mib": 305.72265625,
+          "processes": [
+            {
+              "pid": 147,
+              "rss_mib": 865.92578125,
+              "pss_mib": 838.923828125,
+              "uss_mib": 820.28125
+            }
+          ],
+          "tree_pss_mib": 838.923828125
+        }
+      },
+      "checksum": "acb19c89022245fc07e2bf51066ad030bd4d1d1c303f5884c07a4c3f412ec18b",
+      "size": 4096,
+      "repeat": 2
+    }
+  ]
+}

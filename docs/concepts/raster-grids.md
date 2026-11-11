@@ -98,23 +98,36 @@ tree can keep different grids in separate groups. When all groups share an
 exact grid, the root publishes common spatial coordinates. Otherwise each
 group retains its own coordinates, and the tree has no common `geobox`.
 
-Use `tree.gs.align(target=reference)` to put the groups on the reference
-grid before pixelwise combination. The target is required; the default extent
-is `"match"`. Request `extent="union"` or `extent="intersection"` explicitly
-to change coverage. A reference tree must have a shared grid; otherwise select
-one of its groups. Supply resampling per variable, using names such as
-`"labels/mask"`, when continuous imagery and categorical labels need different
-treatment. Constructing a tree itself does
-not perform this alignment.
+Use `tree.gs.to_dataset(grid=...)` before pixelwise combination. `grid` is a
+node path relative to the node you call on, or a GeoBox; every node is
+reprojected onto it, then merged. Kernels are keyed by variable name, since the
+merged Dataset needs distinct names anyway:
+
+```python
+scene = tree.gs.to_dataset(
+    grid="imagery/r10m",
+    resampling={"*": "bilinear", "quality": "nearest", "mask": "nearest"},
+)
+```
+
+Categorical validation checks every variable after resolving its kernel.
+Constructing a tree does not resample it.
 
 ## Cropping and windows
 
 `isel(y=..., x=...)` selects pixel positions. `.gs.crop(region)` also masks
 pixels outside a geometry, using nodata. Neither operation changes resolution.
-A catalog window's rows open with `.gs.to_datatree()` on their native grids,
-one grid node per pixel size (`/s2/r10m`, `/s2/r20m`); `tree["s2"].gs.to_dataset()`
-brings a collection's nodes onto one of its grids, and `.gs.align(target=...)`
-reprojects onto another.
+A catalog window's rows open with `.gs.to_datatree()` as one node per STAC
+asset, each on its own grid (`/s2/B04`, `/s2/B11`). `tree.gs.group_grid()`
+merges assets sharing one exact grid into a node named by its pixel size
+(`/s2/r10m`, `/s2/r20m`); `tree["s2"].gs.to_dataset()` merges only nodes on
+one exact grid. For mixed grids, select a reference explicitly before merging:
+
+```python
+scene = tree.gs.group_grid()["s2"].gs.to_dataset(grid="r10m")
+```
+
+Conversion does not select a grid or resample pixels.
 
 Reprojection can be lazy for Dask inputs, but interpolation and nodata behavior
 depend on the resampling backend. Check a small representative area before
@@ -129,3 +142,21 @@ reproduction scripts are in the [performance review](../contributing/benchmarks/
 Choose and validate the resampling behavior your data needs; a correct output
 shape and CRS do not by themselves prove equivalent pixels. The review does
 not recommend silently computing a whole raster to hide this limitation.
+
+## Reprojection destinations
+
+`raster.gs.reproject(how, ...)` accepts an ODC `GeoBox` or a CRS
+(string, EPSG integer, or supported CRS object). A GeoBox specifies the exact
+shape, affine transform, and CRS. Resolution is derived from its transform;
+do not also supply a resolution override. A CRS destination derives an output
+grid from the source, optionally using `resolution=`.
+
+```python
+projected = raster.gs.reproject("EPSG:4326", resolution=0.0001)
+matched = raster.gs.reproject(reference.gs.geobox)
+scene = tree.gs.to_dataset(grid=reference.gs.geobox)
+```
+
+Raster objects are not destinations. Select their grid explicitly; for a tree
+with different grids, name a node. A tree is not reprojected as a whole; it
+reaches one grid only on its way to a Dataset.

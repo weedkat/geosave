@@ -3,6 +3,7 @@
 ```bash
 uv sync
 uv run python scripts/api_reference.py
+uv run python scripts/check_doc_examples.py
 uv run zensical build
 uv run python scripts/api_reference.py --check --site site
 ```
@@ -22,8 +23,8 @@ publish them; the existing GitHub Pages workflow owns publication.
 | --- | --- | --- |
 | Home | What makes this useful to me? | Concrete benefits and one small example. |
 | Basics | What are these objects and how do I start? | Small native objects, visible results, a few new concepts at a time. |
-| Activities | How do I solve this problem? | Starting input, runnable steps, resulting object or artifact, next step. |
-| Advanced | Why does it behave this way? | Data flow, invariants, laziness, shape and metadata rules. |
+| How-to guides | How do I solve this problem? | Starting input, runnable steps, resulting object or artifact, next step. |
+| Concepts | Why does it behave this way? | Data flow, invariants, laziness, shape and metadata rules. |
 | API reference | Exactly what can I pass and what comes back? | Signatures, fields, defaults, return values, errors, examples. |
 | Common questions | Where is the answer to a recurring question? | A direct answer and a link to its full guide. |
 
@@ -31,6 +32,27 @@ Introduce optional orchestration and project generation only in the activities
 that need them. Start ordinary file and model examples with native Python APIs.
 Use the library's existing objects and dependencies; a guide should not invent
 an adapter to make a proposed workflow appear supported.
+
+## Make examples useful outside GeoSave
+
+Start with a geospatial question: compare vegetation between management zones,
+acquire imagery for labelled locations, or map land cover in another area.
+Name the expected artifact before introducing the APIs that produce it.
+
+| A useful tutorial provides | Readers give up when |
+| --- | --- |
+| A real input, small runnable example, and visible result | The first task is constructing abstractions or unexplained synthetic arrays |
+| Download size, credentials, dependencies, and version | A hidden account, GPU, or unavailable package blocks the first run |
+| A map beside code and an expected output | Long prose gives no evidence of what success looks like |
+| Explicit band order, scale, grid, nodata, and split decisions | Code runs but quietly trains on misaligned or incorrectly decoded values |
+| A short adaptation table and links at decision points | Users must read the whole manual to change their area or data |
+| Provenance, license, and limits of the result | A teaching model or index is presented as validated environmental evidence |
+
+Use practitioner references to choose the question and evaluation method;
+explain which parts the starter actually implements. Synthetic examples remain
+useful for offline mechanics, but label them clearly and keep the real-data
+project easy to find. Keep maps and tables close to the code that creates them.
+A source-code tour belongs in contributor documentation, not the first lesson.
 
 ## Keep API inputs and outputs accurate
 
@@ -106,3 +128,27 @@ current directions. Preserve unresolved decisions and useful rationale, but
 retire completed task lists once their remaining constraints are recorded in
 the architecture or open-decisions page. The
 [2026-11-04 review](review-2026-11-04.md) records the current audit and validation limits.
+
+## Protect the first successful workflow
+
+`python scripts/check_doc_examples.py` executes the plain Python fences in the
+first-raster, file-ingestion, chip, and training tutorials in a temporary
+directory. It checks lazy arrays, saved pixel values and grids, tensor shapes,
+and predictions before/after checkpoint loading. Titled Python fences are
+explicit adaptation snippets requiring user data; they are not executed.
+
+Use `--figures` to refresh the static tutorial figures from actual outputs,
+and `--network` to also exercise public Earth Search acquisition. Network
+checks are opt-in because provider availability is outside this repository.
+The bundled sample's provenance is recorded in [sample data](../assets/README.md).
+
+Every introductory guide should name its prerequisites and resulting artifact,
+show the result, provide a complete path to it, explain what to change for the
+reader's data, and offer one relevant next step. Keep important grid, label,
+and value constraints beside the operation they affect. Move exhaustive
+options and implementation details to reference and concept pages.
+
+Before publishing navigation or layout changes, inspect desktop and narrow
+mobile views in both themes, follow the main entry links, and check local
+links and image assets in the rendered site. A site build does not verify
+visual layout or example behavior.

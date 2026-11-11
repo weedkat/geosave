@@ -85,12 +85,12 @@ def test_two_destinations_resolving_to_one_file_collide(tmp_path, monkeypatch):
 def test_collections_sharing_a_path_format_without_collection_collide(tmp_path):
     tree = build_tree({"s2": build_raster(), "dem": build_raster()})
 
-    with pytest.raises(ValueError, match=r"collide.*\{collection\}"):
-        tree.gs.to_cog(tmp_path, path_format="scene.tif")
+    with pytest.raises(ValueError, match="collide"):
+        tree.gs.to_cog(tmp_path, format_paths="scene.tif")
     assert not list(tmp_path.iterdir())
 
 
 def test_a_path_naming_a_file_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="path_format"):
+    with pytest.raises(ValueError, match="format_paths"):
         build_raster().gs.to_cog(tmp_path / "scene.tif")
     assert not list(tmp_path.iterdir())

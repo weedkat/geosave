@@ -12,7 +12,7 @@ import xarray as xr
 from geosave.geodata import open_vector
 from geosave.geodata.io.formats import geotiff
 from geosave.geodata.io.openers import open_raster
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import create_test_collection, build_raster
 
 
 def _flat():
@@ -81,7 +81,9 @@ def test_a_signed_vector_url_preserves_its_query(tmp_path, monkeypatch) -> None:
 
 
 def test_a_read_geotiff_names_the_file_it_came_from(tmp_path: Path) -> None:
-    (path,) = build_raster().gs.to_cog(tmp_path, path_format="scene.tif")
+    (path,) = build_raster().gs.to_cog(
+        tmp_path, split_asset=(), format_paths="scene.tif"
+    )
 
     assert open_raster(path).encoding["source"] == str(path)
 
@@ -145,7 +147,9 @@ def test_files_laid_out_across_dates_read_back_through_their_catalog(
     tmp_path: Path,
 ) -> None:
     scene = build_raster(times=2)
-    rows = scene.gs.to_catalog(tmp_path, collection="s2")
+    rows = scene.gs.to_catalog(
+        tmp_path, collection=create_test_collection("s2", description="S2")
+    )
 
     with rows.gs.to_datatree() as tree:
         restored = tree["s2"].gs.to_dataset()

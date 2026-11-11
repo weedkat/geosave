@@ -2,33 +2,60 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import asyncio
+from functools import partial
+from typing import TYPE_CHECKING
+
+from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 import pandas as pd
 import panel as pn
 import param
 from panel.viewable import Viewer
 
-from ..layers import VectorLayer
+from ..layers import VectorLayer, RasterLayer
 
 if TYPE_CHECKING:
     from ..explorer import Explorer
 
 
 class AttributeTable(pn.ui.Tabulator):
-    """A layer's table, owning its row synchronization and subscriptions."""
+    """Browse records and own their selected footprints and opened rasters."""
 
-    def __init__(self, layer: VectorLayer) -> None:
-        self._layer = layer
+    _rename = {
+        **pn.ui.Tabulator._rename,
+        "raster_rows": None,
+        "rasters": None,
+        "error": None,
+    }
+
+    raster_rows = param.List(default=[], item_type=int)
+    rasters = param.Dict(default={})
+    error = param.String(default="")
+
+    def __init__(self, frame, *, name: str, explorer: Explorer) -> None:
+        self._explorer = explorer
+        self._load_generation = 0
         self._released = False
+        frame.gs.validate(crs=True)
+        self.has_rasters = FOOTER_KEY in frame.attrs or all(
+            column in frame for column in ITEM_COLUMNS
+        )
+        if self.has_rasters:
+            frame.gs.validate(stac_item=True)
+
+        layer = VectorLayer(frame, name=name)
+        layer.footprint_rows = []
+        self.footprints = layer
+        self.data = layer.data
         frame = pd.DataFrame(layer.data[layer.columns])
         self._raster_column = "raster"
         while self._raster_column in frame.columns:
             self._raster_column += "_"
         formatters = {}
         titles = {}
-        if layer.has_rasters:
-            frame.insert(0, self._raster_column, frame.index.isin(layer.raster_rows))
+        if self.has_rasters:
+            frame.insert(0, self._raster_column, frame.index.isin(self.raster_rows))
             formatters[self._raster_column] = {"type": "tickCross"}
             titles[self._raster_column] = "Raster"
         super().__init__(
@@ -40,7 +67,7 @@ class AttributeTable(pn.ui.Tabulator):
             header_tooltips={
                 self._raster_column: "Show or hide this row's raster. The left checkbox controls its footprint."
             }
-            if layer.has_rasters
+            if self.has_rasters
             else {},
             disabled=True,
             show_index=False,
@@ -59,11 +86,13 @@ class AttributeTable(pn.ui.Tabulator):
             layer.param.watch(self._tick_footprints, "footprint_rows"),
             self.param.watch(self._show_filtered_rows, ["filters", "value"]),
             layer.param.watch(self._filter_period, "period"),
+            self.param.watch(self._explorer._show_layers, "rasters"),
+            self.param.watch(self._explorer._show_error, "error"),
         ]
-        if layer.has_rasters:
+        if self.has_rasters:
             self.on_click(self._toggle_raster, column=self._raster_column)
             self._subscriptions.append(
-                layer.param.watch(self._tick_rasters, "raster_rows")
+                self.param.watch(self._tick_rasters, "raster_rows")
             )
         # A plain filter keeps the period subscription here. Panel's bound
         # filters install a watcher that remove_filter does not detach.
@@ -71,185 +100,184 @@ class AttributeTable(pn.ui.Tabulator):
         self._show_filtered_rows()
 
     def _select_footprints(self, *_):
-        self._layer.footprint_rows = list(self.selection)
+        self.footprints.footprint_rows = list(self.selection)
+        self._explorer._show_layers()
 
     def _tick_footprints(self, *_):
-        self.selection = list(self._layer.footprint_rows)
+        self.selection = list(self.footprints.footprint_rows)
 
     def _toggle_raster(self, event):
         if self._released:
             return
-        rows = list(self._layer.raster_rows)
+        rows = list(self.raster_rows)
         if event.row in rows:
             rows.remove(event.row)
         else:
             rows.append(int(event.row))
-        self._layer.raster_rows = rows
+        self.raster_rows = rows
 
     def _tick_rasters(self, *_):
-        ticked = self.value.index.isin(self._layer.raster_rows)
+        ticked = self.value.index.isin(self.raster_rows)
         if not (self.value[self._raster_column].to_numpy(dtype=bool) == ticked).all():
             value = self.value.copy()
             value[self._raster_column] = ticked
             self.value = value
 
     def _filter_dates(self, frame):
-        return self._layer.filter_dates(frame, self._layer.period)
+        return self.footprints.filter_dates(frame, self.footprints.period)
 
     def _filter_period(self, *_):
         self.param.trigger("value")
 
     def _show_filtered_rows(self, *_):
-        self._layer.shown_rows = list(self.current_view.index)
+        self.footprints.shown_rows = list(self.current_view.index)
+
+    def open_row_raster(self, position: int) -> RasterLayer:
+        """Open one catalog row lazily, titled by its collection and date."""
+        row = self.data.iloc[position]
+        title = str(row.get("collection") or row.get("id", position))
+        date = row.get("datetime", row.get("start_datetime"))
+        if pd.notna(date) and hasattr(date, "strftime"):
+            title += f" · {date:%Y-%m-%d}"
+        tree = row.gs.to_datatree()
+        # Viewport reads resample onto the screen anyway, so the row is shown on
+        # its finest node grid to keep the most detail; reads stay lazy.
+        nodes = tree.gs.datasets.values()
+        finest = min(nodes, key=lambda node: abs(node.gs.resolution.x))
+        scene = tree.gs.to_dataset(grid=finest.gs.geobox)
+        return RasterLayer(scene, row=row, name=title)
+
+    @param.depends("raster_rows", watch=True)
+    def open_checked_rows(self) -> None:
+        """Open the rasters of newly checked rows, and drop the unchecked rows'."""
+        self._load_generation += 1
+        generation = self._load_generation
+        checked_rows = list(self.raster_rows)
+        new_rows = []
+        for position in checked_rows:
+            if position not in self.rasters:
+                new_rows.append(position)
+        if not new_rows:
+            self._keep_rasters(checked_rows, {})
+            return
+        # Metadata reads can wait on remote files; a running page stays live.
+        pn.state.execute(
+            partial(self._open_new_rows, checked_rows, new_rows, generation)
+        )
+
+    async def _open_new_rows(
+        self, checked_rows: list[int], new_rows: list[int], generation: int
+    ) -> None:
+        if generation != self._load_generation:
+            return
+        try:
+            rasters_by_row = await asyncio.to_thread(self._open_rows, new_rows)
+        except (OSError, ValueError, KeyError, TypeError, NotImplementedError) as error:
+            if generation != self._load_generation:
+                return
+            # Preserve already open rows when this request fails.
+            self.error = str(error)
+            self.raster_rows = sorted(self.rasters)
+            return
+        # A later check superseded this one while its rows opened.
+        if generation != self._load_generation:
+            return
+        self.error = ""
+        self._keep_rasters(checked_rows, rasters_by_row)
+
+    def cancel_loads(self) -> None:
+        """Invalidate pending reads and keep only successfully opened rows checked."""
+        self._load_generation += 1
+        self.raster_rows = list(self.rasters)
+
+    def _open_rows(self, positions: list[int]) -> dict[int, RasterLayer]:
+        rasters_by_row = {}
+        for position in positions:
+            rasters_by_row[position] = self.open_row_raster(position)
+        return rasters_by_row
+
+    def _keep_rasters(
+        self, checked_rows: list[int], rasters_by_row: dict[int, RasterLayer]
+    ) -> None:
+        # The checked rows' rasters already open, then the newly opened ones.
+        rasters = {}
+        for position, raster in self.rasters.items():
+            if position in checked_rows:
+                rasters[position] = raster
+        rasters.update(rasters_by_row)
+        if rasters.keys() != self.rasters.keys():
+            self.rasters = rasters
+
+    def uncheck_row_of(self, raster: RasterLayer) -> None:
+        """Uncheck the row that opened `raster`, closing its raster."""
+        for position, opened_raster in self.rasters.items():
+            if opened_raster is raster:
+                remaining = []
+                for row in self.raster_rows:
+                    if row != position:
+                        remaining.append(row)
+                self.raster_rows = remaining
+                return
 
     def release(self) -> None:
         """Detach this table from its layer; later clicks have no effect."""
         self._released = True
+        self._load_generation += 1
         for watcher in self._subscriptions:
             watcher.inst.param.unwatch(watcher)
         self._subscriptions.clear()
 
 
 class AttributeTables(Viewer):
-    """Show each vector layer's table in a tab, the last selected one's tab open.
+    """Keep named tables and their selections independent of map membership."""
 
-    Choosing a tab selects its layer. Tables are built once per layer and
-    kept, so a notebook keeps their models as tabs switch.
-    """
-
-    # The vector layer whose table is open: the last one selected.
-    open_layer = param.ClassSelector(class_=VectorLayer, allow_None=True)
-
-    def __init__(self, explorer: Explorer) -> None:
-        """Show the vector layers of `explorer`."""
+    def __init__(self, explorer: Explorer, frames) -> None:
         super().__init__()
-        self._explorer = explorer
-        # Each vector layer's table, and its tab's content, built when the layer
-        # is first shown and kept.
-        self.tables: dict[VectorLayer, AttributeTable] = {}
-        self._tab_contents: dict[VectorLayer, pn.ui.Column] = {}
-        # One tab per vector layer, in layer order.
-        self._tabs = pn.ui.Tabs(dynamic=False, sizing_mode="stretch_width", margin=0)
-        self._tab_watcher = self._tabs.param.watch(self._select_tab_layer, "active")
-        self._watchers = [
-            explorer.param.watch(self._follow_layers, "layers"),
-            explorer.param.watch(self._follow_selection, "active_layer"),
-        ]
-        self._follow_layers()
-        self._card = self._create_card()
+        self.tables: dict[str, AttributeTable] = {}
+        tabs = []
+        for name, frame in frames.items():
+            table = AttributeTable(frame, name=name, explorer=explorer)
+            self.tables[name] = table
+            controls = []
+            if table.footprints.period is not None:
+                controls.append(
+                    pn.ui.DateRangePicker.from_param(
+                        table.footprints.param.period, size="small", width=300
+                    )
+                )
+            controls.append(table)
+            tabs.append((name, pn.ui.Column(*controls)))
+
+        self._tabs = pn.ui.Tabs(*tabs, dynamic=False, sizing_mode="stretch_width")
+        self._card = pn.ui.Card(
+            objects=[self._tabs],
+            title="Tables",
+            visible=bool(tabs),
+            collapsed=False,
+            sizing_mode="stretch_width",
+        )
 
     @property
-    def table(self) -> pn.ui.Tabulator | None:
-        """Return the open table."""
-        return self.tables.get(self.open_layer)
+    def table(self) -> AttributeTable | None:
+        """Return the active table without changing map selection."""
+        if not self.tables:
+            return None
+        return list(self.tables.values())[self._tabs.active]
 
-    def _list_vectors(self, *_: Any) -> list[VectorLayer]:
-        vectors = []
-        for layer in self._explorer.layers:
-            if isinstance(layer, VectorLayer):
-                vectors.append(layer)
-        return vectors
-
-    def _follow_layers(self, *_: Any) -> None:
-        """Reconcile table membership, preserving surviving models and filters."""
-        # 1. Build each new vector layer's table, and its tab
-        vectors = self._list_vectors()
-        for layer in list(self.tables):
-            if layer not in vectors:
-                self.tables.pop(layer).release()
-                self._tab_contents.pop(layer)
-        for layer in vectors:
-            if layer not in self.tables:
-                self.tables[layer] = AttributeTable(layer)
-                self._tab_contents[layer] = self._create_tab_content(layer)
-
-        # 3. Retab only when the vector layers change, so tables keep their models
-        contents = []
-        for layer in vectors:
-            contents.append(self._tab_contents[layer])
-        if contents != list(self._tabs.objects):
-            tabs = []
-            for layer in vectors:
-                tabs.append((layer.name, self._tab_contents[layer]))
-            self._tabs[:] = tabs
-            # A single table needs no tab bar.
-            self._tabs.sx = {
-                ".MuiTabs-root": {"display": "none" if len(tabs) == 1 else "flex"}
-            }
-        self._follow_selection()
-
-    def _follow_selection(self, *_: Any) -> None:
-        """Open the selected vector's table without rebuilding its contents."""
-        vectors = self._list_vectors()
-        if self._explorer.active_layer in vectors:
-            self.open_layer = self._explorer.active_layer
-        elif self.open_layer not in vectors:
-            self.open_layer = vectors[0] if vectors else None
-        if self.open_layer is not None:
-            self._tabs.active = vectors.index(self.open_layer)
+    def selected_layers(self) -> list:
+        """Return selected footprints and opened rasters from every table."""
+        layers = []
+        for table in self.tables.values():
+            if table.selection:
+                layers.append(table.footprints)
+            layers.extend(table.rasters.values())
+        return layers
 
     def __panel__(self):
         return self._card
 
-    def _create_card(self):
-        return pn.ui.Card(
-            objects=[self._tabs],
-            title=self.view_title,
-            visible=pn.bind(lambda layer: layer is not None, self.param.open_layer),
-            collapsed=False,
-            collapsible=True,
-            sizing_mode="stretch_width",
-            sx={
-                "boxShadow": "none",
-                "borderTop": 1,
-                "borderColor": "divider",
-                "borderRadius": 0,
-            },
-        )
-
-    def _create_tab_content(self, layer: VectorLayer) -> pn.ui.Column:
-        # The layer's date filter, when it has dates, above its table.
-        controls = []
-        if layer.period is not None:
-            controls.append(
-                pn.ui.DateRangePicker.from_param(
-                    layer.param.period, size="small", width=300
-                )
-            )
-        if layer.has_rasters:
-            controls.append(
-                pn.ui.Typography(
-                    "Left checkbox: footprint · Raster: image. If loading fails, check Raster again to retry.",
-                    variant="caption",
-                    color="text.secondary",
-                )
-            )
-        controls.append(self.tables[layer])
-        return pn.ui.Column(*controls, sizing_mode="stretch_width")
-
-    @param.depends("open_layer")
-    def view_title(self) -> str:
-        """Return the open table's title."""
-        layer = self.open_layer
-        if layer is None:
-            return ""
-        noun = "Catalog" if layer.heading == "Catalogs" else "Attributes"
-        return f"{noun} · {layer.name}"
-
-    def _select_tab_layer(self, event):
-        vectors = self._list_vectors()
-        if event.new is not None and 0 <= event.new < len(vectors):
-            layer = vectors[event.new]
-            if self._explorer.active_layer is not layer:
-                self._explorer.active_layer = layer
-
     def release(self) -> None:
-        """Stop following the explorer's layers and selection."""
-        for watcher in self._watchers:
-            watcher.inst.param.unwatch(watcher)
-        self._watchers.clear()
-        self._tabs.param.unwatch(self._tab_watcher)
+        """Detach tables and invalidate their outstanding loads."""
         for table in self.tables.values():
             table.release()
         self.tables.clear()
-        self._tab_contents.clear()

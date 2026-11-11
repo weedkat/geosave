@@ -1,4 +1,6 @@
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import fsspec
 import pytest
@@ -95,6 +97,60 @@ def test_an_existing_local_file_refuses_without_overwrite(tmp_path: Path) -> Non
         write_file(
             destination, lambda target: pytest.fail("must not run"), suffixes=(".tif",)
         )
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_destination_created_during_encoding_respects_overwrite(tmp_path, overwrite):
+    destination = tmp_path / "scene.tif"
+    unrelated = tmp_path / ".scene.staging.tif"
+    unrelated.write_bytes(b"another writer")
+
+    def save(target):
+        target.write_bytes(b"new pixels")
+        destination.write_bytes(b"winner")
+
+    if overwrite:
+        write_file(destination, save, suffixes=(".tif",), overwrite=True)
+        assert destination.read_bytes() == b"new pixels"
+    else:
+        with pytest.raises(FileExistsError):
+            write_file(destination, save, suffixes=(".tif",))
+        assert destination.read_bytes() == b"winner"
+    assert unrelated.read_bytes() == b"another writer"
+    assert set(tmp_path.iterdir()) == {destination, unrelated}
+
+
+def test_overlapping_local_writers_publish_exactly_one_complete_file(tmp_path):
+    destination = tmp_path / "scene.tif"
+    ready = Barrier(2)
+
+    def write(pixels):
+        staged = None
+
+        def save(target):
+            nonlocal staged
+            staged = target
+            target.write_bytes(pixels)
+            ready.wait(timeout=10)
+
+        try:
+            write_file(destination, save, suffixes=(".tif",))
+        except FileExistsError:
+            return False, pixels, staged
+        return True, pixels, staged
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(write, b"first complete file")
+        second = workers.submit(write, b"second complete file")
+        results = [first.result(timeout=15), second.result(timeout=15)]
+
+    assert sum(won for won, _, _ in results) == 1
+    assert results[0][2] != results[1][2]
+    for won, pixels, staged in results:
+        if won:
+            assert destination.read_bytes() == pixels
+        assert not staged.exists()
+    assert list(tmp_path.iterdir()) == [destination]
 
 
 def test_a_wrong_suffix_refuses_before_writing(tmp_path: Path) -> None:

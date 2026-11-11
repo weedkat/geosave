@@ -1,72 +1,165 @@
-# Train an offline starter
+# Train a model and map its predictions
 
-```bash
-pip install 'geosave[ml]'
-geosave create demo --task lightning --method boilerplate
-cd demo
-python main.py fit --config configs/lightning-boilerplate.yaml \
-  --trainer.accelerator cpu --trainer.devices 1 --trainer.max_epochs 1
+!!! tip "Looking for a real geospatial project?"
+    Start with the [land-cover notebooks](../examples.md#real-land-cover-project)
+    to train on real Sentinel-2 imagery and expert annotations. This page uses
+    synthetic data to check the training, checkpoint, and raster-export mechanics
+    offline; its accuracy is not a geospatial benchmark.
+
+
+Continue from [images to training chips](../quickstart.md): use the saved
+`training-scene.tif`, train a small segmentation model, and put predictions
+back on the source grid.
+
+**You need:** `geosave[ml]` and the file created by the previous tutorial.
+This runs on CPU without downloads. The synthetic labels have a deliberately
+easy relationship to the input bands; the result demonstrates training and
+geographic export, not real-world model quality.
+
+![Synthetic input, reference labels, and the model prediction on a held-out region](../assets/training-result.png)
+
+## Return one sample from a Dataset
+
+```python
+import lightning as L
+import torch
+import xarray as xr
+import torch.nn.functional as F
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+
+import geosave as gs
+
+L.seed_everything(7, workers=True)
+scene = gs.open_raster("training-scene.tif")
+
+class RasterDataset(Dataset):
+    def __init__(self, scene):
+        self.chips = gs.Chips([scene[["red", "nir", "label"]]], size=32)
+
+    def __len__(self):
+        return len(self.chips)
+
+    def __getitem__(self, index):
+        chip = self.chips[index].gs.to_numpy(dtype="float32")
+        image = torch.from_numpy(chip[:2])
+        target = torch.from_numpy(chip[2]).long()
+        return image, target
 ```
 
-This starter trains a small classifier on deterministic synthetic data, without
-pretrained weights or data downloads. The generated files are yours to edit.
-The run reports training and validation loss and saves a checkpoint under
-`artifacts/lightning-boilerplate/version_N/` with the default logger enabled.
-A one-epoch run checks the training setup; it does not establish model quality.
+The Dataset owns pixel reads, band order, and label conversion. Each chip is a
+lazy Dataset, so time or location inputs for the model come from it too. It returns a
+plain `(image, target)` tuple. Keep `scene` open until training and prediction
+finish: each sample reads its pixels on demand. This tutorial uses its own LightningModule;
+GeoSave's generated recipes declare their own sample contracts.
 
-## Follow one sample through training
+## Separate training and validation regions
 
-| File under `modules/lightning/boilerplate/` | Responsibility |
+```python
+train = RasterDataset(scene.isel(x=slice(0, 64)))
+valid = RasterDataset(scene.isel(x=slice(64, 128)))
+train_loader = DataLoader(train, batch_size=4, shuffle=True, num_workers=0)
+valid_loader = DataLoader(valid, batch_size=4, num_workers=0)
+```
+
+The two halves contain different pixels. Real experiments need independent
+scenes or geographic regions and a reserved test set. Spatial correlation can
+make even non-overlapping nearby samples overly similar; choose the separation
+according to the question you want the model to answer.
+
+## Define the model and loss
+
+```python
+class Segmenter(L.LightningModule):
+    def __init__(self):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Conv2d(2, 8, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(8, 2, kernel_size=1),
+        )
+
+    def forward(self, image):
+        return self.network(image)
+
+    def training_step(self, batch, batch_idx):
+        image, target = batch
+        loss = F.cross_entropy(self(image), target)
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        image, target = batch
+        loss = F.cross_entropy(self(image), target)
+        self.log("val_loss", loss)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=0.03)
+
+model = Segmenter()
+trainer = L.Trainer(
+    accelerator="cpu", devices=1, max_epochs=20,
+    logger=False, enable_checkpointing=False, enable_model_summary=False,
+)
+trainer.fit(model, train_loader, valid_loader)
+```
+
+Each pixel produces two class scores. Cross-entropy compares them with the
+integer target. Lightning handles the training loop and validation. This tiny
+network uses only each pixel's bands; spatial models and pretrained encoders
+can learn richer patterns.
+
+## Predict on the held-out region
+
+```python
+model.eval()
+
+def predictions():
+    for key in valid.chips:
+        chip = valid.chips[key].gs.to_numpy(dtype="float32")
+        image = torch.from_numpy(chip[:2])
+        with torch.inference_mode():
+            scores = model(image.unsqueeze(0))[0].numpy()
+        yield key, scores
+
+pixels = valid.chips.merge(predictions())[0]
+source = valid.chips.xarray[0]
+scores = xr.DataArray(pixels, dims=("class", "y", "x")).gs.write_grid(source.gs.geobox)
+prediction = scores.argmax("class").astype("uint8").rename("prediction")
+prediction.gs.to_cog("output", format_paths="prediction.tif", overwrite=True)
+prediction.gs.plot(cmap=["#263b50", "#65b98b"], xlabel="")
+```
+
+The DataLoader added a batch dimension during training; here `unsqueeze(0)`
+adds one for inference. We merge class scores on the chip grid before choosing
+the winning class. `Chips.merge()` returns NumPy; `gs.write_grid` places it on the
+validation region's grid, so
+`output/prediction.tif` can be opened in a GIS.
+
+## Save and reload the trained model
+
+```python
+trainer.save_checkpoint("segmenter.ckpt")
+restored = Segmenter.load_from_checkpoint("segmenter.ckpt").eval()
+scene.close()
+```
+
+Keep the `Segmenter` Python definition with this Lightning checkpoint.
+A checkpoint preserves training state and weights; it is different from a
+[portable GeoSave model release](release.md).
+
+## Take this to real imagery
+
+| Change | What to check |
 | --- | --- |
-| `datasets.py` | `ExampleDataset` returns `({"features": tensor}, target)`: four floating features and one integer class, with no batch dimension. |
-| `data.py` | `DataModule` constructs split Datasets and ordinary DataLoaders. A batch has features shaped `(batch, 4)` and targets shaped `(batch,)`. |
-| `module.py` | `Module` runs a small network, computes cross-entropy, logs loss, and constructs AdamW. |
+| Replace the synthetic scene | Match grids, decode imagery, handle invalid pixels, and verify class codes before tensor conversion. |
+| Add input bands | Keep channel order consistent and change the first layer's input count. |
+| Add classes | Change the output count and use integer targets in the matching range. |
+| Use missing labels | Set an ignore code and configure both loss and metrics to ignore it. |
+| Evaluate quality | Use independent regions and per-class metrics; inspect prediction maps as well as aggregate scores. |
 
-The config selects these classes and their constructor arguments.
-`main.py` invokes GeoSave's LightningCLI integration; Lightning owns training,
-validation, checkpointing, and device placement. Change the Dataset and model
-together when adapting the example to another sample shape.
-
-The synthetic train and validation datasets use overlapping deterministic
-examples. This is a wiring demonstration. For real experiments, supply separate
-scenes or geographic regions for validation and reserve independent test data.
-
-## Use raster data
-
-[Images to training chips](../quickstart.md) produces a two-band image tensor
-and an integer label raster. A segmentation Dataset can return those pixels as
-`{"inputs": {"image": image}, "target": target}`; that is the geospatial
-supervised recipe's sample contract, distinct from this boilerplate's tuple.
-
-Your Dataset owns file reads, chip selection, channel order, missing inputs,
-and label codes. Read only the requested sample. Decode stored imagery when
-physical values are required, preserve integer target classes, and choose an
-explicit ignore code for missing targets. Keep the loss and metrics aligned
-with that code. [Training contracts](../concepts/training.md) describes the
-geospatial recipes and their tensor layouts.
-
-## Geospatial recipes
-
-The segmentation, regression, classification, and MIM starters use ModelSpec v3.
-Their DataModules take an explicit `size` for augmentation and call the spec's
-shared tensor transforms in every split. Sampling and chip layout use
-`catalog.gs.sample(...)` and `gs.Chips(...)` outside ModelSpec.
-
-The project-owned Dataset implementations remain extension points: supply your
-own reads, labels, and sample contract. The [processing workflow](model-spec.md)
-includes an offline end-to-end test using a real generated regression DataModule
-and a tiny temporal model. Existing generated workspaces need the documented
-v3 migration; upgrading the library does not rewrite copied project files.
-
-## Save and reuse the result
-
-A Lightning checkpoint holds the Module's weights and training state. Use it
-to resume training or load the same project-owned Module implementation.
-The boilerplate's custom network is not a registered GeoSave model chain, so it
-cannot be exported directly with `GeoSaveModel.from_chain`.
-
-For native releases, build a supported registered chain and follow
-[save and load a release](release.md). That guide includes an offline round trip
-using a built-in segmentation head. [Workspaces](workspaces.md) explains adding
-methods and managing generated files; [model inputs](model-spec.md) explains
-preprocessing separately from training.
+Follow the [real land-cover project](../examples.md) for satellite image/label
+pairs. Use [pretrained encoders](pretrained.md) when you are ready to fine-tune,
+and [workspaces](workspaces.md) for editable training recipes and configuration.
+The [model-input guide](model-spec.md) covers sharing preparation between
+training and inference.

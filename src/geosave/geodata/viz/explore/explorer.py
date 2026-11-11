@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
+from collections.abc import Mapping, Sequence
+
+import geopandas as gpd
 
 import holoviews as hv
 import pandas as pd
@@ -13,12 +16,9 @@ from odc.geo.geom import BoundingBox, Geometry, bbox_union
 from panel.viewable import Viewer
 
 from .layers import (
-    GeoData,
     Layer,
     RasterLayer,
     VectorLayer,
-    create_layer,
-    create_layers,
 )
 from .page import create_page
 from .comparison import Comparison
@@ -32,8 +32,8 @@ class Explorer(Viewer):
     """Explore native geodata on one map, with a sidebar and attribute tables.
 
     The explorer owns which layers are shown and selected, and the basemap;
-    each layer owns its display settings, and each catalog the rasters its
-    checked rows open. The page follows them. Display it in a notebook, or
+    each layer owns its display settings, and each table owns row selection
+    and raster loading. The page follows them. Display it in a notebook, or
     call `.serve()` to launch a web server.
     """
 
@@ -53,11 +53,27 @@ class Explorer(Viewer):
     period_count = param.Integer(default=0, precedence=-1)
 
     def __init__(
-        self, *data: GeoData | Layer, basemap: str | None = None, height: int = 600
+        self,
+        *,
+        layers: Sequence[Layer] = (),
+        tables: Mapping[str, gpd.GeoDataFrame] | None = None,
+        basemap: str | None = None,
+        height: int = 600,
     ):
-        """Show rasters, frames or layers on one map `height` pixels tall."""
-        if not data:
-            raise ValueError("an explorer needs a raster or vector")
+        """Show configured layers and independently browsable feature tables.
+
+        Args:
+            layers: RasterLayer or VectorLayer objects displayed immediately.
+            tables: Named GeoDataFrames. No rows are selected initially.
+                Selecting rows displays their footprints; the Raster control
+                opens supported Item assets separately.
+            basemap: Basemap name; None uses Light.
+            height: Map height in pixels.
+        """
+        if not layers and not tables:
+            raise ValueError("an explorer needs layers or tables")
+        if any(not isinstance(layer, Layer) for layer in layers):
+            raise TypeError("layers must contain RasterLayer or VectorLayer objects")
         backend = hv.Store.current_backend
         # GeoViews registering a renderer does not initialize notebook resources.
         if not hv.extension._loaded:
@@ -65,22 +81,22 @@ class Explorer(Viewer):
         pn.extension("tabulator", comms="ipywidgets")
         hv.renderer("bokeh")
         hv.Store.set_current_backend("bokeh")
-        super().__init__(basemap=basemap or "Light", added_layers=create_layers(data))
+        super().__init__(basemap=basemap or "Light", added_layers=list(layers))
         self.height = height
         self.server = None
-        self.port = None
+        self.port: int | None = None
         self.is_closed = False
         # The served copies of this explorer, whose pages draw their own regions.
         self._sessions = []
         # Callbacks on each shown layer, removed when it is no longer shown.
         self._layer_watchers: dict[Layer, list[param.parameterized.Watcher]] = {}
-        self.layers = self._list_shown_layers()
+        self.layers = list(self.added_layers)
 
         # The parts of the page that keep state of their own.
         self.status = pn.ui.Alert("", alert_type="danger", visible=False)
         self.comparison = Comparison()
+        self.tables = AttributeTables(self, tables or {})
         self.map = Map(self, height)
-        self.tables = AttributeTables(self)
         self.details = LayerDetails(self)
         self.layer_list = LayerList(self)
         self._page = None
@@ -91,7 +107,7 @@ class Explorer(Viewer):
         ]
         self._watch_layers()
         self._show_period()
-        self.active_layer = self.layers[0]
+        self.active_layer = self.layers[0] if self.layers else None
         if backend in hv.Store.renderers:
             hv.Store.set_current_backend(backend)
 
@@ -113,9 +129,11 @@ class Explorer(Viewer):
         if bounds:
             self.zoom(bbox_union(bounds))
 
-    def add(self, *data: GeoData | Layer) -> None:
-        """Add rasters, frames or layers to the map."""
-        self.added_layers = [*self.added_layers, *create_layers(data)]
+    def add(self, *layers: Layer) -> None:
+        """Add configured layers to the map."""
+        if any(not isinstance(layer, Layer) for layer in layers):
+            raise TypeError("add expects Layer objects")
+        self.added_layers = [*self.added_layers, *layers]
 
     def remove(self, layer: Layer) -> None:
         """Remove a layer; removing a catalog's raster unchecks its row."""
@@ -126,28 +144,75 @@ class Explorer(Viewer):
                     remaining.append(source)
             self.added_layers = remaining
             return
-        for source in self.added_layers:
-            if isinstance(source, VectorLayer) and layer in source.rasters.values():
-                assert isinstance(layer, RasterLayer)
-                source.uncheck_row_of(layer)
+
+        for table in self.tables.tables.values():
+            if layer is table.footprints:
+                table.selection = []
+                return
+            if isinstance(layer, RasterLayer) and layer in table.rasters.values():
+                table.uncheck_row_of(layer)
                 return
 
-    def __mul__(self, other: Explorer | GeoData | Layer | list | tuple) -> Explorer:
-        """Compose a new explorer with independent display settings."""
-        if isinstance(other, Explorer):
-            others = other.added_layers
-        elif isinstance(other, list | tuple):
-            others = create_layers(other)
-        else:
-            others = [create_layer(other)]
-        copies = []
-        for layer in [*self.added_layers, *others]:
-            copies.append(layer.copy())
-        return Explorer(*copies, basemap=self.basemap, height=self.height)
+    def __mul__(self, other: Explorer | Layer) -> Explorer:
+        """Compose independent layers and named tables into a new viewer."""
+        if isinstance(other, Layer):
+            copied = self.copy()
+            copied.add(other.copy())
+            return copied
+        if not isinstance(other, Explorer):
+            return NotImplemented
+
+        overlap = self.tables.tables.keys() & other.tables.tables.keys()
+        if overlap:
+            raise ValueError(f"table names must be unique: {sorted(overlap)}")
+        # Table composition needs the original records as well as selections.
+        frames = {}
+        for viewer in (self, other):
+            for name, table in viewer.tables.tables.items():
+                frames[name] = table.data
+        layers = []
+        for viewer in (self, other):
+            for layer in viewer.added_layers:
+                layers.append(layer.copy())
+        combined = Explorer(
+            layers=layers, tables=frames, basemap=self.basemap, height=self.height
+        )
+        self._copy_tables(combined)
+        other._copy_tables(combined)
+        return combined
 
     def copy(self) -> Explorer:
-        """Return an explorer with the same layers and independent display settings."""
-        return self * ()
+        """Copy presentation state without reopening any raster assets."""
+        layers = [layer.copy() for layer in self.added_layers]
+        frames = {}
+        for name, table in self.tables.tables.items():
+            frames[name] = table.data
+        copied = Explorer(
+            layers=layers, tables=frames, basemap=self.basemap, height=self.height
+        )
+        self._copy_tables(copied)
+        copied.tables._tabs.active = self.tables._tabs.active
+        return copied
+
+    def _copy_tables(self, viewer: Explorer) -> None:
+        for name, table in self.tables.tables.items():
+            copied = viewer.tables.tables[name]
+            copied.footprints.param.update(
+                column=table.footprints.column,
+                color=table.footprints.color,
+                alpha=table.footprints.alpha,
+                visible=table.footprints.visible,
+                period=table.footprints.period,
+            )
+            copied.filters = list(table.filters)
+            copied.sorters = list(table.sorters)
+            copied.page_size = table.page_size
+            copied.page = table.page
+            copied.selection = list(table.selection)
+            copied.rasters = {
+                position: raster.copy() for position, raster in table.rasters.items()
+            }
+            copied.raster_rows = list(table.rasters)
 
     @property
     def layers_by_label(self) -> dict[str, Layer]:
@@ -164,7 +229,7 @@ class Explorer(Viewer):
 
     @property
     def table(self):
-        """Return the open attribute table, the last selected vector's."""
+        """Return the table in the active tab."""
         return self.tables.table
 
     @property
@@ -176,7 +241,8 @@ class Explorer(Viewer):
 
         Examples:
             >>> region = explorer.region
-            >>> catalog.gs.query(region)
+            >>> shape = region.to_crs(catalog.crs).geom
+            >>> catalog.loc[catalog.geometry.intersects(shape)]
             >>> scene.gs.crop(region)
         """
         shapes = self._collect_shapes()
@@ -192,13 +258,7 @@ class Explorer(Viewer):
         return shapes
 
     def _list_shown_layers(self) -> list[Layer]:
-        layers = []
-        for source in self.added_layers:
-            layers.append(source)
-            # A catalog's open rasters follow it.
-            if isinstance(source, VectorLayer):
-                layers.extend(source.rasters.values())
-        return layers
+        return [*self.added_layers, *self.tables.selected_layers()]
 
     def _show_layers(self, *_: Any) -> None:
         self.layers = self._list_shown_layers()
@@ -208,9 +268,7 @@ class Explorer(Viewer):
         # 1. Stop following layers no longer shown
         for layer in list(self._layer_watchers):
             if layer not in self.layers:
-                if isinstance(layer, VectorLayer):
-                    layer.cancel_loads()
-                elif isinstance(layer, RasterLayer):
+                if isinstance(layer, RasterLayer):
                     layer.clear_cache()
                 for watcher in self._layer_watchers.pop(layer):
                     layer.param.unwatch(watcher)
@@ -222,9 +280,6 @@ class Explorer(Viewer):
             watchers = []
             if isinstance(layer, RasterLayer):
                 watchers.append(layer.param.watch(self._offer_periods, "visible"))
-            if isinstance(layer, VectorLayer):
-                watchers.append(layer.param.watch(self._show_layers, "rasters"))
-                watchers.append(layer.param.watch(self._show_error, "error"))
             self._layer_watchers[layer] = watchers
 
         self._repair_selection()
@@ -237,7 +292,9 @@ class Explorer(Viewer):
                 rasters_by_label[label] = layer
         self.comparison.rasters = rasters_by_label
         if self.active_layer not in self.layers:
-            self.active_layer = self.layers[0] if self.layers else None
+            self.active_layer = (
+                self.layers[0] if self.layers else None if self.layers else None
+            )
 
     @param.depends("layers", "freq", watch=True)
     def _offer_periods(self, *_) -> None:
@@ -382,6 +439,7 @@ class Explorer(Viewer):
         self._release()
         self.map.pane.object = None
         self.added_layers = []
+        self.layers = []
         self.active_layer = None
 
     def _release(self):
@@ -396,9 +454,7 @@ class Explorer(Viewer):
             watcher.inst.param.unwatch(watcher)
         self._watchers.clear()
         for layer, watchers in self._layer_watchers.items():
-            if isinstance(layer, VectorLayer):
-                layer.cancel_loads()
-            elif isinstance(layer, RasterLayer):
+            if isinstance(layer, RasterLayer):
                 layer.clear_cache()
             for watcher in watchers:
                 layer.param.unwatch(watcher)

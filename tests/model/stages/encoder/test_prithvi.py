@@ -6,9 +6,8 @@ import torch
 from torch import nn
 from torch.utils.data import default_collate
 
-from geosave.geodata import Dataset, attrs
+from geosave.geodata import Dataset
 from tests.conftest import build_dataset
-from geosave.geodata.attrs import TimeSpec
 from geosave.model.stages.encoder import prithvi
 from geosave.model.stages.encoder.prithvi import BACKBONE_REGISTRY, Prithvi, PrithviTL
 
@@ -46,16 +45,6 @@ def test_model_context_reads_the_raster_it_encodes(scene):
     torch.testing.assert_close(context["location_coords"], torch.tensor([51.0, 11.0]))
     assert context["temporal_coords"].dtype == torch.float32
     assert context["location_coords"].dtype == torch.float32
-
-
-def test_context_encodes_bucket_label_not_midpoint(scene: Dataset) -> None:
-    single = scene.isel(time=slice(1, 2))
-    monthly = single.assign_coords(
-        time=attrs.stamp_attrs(single.time, TimeSpec(time_freq="MS"))
-    )
-    torch.testing.assert_close(
-        prithvi.temporal_coords(monthly), torch.tensor([[2024.0, 0.0]])
-    )
 
 
 @pytest.mark.parametrize("labels", [[], [np.datetime64("NaT", "ns")]])

@@ -1,0 +1,80 @@
+{
+  "tif": {
+    "assets": [
+      "image"
+    ],
+    "rows": 1,
+    "core_schema": "passed",
+    "media_type": "image/tiff; application=geotiff"
+  },
+  "nc": {
+    "assets": [
+      "image"
+    ],
+    "rows": 1,
+    "core_schema": "passed",
+    "media_type": "application/netcdf"
+  },
+  "zarr": {
+    "assets": [
+      "image"
+    ],
+    "rows": 1,
+    "core_schema": "passed",
+    "media_type": "application/vnd+zarr"
+  },
+  "mixed_grid_tree": {
+    "assets": [
+      "fine",
+      "coarse"
+    ],
+    "rows": 1,
+    "core_schema": "passed",
+    "shapes": [
+      [
+        4,
+        4
+      ],
+      [
+        2,
+        2
+      ]
+    ]
+  },
+  "dataarray": {
+    "assets": [
+      "red"
+    ],
+    "rows": 1,
+    "core_schema": "passed"
+  },
+  "composite": {
+    "assets": [
+      "image"
+    ],
+    "rows": 1,
+    "core_schema": "passed"
+  },
+  "encoded": {
+    "assets": [
+      "image"
+    ],
+    "rows": 1,
+    "core_schema": "passed",
+    "band": {
+      "nodata": 65535,
+      "data_type": "uint16",
+      "scale": 0.0001,
+      "offset": 0.0
+    }
+  },
+  "dask_tasks": 0,
+  "asset_io": "No asset reader or writer invoked; URLs are illustrative.",
+  "limits": [
+    "Core STAC schemas validated; extension schemas not validated.",
+    "No raster persistence or file round trip in this probe.",
+    "CF encoding normalization is a prototype, not a writer-independent guarantee.",
+    "DataTree asset mapping is explicit; no automatic collection/date grouping.",
+    "gs.to_item is proposed; probe calls the existing create_item function."
+  ]
+}

@@ -28,7 +28,6 @@ from rasterio.shutil import (
     copy,  # type: ignore[import-untyped]  # ty: ignore[unresolved-import]
 )
 from upath import UPath
-from xarray.conventions import encode_cf_variable
 from xarray.core.utils import equivalent
 
 import geosave.geodata.attrs as attrs
@@ -36,7 +35,6 @@ from geosave.geodata.conventions import TIME_COORDINATE
 from geosave.geodata.io import storage
 from geosave.geodata.io.storage import Location, StorageOptions
 from geosave.geodata.utils.color import parse_color
-from geosave.geodata.core.raster.time import read_bounds
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -49,43 +47,6 @@ if TYPE_CHECKING:
 type CreationOptionValue = str | int | float | bool
 
 FILE_SUFFIXES = (".tif", ".tiff")
-
-
-def _repack(ds: Dataset) -> Dataset:
-    """Apply each variable's CF packing to its values, moving it into attrs.
-
-    rioxarray's Dataset writer declares a band's scale and offset without
-    applying them, so decoded pixels would be stored physical and then read
-    back scaled a second time. Packing them here keeps values and tags agreed.
-
-    Args:
-        ds: Cube whose variables may carry CF packing in their encoding, as
-            every raster read with ``mask_and_scale=True`` does.
-
-    Returns:
-        The same cube with stored values, each variable's packing now in its
-        attrs where the header reads it. A variable carrying none is untouched.
-    """
-    packed = ds.copy()
-    for name, variable in ds.data_vars.items():
-        if not attrs.Packing.is_stated_in(variable.encoding):
-            continue
-        encoded = encode_cf_variable(variable.variable)
-        # The CF encoder names the grid mapping, which rioxarray writes itself.
-        packed_attrs = {
-            key: value for key, value in encoded.attrs.items() if key != "grid_mapping"
-        }
-        stored = xr.DataArray(
-            encoded.data, dims=variable.dims, coords=variable.coords, name=name
-        )
-        stored.attrs = {**variable.attrs, **packed_attrs}
-        stored.encoding = {
-            key: value
-            for key, value in variable.encoding.items()
-            if key not in (*attrs.Packing.KEYS, *attrs.Nodata.KEYS)
-        }
-        packed[name] = stored
-    return packed
 
 
 class GeoTIFFWriteOptions(TypedDict, total=False):
@@ -203,10 +164,18 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     """
     if storage.location(path).suffix.lower() not in FILE_SUFFIXES:
         raise ValueError(f"{path} is not a GeoTIFF destination; use .tif or .tiff")
-    spatial = ds.odc.spatial_dims
-    if spatial is None:
-        raise ValueError("a GeoTIFF needs a locatable grid; assign a CRS first")
-    grid = ds.odc.geobox
+    for name in ds.gs.support_variables:
+        if ds[name].dims:
+            raise ValueError(
+                f"GeoTIFF cannot preserve CF support variable {name!r}; "
+                "write NetCDF/Zarr or explicitly select a DataArray first."
+            )
+    ds = ds.set_coords(ds.gs.support_variables)
+    ds.gs.validate(same_dims=True)
+    if any(variable.gs.geobox is not None for variable in ds.data_vars.values()):
+        ds.gs.validate(same_grid=True)
+    spatial = ds.gs.spatial_dims
+    grid = ds.gs.geobox
     if grid is not None and not isinstance(grid, GeoBox):
         raise ValueError(
             f"this raster is placed by {type(grid).__name__}, which GeoSave "
@@ -224,7 +193,7 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     if count != 1:
         raise ValueError(
             f"one GeoTIFF holds one instant; {count} dates would share {path}; "
-            "add {time} to path_format or select one observation"
+            'split observations with split_item=("time",)'
         )
     cube = ds.squeeze(TIME_COORDINATE) if TIME_COORDINATE in ds.dims else ds
     time = cube.coords.get(TIME_COORDINATE)
@@ -244,7 +213,7 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     if not all(equivalent(value, first) for value in fill_values.values()):
         raise ValueError(
             f"one GeoTIFF holds one fill value, but these bands declare {fill_values}; "
-            "set a shared nodata value or split bands with {band} in path_format"
+            "set a shared nodata value or split bands into separate assets"
         )
 
 
@@ -281,6 +250,12 @@ def write_files(
         [UPath('/abs/red.tif'), UPath('/abs/nir.tif')]
     """
     writer = write_cog if writer is None else writer
+    if writer in (write_cog, write_geotiff):
+        declared = GTiffWriteOptions if writer is write_geotiff else COGWriteOptions
+        unknown = options.keys() - declared.__annotations__.keys()
+        if unknown:
+            raise TypeError(f"unsupported raster write options: {sorted(unknown)}")
+
     _check_files(files, overwrite)
     if compute:
         return [
@@ -436,7 +411,7 @@ def _write(
     """
     validate(ds, path)
 
-    ds = _repack(ds)
+    ds = ds.set_coords(ds.gs.support_variables).gs.scale_and_fill()
 
     cube = ds
     # One file holds one instant, however the axis spells it.
@@ -452,6 +427,19 @@ def _write(
     root = {**cube.attrs, **coverage}
     # A band names itself in its own metadata; GDAL owns the interpretation.
     bands = [_named(cube[name], name) for name in names]
+
+    # Temporal coverage is captured above. Auxiliary coordinates with their own
+    # dimensions cannot be represented by rioxarray's raster band array.
+    dimensions = set()
+    for variable in cube.data_vars.values():
+        dimensions.update(variable.dims)
+
+    auxiliary = []
+    for name, coordinate in cube.coords.items():
+        if not set(coordinate.dims).issubset(dimensions):
+            auxiliary.append(name)
+
+    cube = cube.drop_vars(auxiliary)
 
     # rioxarray turns any attr it is handed into a tag, so it is handed none.
     cube = cube.copy(deep=False)
@@ -515,9 +503,14 @@ def write_header(
             f"name them; pass one variable per band, in band order"
         )
 
-    dst.update_tags(**_as_text(root))
+    owned = {
+        "scale_factor", "add_offset", "_FillValue", "nodata",
+        "color_map", "colorinterp",
+    }
+    # GDAL stores these as band properties, never as dataset JSON tags.
+    root_tags = {key: value for key, value in root.items() if key not in owned}
+    dst.update_tags(**_as_text(root_tags))
 
-    owned = {*attrs.Packing.KEYS, *attrs.Nodata.KEYS, "color_map", "colorinterp"}
     scales: list[float] = []
     offsets: list[float] = []
     interpretations: list[ColorInterp] = []
@@ -592,7 +585,8 @@ def _time_coverage(cube: xr.Dataset) -> dict[str, str]:
     if np.isnat(instant):
         return {}
 
-    bounds = read_bounds(cube.coords)
+    # Serialize NumPy timestamps: the Python datetimes in timespan lose nanoseconds.
+    bounds = cube.gs.time_bounds
     if bounds is None:
         start = end = instant
     else:
@@ -624,7 +618,9 @@ def _as_text(attrs: Mapping[str, Any]) -> dict[str, str]:
         A collection is spelled as JSON, which reads back as itself.
     """
     return {
-        key: value if isinstance(value, str) else orjson.dumps(value).decode()
+        key: value
+        if isinstance(value, str)
+        else orjson.dumps(value, option=orjson.OPT_SERIALIZE_NUMPY).decode()
         for key, value in attrs.items()
     }
 
@@ -656,3 +652,52 @@ def open_geotiff(
         storage_options=storage_options,
         **options,
     )
+
+
+def write_items(
+    items: Sequence[Mapping[str, xr.Dataset]],
+    path: Location,
+    *,
+    format_paths: str | None = None,
+    writer=None,
+    storage_options: StorageOptions | None = None,
+    **options: Any,
+):
+    """Name and write every asset of every Item, checking the whole batch first.
+
+    Args:
+        items: ``{asset name: Dataset}`` per Item, as `split_items` returns.
+        path: Destination folder.
+        format_paths: Relative path template over each asset's scalar
+            coordinates, ``{asset}`` and ``{variable}``. None names files by
+            asset, in a folder per instant when dated.
+        writer: GeoTIFF writer; COG when None.
+        storage_options: Filesystem options merged into the destination.
+        **options: Forwarded to `write_files`.
+
+    Returns:
+        Written paths, or one delayed batch.
+
+    Raises:
+        ValueError: `path` names a file, or two assets land at one destination.
+    """
+    from geosave.geodata.io.paths import format_path
+
+    root = storage.location(path, storage_options)
+    if root.suffix.lower() in FILE_SUFFIXES:
+        raise ValueError("path must be a folder; name files with format_paths")
+
+    files = {}
+    for item in items:
+        for name, asset in item.items():
+            template = format_paths
+            if template is None:
+                template = "{asset}.tif"
+                if "time" in asset.coords and asset.time.ndim == 0:
+                    template = "{time:%Y%m%dT%H%M%S}/{asset}.tif"
+            destination = root / format_path(template, asset, asset=name)
+            if destination in files:
+                raise ValueError(f"format_paths destinations collide at {destination}")
+            files[destination] = asset
+
+    return write_files(files, writer, **options)

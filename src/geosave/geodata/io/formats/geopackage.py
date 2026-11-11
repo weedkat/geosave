@@ -9,7 +9,7 @@ import geopandas as gpd
 from upath import UPath
 
 from geosave.geodata.io import storage
-from geosave.geodata.io.formats._geopandas import unpack_engine_options
+from geosave.geodata.io.formats.utils.geopandas import unpack_engine_options
 from geosave.geodata.io.storage import Location, StorageOptions
 
 if TYPE_CHECKING:
@@ -150,8 +150,11 @@ def write_geopackage(
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
         TypeError: An option is unsupported or supplied twice.
-        ValueError: The suffix is wrong, or an option conflicts with `engine`.
+        ValueError: The frame carries STAC Item metadata, the suffix is wrong,
+            or an option conflicts with `engine`.
     """
+    gdf.gs.validate(geometry=False, stac_item=False)
+
     storage_options = write_options.pop("storage_options", None)
     engine_options = dict(write_options.pop("engine_options", {}))
     if "engine" in engine_options:

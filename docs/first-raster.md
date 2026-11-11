@@ -1,127 +1,91 @@
-# Your first raster
+# Your first vegetation map
 
-Create a tiny image with two measurements at each location, calculate a useful
-feature, then save and reopen it. The example makes its own data, so you can
-run it without downloads or accounts. Install GeoSave first using the
-[installation guide](install.md).
+Open a real satellite image, calculate a vegetation index, and save a result
+that you can open in a GIS. No model, catalog, or GPU is needed.
 
-## Create an image
+**You need:** the [base installation](install.md) and a small sample download.
+The processing steps work offline after downloading the file.
+
+![Natural-color satellite image and its NDVI map](assets/vegetation.jpg)
+
+## Open the sample
+
+[Download sample-scene.tif](assets/sample-scene.tif){ .md-button .md-button--primary }
+
+Save this file in the directory where you run Python or your notebook. It is a
+752 KiB crop of Sentinel-2 imagery near Davis, California, acquired on
+June 27, 2025. It contains four bands on a 10 metre grid.
+[Data source and attribution](assets/README.md).
 
 ```python
-import numpy as np
-import xarray as xr
-
 import geosave as gs
 
-from odc.geo.geobox import GeoBox
-
-grid = GeoBox.from_bbox(
-    (500000, 5000000, 500040, 5000040),
-    crs='EPSG:32633', resolution=10,
-)
-red = np.full((4, 4), 0.25, dtype="float32")
-nir = np.full((4, 4), 0.75, dtype="float32")
-scene = xr.Dataset(
-    {"red": (("y", "x"), red), "nir": (("y", "x"), nir)}
-).gs.write_grid(grid)
-scene
+scene = gs.open_raster("sample-scene.tif")
+list(scene.data_vars), (scene.sizes["y"], scene.sizes["x"])
 ```
-
-Output:
 
 ```text
-<xarray.Dataset> Size: 196B
-Dimensions:      (y: 4, x: 4)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) float32 64B 0.25 0.25 0.25 0.25 ... 0.25 0.25 0.25 0.25
-    nir          (y, x) float32 64B 0.75 0.75 0.75 0.75 ... 0.75 0.75 0.75 0.75
+(['red', 'green', 'blue', 'nir'], (337, 267))
 ```
 
-A raster is an image whose pixels correspond to locations on the ground.
-`scene` is a normal xarray Dataset with two named arrays: `red` and `nir`.
-They represent reflected light in red and near-infrared wavelengths. Real
-satellite images supply these values; here we filled them with simple numbers.
+`scene` is an xarray Dataset. Each variable is one band; `x` and `y` locate the
+pixel centres. Opening the file reads its metadata and prepares lazy pixel
+reads. You do not need to construct a grid for an already georeferenced file.
 
-The GeoBox places the 4 × 4 image within the projected bounds above, and
-`write_grid` writes that placement onto the Dataset.
-Each pixel covers 10 × 10 metres. The `y` and `x` coordinates locate the pixel
-centres, and `spatial_ref` records the map coordinate system, called the CRS.
-GeoSave keeps that location information alongside the values.
-
-## Compute a feature
+## See the image
 
 ```python
-scene = scene.assign(ndvi=gs.features.ndvi(scene, nir="nir", red="red"))
-scene.ndvi
+scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 ```
 
-Output:
+In a notebook, the final expression displays a natural-color image. In a Python
+script, save a plot with `holoviews.save(plot, "scene.png", backend="matplotlib")`,
+where `plot` is the returned object. `xlabel=""` avoids a place-name lookup, so
+this example stays offline.
 
-```text
-<xarray.DataArray 'ndvi' (y: 4, x: 4)> Size: 64B
-array([[0.5, 0.5, 0.5, 0.5],
-       [0.5, 0.5, 0.5, 0.5],
-       [0.5, 0.5, 0.5, 0.5],
-       [0.5, 0.5, 0.5, 0.5]], dtype=float32)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
+## Calculate NDVI
+
+```python
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+ndvi.gs.plot(cmap="YlGn", clim=(-0.2, 0.9), xlabel="")
 ```
 
-NDVI, the normalized difference vegetation index, compares near-infrared and
-red reflectance: `(nir - red) / (nir + red)`. Here every pixel is `0.5`.
-Assignment adds it as a named variable at the same pixel locations. The original
-bands remain in the Dataset, so normal xarray selection and arithmetic still work.
+NDVI compares near-infrared and red reflectance: `(nir - red) / (nir + red)`.
+Higher values often indicate green vegetation. It is an index, not a land-cover
+classification; clouds, water, soil, and season affect interpretation.
+GeoSave decodes the bands' declared nodata and scale/offset before calculation.
+Plotting reads pixels; the calculation itself can remain lazy.
 
 ## Save and reopen
 
 ```python
-from pathlib import Path
-import tempfile
-
-root = Path(tempfile.mkdtemp())
-files = scene.gs.to_cog(root, path_format="scene.tif")
-opened = gs.open_raster(files[0])
-opened
+files = ndvi.gs.to_cog("output", format_paths="ndvi.tif")
+result = gs.open_raster(files[0])
+list(result.data_vars), result.gs.geobox == scene.gs.geobox
 ```
-
-Output:
 
 ```text
-<xarray.Dataset> Size: 264B
-Dimensions:      (x: 4, y: 4)
-Coordinates:
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-    spatial_ref  int64 8B 0
-Data variables:
-    red          (y, x) float32 64B dask.array<chunksize=(4, 4), meta=np.ndarray>
-    nir          (y, x) float32 64B dask.array<chunksize=(4, 4), meta=np.ndarray>
-    ndvi         (y, x) float32 64B dask.array<chunksize=(4, 4), meta=np.ndarray>
-Attributes:
-    AREA_OR_POINT:  Area
+(['ndvi'], True)
 ```
 
-`to_cog` writes Cloud Optimized GeoTIFFs and returns a list of destination
-UPaths. `open_raster` reads one file path. Use a catalog to assemble files across bands or dates.
-The reopened bands are Dask
-arrays: their pixel data loads when you compute, plot, or convert it to tensors.
-Close the dataset with `opened.close()` when finished.
+The Cloud Optimized GeoTIFF at `output/ndvi.tif` keeps the source pixel grid.
+You can open it in QGIS or another Python process. Writing computes the result.
+GeoSave refuses an existing destination; use `overwrite=True` when intentionally
+rerunning the write.
 
-For your own image, use `gs.open_raster("path/to/scene.tif")`. Its band names and
-grid come from the file; no anchor is needed to open it.
+```python
+result.close()
+scene.close()
+```
 
-This example starts with NumPy arrays, so creating and calculating the image
-uses pixels already in memory. Opening a file with `chunks={}` instead builds
-Dask arrays; selection and arithmetic can then stay lazy until saving or
-computing. The [file-ingestion guide](guides/ingest-files.md) follows that path.
+## Use your own data
 
-Continue with [Raster data](basics/rasters.md) for selection and processing, or
-[From images to training chips](quickstart.md) for a complete data preparation
-example. See the [constructor](reference/rasters.md) and
-[I/O reference](reference/io.md) for argument details.
+Replace `"sample-scene.tif"` with your path. Inspect `list(scene.data_vars)` and
+pass your red and near-infrared band names to `ndvi`. A file may use names such
+as `B04` and `B08`, or generic names such as `band_1`. Identify their meaning
+from the data provider before renaming them. An ordinary RGB photo has no
+near-infrared band and cannot supply this NDVI example.
+
+**Next:** [download imagery for your area](guides/download-imagery.md),
+[explore this scene on a map](guides/explore.md), or
+[crop and prepare your own files](guides/ingest-files.md).

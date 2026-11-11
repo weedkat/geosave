@@ -1,40 +1,20 @@
-"""Translate between STAC Items and their rasters.
-
-An Item is one observation: one date, its files as assets. Writing builds it
-from rasters about to be saved, with the STAC metadata they carry: the
-`stac_properties` coordinate and the `StacMetadata` root attrs. Reading names
-an Item's assets and dates for opening them as xarray.
-"""
+"""Interpret and construct native STAC Item metadata without raster I/O."""
 
 from __future__ import annotations
 
-import json
-import warnings
-from collections.abc import Mapping, Sequence
 from datetime import UTC
 from datetime import datetime as DateTime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict
 
-import numpy as np
 import pandas as pd
 import pystac
-import xarray as xr
-from odc.geo.geobox import GeoBox
-from shapely import union_all
-from shapely.geometry import mapping
-from upath import UPath
 
-import geosave.geodata.attrs as attrs
-from geosave import __path__ as _package_paths
-from geosave.geodata.conventions import STAC_PROPERTIES, TIME_COORDINATE
-from geosave.geodata.core.anchor import GeoAnchor
-from geosave.geodata.core.raster.time import assign_bounds, read_bounds
-from geosave.geodata.stac import asset, band
-from geosave.geodata.utils.template import fields_named
-from geosave.geodata.warnings import TimelessItemWarning
+from geosave.geodata.stac import band
 
-# An Item's time: one instant, or a start and an end.
-type ItemTime = DateTime | tuple[DateTime, DateTime]
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from odc.geo.geom import Geometry
 
 
 # The time of an Item whose rasters state none. STAC dates every Item, so a
@@ -61,7 +41,7 @@ _STATED_BY_RASTER = (
 )
 
 
-def select_item_properties(properties: Mapping[str, Any]) -> dict[str, Any]:
+def select_item_properties(properties: dict[str, Any]) -> dict[str, Any]:
     """Keep the Item properties about its date and acquisition, not its pixels.
 
     Args:
@@ -83,224 +63,17 @@ def select_item_properties(properties: Mapping[str, Any]) -> dict[str, Any]:
     return kept
 
 
-def stamp_properties_coordinate[T: xr.Dataset | xr.DataArray](
-    raster: T, properties: Sequence[Mapping[str, Any]]
-) -> T:
-    """Record each date's Item properties as JSON on the `stac_properties` coordinate.
-
-    Args:
-        raster: Raster carrying a `time` coordinate.
-        properties: One mapping per `time` label, in label order.
-
-    Returns:
-        Raster with `stac_properties` along `time`, or scalar for a scalar time.
-
-    Raises:
-        ValueError: The mappings do not match the `time` labels one to one.
-
-    Examples:
-        >>> stamp_properties_coordinate(scene, [{"eo:cloud_cover": 20.0}]).stac_properties.item()
-        '{"eo:cloud_cover": 20.0}'
-    """
-    texts = [json.dumps(dict(entry)) for entry in properties]
-    labels = raster[TIME_COORDINATE]
-    if labels.ndim == 0:
-        if len(texts) != 1:
-            raise ValueError("a scalar time takes one properties mapping")
-        return raster.assign_coords({STAC_PROPERTIES: texts[0]})
-    if len(texts) != labels.size:
-        raise ValueError(
-            f"{len(texts)} properties mappings for {labels.size} time labels"
-        )
-    return raster.assign_coords({STAC_PROPERTIES: (labels.dims[0], texts)})
-
-
-def read_properties_coordinate(
-    raster: xr.Dataset | xr.DataArray,
-) -> list[dict[str, Any]]:
-    """Read each date's Item properties from the `stac_properties` coordinate.
-
-    Args:
-        raster: Raster, with or without the coordinate.
-
-    Returns:
-        One mapping per `time` label, in label order; empty without the
-        coordinate.
-    """
-    if STAC_PROPERTIES not in raster.coords:
-        return []
-    texts = np.atleast_1d(raster.coords[STAC_PROPERTIES].values)
-    return [json.loads(str(text)) for text in texts]
-
-
-def check_single_date(raster: xr.Dataset) -> None:
-    """Refuse a raster that cannot be saved as one STAC observation.
-
-    Args:
-        raster: Raster about to be written as an Item asset.
-
-    Raises:
-        ValueError: The raster lacks a locatable grid or holds several dates.
-            Only coordinates are inspected.
-    """
-    if raster.gs.geobox is None:
-        raise ValueError(
-            "an Item asset needs a locatable grid; assign a CRS before writing"
-        )
-    if TIME_COORDINATE in raster.coords and raster[TIME_COORDINATE].size > 1:
-        raise ValueError(
-            "one Item is one observation; split the dates with {time} in the "
-            "path template"
-        )
-
-
-def create_item(
-    assets: Mapping[str, tuple[UPath, xr.Dataset]],
-    *,
-    id_format: str,
-    collection: str | None = None,
-    datetime: ItemTime | None = None,
-) -> pystac.Item:
-    """Build the Item of one date's written files, with the STAC metadata they carry.
-
-    Args:
-        assets: Asset keys mapped to written paths and the selections written
-            there, all of one date.
-        id_format: Item id template, filled from `lat`, `lon`, `start`, `end`,
-            and, for assets on one grid, `res`, `width`, `height`, `epsg`.
-        collection: Collection id the Item belongs to.
-        datetime: Date or interval for selections stating no time.
-
-    Returns:
-        Item whose assets are the files, and whose properties are the
-        selections' `StacMetadata` common properties overlaid with their
-        date's `stac_properties` mapping.
-
-    Raises:
-        ValueError: A selection lacks a locatable grid or holds several
-            dates, the selections disagree on their date, or an id format
-            field is unavailable. Grid fields require all assets on one grid.
-
-    Warns:
-        TimelessItemWarning: No selection states a time and `datetime` is None.
-
-    Examples:
-        >>> item = create_item({"red": (path, scene)}, id_format="{start:%Y%m%d}")
-        >>> item.properties["platform"]
-        'sentinel-2a'
-    """
-    rasters = [raster for _, raster in assets.values()]
-    grids = []
-    for raster in rasters:
-        check_single_date(raster)
-        grid = raster.gs.geobox
-        if not isinstance(grid, GeoBox):
-            raise ValueError("an Item asset needs a locatable grid with a transform")
-        grids.append(grid)
-    nominal, start, end = _read_time(rasters, datetime)
-    footprint = union_all([grid.geographic_extent.geom for grid in grids])
-    anchor = GeoAnchor.from_geometry(footprint, timespan=(start, end))
-    geobox = None
-    if set(fields_named(id_format)) & {"res", "width", "height", "epsg"}:
-        geobox = grids[0]
-        if any(other != geobox for other in grids[1:]):
-            raise ValueError("grid fields of an Item id need its assets on one grid")
-    ranged = start != end
-    item = pystac.Item(
-        anchor.format(id_format, geobox=geobox),
-        mapping(footprint),
-        list(footprint.bounds),
-        nominal,
-        _read_carried_properties(rasters[0]),
-        start_datetime=start if ranged else None,
-        end_datetime=end if ranged else None,
-        collection=collection,
-    )
-    stated = attrs.StacMetadata.from_attrs(rasters[0].attrs)
-    if stated is not None and stated.extensions:
-        item.stac_extensions = list(
-            dict.fromkeys([*item.stac_extensions, *stated.extensions])
-        )
-    for key, (path, raster) in assets.items():
-        item.add_asset(key, asset.build_asset(path, raster, owner=item))
-    return item
-
-
-def _read_carried_properties(raster: xr.Dataset) -> dict[str, Any]:
-    """Overlay the date's `stac_properties` mapping on the common properties.
-
-    Fields the raster states in its own structure are left to it, even where
-    `with_properties` recorded them, so a copied date never contradicts the
-    Item's own.
-    """
-    stated = attrs.StacMetadata.from_attrs(raster.attrs)
-    common = {} if stated is None else dict(stated.common_properties or {})
-    dates = read_properties_coordinate(raster)
-    # A selection about to be one Item holds one date, as check_single_date keeps it.
-    carried = {**common, **dates[0]} if dates else common
-    return select_item_properties(carried)
-
-
-def _read_label(raster: xr.Dataset) -> np.datetime64 | None:
-    """Return the one `time` label a selection holds, or None for a timeless one."""
-    if TIME_COORDINATE not in raster.coords:
-        return None
-    return np.atleast_1d(raster[TIME_COORDINATE].values)[0]
-
-
-def _read_time(
-    rasters: Sequence[xr.Dataset], datetime: ItemTime | None
-) -> tuple[DateTime | None, DateTime, DateTime]:
-    """Return the nominal instant, start and end of one observation's selections."""
-    labels = []
-    for raster in rasters:
-        label = _read_label(raster)
-        if label is not None:
-            labels.append(label)
-    if not labels:
-        if datetime is None:
-            warnings.warn(
-                "the rasters state no time; pass datetime= to date them",
-                TimelessItemWarning,
-                skip_file_prefixes=tuple(_package_paths),
-            )
-            return None, *TIMELESS
-        if isinstance(datetime, tuple):
-            start, end = datetime
-            return (start if start == end else None), start, end
-        return datetime, datetime, datetime
-
-    dates = pd.DatetimeIndex(labels).unique()
-    if len(dates) != 1 or pd.isna(dates[0]):
-        raise ValueError("the assets of one Item must share one date")
-    stamp = _to_utc(dates.to_numpy()[0])
-
-    # A composite states the period it covers; an instant covers itself.
-    starts = [stamp]
-    ends = [stamp]
-    for raster in rasters:
-        bounds = read_bounds(raster.coords)
-        if bounds is not None:
-            first, last = bounds
-            if np.isnat(first).any() or np.isnat(last).any():
-                raise ValueError("start_datetime and end_datetime must not hold NaT")
-            starts.append(_to_utc(first.min()))
-            ends.append(_to_utc(last.max()))
-    return stamp, min(starts), max(ends)
-
-
-def _to_utc(value: np.datetime64) -> DateTime:
-    """Read a naive UTC `datetime64`, already checked not NaT, as an aware datetime."""
-    return cast("DateTime", pd.Timestamp(value).tz_localize(UTC).to_pydatetime())
-
-
 def read_timespan(
-    item: pystac.Item | Mapping[str, Any],
+    instant: DateTime | str | None,
+    start: DateTime | str | None = None,
+    end: DateTime | str | None = None,
 ) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     """Return the first and last instant an Item covers.
 
     Args:
-        item: Item, or its dict as a window's `sources` holds it.
+        instant: Nominal observation timestamp, or None.
+        start: Explicit coverage start, or None to use the instant.
+        end: Explicit coverage end, or None to use the instant.
 
     Returns:
         (start, end), naive UTC: its `start_datetime` and `end_datetime`,
@@ -308,14 +81,11 @@ def read_timespan(
         `TIMELESS` or states no time.
 
     Examples:
-        >>> read_timespan({"properties": {"datetime": "2025-06-01T00:00:00Z"}})
+        >>> read_timespan("2025-06-01T00:00:00Z")
         (Timestamp('2025-06-01 00:00:00'), Timestamp('2025-06-01 00:00:00'))
     """
-    properties = (
-        item.properties if isinstance(item, pystac.Item) else item.get("properties", {})
-    )
-    start = properties.get("start_datetime") or properties.get("datetime")
-    end = properties.get("end_datetime") or properties.get("datetime")
+    start = start if start is not None else instant
+    end = end if end is not None else instant
     if start is None or end is None:
         return None
     # Compared as Timestamps first, since TIMELESS lies past pandas' nanosecond range.
@@ -327,27 +97,70 @@ def read_timespan(
     )
 
 
-def read_instant(item: pystac.Item | Mapping[str, Any]) -> pd.Timestamp | None:
+def read_item_period(item: pystac.Item) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    """Return the period an Item covers: its start and end, else its instant twice.
+
+    Args:
+        item: Native STAC Item.
+
+    Returns:
+        (start, end), naive UTC, or None for a timeless Item.
+
+    Examples:
+        >>> read_item_period(composite)
+        (Timestamp('2025-06-01 00:00:00'), Timestamp('2025-07-01 00:00:00'))
+    """
+    return read_timespan(
+        item.datetime,
+        item.properties.get("start_datetime"),
+        item.properties.get("end_datetime"),
+    )
+
+
+def read_instant(item: pystac.Item) -> pd.Timestamp | None:
     """Return the instant an Item is dated by: its `datetime`, else its start.
 
     Args:
-        item: Item, or its dict as a window's `sources` holds it.
+        item: Native STAC Item.
 
     Returns:
         The instant, naive UTC, or None for a timeless Item.
 
     Examples:
-        >>> read_instant({"properties": {"datetime": "2025-06-01T00:00:00Z"}})
+        >>> read_instant(item)
         Timestamp('2025-06-01 00:00:00')
     """
-    covered = read_timespan(item)
+    covered = read_item_period(item)
     if covered is None:
         return None
-    properties = (
-        item.properties if isinstance(item, pystac.Item) else item.get("properties", {})
-    )
-    nominal = properties.get("datetime")
+    nominal = item.datetime
     return pd.to_datetime(nominal, utc=True).tz_convert(None) if nominal else covered[0]
+
+
+def read_footprint(items: Sequence[pystac.Item]) -> Geometry | None:
+    """Return the area the Items' geometries cover, as one lon/lat geometry.
+
+    Args:
+        items: Items whose `geometry` states their region.
+
+    Returns:
+        Union of their geometries in EPSG:4326, or None where none states one.
+
+    Examples:
+        >>> read_footprint([item]).crs
+        CRS('EPSG:4326')
+    """
+    from odc.geo.geom import Geometry
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    shapes = []
+    for entry in items:
+        if entry.geometry is not None:
+            shapes.append(shape(entry.geometry))
+    if not shapes:
+        return None
+    return Geometry(unary_union(shapes), "EPSG:4326")
 
 
 def select_data_assets(item: pystac.Item) -> dict[str, pystac.Asset]:
@@ -400,6 +213,11 @@ def read_variable_names(item: pystac.Item) -> dict[str, tuple[str, ...]]:
         count = len(bands)
         if count <= 1:
             found[key] = (key,)
+            if count == 1:
+                for alias in bands[0]:
+                    if alias == key or owner.get(alias) == (key, 1):
+                        found[key] = (alias,)
+                        break
             continue
         variables = []
         for index in range(1, count + 1):
@@ -410,62 +228,85 @@ def read_variable_names(item: pystac.Item) -> dict[str, tuple[str, ...]]:
     return found
 
 
-def stamp_item_time(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
-    """Date a raster opened from an Item, and record the Item's properties.
+class ItemTime(TypedDict):
+    """UTC observation instant and optional paired coverage boundaries."""
 
-    Time coordinates already in the file are kept; composite bounds and the
-    `stac_properties` coordinate come from the Item. A timeless Item adds no
-    dates and no properties.
-    """
-    when = read_instant(item)
-    if when is None:
-        return raster
-
-    if raster.gs.times is None:
-        raster = raster.assign_coords(time=when)
-
-    if "start_datetime" in item.properties and "end_datetime" in item.properties:
-        edges = []
-        for key in ("start_datetime", "end_datetime"):
-            edges.append(
-                pd.to_datetime(item.properties[key], utc=True)
-                .tz_convert(None)
-                .to_datetime64()
-            )
-        raster = assign_bounds(raster, [tuple(edges)])
-
-    properties = select_item_properties(item.properties)
-    labels = np.atleast_1d(raster[TIME_COORDINATE].values)
-    return stamp_properties_coordinate(raster, [properties] * labels.size)
+    datetime: DateTime | None
+    start_datetime: DateTime | None
+    end_datetime: DateTime | None
 
 
-def build_stac_metadata(
-    items: Sequence[pystac.Item], collection: pystac.Collection | None
-) -> attrs.StacMetadata:
-    """Read Collection metadata and the properties and schemas shared by Items.
+def normalize_datetime(value: DateTime | str) -> DateTime:
+    """Convert a finite timestamp to UTC; interpret naive timestamps as UTC."""
+    timestamp = pd.Timestamp(value)
+    if not isinstance(timestamp, pd.Timestamp):
+        raise ValueError("Item datetime must be finite")
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    return timestamp.to_pydatetime()
+
+
+def normalize_time(
+    instant: DateTime | str | None,
+    start: DateTime | str | None,
+    end: DateTime | str | None,
+) -> ItemTime:
+    """Normalize an instant, an interval, or an instant within an interval.
 
     Args:
-        items: Nonempty sequence of source Items.
-        collection: Collection to retain without its catalog links, or None.
+        instant: Nominal observation timestamp, or None for interval-only data.
+        start: Inclusive coverage start; requires end.
+        end: Coverage end; requires start.
 
     Returns:
-        Metadata for a Dataset root or a DataTree's collection node. Only
-        nonstructural properties present and equal on every Item are retained.
+        Named UTC datetime fields; absent instant or boundaries remain None.
+
+    Raises:
+        ValueError: Time is missing, nonfinite, incomplete, reversed, or the
+            nominal instant lies outside the interval.
     """
-    fields = None
-    if collection is not None:
-        fields = collection.to_dict(include_self_link=False, transform_hrefs=False)
-        fields["links"] = []
-    shared = select_item_properties(items[0].properties)
-    for entry in items[1:]:
-        for key in list(shared):
-            if key not in entry.properties or entry.properties[key] != shared[key]:
-                del shared[key]
-    extensions = []
-    for entry in items:
-        extensions.extend(entry.stac_extensions)
-    return attrs.StacMetadata(
-        collection=fields,
-        common_properties=shared,
-        extensions=list(dict.fromkeys(extensions)),
-    )
+    if (start is None) != (end is None):
+        raise ValueError("provide both start_datetime and end_datetime")
+    if instant is None and start is None:
+        raise ValueError(
+            "supply input_datetime or both start_datetime and end_datetime"
+        )
+
+    instant = None if instant is None else normalize_datetime(instant)
+    start = None if start is None else normalize_datetime(start)
+    end = None if end is None else normalize_datetime(end)
+    if start is not None and end is not None:
+        if start > end:
+            raise ValueError("Item interval must have ordered boundaries")
+        if instant is not None and not start <= instant <= end:
+            raise ValueError("Item datetime lies outside the stated coverage")
+
+    return {"datetime": instant, "start_datetime": start, "end_datetime": end}
+
+
+def create_item(
+    *,
+    id: str,
+    time: ItemTime,
+    properties: dict[str, Any],
+    collection: str | None = None,
+) -> pystac.Item:
+    """Construct an Item from normalized time and acquisition properties.
+
+    Geometry and Assets can be attached with native PySTAC methods. Properties
+    are copied; time is stated exclusively by the explicit time argument.
+    """
+    from copy import deepcopy
+
+    fields = deepcopy(properties)
+    for key in ("datetime", "start_datetime", "end_datetime"):
+        if key in fields:
+            raise ValueError(f"provide {key} through time, not properties")
+    start = time["start_datetime"]
+    end = time["end_datetime"]
+    if start is not None and end is not None:
+        fields["start_datetime"] = start.isoformat()
+        fields["end_datetime"] = end.isoformat()
+    return pystac.Item(id, None, None, time["datetime"], fields, collection=collection)

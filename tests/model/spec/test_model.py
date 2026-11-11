@@ -1,529 +1,506 @@
-from __future__ import annotations
-
-from datetime import UTC, datetime
+from concurrent.futures import ThreadPoolExecutor
+from graphlib import CycleError
+from pathlib import Path
 
 import dask.array as da
-import geopandas as gpd
+from dask.callbacks import Callback
 import numpy as np
-import pandas as pd
 import pytest
 import xarray as xr
-import yaml
-from odc.geo.geobox import GeoBox
-from upath import UPath
 
-from geosave.geodata import (
-    GeoCatalog,
-    GeoDataFrame,
-    open_vector,
-)
-from tests.conftest import build_dataset, build_tree
-from geosave.geodata.stac.catalog import from_items
-from geosave.geodata.io.formats import geotiff
-from geosave.model.spec import CallSpec, ModelSpec, RasterRequirement, Ref
-from tests.geodata.conftest import item_table, write_collection_cogs
-from tests.geodata.conftest import create_file_items
+from tests.model.spec import operations
+from geosave.model.spec import Input, ModelSpec, Step
+from geosave.model.spec.reference import Reference
 
-WHEN = datetime(2025, 6, 1, tzinfo=UTC)
 
-
-def test_python_and_yaml_round_trip_preserves_references_and_literals(tmp_path):
-    spec = ModelSpec.model_validate(
-        {
-            "schema_version": 3,
-            "rasters": {"optical": {"channels": 1}},
-            "preprocessing": {
-                "selected": CallSpec(
-                    call=Ref("optical.__getitem__"),
-                    kwargs={"key": ["red", "nir"]},
-                ),
-                "result": CallSpec(
-                    call="missing_package.for_this_stage",
-                    kwargs={
-                        "items": [Ref("selected"), {"ref": "literal"}],
-                        "label": "!ref selected",
-                    },
-                ),
-            },
-        }
-    )
-    assert ModelSpec.model_validate(spec.model_dump()) == spec
-
-    path = spec.save(tmp_path / "model_spec.yaml")
-
-    assert "!ref" in path.read_text()
-    assert ModelSpec.load(path) == spec
-
-
-def test_a_saved_spec_states_only_what_was_declared(tmp_path):
-    written = """schema_version: 3
-rasters:
-  optical:
-    variables: [red, nir]
-inputs:
-  image: !ref optical
-"""
-    source = tmp_path / "written.yaml"
-    source.write_text(written)
-    spec = ModelSpec.load(source)
-
-    saved = spec.save(tmp_path / "saved.yaml")
-
-    assert yaml.safe_load(saved.read_text().replace("!ref", "")) == yaml.safe_load(
-        written.replace("!ref", "")
-    )
-    assert ModelSpec.load(saved) == spec
-
-
-def test_parsing_never_imports_or_executes_calls(tmp_path):
-    path = tmp_path / "model.yaml"
-    path.write_text(
-        """schema_version: 3
-rasters: {source: {channels: 1}}
-preprocessing:
-  result:
-    call: deliberately_uninstalled.module.function
-    kwargs: {input: !ref source}
-"""
-    )
-
-    result = ModelSpec.load(path)
-
-    assert result.preprocessing["result"].kwargs["input"] == Ref("source")
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "schema_version: 3\nrasters: {}\nrasters: {}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: builtins.dict, call: builtins.list}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: !ref [model]}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: !unknown model}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: builtins.dict, kwargs: {!ref key: 1}}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: builtins.dict, kwargs: {1: value}}",
-        "schema_version: 3\nrasters: {1: {}}",
-        "schema_version: 3\nrasters: {}\npreprocessing: {1: {call: builtins.dict}}",
-        "schema_version: 3\nrasters: {}\npreprocessing:\n  x: {call: builtins.dict, kwargs: &cycle {self: *cycle}}",
-    ],
-)
-def test_invalid_yaml_is_rejected(tmp_path, body):
-    path = tmp_path / "model.yaml"
-    path.write_text(body)
-
-    with pytest.raises((ValueError, yaml.YAMLError)):
-        ModelSpec.load(path)
-
-
-def test_yaml_reference_support_does_not_modify_safe_loader():
-    with pytest.raises(yaml.constructor.ConstructorError):
-        yaml.safe_load("value: !ref input")
-
-
-def _spec(**fields: object) -> ModelSpec:
-    return ModelSpec.model_validate(
-        {
-            "schema_version": 3,
-            "rasters": {"optical": {"channels": 1}},
-            "preprocessing": {
-                "image": {"call": "builtins.dict", "kwargs": {"data": Ref("optical")}}
-            },
-            **fields,
-        }
-    )
-
-
-def test_inputs_round_trip_references_and_calls(tmp_path):
-    path = tmp_path / "model.yaml"
-    path.write_text(
-        """schema_version: 3
-rasters: {optical: {channels: 1}}
-preprocessing:
-  image:
-    call: deliberately_uninstalled.module.function
-    kwargs: {data: !ref optical}
-encoding:
-  context:
-    call: deliberately_uninstalled.module.context
-    kwargs: {raster: !ref optical}
-inputs:
-  image: !ref image
-  centre: !ref 'context["centre"]'
-pixels: [image]
-transforms:
-  image:
-    call: deliberately_uninstalled.module.normalize
-    kwargs: {value: !ref image, mean: [0.5], std: [0.25]}
-"""
-    )
-    spec = ModelSpec.load(path)
-    assert spec.inputs["image"] == Ref("image")
-    assert ModelSpec.load(spec.save(tmp_path / "saved.yaml")) == spec
-
-
-@pytest.mark.parametrize(
-    "inputs",
-    [
-        {"image": Ref("missing")},
-        {"centre": Ref("missing")},
-    ],
-)
-def test_inputs_must_reference_a_step_or_a_raster(inputs):
-    with pytest.raises(ValueError, match=r"Model inputs reference .*missing"):
-        _spec(inputs=inputs)
-
-
-def test_transforms_reject_unavailable_arguments_before_execution():
-    with pytest.raises(ValueError, match="Missing stage inputs.*absent"):
-        _spec(
-            inputs={"image": Ref("image")},
-            transforms={
-                "image": {"call": "builtins.dict", "kwargs": {"value": Ref("absent")}}
-            },
-        )
-
-
-def test_a_spec_round_trips_through_a_remote_upath(bucket):
-    spec = _spec(inputs={"image": Ref("image")})
-    target = UPath(bucket) / "model_spec.yaml"
-
-    saved = spec.save(target)
-
-    assert saved == target
-    assert ModelSpec.load(target) == spec
-
-
-def scaled(*, data: xr.Dataset) -> xr.Dataset:
-    return data * 2
-
-
-def centre(*, raster: xr.Dataset) -> dict[str, float]:
-    return {"centre": float(raster["red"].mean())}
-
-
-def _processing(**fields: object) -> ModelSpec:
-    return ModelSpec.model_validate(
-        {
-            "schema_version": 3,
-            "rasters": {"optical": {"variables": ["red"]}},
-            "preprocessing": {
-                "image": {
-                    "call": f"{__name__}.scaled",
-                    "kwargs": {"data": Ref("optical")},
-                }
-            },
-            "inputs": {"image": Ref("image"), "centre": Ref('context["centre"]')},
-            "encoding": {
-                "context": {
-                    "call": f"{__name__}.centre",
-                    "kwargs": {"raster": Ref("image")},
-                }
-            },
-            **fields,
-        }
-    )
-
-
-def _optical() -> xr.Dataset:
-    return xr.Dataset(
-        {
-            "red": (("y", "x"), da.ones((2, 2), chunks=1)),
-            "nir": (("y", "x"), da.zeros((2, 2))),
-        }
-    )
-
-
-def test_preprocess_returns_selected_rasters_and_results_lazily():
-    results = _processing().preprocess({"optical": _optical(), "label": xr.Dataset()})
-
-    assert sorted(results) == ["image", "optical"]
-    assert list(results["optical"].data_vars) == ["red"]
-    assert isinstance(results["image"]["red"].data, da.Array)
-    assert float(results["image"]["red"].max()) == 2
-
-
-def test_preprocess_refuses_a_missing_declared_raster():
-    with pytest.raises(KeyError, match="optical"):
-        _processing().preprocess({"label": xr.Dataset()})
-
-
-def test_encoding_binds_context_from_the_same_sample_and_keeps_state():
-    spec = _processing()
-    prepared = spec.preprocess({"optical": _optical()})
-    encoded = spec.encode(prepared)
-    inputs = spec.model_inputs(encoded)
-    assert inputs["image"] is prepared["image"]
-    assert inputs["centre"] == 2.0
-    assert encoded["optical"] is prepared["optical"]
-    assert set(inputs) == {"image", "centre"}
-
-
-def test_auxiliary_raster_metadata_can_supply_context():
-    spec = _processing(
-        encoding={
-            "context": {
-                "call": "builtins.dict",
-                "kwargs": {"centre": Ref('optical.attrs["centre"]')},
-            }
-        }
-    )
-    prepared = spec.preprocess({"optical": _optical().assign_attrs(centre=7)})
-    assert spec.model_inputs(spec.encode(prepared))["centre"] == 7
-
-
-def test_model_spec_rejects_undeclared_preprocessing_roots():
-    with pytest.raises(ValueError, match="Missing stage inputs.*scale.*value"):
-        ModelSpec.model_validate(
-            {
-                "schema_version": 3,
-                "rasters": {},
-                "preprocessing": {
-                    "scaled": {"call": Ref("scale"), "kwargs": {"value": Ref("value")}}
-                },
-            }
-        )
-
-
-def test_load_rasters_selects_what_each_recipe_loads(
-    serve, red, coordinate_anchor, coordinate_grid, stac_recipe
-):
-    serve({"https://primary.test/stac": red})
-    model = ModelSpec(
-        schema_version=3,
-        rasters={"image": RasterRequirement(variables=("red",), stac=stac_recipe)},
-    )
-
-    rasters = model.load_rasters(coordinate_anchor, geobox=coordinate_grid)
-
-    assert list(rasters["image"].data_vars) == ["red"]
-
-
-def test_load_rasters_refuses_rasters_without_a_recipe(
-    coordinate_anchor, coordinate_grid, stac_recipe
-):
-    model = ModelSpec(
-        schema_version=3,
-        rasters={
-            "image": RasterRequirement(variables=("red",), stac=stac_recipe),
-            "dem": RasterRequirement(variables=("height",)),
-        },
-    )
-
-    with pytest.raises(ValueError, match=r"no `stac` block: \['dem'\]"):
-        model.load_rasters(coordinate_anchor, geobox=coordinate_grid)
-
-
-def doubled(*, data: xr.Dataset) -> xr.Dataset:
-    return data * 2
-
-
-def _ingest_spec() -> ModelSpec:
-    return ModelSpec.model_validate(
-        {
-            "schema_version": 3,
-            "rasters": {"optical": {"variables": ["nir"]}},
-            "preprocessing": {
-                "image": {
-                    "call": f"{__name__}.doubled",
-                    "kwargs": {"data": Ref("optical")},
-                }
-            },
-            "inputs": {"image": Ref("image")},
-        }
-    )
-
-
-GRID = GeoBox.from_bbox(
-    (500_000, 9_000_000, 500_080, 9_000_080), "EPSG:32748", resolution=10
-)
-NIR = np.arange(64, dtype="uint16").reshape(8, 8)
-
-
-def _scene() -> xr.Dataset:
-    optical = build_dataset({"nir": (("y", "x"), da.from_array(NIR))}, GRID)
-    return optical.expand_dims(time=[np.datetime64("2025-06-01T10:30:00")])
-
-
-def _label() -> xr.Dataset:
-    plane = np.full((8, 8), 3, "uint8")
-    label = build_dataset({"label": (("y", "x"), plane)}, GRID)
-    return label.expand_dims(time=[np.datetime64("2025-06-01")])
+TEXT = Path(__file__).with_name("model_spec.yaml").read_text()
+POLYGON = {
+    "type": "Polygon",
+    "coordinates": [[[107, -7], [108, -7], [108, -6], [107, -7]]],
+}
 
 
 @pytest.fixture
-def loaded(monkeypatch):
-    """Serve `_scene` as every recipe's load and record the anchors asked for."""
-    anchors = []
-
-    def load(spec, anchor, *, geobox):
-        anchors.append(anchor)
-        return {"optical": _scene()}
-
-    monkeypatch.setattr(ModelSpec, "load_rasters", load)
-    return anchors
+def spec():
+    return ModelSpec.from_yaml(TEXT)
 
 
-def test_inference_reads_an_ingested_sample_through_preprocess(tmp_path, loaded):
-    spec = _ingest_spec()
-    anchor = _label().gs.anchor
+def test_load_and_plan_are_inert(monkeypatch):
+    from geosave.model.spec import model as model_spec
 
-    items = spec.ingest(
-        anchor, tmp_path, geobox=GRID, path_format="{collection}/{band}.tif"
-    )
+    def reject(name):
+        raise AssertionError("Imported a callable during loading or planning")
 
-    assert loaded == [anchor]
-    tree = items.gs.sample()[0].gs.to_datatree()
-    rasters = {"optical": tree["optical"].gs.to_dataset()}
-    assert list(rasters) == ["optical"]
-    image = spec.preprocess(rasters)["image"]
-    np.testing.assert_array_equal(image["nir"].values.squeeze(), 2 * NIR)
+    monkeypatch.setattr(model_spec, "import_module", reject)
+    spec = ModelSpec.from_yaml(TEXT)
+    plan = spec.plan(entry="from_area", output="classes")
+    assert plan["inputs"] == ("geometry", "time", "batch_size")
+    assert plan["steps"] == ("from_area", "checked", "prepared", "scores", "classes")
 
 
-def test_training_samples_pair_the_ingested_table_with_a_label_table(tmp_path, loaded):
-    label = _label()
-    images = _ingest_spec().ingest(
-        label.gs.anchor, tmp_path, geobox=GRID, path_format="{collection}/{band}.tif"
-    )
-    labels = from_items(
-        create_file_items(
-            label.gs.to_cog(tmp_path / "label", path_format="label.tif"),
-            collection="label",
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("from_raster", {"raster": operations.scene()}),
+        ("from_area", {"geometry": POLYGON, "time": "2025-06"}),
+        (
+            "from_center",
+            {
+                "longitude": 107.0,
+                "latitude": -7.0,
+                "width_m": 40.0,
+                "height_m": 40.0,
+                "time": "2025-06",
+            },
+        ),
+    ],
+)
+def test_sources_converge_to_same_contract(spec, name, arguments):
+    result = spec.run(entry=name, output="classes", **arguments)
+    np.testing.assert_array_equal(result.label.values, np.zeros((4, 4), dtype="uint8"))
+    assert result.gs.geobox == operations.scene().gs.geobox
+
+
+def test_intermediate_preserves_laziness(spec):
+    events = []
+    with Callback(posttask=lambda *args: events.append(1)):
+        prepared = spec.run(
+            entry="from_raster", output="prepared", raster=operations.scene()
         )
+    assert not events
+    assert isinstance(prepared.red.data, da.Array)
+    np.testing.assert_array_equal(prepared.red.values, np.ones((4, 4)))
+
+
+def test_output_path_needed_only_for_writer(spec, tmp_path):
+    raster = operations.scene()
+    result = spec.run(entry="from_raster", output="classes", raster=raster)
+    assert list(tmp_path.iterdir()) == []
+    path = tmp_path / "classes.tif"
+    saved = spec.run(
+        entry="from_raster", output="saved", raster=raster, destination=str(path)
+    )
+    reopened = operations.open_raster(saved)
+    np.testing.assert_array_equal(reopened.label.values, result.label.values)
+    assert reopened.gs.geobox == raster.gs.geobox
+    assert reopened.label.dtype == np.dtype("uint8")
+
+
+def test_shared_dependency_executes_once(spec, monkeypatch):
+    original = operations.prepare
+    calls = []
+
+    def prepare(raster):
+        calls.append(1)
+        return original(raster)
+
+    monkeypatch.setattr(operations, "prepare", prepare)
+    result = spec.run(
+        entry="from_raster", output=["prepared", "classes"], raster=operations.scene()
+    )
+    assert len(calls) == 1
+    assert set(result) == {"prepared", "classes"}
+
+
+def test_concurrent_invocations_do_not_share_results(spec):
+    def predict(value):
+        result = spec.run(
+            entry="from_raster", output="classes", raster=operations.scene(value)
+        )
+        return int(result.label.values[0, 0])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert list(executor.map(predict, [2.0, -2.0])) == [0, 1]
+
+
+def test_downstream_option_does_not_enter_acquisition(spec, monkeypatch):
+    calls = []
+
+    def predict(raster, batch_size):
+        calls.append(batch_size)
+        return xr.DataArray(
+            np.zeros((2, 4, 4)), dims=("class", "y", "x")
+        ).gs.write_grid(raster.gs.geobox)
+
+    monkeypatch.setattr(operations, "predict", predict)
+    spec.run(
+        entry="from_area",
+        output="classes",
+        geometry=POLYGON,
+        time="2025-06",
+        batch_size=7,
+    )
+    assert calls == [7]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"raster": operations.scene(), "unexpected": 1},
+    ],
+)
+def test_missing_or_unused_inputs_fail_before_calling(spec, monkeypatch, arguments):
+    def reject(raster):
+        raise AssertionError("Entry executed before argument preflight")
+
+    monkeypatch.setattr(operations, "accept", reject)
+    with pytest.raises(ValueError):
+        spec.run(entry="from_raster", output="classes", **arguments)
+
+
+def test_missing_output_fails_before_preparation(spec, monkeypatch):
+    def reject(raster):
+        raise AssertionError("Entry executed before missing destination check")
+
+    monkeypatch.setattr(operations, "accept", reject)
+    with pytest.raises(ValueError, match="input 'destination' is missing"):
+        spec.run(entry="from_raster", output="saved", raster=operations.scene())
+
+
+def test_invalid_raster_prevents_model_execution(spec, monkeypatch):
+    def reject(raster, batch_size):
+        raise AssertionError("Model executed before raster validation")
+
+    monkeypatch.setattr(operations, "predict", reject)
+    with pytest.raises(ValueError, match="Expected one red"):
+        spec.run(entry="from_raster", output="classes", raster=xr.Dataset())
+
+
+def test_references_select_names_and_attributes():
+    values = {"raster": operations.scene()}
+    assert Reference("raster").read_value(values) is values["raster"]
+    assert (
+        Reference("raster.gs.geobox").read_value(values) == values["raster"].gs.geobox
     )
 
-    samples = GeoCatalog.concat([images, labels]).gs.sample()
 
-    assert len(samples) == 1
-    tree = samples[0].gs.to_datatree()
-    rasters = {name: tree[name].gs.to_dataset() for name in ("label", "optical")}
-    assert sorted(rasters) == ["label", "optical"]
-    assert (rasters["label"]["label"].values == 3).all()
+@pytest.mark.parametrize(
+    "path",
+    ["raster.compute()", "x + 1", "x[y]", "x[0:2]", 'context["grid"]', "outputs[0]"],
+)
+def test_references_do_not_evaluate_expressions(path):
+    with pytest.raises(ValueError):
+        Reference(path)
 
 
-def test_ingested_pixels_stay_lazy_until_they_are_written(
-    tmp_path, loaded, monkeypatch
+def test_bound_method_call(tmp_path):
+    spec = ModelSpec.from_yaml("""schema_version: 1
+inputs:
+  value: {}
+steps:
+  initial:
+    call: tests.model.spec.operations.accept
+    kwargs: {raster: !ref value}
+  answer:
+    call: !ref entry.upper
+""")
+    assert spec.run(entry="initial", output="answer", value="hello") == "HELLO"
+    restored = ModelSpec.load(spec.save(tmp_path / "recipe.yaml"))
+    assert restored.run(entry="initial", output="answer", value="hello") == "HELLO"
+
+
+@pytest.mark.parametrize(
+    "call", ["tests.model.spec.operations.accept", Reference("entry.upper")]
+)
+def test_call_argument_errors_report_step_after_dependencies_run(monkeypatch, call):
+    calls = []
+
+    def accept(raster):
+        calls.append(raster)
+        return raster
+
+    monkeypatch.setattr(operations, "accept", accept)
+    spec = ModelSpec(
+        inputs={"text": Input()},
+        steps={
+            "accepted": Step(
+                call="tests.model.spec.operations.accept",
+                kwargs={"raster": Reference("text")},
+            ),
+            "failed": Step(call=call, kwargs={"unexpected": Reference("entry")}),
+        },
+        entry="accepted",
+        output="failed",
+    )
+    with pytest.raises(TypeError) as error:
+        spec.run(text="hello")
+    assert calls == ["hello"]
+    notes = "\n".join(error.value.__notes__)
+    assert "Step 'failed'" in notes
+    assert "output 'failed'" in notes
+
+
+def test_selector_names_cannot_be_inputs():
+    with pytest.raises(ValueError, match="reserved"):
+        ModelSpec.from_yaml(TEXT.replace("  raster: {}", "  output: {}"))
+
+
+def test_input_mutation_is_not_prevented(spec, monkeypatch):
+    def mutate(raster):
+        raster.attrs["changed"] = True
+        return raster
+
+    monkeypatch.setattr(operations, "prepare", mutate)
+    raster = operations.scene()
+    spec.run(entry="from_raster", output="prepared", raster=raster)
+    assert raster.attrs["changed"] is True
+
+
+def test_unknown_reference_and_duplicate_names_fail():
+    with pytest.raises(ValueError, match="unknown reference"):
+        ModelSpec.from_yaml(TEXT.replace("raster: !ref checked", "raster: !ref absent"))
+    with pytest.raises(ValueError, match="unique strings"):
+        ModelSpec.from_yaml(TEXT + "\ninputs: {}\n")
+    with pytest.raises(ValueError, match="distinct"):
+        ModelSpec.from_yaml(TEXT.replace("  raster: {}", "  prepared: {}"))
+
+
+def test_cycles_include_selected_source():
+    with pytest.raises(CycleError):
+        ModelSpec.from_yaml(
+            TEXT.replace("raster: !ref checked", "raster: !ref classes")
+        ).plan(entry="from_raster", output="classes")
+    with pytest.raises(CycleError):
+        ModelSpec.from_yaml(
+            TEXT.replace(
+                "kwargs: {raster: !ref raster}", "kwargs: {raster: !ref entry}"
+            )
+        ).plan(entry="from_raster", output="classes")
+
+
+def test_missing_selection_without_defaults_and_no_intermediate_override(spec):
+    without_defaults = ModelSpec.from_yaml(
+        TEXT.replace("entry: from_raster\n", "").replace("output: classes\n", "")
+    )
+    with pytest.raises(ValueError, match="No workflow entry"):
+        without_defaults.run(output="classes", raster=operations.scene())
+    with pytest.raises(ValueError, match="No workflow output"):
+        without_defaults.run(entry="from_raster", raster=operations.scene())
+    with pytest.raises(ValueError, match="unused"):
+        spec.run(
+            entry="from_raster",
+            output="classes",
+            raster=operations.scene(),
+            prepared=operations.scene(),
+        )
+
+
+def test_file_source_roundtrip(spec, tmp_path):
+    path = operations.save(operations.scene(-2.0), str(tmp_path / "source.tif"))
+    result = spec.run(entry="from_path", output="classes", path=path)
+    np.testing.assert_array_equal(result.label.values, np.ones((4, 4), dtype="uint8"))
+
+
+@pytest.mark.parametrize("path", ["recipe.yaml", "memory://modelspec/recipe.yaml"])
+def test_recipe_roundtrip_preserves_references_defaults_and_execution(tmp_path, path):
+    target = path if path.startswith("memory:") else tmp_path / path
+    recipe = ModelSpec.from_yaml(TEXT)
+    saved = recipe.save(target)
+    restored = ModelSpec.load(saved)
+    expected = recipe.run(raster=operations.scene())
+    actual = restored.run(raster=operations.scene())
+    xr.testing.assert_identical(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "[]",
+        "schema_version: true",
+        "schema_version: 3",
+        "schema_version: 1\ninputs: []",
+        "schema_version: 1\ninputs: {a: null}",
+    ],
+)
+def test_malformed_documents_fail_at_load(text):
+    with pytest.raises(ValueError):
+        ModelSpec.from_yaml(text)
+
+
+def test_mutable_defaults_are_fresh_and_nested_references_resolve():
+    spec = ModelSpec.from_yaml("""schema_version: 1
+inputs:
+  value: {default: []}
+steps:
+  initial:
+    call: builtins.dict
+    kwargs: {items: [!ref value]}
+""")
+    first = spec.run(entry="initial", output="initial")
+    first["items"][0].append(1)
+    assert spec.run(entry="initial", output="initial") == {"items": [[]]}
+
+
+def test_planning_does_not_resolve_properties_and_execution_retains_identity():
+    class Object:
+        @property
+        def value(self):
+            raise RuntimeError("property executed")
+
+    spec = ModelSpec.from_yaml("""schema_version: 1
+inputs: {object: {}}
+steps:
+  answer:
+    call: builtins.dict
+    kwargs: {value: !ref object.value}
+""")
+    spec.plan(entry="answer", output="answer")
+    with pytest.raises(RuntimeError, match="property executed") as error:
+        spec.run(entry="answer", output="answer", object=Object())
+    assert "answer" in "\n".join(error.value.__notes__)
+
+
+def test_builtin_raster_validation_preserves_native_lazy_values():
+    from geosave.model.processing import validate_raster
+
+    raster = operations.scene()
+    with Callback(pretask=lambda *args: pytest.fail("Read pixels during validation")):
+        assert validate_raster(raster) is raster
+    with pytest.raises(ValueError):
+        validate_raster(xr.Dataset({"red": (("y", "x"), np.ones((2, 2)))}))
+
+
+def test_valid_input_self_does_not_collide_with_python_receiver():
+    spec = ModelSpec.from_yaml("""schema_version: 1
+inputs: {self: {}}
+steps:
+  answer:
+    call: builtins.dict
+    kwargs: {value: !ref self}
+""")
+    assert spec.run(entry="answer", output="answer", **{"self": 3}) == {"value": 3}
+
+
+def test_documented_recipe_runs_through_save(tmp_path):
+    recipe = ModelSpec.load(Path(__file__).parents[3] / "docs/guides/model_spec.yaml")
+    raster = operations.scene()
+    result = recipe.run(entry="checked", output="encoded", raster=raster)
+    np.testing.assert_array_equal(result.numpy(), raster.to_array().values)
+    path = recipe.run(
+        entry="checked",
+        output="saved",
+        raster=raster,
+        destination=str(tmp_path / "scene.tif"),
+    )
+    reopened = operations.open_raster(path)
+    np.testing.assert_array_equal(reopened.red.values, raster.red.values)
+    assert reopened.gs.geobox == raster.gs.geobox
+
+
+def test_defaults_and_overrides_select_real_paths(spec, tmp_path):
+    raster = operations.scene()
+    expected = spec.run(entry="from_raster", output="classes", raster=raster)
+    xr.testing.assert_identical(spec.run(raster=raster), expected)
+
+    source = operations.save(raster, str(tmp_path / "input.tif"))
+    actual = spec.run(entry="from_path", path=source)
+    np.testing.assert_array_equal(actual.label.values, expected.label.values)
+    assert actual.gs.geobox == expected.gs.geobox
+    outputs = spec.run(output=["prepared", "classes"], raster=raster)
+    xr.testing.assert_identical(outputs["classes"], expected)
+    assert isinstance(outputs["prepared"].red.data, da.Array)
+
+
+def test_selected_entry_must_participate_before_operations_are_imported(
+    spec, monkeypatch
 ):
-    written = []
-    write_cog = geotiff.write_cog
+    from geosave.model.spec import model
 
-    def spy(raster, *args, **kwargs):
-        for name in raster.data_vars:
-            written.append(isinstance(raster[name].data, da.Array))
-        return write_cog(raster, *args, **kwargs)
+    def reject(name):
+        pytest.fail("Imported code before rejecting a disconnected entry")
 
-    monkeypatch.setattr(geotiff, "write_cog", spy)
+    monkeypatch.setattr(model, "import_module", reject)
+    with pytest.raises(ValueError, match="does not use entry"):
+        spec.run(entry="from_path", output="from_raster", raster=operations.scene())
 
-    _ingest_spec().ingest(
-        _label().gs.anchor, tmp_path, geobox=GRID, path_format="{collection}.tif"
+
+def test_constructor_and_yaml_share_workflow_semantics(tmp_path):
+    spec = ModelSpec(
+        inputs={"value": Input()},
+        steps={
+            "accepted": Step(
+                call="builtins.dict", kwargs={"value": Reference("value")}
+            ),
+            "returned": Step(
+                call="builtins.dict", kwargs={"wrapped": Reference("entry")}
+            ),
+        },
+        entry="accepted",
+        output=["accepted", "returned"],
     )
+    value = object()
+    result = spec.run(value=value)
+    assert result["accepted"]["value"] is value
+    assert result["returned"]["wrapped"] is result["accepted"]
 
-    assert written == [True]
+    restored = ModelSpec.load(spec.save(tmp_path / "recipe.yaml"))
+    assert restored.run(value=value)["returned"]["wrapped"]["value"] is value
 
 
-def test_item_ids_follow_the_given_format(tmp_path, loaded):
-    items = _ingest_spec().ingest(
-        _label().gs.anchor,
-        tmp_path,
-        geobox=GRID,
-        path_format="{collection}.tif",
-        id_format="tile_{start:%Y%m%d}",
+def test_import_failure_identifies_output_step_and_configured_operation():
+    spec = ModelSpec(
+        steps={"prepared": Step(call="missing_modelspec_package.prepare")},
+        entry="prepared",
+        output="prepared",
     )
+    with pytest.raises(ModuleNotFoundError) as error:
+        spec.run()
+    notes = "\n".join(error.value.__notes__)
+    assert "prepared" in notes
+    assert "missing_modelspec_package.prepare" in notes
+    assert "installed" in notes
 
-    assert items["id"].tolist() == ["tile_20250601"]
 
-
-def _prepare_optical(index: int) -> xr.Dataset:
-    left = 500_000 + index * 1000
-    grid = GeoBox.from_bbox(
-        (left, 9_000_000, left + 80, 9_000_000 + 80), "EPSG:32748", resolution=10
+def test_failed_reference_identifies_argument_step_and_value_type():
+    spec = ModelSpec(
+        inputs={"raster": Input()},
+        steps={
+            "decoded": Step(
+                call="builtins.dict",
+                kwargs={"grid": {"nested": Reference("raster.absent_grid")}},
+            )
+        },
+        entry="decoded",
+        output="decoded",
     )
-    plane = np.arange(64, dtype="float32").reshape(8, 8) + 100 * index
-    return build_dataset(
-        {"red": (("y", "x"), plane), "nir": (("y", "x"), plane + 0.5)}, grid
-    )
+    with pytest.raises(AttributeError) as error:
+        spec.run(raster=xr.Dataset())
+    notes = "\n".join(error.value.__notes__)
+    for text in ("raster.absent_grid", "Dataset", "argument 'grid'", "Step 'decoded'"):
+        assert text in notes
 
 
-def _raw(root) -> GeoDataFrame:
-    """Write two samples, optical beside a label, and return their item table."""
-    tables = []
-    for index in range(2):
-        optical = _prepare_optical(index)
-        label = build_dataset(
-            {"label": (("y", "x"), np.full((8, 8), index, "uint8"))},
-            optical.gs.geobox,
-        )
-        sample = build_tree({"optical": optical, "label": label})
-        # One file per band, so each asset is one variable named by its key.
-        templates = {name: f"s{index}/{name}/{{band}}.tif" for name in sample.gs.groups}
-        files = write_collection_cogs(sample, root, templates)
-        tables.append(item_table(files, prefix=f"s{index}", datetime=WHEN))
-    return open_vector(GeoCatalog.concat(tables).gs.to_geoparquet(root / "raw.parquet"))
+def test_null_default_remains_distinct_from_required_input_after_saving(tmp_path):
+    spec = ModelSpec.from_yaml("""schema_version: 1
+entry: collected
+output: collected
+inputs:
+  required: {}
+  optional: {default: null}
+steps:
+  collected:
+    call: builtins.dict
+    kwargs: {required: !ref required, optional: !ref optional}
+""")
+    restored = ModelSpec.load(spec.save(tmp_path / "recipe.yaml"))
+    assert restored.run(required=3) == {"required": 3, "optional": None}
+    with pytest.raises(ValueError, match="input 'required' is missing"):
+        restored.run()
 
 
-def test_prepared_pixels_are_the_preprocessed_raw_pixels(tmp_path):
-    spec = _ingest_spec()
-
-    prepared = spec.prepare(
-        _raw(tmp_path / "raw"), tmp_path / "prepared", keep=["label"]
-    )
-
-    assert sorted(prepared["collection"].unique()) == ["image", "label"]
-    assert ModelSpec.load(tmp_path / "prepared" / ModelSpec.filename) == spec
-    restored = open_vector(prepared.gs.to_geoparquet(tmp_path / "prepared.parquet"))
-    samples = restored.gs.sample()
-    assert len(samples) == 2
-    identities = pd.concat(list(samples))[["collection", "id"]]
-    assert not identities.duplicated().any()
-    folders = []
-    for entry in (tmp_path / "prepared").iterdir():
-        if entry.is_dir():
-            folders.append(entry.name)
-    assert sorted(folders) == ["0", "1"]
-    tree = samples[1].gs.to_datatree()
-    rasters = {name: tree[name].gs.to_dataset() for name in ("image", "label")}
-    assert list(rasters["image"].data_vars) == ["nir"]
-    np.testing.assert_array_equal(
-        rasters["image"]["nir"].values, 2 * _prepare_optical(1)["nir"].values
-    )
-    assert (rasters["label"]["label"].values == 1).all()
-
-
-def test_prepare_without_a_path_writes_a_temporary_catalog(tmp_path):
-    prepared = _ingest_spec().prepare(_raw(tmp_path / "raw"))
-
-    tree = prepared.gs.sample()[0].gs.to_datatree()
-    rasters = {"image": tree["image"].gs.to_dataset()}
-    assert list(rasters) == ["image"]
-    np.testing.assert_array_equal(
-        rasters["image"]["nir"].values, 2 * _prepare_optical(0)["nir"].values
-    )
-
-
-def test_prepare_keeps_pixels_lazy_until_written(tmp_path, monkeypatch):
-    raw = _raw(tmp_path / "raw")
-    written = []
-    write_cog = geotiff.write_cog
-
-    def spy(raster, *args, **kwargs):
-        written.append(
-            all(isinstance(raster[name].data, da.Array) for name in raster.data_vars)
-        )
-        return write_cog(raster, *args, **kwargs)
-
-    monkeypatch.setattr(geotiff, "write_cog", spy)
-
-    _ingest_spec().prepare(raw, tmp_path / "prepared", keep=["label"])
-
-    # Two samples, each writing its image and its kept label.
-    assert written == [True] * 4
-
-
-def test_prepare_refuses_an_existing_folder(tmp_path):
-    (tmp_path / "prepared").mkdir()
-
-    with pytest.raises(FileExistsError):
-        _ingest_spec().prepare(gpd.GeoDataFrame(), tmp_path / "prepared")
-
-
-def test_prepare_names_a_missing_kept_collection(tmp_path):
-    with pytest.raises(KeyError, match="dem"):
-        _ingest_spec().prepare(_raw(tmp_path / "raw"), keep=["dem"])
+def test_nested_steps_can_use_document_field_names(tmp_path):
+    spec = ModelSpec.from_yaml("""schema_version: 1
+entry: inputs
+output: output
+steps:
+  inputs:
+    call: builtins.dict
+    kwargs: {answer: 42}
+  output:
+    call: builtins.dict
+    kwargs: {value: !ref entry}
+""")
+    restored = ModelSpec.load(spec.save(tmp_path / "recipe.yaml"))
+    assert restored.run() == {"value": {"answer": 42}}

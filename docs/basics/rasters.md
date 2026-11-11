@@ -145,7 +145,7 @@ scene.gs.plot("ndvi", cmap="YlGn", xlabel="")
 
 The color scale shows the band's values. `xlabel=""` leaves out a location
 caption and avoids its reverse-geocoding lookup. Name three variables to draw a
-composite: `scene.gs.plot("B08", "B04", "B03")`.
+composite: `scene.gs.plot(rgb=("B08", "B04", "B03"))`.
 
 ## Explore on a map
 
@@ -209,7 +209,12 @@ place model outputs later. Time series, mixed dtypes and masking are covered in
 Use named groups when inputs have different variables or time coordinates:
 
 ```python
-sample = xr.merge([scene.gs.to_datatree("optical"), labels.gs.to_datatree("label")])
+sample = xr.DataTree.from_dict({
+    "/optical": xr.Dataset(attrs=scene.attrs),
+    "/optical/r10m": scene,
+    "/label": xr.Dataset(attrs=labels.attrs),
+    "/label/r10m": labels,
+})
 sample
 ```
 
@@ -242,10 +247,11 @@ Group: /
 
 A tree is an xarray `DataTree` of collections, each holding one `Dataset` per
 grid, named after its pixel size as ESA's EOPF products name theirs (`r10m`,
-`r20m`). `to_datatree("optical")` makes a Dataset its collection's grid node, and `xr.merge` joins collections
-or one collection's grids.
-`sample["optical"].gs.to_dataset()` converts one collection to a raster,
-bringing its grid nodes onto its finest grid, and `sample.gs.to_tensor()`
+`r20m`). Native `xr.DataTree.from_dict` assigns explicit paths; parent Datasets
+preserve collection attrs. Paths describe organization, not grid identity.
+`sample["optical"].gs.to_dataset()` merges compatible nodes sharing the same
+exact grid. For mixed grids, pass `grid=` with a node path or GeoBox, as
+`sample["optical"].gs.to_dataset(grid="r10m")`. `sample.gs.to_tensor()`
 returns a dictionary of tensors keyed by grid node path (`"optical/r10m"`).
 
 Continue with [raster grids](../concepts/raster-grids.md) for CRS, alignment,

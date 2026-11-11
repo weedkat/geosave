@@ -82,6 +82,18 @@ Dask laziness. Rasterization produces pixels eagerly; vectorization needs the
 selected two-dimensional plane in memory. Reprojection can remain lazy, but
 its result still needs checking for the selected resampling method.
 
+## Read chips on demand
+
+`gs.Chips([scene], size=256)` plans tile layouts without computing pixels.
+`chips[0]` returns one lazy window; computing it reads that window, and
+repeated reads can read it again. Keep the source open until all dependent
+reads finish. Storage chunks and upstream transforms may require more work than
+the requested window.
+
+Prediction merging still allocates full output accumulators. Lazy input reads
+do not make whole-scene output memory bounded. See [chip reading and merging](../guides/catalogs-and-cuts.md#cut-raster-chips)
+for batching and output rules.
+
 ## Schedule a write explicitly
 
 Every `to_cog`, `to_zarr` and `to_netcdf` takes `compute=False` and returns

@@ -31,16 +31,44 @@ If you already have a file, use `gs.open_vector("fields.parquet")`,
 `gs.open_vector("fields.geojson")`, or `gs.open_vector("fields.gpkg")`.
 Reading preserves the file's columns; it does not add a training split or ID.
 
+## Check spatial records
+
+```python
+fields.gs.validate(crs=True)
+fields.iloc[0].gs.validate()
+```
+
+Validation returns `None` and leaves the data unchanged. By default it checks
+that every geometry is present, nonempty, and valid. `crs=True` also requires a
+declared CRS; `geometry=False` skips geometry checks. Empty tables pass these
+checks, although operations such as reading a footprint require rows.
+
+For a GeoDataFrame, `area=True` requires valid geometries with positive area.
+`temporal=True` checks complete, ordered start/end bounds and requires a stated
+`datetime` to fall within them. Undated rows remain valid. Sampling requests
+area validation for selected footprints and temporal validation when using dates;
+neither check opens raster assets.
+
+For Item tables, `stac_item=True` checks the columns needed for STAC conversion;
+it does not validate the full STAC schema or open assets. Ordinary features do
+not need those columns. Failures raise `geosave.geodata.VectorValidationError`
+with geometry errors identifying the affected row. A standalone Series does
+not inherit its parent frame's CRS: use `fields.iloc[[0]].gs.validate(crs=True)`
+to check one row while retaining that CRS.
+
+Use `validate(stac_item=False)` to require ordinary features: it rejects STAC
+columns or metadata. The default `stac_item=None` skips this check.
+
 ## Create a grid for the features
 
 ```python
 from odc.geo.geobox import GeoBox
 
-anchor = fields.gs.anchor
-grid = GeoBox.from_geopolygon(anchor.geometry, crs="EPSG:32633", resolution=10)
+region = fields.gs.region
+grid = GeoBox.from_geopolygon(region.extent, crs="EPSG:32633", resolution=10)
 ```
 
-The anchor retains the feature union and any recognized STAC time coverage.
+The region retains the feature union and any recognized STAC time coverage.
 The GeoBox separately specifies output pixels. Its CRS determines resolution units.
 
 ## Turn features into pixels
@@ -83,7 +111,7 @@ To burn a column's values, use
 The fill value is used outside the features; choose it separately from the
 valid class codes.
 
-The target can be a GeoAnchor or a georeferenced xarray object; the result is
+The target can be a GeoRegion or a georeferenced xarray object; the result is
 an eager `DataArray` on that exact grid.
 
 ## Turn pixels into polygons
@@ -110,7 +138,8 @@ before vectorizing a raster with extra dimensions.
 ## Select features near a raster
 
 ```python
-selected = fields.gs.query(anchor)
+shape = region.extent.to_crs(fields.crs).geom
+selected = fields.loc[fields.geometry.intersects(shape)]
 selected
 ```
 
@@ -121,8 +150,8 @@ Output:
 0  north      1  POLYGON ((12.001 45, 12.001 45.001, 12 45.001,...
 ```
 
-`query` selects intersecting features by default and handles CRS conversion.
-Pass `predicate="within"` to keep rows whose geometry lies within the target.
+Reproject the target geometry onto the frame’s CRS before selecting rows.
+Use `fields.geometry.within(shape)` to keep features contained by the target.
 
 Selection keeps matching rows and does not clip geometries; use GeoPandas
 `.clip(...)` for that.

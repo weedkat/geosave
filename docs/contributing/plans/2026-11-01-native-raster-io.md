@@ -1,5 +1,7 @@
 # Native raster I/O Implementation Plan
 
+Transform ownership is superseded by [native transforms](2026-11-10-native-transforms.md). The implementation now uses concrete accessors and native xarray operations. Historical evidence below is retained.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development for independent ownership slices and a final integrated review.
 
 **Goal:** Replace Scene/RasterFile/assemble with native inventories, transforms and resource-owning loaders.

@@ -84,13 +84,13 @@ def _foreign() -> xr.Dataset:
     return built
 
 
-def test_netcdf_reads_a_foreign_grid_onto_y_x(tmp_path: Path) -> None:
+def test_netcdf_preserves_foreign_cf_coordinate_names(tmp_path: Path) -> None:
     foreign = _foreign()
     foreign.to_netcdf(tmp_path / "foreign.nc")
 
     restored = netcdf.open_netcdf(tmp_path / "foreign.nc", chunks={})
 
-    assert restored.red.dims == ("y", "x")
+    assert restored.red.dims == ("latitude", "longitude")
     assert restored.gs.geobox == foreign.odc.geobox
     assert restored.red.chunks is not None
     restored.close()
@@ -143,8 +143,8 @@ def test_a_tree_round_trips_through_one_netcdf_file(tmp_path):
 
     assert path == tmp_path / "scene.nc"
     with open_raster(path) as restored:
-        assert list(restored.gs.rasters) == ["s2/r10m", "s2/r20m"]
-        for name, raster in tree.gs.rasters.items():
-            loaded = restored.gs.rasters[name]
+        assert list(restored.gs.datasets) == ["s2/r10m", "s2/r20m"]
+        for name, raster in tree.gs.datasets.items():
+            loaded = restored.gs.datasets[name]
             assert loaded.gs.geobox == raster.gs.geobox
             np.testing.assert_array_equal(loaded.time.values, raster.time.values)

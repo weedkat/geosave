@@ -20,7 +20,7 @@ grid = GeoBox.from_bbox(
 )
 pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
 scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
-files = scene.gs.to_cog(root, path_format="scene.tif")
+files = scene.gs.to_cog(root, split_asset=(), format_paths="scene.tif")
 reopened = gs.open_raster(files[0])
 reopened
 ```
@@ -44,7 +44,8 @@ The reopened object is an xarray `Dataset`, with one variable per band.
 The file preserves this raster's grid, `uint8` values, variable name, and nodata.
 `to_cog` returns a list of written UPaths, in time then variable order.
 `gs.open_raster(files[0])` reads the single file in this example. For files split across bands or dates, write a catalog and use `rows.gs.to_datatree()`. Only GeoTIFF is split
-into files by a template (`{collection}`, `{res}`, `{time}`, `{band}`), since a
+into files, by `split_item` and `split_asset`, and a template names them
+(`{collection}`, `{time}`, `{asset}`, `{variable}`), since a
 GeoTIFF holds one grid at one date. `to_zarr` and `to_netcdf` take no template:
 they write one store and return its UPath, and a tree's store keeps its
 collections and grid nodes as groups, which `gs.open_raster(path)` reads back.

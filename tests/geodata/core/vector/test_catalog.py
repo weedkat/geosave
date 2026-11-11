@@ -1,17 +1,15 @@
 from copy import deepcopy
-from datetime import UTC, datetime
 
 import dask.array as da
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import xarray as xr
 import pytest
 from pystac.extensions.raster import RasterExtension
 from shapely.geometry import Point, box
 
-from geosave.geodata import GeoAnchor, GeoCatalog
-from geosave.geodata.stac.catalog import from_items
+from geosave.geodata import GeoCatalog
+from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_dataarray
 from tests.geodata.conftest import build_raster, write_collection_cogs
 from tests.geodata.core.vector.conftest import (
@@ -21,26 +19,6 @@ from tests.geodata.core.vector.conftest import (
 )
 from tests.geodata.stac.conftest import entry
 from tests.geodata.conftest import create_file_items, create_test_collection
-
-
-def test_catalog_tree_closes_every_scene_once(catalog, monkeypatch):
-    from geosave.geodata.io import stac as raster_stac
-    from geosave.geodata.stac.item import stamp_item_time
-
-    closed = []
-
-    def read(entry, **options):
-        raster = stamp_item_time(build_raster()[["red"]], entry)
-        scene = xr.DataTree.from_dict({"r10m": raster})
-        scene.set_close(lambda: closed.append(entry.id))
-        return scene
-
-    monkeypatch.setattr(raster_stac, "open_scene", read)
-    tree = catalog.gs.to_datatree()
-    assert closed == []
-    tree.close()
-    tree.close()
-    assert sorted(closed) == sorted(catalog["id"])
 
 
 def test_column_mutation_keeps_vector_operations_and_checks_items_when_called():
@@ -76,11 +54,6 @@ def test_other_vector_formats_refuse_catalog_metadata_loss(
     assert set(restored.gs.collections) == {"s2", "s1", "label"}
 
 
-def _ground(geometry, timespan: str | None = None) -> GeoAnchor:
-    """Anchor fitting one longitude/latitude geometry exactly."""
-    return GeoAnchor.from_geometry(geometry, crs="EPSG:4326", timespan=timespan)
-
-
 def test_geographic_operations_require_a_crs() -> None:
     with pytest.raises(AttributeError, match="GeoDataFrame"):
         _ = pd.DataFrame({"a": [1]}).gs
@@ -94,7 +67,6 @@ def test_a_renamed_geometry_column_still_answers() -> None:
     ).rename_geometry("footprint")
 
     assert frame.gs.footprint.geom.equals(box(0, 0, 2, 2))
-    assert list(frame.gs.query(_ground(box(1, 1, 3, 3))).name) == ["a"]
     assert GeoCatalog.concat([frame, frame]).geometry.name == "geometry"
 
 
@@ -124,61 +96,6 @@ def test_concat_requires_one_explicit_crs_plane() -> None:
 
 def _places(names: list[str], geometries: list) -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame({"name": names}, geometry=geometries, crs="EPSG:4326")
-
-
-def test_query_returns_original_intersecting_rows_in_source_order() -> None:
-    collection = _places(
-        ["left", "middle", "right"],
-        [box(0, 0, 2, 2), box(2, 0, 4, 2), box(8, 0, 10, 2)],
-    )
-
-    result = collection.gs.query(_ground(box(1, -1, 3, 3)))
-
-    assert list(result.name) == ["left", "middle"]
-    assert result.iloc[0].geometry.equals(collection.iloc[0].geometry)
-
-
-def test_query_predicate_describes_each_row_relative_to_target() -> None:
-    collection = _places(
-        ["inside", "outside", "container"],
-        [box(1, 1, 2, 2), box(5, 5, 6, 6), box(-1, -1, 4, 4)],
-    )
-    target = _ground(box(0, 0, 3, 3))
-
-    assert list(collection.gs.query(target, predicate="within").name) == ["inside"]
-    assert list(collection.gs.query(target, predicate="contains").name) == ["container"]
-
-
-def test_query_reprojects_the_anchor_onto_the_table() -> None:
-    collection = _places(["place"], [box(112.0, -8.2, 112.2, -8.0)])
-    anchor = GeoAnchor.from_geometry(
-        GeoAnchor.from_coordinates(-8.1, 112.1).geometry.to_crs("EPSG:32749")
-    )
-
-    result = collection.gs.query(anchor)
-
-    assert anchor.crs.epsg != 4326
-    assert list(result.name) == ["place"]
-    assert result.gs.crs.to_epsg() == 4326
-
-
-def test_query_takes_a_raster_by_its_anchor(raster) -> None:
-    collection = gpd.GeoDataFrame(
-        {"label": ["inside", "outside"]},
-        geometry=[raster.gs.geobox.extent.geom, box(0, 0, 1, 1)],
-        crs=raster.gs.crs,
-    )
-
-    assert list(collection.gs.query(raster).label) == ["inside"]
-
-
-def test_query_empty_collection_preserves_schema() -> None:
-    result = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs="EPSG:4326")).gs.query(
-        _ground(box(0, 0, 1, 1))
-    )
-
-    assert len(result) == 0
-    assert result.gs.crs.to_epsg() == 4326
 
 
 def test_rasterize_values_back_onto_reference_grid(raster) -> None:
@@ -211,131 +128,29 @@ def test_the_footprint_bounds_carry_the_vectors_crs() -> None:
     assert bounds.crs == "EPSG:32633"
 
 
-@pytest.mark.parametrize(
-    "timespan,expected",
-    [
-        ("2025-01-15", ["instant", "interval", "timeless"]),
-        ("2025-01-16", ["timeless"]),
-        (None, ["instant", "later", "interval", "timeless"]),
-    ],
-)
-def test_query_combines_space_and_time_without_changing_rows(
-    timespan, expected
-) -> None:
-    dated = _places(
-        ["instant", "later", "interval", "timeless", "outside"],
-        [box(0, 0, 1, 1)] * 4 + [box(5, 5, 6, 6)],
-    )
-    dated["datetime"] = ["2025-01-15T01:00:00+01:00", "2025-06-01", None, None, None]
-    dated["start_datetime"] = [None, None, "2025-01-01", None, None]
-    dated["end_datetime"] = [None, None, "2025-01-15", None, None]
-    dated.index = [9, 2, 9, 4, 7]
-    dated.attrs["producer"] = "survey"
-    original = dated.copy(deep=True)
+def test_an_item_rows_region_is_its_grid_over_its_span(items, grid):
+    region = items.iloc[1].gs.region
 
-    result = dated.gs.query(_ground(box(-1, -1, 2, 2), timespan))
-
-    pd.testing.assert_frame_equal(result, dated.loc[dated.name.isin(expected)])
-    assert result.attrs == dated.attrs
-    pd.testing.assert_frame_equal(dated, original)
-
-
-def test_query_selects_by_time_alone_when_no_place_is_given() -> None:
-    frame = gpd.GeoDataFrame(
-        {
-            "id": ["march", "april", "undated"],
-            "datetime": ["2024-03-08", "2024-04-12", None],
-        },
-        geometry=[Point(0, 0)] * 3,
-        crs="EPSG:4326",
-    )
-
-    assert frame.gs.query(when="2024-03")["id"].tolist() == ["march", "undated"]
-
-
-def test_query_takes_a_plain_geometry_as_wgs84_and_a_separate_span() -> None:
-    frame = gpd.GeoDataFrame(
-        {"id": ["near", "far"], "datetime": ["2024-03-08", "2024-03-08"]},
-        geometry=[Point(0, 0), Point(10, 10)],
-        crs="EPSG:4326",
-    )
-
-    selected = frame.gs.query(box(-1, -1, 1, 1), when=("2024-03-01", "2024-03-31"))
-
-    assert selected["id"].tolist() == ["near"]
-    assert frame.gs.query(box(-1, -1, 1, 1), when="2023").empty
-
-
-def test_query_reads_time_columns_that_carry_no_timezone() -> None:
-    table = _dated()
-    for column in ("datetime", "start_datetime", "end_datetime"):
-        table[column] = table[column].dt.tz_localize(None)
-
-    assert list(table.gs.query(_ground(box(-1, -1, 2, 2), "2025-01")).id) == ["jan"]
-
-
-def _dated() -> gpd.GeoDataFrame:
-    """Three rows on one ground: two spans and one lone instant."""
-    table = gpd.GeoDataFrame(
-        {
-            "id": ["jan", "jun", "instant"],
-            "datetime": [None, None, datetime(2025, 6, 12, tzinfo=UTC)],
-            "start_datetime": [
-                datetime(2025, 1, 10, tzinfo=UTC),
-                datetime(2025, 6, 10, tzinfo=UTC),
-                None,
-            ],
-            "end_datetime": [
-                datetime(2025, 1, 15, tzinfo=UTC),
-                datetime(2025, 6, 15, tzinfo=UTC),
-                None,
-            ],
-        },
-        geometry=[box(0, 0, 1, 1)] * 3,
-        crs="EPSG:4326",
-    )
-    for column in ("datetime", "start_datetime", "end_datetime"):
-        table[column] = pd.to_datetime(table[column], utc=True)
-    return table
-
-
-def test_query_filters_time_on_a_table_with_only_datetime() -> None:
-    raster = build_raster(times=2)
-    footprint = raster.gs.geobox.extent.to_crs("EPSG:4326").geom
-    frame = gpd.GeoDataFrame(
-        {
-            "id": ["first", "second"],
-            "datetime": pd.to_datetime(raster.time.values, utc=True),
-        },
-        geometry=[footprint, footprint],
-        crs="EPSG:4326",
-    )
-
-    assert frame.gs.query(raster.isel(time=[0]))["id"].tolist() == ["first"]
-
-
-def test_an_item_rows_anchor_is_its_grid_over_its_span(items, grid):
-    anchor = items.iloc[1].gs.anchor
-
-    assert anchor.geometry.geom.equals(items.iloc[1].geometry)
-    assert str(anchor.timespan[0]) == "2024-03-08 00:00:00"
+    assert region.extent.geom.equals(items.iloc[1].geometry)
+    assert str(region.timespan[0]) == "2024-03-08 00:00:00"
 
 
 def test_a_timeless_item_reads_without_time_coordinates(grid, tmp_path):
     import numpy as np
 
     from tests.conftest import build_dataset
-    from geosave.geodata.warnings import TimelessItemWarning
+    from geosave.geodata.stac.item import TIMELESS
     from tests.geodata.conftest import item_table
 
     data = build_dataset(
         {"height": (("y", "x"), np.ones(grid.shape, dtype="float32"))}, grid
     )
-    with pytest.warns(TimelessItemWarning):
-        items = item_table(
-            data.gs.to_cog(tmp_path, path_format="dem.tif"), collection="dem"
-        )
-    opened = items.iloc[0].gs.to_datatree().gs.to_dataset()
+    items = item_table(
+        data.gs.to_cog(tmp_path, format_paths="dem.tif"),
+        collection="dem",
+        datetime=TIMELESS,
+    )
+    opened = items.iloc[0].gs.to_datatree()["dem"].gs.to_dataset()
     assert "time" not in opened.coords
     assert "start_datetime" not in opened.coords
     assert "end_datetime" not in opened.coords
@@ -352,7 +167,7 @@ def test_collection_objects_are_independent_of_stored_definitions(items):
     assert items.attrs["stac-geoparquet"]["collections"] == original
 
 
-def test_concat_keeps_independent_definitions_and_the_first_duplicate(items):
+def test_concat_copies_definitions_and_rejects_conflicting_duplicates(items):
     table = items
     combined = table.gs.concat([table, table])
     assert set(combined.gs.collections) == set(table.gs.collections)
@@ -361,10 +176,8 @@ def test_concat_keeps_independent_definitions_and_the_first_duplicate(items):
     assert (
         table.attrs["stac-geoparquet"]["collections"][name]["description"] != "changed"
     )
-    assert (
-        table.gs.concat([table, combined]).attrs["stac-geoparquet"]["collections"][name]
-        == (table.attrs["stac-geoparquet"]["collections"][name])
-    )
+    with pytest.raises(ValueError, match="description"):
+        table.gs.concat([table, combined])
 
 
 def test_concat_feeds_multicollection_stacks(tmp_path):
@@ -381,7 +194,7 @@ def test_concat_feeds_multicollection_stacks(tmp_path):
     for name, paths in scenes.items():
         collection = create_test_collection(name, description=name)
         catalogs.append(
-            from_items(
+            create_catalog(
                 create_file_items(paths, collection=name), collections=[collection]
             )
         )
@@ -393,14 +206,14 @@ def test_concat_feeds_multicollection_stacks(tmp_path):
     assert loaded["optical"].gs.to_dataset().red.chunks is not None
 
 
-def test_concat_keeps_the_first_definition_even_after_filtering_rows():
+def test_concat_checks_definitions_retained_after_filtering_rows():
     optical = create_test_collection("optical", description="Old optical")
     label = create_test_collection("label", description="Labels")
-    rows = from_items([entry(), entry("label")], collections=[optical, label])
+    rows = create_catalog([entry(), entry("label")], collections=[optical, label])
     optical.description = "New optical"
-    fresh = from_items([entry()], collections=[optical])
-    combined = GeoCatalog.concat([rows[rows.collection == "label"], fresh])
-    assert combined.gs.collections["optical"].description == "Old optical"
+    fresh = create_catalog([entry()], collections=[optical])
+    with pytest.raises(ValueError, match="optical.*description"):
+        GeoCatalog.concat([rows[rows.collection == "label"], fresh])
 
 
 def test_sample_groups_footprints_covering_one_another(catalog):
@@ -449,7 +262,7 @@ def test_an_item_joins_every_footprint_it_shares_enough_of():
     entries = []
     for item_id, left in (("a", 0), ("b", 0.3), ("c", 0.6)):
         entries.append(create_item(item_id, "s2", box(left, 0, left + 1, 1)))
-    shifted = from_items(entries)
+    shifted = create_catalog(entries)
 
     assert read_sample_ids(shifted.gs.sample(overlap=0.5)) == [["a", "b"], ["b", "c"]]
 
@@ -467,7 +280,7 @@ def test_a_sample_keeps_the_catalog_collections(catalog):
 
 def test_rows_become_the_items_they_came_from(scene, tmp_path) -> None:
     items = create_scene_items(scene, tmp_path)
-    restored = from_items(items).gs.to_items()
+    restored = create_catalog(items).gs.to_items()
     assert [item.id for item in restored] == [item.id for item in items]
     assert restored[0].bbox == pytest.approx(items[0].bbox)
     assert restored[0].assets["red"].href == items[0].assets["red"].href
@@ -475,7 +288,7 @@ def test_rows_become_the_items_they_came_from(scene, tmp_path) -> None:
 
 
 def test_filtered_rows_keep_only_the_assets_they_have(scene, label, tmp_path) -> None:
-    rows = from_items(
+    rows = create_catalog(
         create_scene_items(scene, tmp_path)
         + create_scene_items(label, tmp_path, "label")
     )
@@ -489,7 +302,9 @@ def test_concatenated_tables_become_the_items_they_came_from(
     optical_items = create_scene_items(scene, tmp_path / "optical")
     label_items = create_scene_items(label, tmp_path / "labels", "label")
     items = optical_items + label_items
-    rows = GeoCatalog.concat([from_items(optical_items), from_items(label_items)])
+    rows = GeoCatalog.concat(
+        [create_catalog(optical_items), create_catalog(label_items)]
+    )
     restored = rows.gs.to_items()
     assert [item.id for item in restored] == [item.id for item in items]
     assert [sorted(item.assets) for item in restored] == [
@@ -498,7 +313,7 @@ def test_concatenated_tables_become_the_items_they_came_from(
 
 
 def test_empty_table_converts_to_no_items():
-    assert from_items([]).gs.to_items() == []
+    assert create_catalog([]).gs.to_items() == []
 
 
 def test_items_of_a_projected_table_state_their_footprint_in_wgs84(catalog):
@@ -522,7 +337,7 @@ def test_sample_refuses_items_without_area():
     ]
 
     with pytest.raises(ValueError, match="pt"):
-        from_items(entries).gs.sample()
+        create_catalog(entries).gs.sample()
 
 
 def test_a_sample_shape_is_an_item_when_its_items_only_touch():
@@ -533,7 +348,7 @@ def test_a_sample_shape_is_an_item_when_its_items_only_touch():
         create_item("right", "s2", box(0.5, 0, 1.5, 1)),
     ]
 
-    samples = from_items(entries).gs.sample(overlap=0.5)
+    samples = create_catalog(entries).gs.sample(overlap=0.5)
 
     assert read_sample_ids(samples) == [["tile", "left", "right"]]
     assert samples.footprints.geometry.iloc[0].area > 0
@@ -542,8 +357,157 @@ def test_a_sample_shape_is_an_item_when_its_items_only_touch():
 def test_rows_stack_along_time_per_collection_and_grid(tiles):
     rows = tiles[tiles["id"].str.startswith("s2_300000")]
 
-    tree = rows.gs.to_datatree()
+    tree = rows.gs.to_datatree().gs.group_grid()
 
-    assert list(tree.gs.rasters) == ["s2/r10m"]
+    assert list(tree.gs.datasets) == ["s2/r10m"]
     assert tree["s2/r10m"].sizes["time"] == 5
     assert tree["s2"].gs.to_dataset().gs.stac_collection.id == "s2"
+
+
+def test_validation_can_check_crs_without_requiring_geometry():
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(geometry=[None], crs="EPSG:4326")
+    assert rows.gs.validate(geometry=False, crs=True) is None
+    with pytest.raises(VectorValidationError, match="position 0.*missing"):
+        rows.gs.validate()
+    with pytest.raises(VectorValidationError, match="set_crs"):
+        gpd.GeoDataFrame(geometry=[Point(0, 0)]).gs.validate(crs=True)
+
+
+def test_sampling_reports_invalid_geometry_without_an_item_id():
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(geometry=[Point(0, 0)], index=["site"], crs="EPSG:4326")
+    with pytest.raises(VectorValidationError, match="position 0.*area"):
+        rows.gs.sample()
+
+
+@pytest.mark.parametrize(
+    "start, end, message",
+    [
+        ("2025-01-01", None, "both start_datetime and end_datetime"),
+        ("2025-02-01", "2025-01-01", "end_datetime precedes"),
+        ("2025-02-01", "2025-02-28", "datetime lies outside"),
+    ],
+)
+def test_temporal_validation_is_independent_of_geometry(start, end, message):
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(
+        {
+            "id": ["invalid"],
+            "datetime": ["2025-01-15"],
+            "start_datetime": [start],
+            "end_datetime": [end],
+        },
+        geometry=[None],
+        index=[9],
+    )
+
+    with pytest.raises(VectorValidationError, match=f"position 0.*invalid.*{message}"):
+        rows.gs.validate(geometry=False, temporal=True)
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"collections": []}, "collections"),
+        ({"collections": "s2"}, "collections"),
+        ({"collections": ["s2", "s2"]}, "repeat"),
+        ({"collections": ["s2"], "missing": "invalid"}, "missing"),
+        ({"collections": ["s2"], "interval": "invalid"}, "interval"),
+        ({"collections": ["s2"], "step": 0}, "step"),
+        ({"collections": ["s2"], "window": 1.5}, "window"),
+    ],
+)
+def test_sampling_rejects_invalid_options_before_planning(options, message):
+    rows = gpd.GeoDataFrame(
+        {"collection": ["s2"], "datetime": [pd.Timestamp("2025-01-01")]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+    with pytest.raises(ValueError, match=message):
+        rows.gs.sample(**options)
+
+
+def test_concat_rejects_mixing_item_tables_and_features(catalog):
+    features = gpd.GeoDataFrame(
+        {"name": ["place"]}, geometry=[Point(0, 0)], crs=catalog.crs
+    )
+
+    with pytest.raises(ValueError, match="STAC Item tables with ordinary features"):
+        GeoCatalog.concat([catalog, features])
+
+
+@pytest.mark.parametrize("record", [False, True])
+def test_validation_distinguishes_plain_features_from_item_records(record):
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs=4326)
+    value = rows.iloc[0] if record else rows
+    value.gs.validate(stac_item=False)
+    with pytest.raises(VectorValidationError, match="STAC Item operations need"):
+        value.gs.validate(stac_item=True)
+
+    rows["id"] = ["scene"]
+    rows["assets"] = [{}]
+    rows["links"] = [[]]
+    rows["stac_extensions"] = [[]]
+    value = rows.iloc[0] if record else rows
+    value.gs.validate()
+    value.gs.validate(stac_item=True)
+    with pytest.raises(VectorValidationError, match="ordinary features required"):
+        value.gs.validate(stac_item=False)
+
+
+@pytest.mark.parametrize("record", [False, True])
+def test_plain_feature_validation_rejects_retained_stac_metadata(record):
+    from geosave.geodata.errors import VectorValidationError
+
+    rows = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs=4326)
+    rows.attrs["stac-geoparquet"] = {"collections": {}}
+    value = rows.iloc[0] if record else rows
+
+    value.gs.validate()
+    with pytest.raises(VectorValidationError, match="to_geoparquet"):
+        value.gs.validate(stac_item=False)
+
+
+def test_a_published_region_reads_back_beside_the_whole_grid(tmp_path) -> None:
+    from odc.geo.geom import Geometry
+    from shapely.geometry import Polygon, shape
+
+    raster = build_raster(times=1)
+    grid = raster.gs.geobox
+    region = Geometry(Polygon(list(grid.extent.geom.exterior.coords)[:3]), grid.crs)
+    collection = create_test_collection("aoi", description="AOI scenes")
+    catalog = raster.gs.write_extent(region).gs.to_catalog(
+        tmp_path / "a", collection=collection
+    )
+
+    with catalog.gs.to_datatree() as tree:
+        loaded = tree["aoi"].gs.to_dataset()
+        assert loaded.gs.geobox == grid
+        expected = region.to_crs("EPSG:4326").geom.normalize()
+        restored = loaded.gs.region.extent.geom.normalize()
+        assert restored.equals_exact(expected, 1e-9)
+        again = loaded.gs.to_catalog(tmp_path / "b", collection=collection)
+
+    republished = shape(again.gs.to_items()[0].geometry).normalize()
+    assert republished.equals_exact(expected, 1e-9)
+
+
+def test_a_cleared_region_publishes_the_whole_grid(tmp_path) -> None:
+    from shapely.geometry import shape
+
+    raster = build_raster(times=1)
+    collection = create_test_collection("grid", description="Whole grid")
+
+    catalog = raster.gs.write_extent(None).gs.to_catalog(
+        tmp_path, collection=collection
+    )
+
+    footprint = shape(catalog.gs.to_items()[0].geometry).normalize()
+    grid = raster.gs.geobox.extent.to_crs("EPSG:4326").geom.normalize()
+    assert footprint.equals_exact(grid, 1e-9)

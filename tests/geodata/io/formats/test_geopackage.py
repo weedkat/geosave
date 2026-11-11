@@ -15,6 +15,19 @@ from geosave.geodata import (
 from tests.geodata.conftest import _size
 
 
+def test_direct_geopackage_writer_refuses_to_discard_catalog_metadata(tmp_path):
+    from geosave.geodata.io.formats.geopackage import write_geopackage
+
+    rows = _plots()
+    rows.attrs["stac-geoparquet"] = {"collections": {}}
+    path = tmp_path / "catalog.gpkg"
+
+    with pytest.raises(ValueError, match="to_geoparquet"):
+        write_geopackage(rows, path)
+
+    assert not path.exists()
+
+
 def _plots() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(
         {"class": [1, 2]}, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326"

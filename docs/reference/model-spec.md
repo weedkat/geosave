@@ -1,12 +1,6 @@
-# Model specifications
+# ModelSpec
 
-ModelSpec v3 declares raster requirements and executable preparation, encoding,
-input transforms, per-sample decoding, and merged-output processing. Loading
-validates references without running calls. Sampling and chip layout are explicit.
+Version 1 declares inputs and named Python calls. See [recipes](../guides/model-spec.md)
+for entry/output defaults and overrides, references, and trust boundaries.
 
-See [Execute a processing recipe](../guides/model-spec.md) and
-[Input contracts](../concepts/model-inputs.md).
-
-::: geosave.model.spec
-
-::: geosave.model.processing
+::: geosave.model.spec.ModelSpec

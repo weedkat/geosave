@@ -47,9 +47,8 @@ type Decoded[T] = Annotated[T, BeforeValidator(decode)]
 class AttrsGroup(BaseModel):
     """A set of attr keys read and written as one validated value.
 
-    A group only knows its own keys and how to read and write itself. Joining
-    many objects' attrs, and what to do on a conflict, belongs to
-    `attrs.combine`, which keeps a group whole or drops it.
+    A group owns its keys, validation and serialization. Combining attrs
+    belongs to xarray and does not depend on group membership.
 
     Attributes:
         KEYS: Every key the group reads; stamping replaces all of them.

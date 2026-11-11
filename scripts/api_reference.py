@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "docs" / "reference"
 PACKAGES = ("geosave", "geosave_flows")
 PROTOCOLS = {"__getitem__", "__iter__", "__len__", "__eq__", "__hash__", "__repr__"}
+INTERNAL = (
+    "geosave.geodata.core.raster.transform",
+    "geosave.geodata.core.vector.utils.rasterize",
+)
 NATIVE = {
     f"geosave.geodata.{name}"
     for name in ("DataArray", "DataTree", "Dataset", "GeoDataFrame")
@@ -36,6 +40,8 @@ def inventory() -> dict[str, Object]:
             module = pending.pop()
             parts = module.path.split(".")
             if "templates" in parts or any(part.startswith("_") for part in parts):
+                continue
+            if module.path.startswith(INTERNAL):
                 continue
             if (
                 module.path.startswith("geosave.cli")

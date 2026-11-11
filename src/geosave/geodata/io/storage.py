@@ -133,6 +133,11 @@ def write_file(
 
     Every single-file format writes this way: `save` only ever sees a local
     path, and the finished file is moved or uploaded to where it belongs.
+    Local writes use private staging on the destination filesystem. Without
+    overwrite, publishing uses a hard link that fails if the destination
+    already exists, including when another writer creates it during encoding.
+    Remote uploads retain the backend's behavior; their existence check does
+    not guarantee exclusion of concurrent writers.
 
     Args:
         path: Output path, fsspec URL, or UPath.
@@ -148,6 +153,8 @@ def write_file(
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
         ValueError: The suffix is wrong.
+        OSError: Local publication fails, including when the filesystem does
+            not support hard links for a no-overwrite write.
 
     Examples:
         >>> write_file("plots.parquet", plots.to_parquet, suffixes=(".parquet",))
@@ -169,15 +176,18 @@ def write_file(
             destination.fs.put(str(staging), destination.path)
         return destination
 
-    # A local file is written beside its destination, then moved over it.
+    # Stay on the destination filesystem for atomic replacement or linking.
     target = local_path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = target.with_name(f".{target.stem}.staging{target.suffix}")
-    try:
+    with TemporaryDirectory(
+        prefix=f".{target.stem}.staging-", dir=target.parent
+    ) as folder:
+        staging = Path(folder) / target.name
         save(staging)
-        os.replace(staging, target)
-    finally:
-        staging.unlink(missing_ok=True)
+        if overwrite:
+            os.replace(staging, target)
+        else:
+            os.link(staging, target)
     return destination
 
 

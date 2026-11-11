@@ -7,33 +7,31 @@ Joins pass `combine_attrs=attrs.combine_attrs`.
 """
 
 from .groups.base import AttrsGroup, Decoded, decode
-from .combine import combine_attrs, intersect
-from .stamp import clear_attrs, stamp_attrs
+from .combine import combine_attrs
+from .stamp import AttrsObject, clear_attrs, stamp_attrs
 from .groups.acdd import ACDD
+from .groups.extent import Extent
 from .groups.gdal import GDALBand
 from .groups.legend import Legend
-from .groups.nodata import Nodata
 from .groups.packing import Packing
 from .groups.quantity import Quantity
 from .groups.spectral import Spectral
 from .groups.stac import StacMetadata
-from .groups.timespec import TimeSpec
 
 __all__ = [
     "ACDD",
     "AttrsGroup",
+    "AttrsObject",
     "Decoded",
+    "Extent",
     "GDALBand",
     "Legend",
-    "Nodata",
     "Packing",
     "Quantity",
     "Spectral",
     "StacMetadata",
-    "TimeSpec",
     "clear_attrs",
     "combine_attrs",
     "decode",
-    "intersect",
     "stamp_attrs",
 ]

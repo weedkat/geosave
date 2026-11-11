@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from ..explorer import Explorer
 
 # Layer list headings, in the order they are listed.
-HEADINGS = ("Catalogs", "Rasters", "Vectors")
+HEADINGS = ("Rasters", "Vectors")
 
 IDENTIFY_PROMPT = "<p>Click the map to inspect visible layers.</p>"
 

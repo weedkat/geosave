@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from geosave.geodata.viz.explore import create_layer
+
 import os
 import json
 import signal
@@ -51,7 +53,7 @@ def test_colab_serve_uses_the_proxy_origin_and_iframe(scene, monkeypatch, port):
         return handle
 
     monkeypatch.setattr(pn, "serve", serve)
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     try:
         assert viewer.serve(port=port) is handle
         assert settings["threaded"] is True
@@ -79,8 +81,8 @@ def _wait_for(port, *, server=None, log_path=None):
 
 
 def test_serving_again_on_a_port_replaces_the_earlier_explorer(scene, port):
-    first = Explorer(scene, basemap="None")
-    second = Explorer(scene, basemap="None")
+    first = Explorer(layers=[create_layer(scene)], basemap="None")
+    second = Explorer(layers=[create_layer(scene)], basemap="None")
     try:
         first.serve(port=port, threaded=True, open=False, verbose=False)
         _wait_for(port)
@@ -96,7 +98,7 @@ def test_serving_again_on_a_port_replaces_the_earlier_explorer(scene, port):
 
 
 def test_stop_releases_the_port(scene, port):
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     try:
         viewer.serve(port=port, threaded=True, open=False, verbose=False)
         _wait_for(port)
@@ -112,7 +114,7 @@ def test_stop_releases_the_port(scene, port):
 
 
 def test_a_port_another_program_holds_is_refused_in_the_calling_thread(scene):
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     with socket.socket() as blocker:
         blocker.bind(("localhost", 0))
         blocker.listen()
@@ -135,7 +137,7 @@ def test_script_serve_accepts_both_local_browser_origins(tmp_path, rgb_catalog):
     app.write_text(
         "import geosave as gs\n"
         f"viewer = gs.open_vector({str(rgb_catalog)!r}).gs.explore(basemap='None')\n"
-        "viewer.layers[0].raster_rows = [0]\n"
+        "viewer.table.raster_rows = [0]\n"
         f"viewer.serve(port={port}, open=False)\n"
         "viewer.close()\n"
         "print('SERVER_STOPPED', flush=True)\n"
@@ -370,7 +372,7 @@ second.close()
 
 
 def test_serving_the_same_explorer_again_keeps_its_layers(scene, port):
-    viewer = Explorer(scene, basemap="None")
+    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     try:
         viewer.serve(port=port, threaded=True, open=False, verbose=False)
         _wait_for(port)
