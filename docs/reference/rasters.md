@@ -47,11 +47,11 @@ periods their source records, such as each loaded Item's own period.
 `timespan` reduces cells, falling back to time labels, and returns `None` for
 an empty time axis.
 
-NetCDF and Zarr preserve source coordinate names, observed start/end coordinates and native CF bounds
-independently. They no longer convert between these representations. On a
-Dataset, `scene.gs.cell_bounds` reads the CF bounds linked from its temporal coordinate using
-cf-xarray; `scene.gs.time_bounds` remains observation coverage. `timespan`
-prefers observation coverage, then CF cell bounds, then labels.
+NetCDF and Zarr store cells as a CF boundary variable, `time_bounds(time,
+bounds)` named by `time`'s `bounds` attr, with `time`'s units and calendar.
+GeoSave's readers turn it back into `start_datetime` and `end_datetime`, so
+in memory cells are always those two coordinates; a foreign CF file's bounds,
+under any name, open the same way.
 A monthly bin label is not necessarily the first contributing observation.
 `scene.gs.time_coordinate` discovers that coordinate through CF time/axis
 declarations, falling back to the conventional `time` name. A declared `date`

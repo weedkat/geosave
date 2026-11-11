@@ -14,7 +14,7 @@ from .groups.extent import Extent
 from .groups.gdal import GDALBand
 from .groups.legend import Legend
 from .groups.packing import Packing
-from .groups.quantity import Quantity
+from .groups.description import Description
 from .groups.spectral import Spectral
 from .groups.stac import StacMetadata
 
@@ -27,7 +27,7 @@ __all__ = [
     "GDALBand",
     "Legend",
     "Packing",
-    "Quantity",
+    "Description",
     "Spectral",
     "StacMetadata",
     "clear_attrs",

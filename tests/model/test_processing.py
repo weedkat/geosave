@@ -232,17 +232,3 @@ steps:
     assert list(raster.data_vars) == ["red", "nir"]
 
 
-def test_tensor_conversion_ignores_structural_cf_bounds():
-    import numpy as np
-    import xarray as xr
-    from geosave.model.processing import to_tensor
-
-    scene = xr.Dataset(
-        {
-            "image": (("y", "x"), np.ones((2, 2))),
-            "edges": (("x", "vertices"), [[0, 1], [1, 2]]),
-        },
-        coords={"x": ("x", [0.5, 1.5], {"bounds": "edges"}), "y": [0, 1]},
-    )
-    tensor = to_tensor(scene, dims=("band", "y", "x"))
-    assert tuple(tensor.shape) == (1, 2, 2)

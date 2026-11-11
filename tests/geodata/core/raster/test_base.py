@@ -250,6 +250,25 @@ def test_right_labels_state_the_cell_before_them():
     np.testing.assert_array_equal(dated.end_datetime.values, dated.time.values)
 
 
+@pytest.mark.parametrize(
+    "freq, origin, labels, starts",
+    [
+        ("ME", "start_day", ["2025-01-31", "2025-02-28"], ["2024-12-31", "2025-01-31"]),
+        ("7D", "end", ["2025-01-05", "2025-01-12"], ["2024-12-29", "2025-01-05"]),
+    ],
+)
+def test_time_bounds_resolve_native_label_defaults(freq, origin, labels, starts):
+    raster = _dated(labels).rename(time="acquired")
+
+    dated = raster.gs.write_time_bounds(freq, dim="acquired", origin=origin)
+
+    np.testing.assert_array_equal(
+        dated.start_datetime.values, np.array(starts, dtype="datetime64[ns]")
+    )
+    np.testing.assert_array_equal(dated.end_datetime.values, dated.acquired.values)
+    assert dated.data is raster.data
+
+
 def test_cells_follow_an_auxiliary_time_dimension():
     raster = _dated(["2025-01-01", "2025-02-01"], dims=("observation",))
 

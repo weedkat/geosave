@@ -433,3 +433,23 @@ def assign_cells(raster, pairs):
         start_datetime=(labels.dims, starts.reshape(labels.shape)),
         end_datetime=(labels.dims, ends.reshape(labels.shape)),
     )
+
+
+def build_dated_raster() -> xr.Dataset:
+    """Build a lazy two-date raster whose cells start before its first label.
+
+    Labels carry nanoseconds, so a round trip that loses precision shows.
+    """
+    raster = build_raster(times=2).chunk(time=1)
+    raster = raster.assign_coords(
+        time=raster.time.copy(
+            data=np.array(
+                ["2025-01-10T10:30:00.123456789", "2025-01-20T10:30:00"],
+                "datetime64[ns]",
+            )
+        )
+    )
+    return assign_cells(
+        raster,
+        [("2025-01-01", "2025-01-15"), ("2025-01-15", "2025-02-01")],
+    ).chunk(time=1)

@@ -372,3 +372,43 @@ def test_a_tree_round_trips_through_one_zarr_store(tmp_path):
             xr.testing.assert_equal(
                 loaded[list(raster.data_vars)], raster[list(raster.data_vars)]
             )
+
+
+def test_zarr_stores_cells_as_cf_bounds_and_reads_them_back(tmp_path):
+    from tests.geodata.conftest import build_dated_raster
+
+    raster = build_dated_raster()
+    path = zarr.write_zarr(raster, tmp_path / "a.zarr")
+
+    time = orjson.loads((path / "time" / "zarr.json").read_bytes())["attributes"]
+    bounds = orjson.loads((path / "time_bounds" / "zarr.json").read_bytes())
+    assert time["bounds"] == "time_bounds"
+    assert bounds["attributes"].get("units", time["units"]) == time["units"]
+    assert not (path / "start_datetime").exists()
+    back = zarr.open_zarr(path)
+    for name in ("time", "start_datetime", "end_datetime"):
+        np.testing.assert_array_equal(back[name].values, raster[name].values)
+    assert "time_bounds" not in back.variables
+
+
+def test_tree_cells_round_trip_on_their_collection_node(tmp_path):
+    from tests.geodata.conftest import build_dated_raster
+
+    raster = build_dated_raster()
+    coords = ["time", "start_datetime", "end_datetime"]
+    tree = xr.DataTree.from_dict(
+        {
+            "/s2": xr.Dataset(coords={name: raster[name].variable for name in coords}),
+            "/s2/r10m": raster.drop_vars(coords),
+        }
+    )
+    path = zarr.write_zarr(tree, tmp_path / "tree.zarr")
+
+    # The collection group stores CF bounds, not start/end variables.
+    assert (path / "s2" / "time_bounds").exists()
+    assert not (path / "s2" / "start_datetime").exists()
+    back = zarr.open_zarr(path)
+
+    child = back["s2/r10m"].to_dataset(inherit="all_coords")
+    np.testing.assert_array_equal(child.end_datetime.values, raster.end_datetime.values)
+    assert "time_bounds" not in back["s2"].to_dataset(inherit=False).variables

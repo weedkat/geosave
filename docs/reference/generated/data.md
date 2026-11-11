@@ -53,6 +53,26 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.attrs.groups.description.Description
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - long_name
+        - standard_name
+        - units
+        - KEYS
+        - is_stated_in
+        - from_attrs
+        - to_attrs
+        - __eq__
+      inherited_members:
+        - KEYS
+        - is_stated_in
+        - from_attrs
+        - to_attrs
+        - __eq__
+
 ::: geosave.geodata.attrs.groups.extent.Extent
     options:
       show_root_full_path: true
@@ -147,26 +167,6 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.quantity.Quantity
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - standard_name
-        - units
-        - cell_methods
-        - KEYS
-        - is_stated_in
-        - from_attrs
-        - to_attrs
-        - __eq__
-      inherited_members:
-        - KEYS
-        - is_stated_in
-        - from_attrs
-        - to_attrs
-        - __eq__
-
 ::: geosave.geodata.attrs.groups.spectral.Spectral
     options:
       show_root_full_path: true
@@ -226,11 +226,11 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.conventions.CRS_COORDINATE
+::: geosave.geodata.conventions.END_DATETIME
     options:
       show_root_full_path: true
 
-::: geosave.geodata.conventions.END_DATETIME
+::: geosave.geodata.conventions.GRID_MAPPING
     options:
       show_root_full_path: true
 
@@ -282,7 +282,6 @@ fields appear as attributes, including their annotated types and defaults.
       members:
         - time_coordinate
         - write_time_bounds
-        - time_bounds
         - timespan
 
 ::: geosave.geodata.core.raster.chips.ChipKey
@@ -333,6 +332,7 @@ fields appear as attributes, including their annotated types and defaults.
         - nodata
         - legend
         - is_categorical
+        - description
         - packing
         - spectral
         - write_grid
@@ -375,7 +375,6 @@ fields appear as attributes, including their annotated types and defaults.
         - mask_and_scale
         - scale_and_fill
         - write_time_bounds
-        - time_bounds
       inherited_members:
         - is_georeferenced
         - crs
@@ -389,7 +388,6 @@ fields appear as attributes, including their annotated types and defaults.
         - mask_and_scale
         - scale_and_fill
         - write_time_bounds
-        - time_bounds
         - __init__
 
 ::: geosave.geodata.core.raster.dataset.GeoDataset
@@ -402,7 +400,6 @@ fields appear as attributes, including their annotated types and defaults.
         - geobox
         - validate
         - variables
-        - cell_bounds
         - support_variables
         - raster_variables
         - expand_rasters
@@ -455,7 +452,6 @@ fields appear as attributes, including their annotated types and defaults.
         - mask_and_scale
         - scale_and_fill
         - write_time_bounds
-        - time_bounds
       inherited_members:
         - is_georeferenced
         - crs
@@ -469,7 +465,6 @@ fields appear as attributes, including their annotated types and defaults.
         - mask_and_scale
         - scale_and_fill
         - write_time_bounds
-        - time_bounds
         - __init__
 
 ::: geosave.geodata.core.raster.datatree.GeoDataTree
@@ -522,11 +517,19 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.cf.read_support_variables
+::: geosave.geodata.core.raster.utils.cf.decode_time_bounds
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.cf.read_time_bounds
+::: geosave.geodata.core.raster.utils.cf.drop_coordinate_fill
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.cf.encode_time_bounds
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.cf.read_support_variables
     options:
       show_root_full_path: true
 

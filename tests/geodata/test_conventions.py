@@ -88,34 +88,24 @@ def _monthly() -> xr.Dataset:
         [
             (np.datetime64("2025-06-01"), np.datetime64("2025-07-01")),
             (np.datetime64("2025-07-01"), np.datetime64("2025-08-01")),
-        ]
+        ],
     )
 
 
 @pytest.mark.parametrize("suffix", ["nc", "zarr"])
-def test_observation_period_roundtrip_stays_separate_from_cf_cells(tmp_path, suffix):
-    from geosave.geodata.io import open_raster
-
+def test_a_raster_stating_its_cells_twice_is_refused_on_write(tmp_path, suffix):
     monthly = _monthly()
-    # The original CF variable's name and meaning must survive ingestion.
     monthly["cells"] = (
         ("time", "vertices"),
         np.stack([monthly.start_datetime.values, monthly.end_datetime.values], axis=-1),
     )
-    monthly["cells"].attrs["long_name"] = "cell extent"
     monthly.time.attrs["bounds"] = "cells"
-    path = tmp_path / f"monthly.{suffix}"
-    if suffix == "nc":
-        monthly.gs.to_netcdf(path)
-    else:
-        monthly.gs.to_zarr(path)
 
-    with open_raster(path) as restored:
-        assert restored.start_datetime.equals(monthly.start_datetime)
-        assert restored.end_datetime.equals(monthly.end_datetime)
-        assert restored.cf.get_bounds("time").name == "cells"
-        assert restored.cells.attrs["long_name"] == "cell extent"
-        np.testing.assert_array_equal(restored.cells.values, monthly.cells.values)
+    with pytest.raises(ValueError, match="cells.*start_datetime"):
+        if suffix == "nc":
+            monthly.gs.to_netcdf(tmp_path / "monthly.nc")
+        else:
+            monthly.gs.to_zarr(tmp_path / "monthly.zarr")
 
 
 def test_cf_units_identify_spatial_axes_without_name_guesses():
@@ -159,9 +149,3 @@ def test_curvilinear_coordinates_do_not_imply_affine_spatial_axes():
         },
     )
     assert raster.gs.spatial_dims is None
-
-
-def test_missing_declared_bounds_are_not_silently_ignored():
-    raster = xr.Dataset(coords={"time": ("time", [0], {"bounds": "absent"})})
-    with pytest.raises(ValueError, match="Dataset lacks"):
-        _ = raster.gs.cell_bounds

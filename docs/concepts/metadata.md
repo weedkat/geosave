@@ -33,6 +33,7 @@ Use the `.gs` properties and `write_*` methods for everyday work, as shown in
 | Group | Keys | Meaning |
 | --- | --- | --- |
 | `Packing` | `scale_factor`, `add_offset`, `_FillValue`, `missing_value`; also reads `nodata` | CF conversion and missing-value declarations on each variable. |
+| `Description` | `long_name`, `standard_name`, `units` | What a variable's values are (CF chapter 3); `band.gs.description`. Find variables by them with `ds.cf.standard_names`. |
 | `Legend` | `flag_values`, `flag_masks`, `flag_meanings`, `color_map` | Class codes or bit flags and their labels. |
 | `Spectral` | `common_name`, `center_wavelength`, `full_width_half_max` | Band identity and wavelength in micrometres. |
 | `GDALBand` | `variable_name`, `colorinterp` | Band naming and colour interpretation in GDAL formats. |
@@ -40,8 +41,13 @@ Use the `.gs` properties and `write_*` methods for everyday work, as shown in
 | `Extent` | `geospatial_bounds`, `geospatial_bounds_crs` | Declared spatial extent as WKT and its CRS, retained on raster roots and spatial variables. |
 
 Band groups live on variables. A time label's cell is not an attr group: it is
-a CF bounds variable, `time_bounds(time, bounds)`, named by `time`'s `bounds`
-attribute and read with `ds.cf.get_bounds("time")`.
+two coordinates on the time dimension, stored in files as CF bounds:
+
+```text
+in memory                              netCDF / Zarr
+start_datetime(time) ┐   encode  ──►   time:bounds = "time_bounds"
+end_datetime(time)   ┘   ◄── decode    time_bounds(time, bounds)
+```
 Other keys, such as `units` and `long_name`, stay ordinary attrs. ACDD keys
 also stay in that mapping; the group reads their dataset-level meaning.
 
@@ -145,16 +151,17 @@ coordinate becomes a property. Dates, `proj:*` and band fields always come
 from the raster's own coordinates, grid and attrs.
 
 ```text
-source                                   time_bounds of the label
+source                                   cell of the label
 Item with start/end, one label per Item  the Item's start_datetime, end_datetime
-several Items mosaicked into one label   none
-.gs.composite(freq="1MS", ...)           the resample bin, e.g. [Jan 1, Feb 1]
+groupby="solar_day" mosaic               the local solar day, e.g. [01-09 17:00, 01-10 17:00) UTC
+.gs.composite(freq="1MS", ...)           the resample bin, e.g. [Jan 1, Feb 1)
+.gs.write_time_bounds("MS")              one freq step per label
 ```
 
 `.gs.composite()` also writes `cell_methods` and rebuilds `stac_properties`.
 Other operations that change the time axis do not recompute cells or
-provenance: native reductions drop `time_bounds`; drop or recompute
-coordinates that no longer describe the result. Publication writes the cells
+provenance: native reductions drop the cell coordinates; restate them with
+`gs.write_time_bounds` when they still apply. Publication writes the cells
 back as STAC `start_datetime` and `end_datetime`.
 
 Full Collection definitions belong to catalog tables, under the JSON-serializable

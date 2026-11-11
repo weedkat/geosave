@@ -148,3 +148,41 @@ def test_a_tree_round_trips_through_one_netcdf_file(tmp_path):
             loaded = restored.gs.datasets[name]
             assert loaded.gs.geobox == raster.gs.geobox
             np.testing.assert_array_equal(loaded.time.values, raster.time.values)
+
+
+@pytest.mark.parametrize("scalar", [False, True])
+def test_netcdf_stores_cells_as_cf_bounds_and_reads_them_back(tmp_path, scalar):
+    import netCDF4
+
+    from tests.geodata.conftest import build_dated_raster
+
+    raster = build_dated_raster()
+    raster = raster.isel(time=0) if scalar else raster
+    path = netcdf.write_netcdf(raster, tmp_path / "a.nc")
+
+    with netCDF4.Dataset(path) as raw:
+        assert raw["time"].bounds == "time_bounds"
+        assert "start_datetime" not in raw.variables
+        bounds_units = getattr(raw["time_bounds"], "units", raw["time"].units)
+        assert bounds_units == raw["time"].units
+        assert "_FillValue" not in raw["x"].ncattrs()
+        assert "_FillValue" not in raw["y"].ncattrs()
+    back = netcdf.open_netcdf(path)
+    for name in ("time", "start_datetime", "end_datetime"):
+        np.testing.assert_array_equal(back[name].values, raster[name].values)
+    assert "time_bounds" not in back.variables
+    assert "bounds" not in back.dims
+
+
+def test_a_foreign_cf_file_decodes_to_start_and_end(tmp_path):
+    from tests.geodata.conftest import build_raster
+
+    foreign = build_raster(times=2).cf.add_bounds("time")
+    foreign = foreign.rename_vars(time_bounds="time_bnds").rename_dims(bounds="nv")
+    foreign.time.attrs["bounds"] = "time_bnds"
+    foreign.to_netcdf(tmp_path / "foreign.nc")
+
+    back = netcdf.open_netcdf(tmp_path / "foreign.nc")
+
+    assert {"start_datetime", "end_datetime"} <= set(back.coords)
+    assert "nv" not in back.dims

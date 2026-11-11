@@ -367,19 +367,6 @@ class GeoDataTree(GeoRaster["DataTree"]):
                 continue
             # .dataset would return a DatasetView whose attrs still write through here.
             dataset = node.to_dataset(inherit="all_coords")
-            # DataTree inherits coordinates, not their bounds data variables.
-            # Resolve only the bounds explicitly referenced by inherited coords.
-            for coordinate in list(dataset.coords.values()):
-                reference = coordinate.attrs.get(
-                    "bounds", coordinate.encoding.get("bounds")
-                )
-                if reference is None or reference in dataset.variables:
-                    continue
-                for ancestor in node.parents:
-                    parent = ancestor.to_dataset(inherit=False)
-                    if reference in parent.variables:
-                        dataset = dataset.assign_coords({reference: parent[reference]})
-                        break
             if dataset.gs.raster_variables:
                 rasters[path] = cast("Dataset", dataset)
         return rasters
@@ -506,7 +493,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
             10.0
         """
         from functools import partial
-        from geosave.geodata.conventions import CRS_COORDINATE
+        from geosave.geodata.conventions import GRID_MAPPING
 
         rasters = self.datasets
         try:
@@ -553,9 +540,9 @@ class GeoDataTree(GeoRaster["DataTree"]):
                     f"{path!r} requires equal variable dimensions; no broadcasting"
                 )
             # Grid equality was checked above. Normalize equivalent CRS placeholders.
-            if CRS_COORDINATE in raster.coords and CRS_COORDINATE in first.coords:
+            if GRID_MAPPING in raster.coords and GRID_MAPPING in first.coords:
                 raster = raster.assign_coords(
-                    {CRS_COORDINATE: first[CRS_COORDINATE].variable}
+                    {GRID_MAPPING: first[GRID_MAPPING].variable}
                 )
             raster = raster.gs.write_crs()
             if not raster.coords.to_dataset().equals(first.coords.to_dataset()):

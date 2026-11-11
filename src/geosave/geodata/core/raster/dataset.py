@@ -158,10 +158,8 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 `mask_and_scale()`, or class codes would be reduced numerically.
         """
         from .transform.temporal import CELL_METHODS, composite_ds
-        from .utils.cf import check_coordinate_change
 
         data = self._data
-        check_coordinate_change(data, (dim,))
         cell_method = CELL_METHODS[method]
         for name in self.raster_variables:
             variable = data[name]
@@ -190,20 +188,11 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             origin=origin,
             offset=offset,
         )
-
-        for name in self.support_variables:
-            if name in data.data_vars:
-                result[name] = data[name]
         return cast("Dataset", result)
 
     def _select_pixels(self) -> xr.Dataset:
-        """Select pixel variables while retaining native coordinates and CRS."""
-        support = self.support_variables
-        carriers = [name for name in support if not self._data[name].dims]
-        selected = self._data.set_coords(carriers)
-        return selected.drop_vars(
-            [name for name in support if name in selected.data_vars]
-        )
+        """Hold the CRS carriers as coordinates, so only pixel variables remain data."""
+        return self._data.set_coords(list(self.support_variables))
 
     def _read_variable(self, name: Hashable) -> xr.DataArray:
         """Retain native coordinates and attach referenced scalar CRS carriers.
@@ -354,39 +343,15 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         return tuple(str(name) for name in self._data.data_vars)
 
     @property
-    def cell_bounds(self) -> xr.DataArray | None:
-        """Read native CF time cell bounds, independently of observation coverage."""
-        from .utils.cf import read_time_bounds
-
-        labels = self.time_coordinate
-        if labels is None:
-            return None
-        return read_time_bounds(self._data, labels.name)
-
-    def _read_coverage(self) -> tuple[np.ndarray, np.ndarray] | None:
-        """Prefer observation coverage, then declared CF temporal cell extent."""
-        observed = self.time_bounds
-        if observed is not None:
-            return observed
-        bounds = self.cell_bounds
-        if bounds is None:
-            return None
-        values = bounds.values
-        return (
-            np.atleast_1d(np.minimum(values[..., 0], values[..., 1])),
-            np.atleast_1d(np.maximum(values[..., 0], values[..., 1])),
-        )
-
-    @property
     def support_variables(self) -> tuple[Hashable, ...]:
-        """Name CF bounds and CRS carriers, including coordinate variables."""
+        """Name the scalar CRS carriers, including coordinate variables."""
         from .utils.cf import read_support_variables
 
         return read_support_variables(self._data)
 
     @property
     def raster_variables(self) -> tuple[Hashable, ...]:
-        """Name data variables excluding structural CF bounds and CRS carriers.
+        """Name data variables excluding CRS carriers.
 
         Unknown nonspatial data variables remain included so raster validation
         reports them rather than silently discarding them.
@@ -602,18 +567,8 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> scene.gs.write_grid(grid).gs.geobox == grid
             True
         """
-        from .utils.cf import check_coordinate_change
-
         self._validate_spatial()
-        check_coordinate_change(self._data, cast("tuple[str, str]", self.spatial_dims))
         placed = grid.write_grid(self._select_pixels(), geobox)
-        for name in self.support_variables:
-            variable = self._data[name].variable
-            if variable.dims:
-                if name in self._data.coords:
-                    placed = placed.assign_coords({name: variable})
-                else:
-                    placed[name] = variable
         for name in placed.gs.raster_variables:
             placed[name] = grid.clear_mapping_attr(placed[name]).variable
         return cast("Dataset", placed)
@@ -661,9 +616,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         geobox = resolve_grid(source, how, resolution)
         if geobox == source:
             return cast("Dataset", self._data)
-        from .utils.cf import check_coordinate_change
-
-        check_coordinate_change(self._data, cast("tuple[str, str]", self.spatial_dims))
         variables = {}
         for name in self.raster_variables:
             variable = self._read_variable(name)
@@ -677,13 +629,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 coordinate.dims
             ):
                 warped = warped.assign_coords({name: coordinate.variable})
-        for name in self.support_variables:
-            variable = self._data[name].variable
-            if variable.dims:
-                if name in self._data.coords:
-                    warped = warped.assign_coords({name: variable})
-                else:
-                    warped[name] = variable
         return cast("Dataset", warped)
 
     def mask(
@@ -786,10 +731,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         """
 
         from .transform.extent import crop_to_grid
-        from .utils.cf import check_coordinate_change
 
-        if self.spatial_dims is not None:
-            check_coordinate_change(self._data, self.spatial_dims)
         return cast(
             "Dataset",
             crop_to_grid(self._data, geobox, mode=mode, constant_value=constant_value),
@@ -1212,12 +1154,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         array = dataset.to_dataarray(dim=BAND_DIMENSION).transpose(
             *axes, BAND_DIMENSION, *spatial
         )
-        # An array cannot carry bounds with an extra vertex dimension.
-        for coord in array.coords.values():
-            reference = coord.attrs.get("bounds", coord.encoding.get("bounds"))
-            if reference is not None and reference not in array.coords:
-                coord.attrs.pop("bounds", None)
-                coord.encoding.pop("bounds", None)
         array.attrs = attrs.combine_attrs(metadata, policy=combine_attrs)
         return cast("DataArray", array)
 
@@ -1345,17 +1281,13 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
 
         from .transform.packing import mask_missing
         from .utils.grid import clear_mapping_attr
-        from geosave.geodata.conventions import CRS_COORDINATE
+        from geosave.geodata.conventions import GRID_MAPPING
 
         from odc.geo.overlap import compute_reproject_roi
         from odc.geo.roi import roi_is_empty
         from odc.geo.xr import xr_coords, xr_reproject
 
-        from .utils.cf import check_coordinate_change
-
         spatial = self.spatial_dims
-        if spatial is not None:
-            check_coordinate_change(self._data, spatial)
         raster = self._select_pixels()
         try:
             raster.gs.validate(georeferenced=True, affine=True)
@@ -1431,15 +1363,8 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 pixels[name] = pixels[name].transpose(*order)
 
         pixels = pixels.odc.assign_crs(geobox.crs).assign_coords(
-            {CRS_COORDINATE: xr_coords(geobox)[CRS_COORDINATE]}
+            {GRID_MAPPING: xr_coords(geobox)[GRID_MAPPING]}
         )
-        for name in self.support_variables:
-            variable = self._data[name].variable
-            if variable.dims:
-                if name in self._data.coords:
-                    pixels = pixels.assign_coords({name: variable})
-                else:
-                    pixels[name] = variable
         for name in pixels.gs.raster_variables:
             pixels[name] = clear_mapping_attr(pixels[name]).variable
         return cast("Dataset", pixels)

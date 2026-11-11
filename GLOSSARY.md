@@ -82,14 +82,18 @@ A validated, centrally readable set of attrs that mean one thing together
 `.cf` as a structured view of the same attrs, not a separate store. A
 `gs.write_*` method states a value as the right attrs, encoding or variables.
 
+**Cell**:
+The period one time label stands for, as two coordinates on the time
+dimension: `start_datetime(time)` and `end_datetime(time)`. A cell ends where
+the next starts (CF convention). They survive `ds[[...]]` and travel with a
+DataArray.
+_Avoid_: estimating cells from labels
+
 **Bounds**:
-A CF boundary variable, such as `time_bounds(time, bounds)`, named by its
-coordinate's `bounds` attribute. It delimits that coordinate's **cells** and
-inherits the coordinate's `units`, `calendar` and `standard_name`. GeoSave
-keeps it in `coords` and reads it with `.cf.get_bounds`. `ds[[...]]` drops it,
-because no pixel variable has its `bounds` dimension; `drop_vars` and
-`.cf[[...]]` keep it.
-_Avoid_: start/end coordinates, estimating cells from labels
+The CF boundary variable a netCDF or Zarr file stores cells as,
+`time_bounds(time, bounds)`, named by `time`'s `bounds` attribute and sharing
+its `units` and `calendar`. GeoSave's readers turn it into a cell's two
+coordinates; it does not exist in memory.
 
 **Cell methods**:
 The CF `cell_methods` attribute stating how a variable's values were reduced
@@ -100,9 +104,9 @@ One label along the time dimension. A loader's grouping (`solar_day`, `id`)
 decides which source Items it combines.
 
 **Observation period**:
-The STAC `start_datetime`/`end_datetime` of an Item. Loading writes it as the
-observation's time cell only when one observation is exactly one Item; a
-mosaicked observation has no cell. A **composite**'s cell is its resample bin.
+The STAC `start_datetime`/`end_datetime` of an Item. A label that is exactly
+one Item stating it gets it as its cell; a `solar_day` mosaic's cell is the
+local solar day; a **composite**'s cell is its resample bin.
 
 **Timespan**:
 The inclusive overall period of a region or raster: one start and one end.

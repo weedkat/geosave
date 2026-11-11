@@ -177,7 +177,18 @@ def _write(
     options: dict[str, Any],
 ) -> UPath:
     """Write a checked raster to a local file, uploading it when the store is remote."""
+    from geosave.geodata.core.raster.utils.cf import (
+        drop_coordinate_fill,
+        encode_time_bounds,
+    )
+
     if isinstance(raster, xr.DataTree):
+        # Cells are stored as CF bounds; coordinates carry no fill (CF §5, §7.1).
+        nodes = {}
+        for node in raster.subtree:
+            dataset = node.to_dataset(inherit=False)
+            nodes[node.path] = drop_coordinate_fill(encode_time_bounds(dataset))
+        raster = xr.DataTree.from_dict(nodes)
         shared = dict(options.pop("encoding", None) or {})
         encoding: dict[str, dict[Hashable, Any]] = {}
         for node in raster.subtree:
@@ -188,6 +199,8 @@ def _write(
         options["encoding"] = encoding
         # A group's grid mapping must sit in that group for its CF decoding.
         options["write_inherited_coords"] = True
+    else:
+        raster = drop_coordinate_fill(encode_time_bounds(raster))
 
     def save(target: Path) -> None:
         raster.to_netcdf(target, mode="w", engine=engine, compute=True, **options)
@@ -225,6 +238,8 @@ def open_netcdf(
         >>> list(open_netcdf("scene.nc").gs.datasets)
         ['s2/r10m', 's2/r20m']
     """
+    from geosave.geodata.core.raster.utils.cf import decode_time_bounds
+
     path = storage.location(source, storage_options)
     with ExitStack() as opened:
         if storage.is_local(path):
@@ -243,10 +258,14 @@ def open_netcdf(
             **open_options,
         )
         opened.callback(stored.close)
+        # Stored CF bounds come back as start/end coordinates.
         if stored.children:
-            result = stored.copy()
+            nodes = {}
+            for node in stored.subtree:
+                nodes[node.path] = decode_time_bounds(node.to_dataset(inherit=False))
+            result = xr.DataTree.from_dict(nodes)
         else:
-            result = stored.to_dataset().copy(deep=False)
+            result = decode_time_bounds(stored.to_dataset().copy(deep=False))
             result.encoding["source"] = absolute_location(path)
         result.set_close(opened.pop_all().close)
         return cast("Dataset | DataTree", result)

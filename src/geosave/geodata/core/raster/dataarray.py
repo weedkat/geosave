@@ -396,23 +396,27 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         """Say whether values are class codes that blending or ranking would destroy.
 
         Dtype does not say: Sentinel-2 reflectance and a land cover map are
-        both integers. A legend key or a GDAL palette marks the values as
-        codes. A half-spelled legend still answers; a `colorinterp` GDAL
-        does not know raises.
+        both integers. CF flags (`flag_values` or `flag_masks` with
+        `flag_meanings`, read by cf-xarray) mark the values as codes, and so
+        does a GDAL colour table, which states colours but no CF flags.
 
         Returns:
-            True when the attrs state a legend or `colorinterp="palette"`;
-            otherwise False. Pixel values and dtype are not inspected.
+            True for a CF flag variable or `colorinterp="palette"`; otherwise
+            False. Pixel values and dtype are not inspected.
 
         Examples:
             >>> scene.landcover.gs.is_categorical, scene.red.gs.is_categorical
             (True, False)
         """
-        attributes = self._data.attrs
-        if attrs.Legend.is_stated_in(attributes):
+        if self._data.cf.is_flag_variable:
             return True
-        gdal_band = attrs.GDALBand.from_attrs(attributes)
+        gdal_band = attrs.GDALBand.from_attrs(self._data.attrs)
         return gdal_band is not None and gdal_band.colorinterp == "palette"
+
+    @property
+    def description(self) -> attrs.Description | None:
+        """Read what this variable's values are (`long_name`, `standard_name`, `units`), or None."""
+        return attrs.Description.from_attrs(self._data.attrs)
 
     @property
     def packing(self) -> attrs.Packing | None:

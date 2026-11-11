@@ -527,6 +527,7 @@ def test_saved_item_preserves_nominal_time_from_interval_properties(tmp_path):
     assert entry.properties["platform"] == "s2a"
     assert properties == before
 
+
 def _scene():
     source = build_raster(times=2).chunk()
     return source.assign(dem=source.red.isel(time=0, drop=True).astype("float32"))
@@ -595,4 +596,4 @@ def test_variable_assets_keep_cf_time_bounds():
     ends = starts + np.timedelta64(1, "D")
     scene = assign_cells(scene, list(zip(starts, ends, strict=True)))
     items = split_items({".": scene}, ("time",), ("variable",))
-    assert items[1]["nir"].gs.time_bounds[1] == ends[1]
+    assert items[1]["nir"].end_datetime.values == ends[1]

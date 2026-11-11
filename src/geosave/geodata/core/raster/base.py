@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -52,17 +53,26 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         self,
         freq: str,
         *,
-        label: Literal["left", "right"] = "left",
         dim: str | None = None,
+        closed: Literal["left", "right"] | None = None,
+        label: Literal["left", "right"] | None = None,
+        origin: str | datetime = "start_day",
+        offset: str | timedelta | None = None,
     ) -> DataT:
-        """State each time label's cell as one frequency step, without reading pixels.
+        """Write bounds for existing resample labels without reading pixels.
+
+        Coordinates must already hold bin labels produced with this sampling
+        configuration, rather than raw observation timestamps.
 
         Args:
             freq: Pandas offset alias the cells span, such as "MS".
-            label: "left" when each label starts its cell, "right" when it
-                ends it.
             dim: Coordinate holding the labels; defaults to the temporal
                 coordinate.
+            closed: Inclusive bin edge, following native resample defaults.
+            label: Bin label edge, following native resample defaults.
+            origin: Origin used for resampling.
+            offset: Shift applied to the resample origin. Existing labels
+                already include this shift.
 
         Returns:
             New raster with `start_datetime` and `end_datetime` coordinates on
@@ -82,12 +92,15 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         if labels is None:
             raise KeyError("No temporal coordinate is declared")
         step = to_offset(freq)
+        label_edge = pd.Grouper(
+            freq=freq, closed=closed, label=label, origin=origin, offset=offset
+        ).label
         values = pd.DatetimeIndex(np.atleast_1d(labels.values))
         # Fixed-length steps such as "10D" accept every instant as an edge.
         for value in values:
             if not step.is_on_offset(value):
                 raise ValueError(f"time label {value} is not on a {freq} edge")
-        if label == "left":
+        if label_edge == "left":
             starts, ends = values, values + step
         else:
             starts, ends = values - step, values
@@ -98,76 +111,30 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         )
 
     @property
-    def time_bounds(self) -> tuple[np.ndarray, np.ndarray] | None:
-        """Return each label's start and end as 1-D arrays, None for instants.
+    def timespan(self) -> DateRange | None:
+        """Return the first start and last end the cells state, else the first and last label.
 
-        A scalar period gives arrays of length one. NaT marks a label that
-        covers no observation.
+        Returns None without time or for an empty time axis. Reads coordinates
+        only, never raster pixels.
 
-        Raises:
-            ValueError: Bounds are incomplete, reversed, or on unrelated dimensions.
+        Examples:
+            >>> monthly.gs.write_time_bounds("MS").gs.timespan
+            (datetime.datetime(2025, 1, 1, 0, 0), datetime.datetime(2025, 3, 1, 0, 0))
         """
         coords = self._data.coords
-        if START_DATETIME not in coords and END_DATETIME not in coords:
-            return None
-        if START_DATETIME not in coords or END_DATETIME not in coords:
-            raise ValueError(
-                "a period needs both start_datetime and end_datetime "
-                "coordinates; add the missing one or drop both"
-            )
-        start = coords[START_DATETIME]
-        end = coords[END_DATETIME]
-        labels = self.time_coordinate
-        for endpoint in (start, end):
-            if endpoint.ndim and (
-                labels is None or endpoint.dims != labels.dims or labels.ndim != 1
-            ):
-                raise ValueError(
-                    "observation endpoints must follow the temporal coordinate's dimension"
-                )
-
-        starts = np.atleast_1d(start.values)
-        ends = np.atleast_1d(end.values)
-        starts, ends = np.broadcast_arrays(starts, ends)
-        if np.any(np.isnat(starts) != np.isnat(ends)) or np.any(starts > ends):
-            raise ValueError("time bounds must be ordered pairs or paired NaT")
-        return starts, ends
-
-    def _read_coverage(self) -> tuple[np.ndarray, np.ndarray] | None:
-        """Read observation coverage for whole-object summaries."""
-        return self.time_bounds
-
-    @property
-    def timespan(self) -> DateRange | None:
-        """Return inclusive coverage from bounds, falling back to time labels.
-
-        Empty time axes, absent temporal information and NaT coverage return
-        None. Only temporal coordinates are read, never raster pixels.
-        """
-        labels = self.time_coordinate
-        if labels is not None and labels.size == 0:
-            return None
-
-        bounds = self._read_coverage()
-        if bounds is None:
+        if START_DATETIME in coords:
+            starts = coords[START_DATETIME].values
+            ends = coords[END_DATETIME].values
+        else:
+            labels = self.time_coordinate
             if labels is None:
                 return None
-            starts = ends = np.atleast_1d(labels.values)
-        else:
-            starts, ends = bounds
-
-        if starts.size == 0 or ends.size == 0:
+            starts = ends = labels.values
+        first = pd.DatetimeIndex(np.atleast_1d(starts)).min()
+        last = pd.DatetimeIndex(np.atleast_1d(ends)).max()
+        if pd.isna(first) or pd.isna(last):
             return None
-
-        present = ~np.isnat(starts) & ~np.isnat(ends)
-        if not present.any():
-            return None
-        first, last = starts[present].min(), ends[present].max()
-
-        # Microseconds convert to datetime; nanoseconds would convert to int.
-        return first.astype("datetime64[us]").item(), last.astype(
-            "datetime64[us]"
-        ).item()
+        return first.to_pydatetime(), last.to_pydatetime()
 
 
 class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):

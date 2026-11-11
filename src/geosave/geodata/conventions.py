@@ -1,105 +1,80 @@
 """Xarray raster structure and coordinate names used by GeoSave.
 
-A Dataset holds named measurements and their CF support variables. Here
-reflectance varies with time, elevation does not, and ``time_bounds``
-delimits each time label's cell rather than being another image band::
+A Dataset: measurements as data variables, each time label's cell as two
+coordinates, the CRS as a scalar coordinate::
 
     >>> scene
     <xarray.Dataset> Size: 164B
-    Dimensions:      (time: 2, y: 2, x: 3, bounds: 2)
+    Dimensions:         (time: 2, y: 2, x: 3)
     Coordinates:
-      * time         (time) datetime64[ns] 16B 2025-06-01 2025-06-11
-      * y            (y) float64 16B 5e+06 5e+06
-      * x            (x) float64 24B 5e+05 5e+05 5e+05
-        time_bounds  (time, bounds) datetime64[ns] 32B 2025-05-31 ... 2025-06-12
-        spatial_ref  int32 4B 32633
-    Dimensions without coordinates: bounds
+      * time            (time) datetime64[ns] 16B 2025-06-01 2025-07-01
+        start_datetime  (time) datetime64[ns] 16B 2025-06-01 2025-07-01
+        end_datetime    (time) datetime64[ns] 16B 2025-07-01 2025-08-01
+      * y               (y) float64 16B 5e+06 5e+06
+      * x               (x) float64 24B 5e+05 5e+05 5e+05
+        spatial_ref     int32 4B 32633
     Data variables:
-        red          (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
-        nir          (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
-        dem          (y, x) float32 24B dask.array<chunksize=(2, 3), meta=np.ndarray>
+        red             (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
+        nir             (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
+        dem             (y, x) float32 24B dask.array<chunksize=(2, 3), meta=np.ndarray>
     Attributes:
-        title:    Reflectance and elevation
+        title:    Monthly reflectance and elevation
 
-A DataArray holds one variable, its coordinates, and its own attrs. It cannot
-hold ``time_bounds``, whose ``bounds`` dimension no pixel variable has::
+A DataArray keeps its cells, because they share the time dimension::
 
     >>> scene["red"]
     <xarray.DataArray 'red' (time: 2, y: 2, x: 3)> Size: 24B
-    dask.array<zeros_like, shape=(2, 2, 3), dtype=uint16, chunksize=(1, 2, 3), chunktype=numpy.ndarray>
+    dask.array<xarray-red, shape=(2, 2, 3), dtype=uint16, chunksize=(1, 2, 3), chunktype=numpy.ndarray>
     Coordinates:
-      * time         (time) datetime64[ns] 16B 2025-06-01 2025-06-11
-      * y            (y) float64 16B 5e+06 5e+06
-      * x            (x) float64 24B 5e+05 5e+05 5e+05
-        spatial_ref  int32 4B 32633
+      * time            (time) datetime64[ns] 16B 2025-06-01 2025-07-01
+        start_datetime  (time) datetime64[ns] 16B 2025-06-01 2025-07-01
+        end_datetime    (time) datetime64[ns] 16B 2025-07-01 2025-08-01
+      * y               (y) float64 16B 5e+06 5e+06
+      * x               (x) float64 24B 5e+05 5e+05 5e+05
+        spatial_ref     int32 4B 32633
     Attributes:
-        long_name:     Red reflectance
-        units:         1
-        scale_factor:  0.0001
-        _FillValue:    0
+        long_name:  Red reflectance
+        units:      1
 
-The CF storage structure behind those printouts (selected attrs shown). Every
-entry is a variable; ``coords`` and ``data_vars`` are xarray's grouping::
+Where each part lives, in memory and in a netCDF or Zarr file::
 
-    scene: xr.Dataset
-    ├── attrs
-    │   └── title: "Reflectance and elevation"
-    ├── coords
-    │   ├── x(x), y(y)
-    │   │   └── attrs: axis, standard_name ("projection_x_coordinate"), units
-    │   ├── time(time)
-    │   │   ├── data: datetime64[ns] [2025-06-01, 2025-06-11]
-    │   │   └── attrs: axis "T", standard_name "time",
-    │   │              bounds "time_bounds" ──► coords["time_bounds"]
-    │   ├── time_bounds(time, bounds)            CF boundary variable
-    │   │   └── data: [[2025-05-31, 2025-06-02], [2025-06-10, 2025-06-12]]
-    │   └── spatial_ref()                        CF grid mapping, written by ODC
-    │       └── attrs: grid_mapping_name, crs_wkt, projection parameters
-    └── data_vars
-        ├── red(time, y, x)
-        │   ├── data: lazy uint16 pixels
-        │   ├── attrs: long_name, units, scale_factor, _FillValue
-        │   └── encoding: grid_mapping "spatial_ref" ──► coords["spatial_ref"]
-        ├── nir(time, y, x)
-        └── dem(y, x)
+    in memory                              file
+    time(time)                             time(time)  bounds="time_bounds"
+    start_datetime(time) ┐   encode  ──►   time_bounds(time, bounds)
+    end_datetime(time)   ┘   ◄── decode      units, calendar = time's (CF §7.1)
+    x(x), y(y)                             x(x), y(y)  no _FillValue (CF §5)
+    spatial_ref()  grid mapping (ODC)      spatial_ref()
+    red.encoding["grid_mapping"]           red:grid_mapping = "spatial_ref"
 
-``.cf`` reads this structure; it stores no separate metadata::
+Who writes the cells::
 
-    scene.cf.axes                    {"X": ["x"], "Y": ["y"], "T": ["time"]}
-    scene.cf.get_bounds("time")      scene["time_bounds"], never estimated
-    scene.cf.grid_mappings           spatial_ref, with its CRS
+    one STAC Item per label            its start_datetime / end_datetime
+    groupby="solar_day" mosaic         the local solar day it covers
+    gs.composite(freq)                 the resample bin
+    gs.write_time_bounds("MS")         one freq step per label
+    a cell ends where the next starts (CF convention)
 
-A reference such as ``bounds`` or ``grid_mapping`` lives in attrs or, once a
-file is decoded, in encoding; ``.cf`` reads either. Decoding likewise moves
-consumed ``scale_factor`` and ``_FillValue`` from attrs into encoding. GeoSave
-adds structure through ``gs.write_*`` methods, which state it as these attrs,
-encodings and variables.
+``.cf`` reads the CF structure; it stores no separate metadata::
 
-Selection keeps a coordinate only when the selected variables have all of its
-dimensions, so ``time_bounds`` follows ``drop_vars`` and ``.cf`` selection::
+    scene.cf.axes            {"X": ["x"], "Y": ["y"], "T": ["time"]}
+    scene.cf.grid_mappings   spatial_ref, with its CRS
 
-    scene[["red"]]               red, time, x, y, spatial_ref
-    scene.cf[["red"]]            + time_bounds   (unreferenced coordinates dropped)
-    scene.drop_vars(["nir", "dem"])  + time_bounds   (every other variable kept)
+STAC metadata keeps its own shape beside it::
 
-Time cells come from what GeoSave knows: a loaded Item's period, where one
-label is one Item, or a composite's resample bin. STAC metadata stays in its
-own shape beside the CF structure::
-
-    scene.coords["stac_properties"] (time)  JSON Item properties per observation
+    scene.coords["stac_properties"] (time)  JSON Item properties per label
     scene.attrs["stac_collection"]          JSON Collection
     scene.attrs["stac_extensions"]          JSON extension schema URIs
-    scene.gs.stac_common_properties         intersection over observations
 
-STAC's ``start_datetime`` and ``end_datetime`` appear only on Items, where
-loading reads and publication writes them.
+A DataTree node inherits its parents' coordinates, so asset nodes share the
+collection node's time and cells::
+
+    /s2              time, start_datetime, end_datetime, stac_properties
+    ├── /B04         B04 (time, y, x)   its own grid
+    └── /B11         B11 (time, y, x)   its own grid
 
 GeoSave creators use ``y``/``x``, ``time``, and ``band`` when channels are
-stacked in one DataArray. Native inputs can retain other names: CF attrs
-identify their axes; ``to_yx`` explicitly renames the spatial pair.
-DataTree nodes hold Datasets and inherit parent coordinates;
-``to_dataset(inherit="all_coords")`` includes a parent's ``time_bounds``.
-Independent grids can occupy sibling nodes.
+stacked in one DataArray. Native inputs keep other names; CF attrs identify
+their axes.
 
 See https://cf-xarray.readthedocs.io/en/latest/quickstart.html.
 """
@@ -115,7 +90,7 @@ import xarray as xr
 SPATIAL_DIMENSIONS = ("y", "x")
 
 # Scalar coordinate holding the CRS, which CF reaches through `grid_mapping`.
-CRS_COORDINATE = "spatial_ref"
+GRID_MAPPING = "spatial_ref"
 
 # Axis the bands occupy: a file's bands, stacked variables, or display channels.
 BAND_DIMENSION = "band"
@@ -156,4 +131,3 @@ def to_yx[T: (xr.DataArray, xr.Dataset)](data: T) -> T:
     if dims in (None, SPATIAL_DIMENSIONS):
         return data
     return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))
-

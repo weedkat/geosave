@@ -31,7 +31,7 @@ from upath import UPath
 from xarray.core.utils import equivalent
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import TIME_COORDINATE
+from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
 from geosave.geodata.io import storage
 from geosave.geodata.io.storage import Location, StorageOptions
 from geosave.geodata.utils.color import parse_color
@@ -164,12 +164,6 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     """
     if storage.location(path).suffix.lower() not in FILE_SUFFIXES:
         raise ValueError(f"{path} is not a GeoTIFF destination; use .tif or .tiff")
-    for name in ds.gs.support_variables:
-        if ds[name].dims:
-            raise ValueError(
-                f"GeoTIFF cannot preserve CF support variable {name!r}; "
-                "write NetCDF/Zarr or explicitly select a DataArray first."
-            )
     ds = ds.set_coords(ds.gs.support_variables)
     ds.gs.validate(same_dims=True)
     if any(variable.gs.geobox is not None for variable in ds.data_vars.values()):
@@ -586,12 +580,10 @@ def _time_coverage(cube: xr.Dataset) -> dict[str, str]:
         return {}
 
     # Serialize NumPy timestamps: the Python datetimes in timespan lose nanoseconds.
-    bounds = cube.gs.time_bounds
-    if bounds is None:
-        start = end = instant
-    else:
-        starts, ends = bounds
-        start, end = starts.min(), ends.max()
+    start = end = instant
+    if START_DATETIME in cube.coords:
+        start = cube[START_DATETIME].values.min()
+        end = cube[END_DATETIME].values.max()
     coverage = attrs.ACDD(
         time_coverage_start=np.datetime_as_string(start, unit="auto"),
         time_coverage_end=np.datetime_as_string(end, unit="auto"),

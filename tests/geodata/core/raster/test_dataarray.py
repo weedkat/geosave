@@ -242,9 +242,21 @@ def test_a_plain_integer_band_is_a_measurement() -> None:
     assert not _coded_band(units="1").gs.is_categorical
 
 
-def test_a_half_spelled_listing_still_marks_class_codes() -> None:
-    # A guard answers yes or no; it must not raise on attrs it cannot parse.
-    assert _coded_band(flag_masks=[1, 2]).gs.is_categorical
+@pytest.mark.parametrize(
+    "band_attrs",
+    [
+        {"flag_masks": [1, 2]},  # CF needs flag_meanings beside flags
+        {"color_map": '{"1": "#00ff00"}'},  # colours alone are not classes
+    ],
+)
+def test_attrs_that_are_not_cf_flags_do_not_mark_class_codes(band_attrs) -> None:
+    assert not _coded_band(**band_attrs).gs.is_categorical
+
+
+def test_cf_flags_with_meanings_mark_class_codes() -> None:
+    band = _coded_band(flag_masks=[1, 2], flag_meanings="cloud shadow")
+
+    assert band.gs.is_categorical
 
 
 @pytest.mark.parametrize(

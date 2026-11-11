@@ -112,7 +112,7 @@ def test_a_composite_cell_is_its_resample_bin(freq, options, as_array) -> None:
 def test_one_variable_keeps_its_period() -> None:
     monthly = series(100, 900, 500).gs.mask_and_scale().gs.composite("MS", "median")
 
-    assert monthly.red.gs.time_bounds is not None
+    assert "start_datetime" in monthly.red.coords
     assert monthly.isel(time=0).red.gs.timespan is not None
 
 
@@ -222,7 +222,7 @@ def test_reduction_preserves_metadata_under_xarray_drop_attrs_option(kind):
     variable = result if kind == "array" else result.red
     assert variable.attrs["units"] == "m"
     assert variable.attrs["cell_methods"] == "time: mean"
-    assert result.gs.time_bounds is not None
+    assert "start_datetime" in result.coords
     assert variable.chunks is not None
     np.testing.assert_allclose(variable.compute()[:, 0, 0], [500, np.nan, 500])
 
@@ -272,21 +272,6 @@ def test_an_empty_bin_keeps_its_cell_in_selection_and_timespan(kind):
     start, end = monthly.gs.timespan
     assert start.isoformat() == "2024-01-01T00:00:00"
     assert end.isoformat() == "2024-04-01T00:00:00"
-
-
-@pytest.mark.parametrize(
-    "bounds",
-    [
-        [("2024-01-01", "NaT")],
-        [("2024-02-01", "2024-01-01")],
-    ],
-)
-def test_invalid_periods_fail_at_read(bounds):
-    data = series(1, 3, 5)
-    stamps = np.array(bounds, dtype="datetime64[ns]")
-    invalid = data.assign_coords(start_datetime=stamps[0, 0], end_datetime=stamps[0, 1])
-    with pytest.raises(ValueError, match="ordered pairs"):
-        invalid.gs.time_bounds
 
 
 def test_static_variables_do_not_claim_temporal_reduction():

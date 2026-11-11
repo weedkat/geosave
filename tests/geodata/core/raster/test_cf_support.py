@@ -1,9 +1,9 @@
 """CF support survives pixel operations without becoming a raster band."""
 
+import dask.array
 import numpy as np
 import pytest
 import xarray as xr
-from dask.callbacks import Callback
 
 from tests.geodata.conftest import build_raster
 
@@ -16,54 +16,6 @@ def bounded():
     )
     scene.x.attrs["bounds"] = "x_bounds"
     return scene
-
-
-def test_mask_and_stack_exclude_bounds_without_computing_pixels():
-    scene = bounded()
-    before = scene.copy(deep=True)
-    with Callback(pretask=lambda *_: pytest.fail("unexpected pixel compute")):
-        scene.gs.validate()
-        masked = scene.gs.mask(
-            np.ones((scene.sizes["y"], scene.sizes["x"]), bool), fill=0
-        )
-        stacked = scene.gs.to_dataarray()
-    xr.testing.assert_identical(masked.x_bounds, scene.x_bounds)
-    assert "vertices" not in stacked.dims
-    assert "bounds" not in stacked.x.attrs
-    xr.testing.assert_identical(scene.x_bounds, before.x_bounds)
-    assert scene.x.attrs["bounds"] == "x_bounds"
-
-
-def test_composite_preserves_spatial_bounds_without_broadcasting():
-    scene = bounded().expand_dims(
-        time=np.array(["2025-01-10", "2025-01-20"], dtype="datetime64[ns]")
-    )
-    # Construct native support independent of time, as in a file.
-    scene["x_bounds"] = scene.x_bounds.isel(time=0, drop=True)
-    result = scene.gs.composite("MS", "mean")
-    xr.testing.assert_identical(result.x_bounds, scene.x_bounds)
-    assert "bounds" not in result.time.attrs
-    assert str(result.start_datetime.values[0])[:10] == "2025-01-01"
-
-
-def test_cf_cells_are_not_observation_coverage():
-    scene = build_raster().expand_dims(
-        time=np.array(["2025-01-15"], dtype="datetime64[ns]")
-    )
-    cells = np.array([["2025-01-01", "2025-02-01"]], dtype="datetime64[ns]")
-    scene["cells"] = (("time", "vertices"), cells)
-    scene.time.encoding["bounds"] = "cells"
-    assert scene.gs.time_bounds is None
-    assert scene.gs.timespan[0].day == 1
-    assert scene.gs.cell_bounds.name == "cells"
-    with pytest.raises(ValueError, match="recomputing CF support"):
-        scene.gs.composite("MS", "mean")
-
-
-def test_grid_change_refuses_stale_spatial_bounds():
-    scene = bounded()
-    with pytest.raises(ValueError, match="recomputing CF support"):
-        scene.gs.write_grid(scene.gs.geobox)
 
 
 def test_unknown_nonspatial_data_is_not_silently_discarded():
@@ -94,27 +46,6 @@ def test_mapping_data_variable_is_not_a_band_and_keeps_georeferencing(tmp_path):
         assert restored.gs.geobox == scene.gs.geobox
 
 
-def test_tree_resolves_bounds_of_inherited_time_without_mutating_parent():
-    time = np.array(["2025-01-15"], dtype="datetime64[ns]")
-    root = xr.Dataset(
-        {
-            "cells": (
-                ("time", "vertices"),
-                np.array([["2025-01-01", "2025-02-01"]], dtype="datetime64[ns]"),
-            )
-        },
-        coords={"time": time},
-    )
-    root.time.attrs["bounds"] = "cells"
-    tree = xr.DataTree.from_dict(
-        {".": root, "image": build_raster().expand_dims(time=time)}
-    )
-    assert list(tree.gs.datasets) == ["image"]
-    assert tree.gs.timespan[0].day == 1
-    assert "cells" in tree.data_vars
-    assert "cells" not in tree.coords
-
-
 def test_mask_updates_ancillary_raster_as_data_not_a_conflicting_coordinate():
     scene = build_raster()
     scene.red.attrs["ancillary_variables"] = "nir"
@@ -140,7 +71,7 @@ def test_spatial_operations_preserve_independent_coordinates_and_mapping():
 
 
 @pytest.mark.parametrize("suffix", ["nc", "zarr"])
-def test_tree_bounds_roundtrip_retains_native_relationship(tmp_path, suffix):
+def test_tree_bounds_roundtrip_as_start_and_end(tmp_path, suffix):
     from geosave.geodata.io import open_raster
 
     time = np.array(["2025-01-15"], dtype="datetime64[ns]")
@@ -165,9 +96,14 @@ def test_tree_bounds_roundtrip_retains_native_relationship(tmp_path, suffix):
         assert list(restored.gs.datasets) == ["image"]
         assert restored.gs.timespan[0].day == 1
         image = restored.gs.datasets["image"]
-        assert image.gs.cell_bounds.name == "cells"
-        assert image.gs.time_bounds is None
-        np.testing.assert_array_equal(image.gs.cell_bounds.values, root.cells.values)
+        # Stored CF bounds come back as the cell coordinates every reader uses.
+        assert "cells" not in image.variables
+        np.testing.assert_array_equal(
+            image.start_datetime.values, root.cells.values[:, 0]
+        )
+        np.testing.assert_array_equal(
+            image.end_datetime.values, root.cells.values[:, 1]
+        )
 
 
 def test_thinned_cf_window_keeps_inferred_grid_on_singleton_axes():
@@ -216,7 +152,7 @@ def test_reprojection_keeps_foreign_axis_names_and_coherent_mapping():
     assert sampled.red.encoding["grid_mapping"] in sampled.coords
 
 
-def test_cf_temporal_name_drives_bounds_and_stac_stamping():
+def test_cf_temporal_name_drives_cells_and_stac_stamping():
     from datetime import datetime, timezone
     import pystac
     from geosave.geodata.stac.raster import stamp_item_time, stamp_item_properties
@@ -225,16 +161,7 @@ def test_cf_temporal_name_drives_bounds_and_stac_stamping():
         date=np.array(["2025-01-10", "2025-01-20"], dtype="datetime64[ns]")
     )
     scene.date.attrs.update(standard_name="time", axis="T")
-    scene["cells"] = (
-        ("date", "nv"),
-        np.array(
-            [["2025-01-01", "2025-01-15"], ["2025-01-15", "2025-02-01"]],
-            dtype="datetime64[ns]",
-        ),
-    )
-    scene.date.attrs["bounds"] = "cells"
     assert scene.gs.time_coordinate.name == "date"
-    assert scene.gs.timespan[0].day == 1
     item = pystac.Item(
         "sample",
         None,
@@ -249,20 +176,22 @@ def test_cf_temporal_name_drives_bounds_and_stac_stamping():
     assert observed.start_datetime.dims == ("date",)
 
 
-def test_observation_endpoints_cannot_follow_an_unrelated_axis():
-    scene = build_raster().expand_dims(
-        date=np.array(["2025-01-10", "2025-01-20"], dtype="datetime64[ns]")
+def test_encoding_time_bounds_leaves_the_callers_raster_unchanged():
+    from geosave.geodata.core.raster.utils.cf import (
+        decode_time_bounds,
+        encode_time_bounds,
     )
-    scene.date.attrs["standard_name"] = "time"
-    scene = scene.assign_coords(
-        start_datetime=(
-            "unrelated",
-            np.array(["2025-01-01", "2025-01-15"], dtype="datetime64[ns]"),
-        ),
-        end_datetime=(
-            "unrelated",
-            np.array(["2025-01-14", "2025-01-31"], dtype="datetime64[ns]"),
-        ),
-    )
-    with pytest.raises(ValueError, match="temporal coordinate's dimension"):
-        scene.gs.time_bounds
+    from tests.geodata.conftest import build_dated_raster
+
+    raster = build_dated_raster()
+
+    encoded = encode_time_bounds(raster)
+    decoded = decode_time_bounds(encoded)
+
+    assert "bounds" not in raster.time.attrs
+    assert "units" not in raster.time.encoding
+    assert encoded.time.attrs["bounds"] == "time_bounds"
+    assert encoded.time_bounds.dims == ("time", "bounds")
+    assert isinstance(encoded.red.data, dask.array.Array)
+    for name in ("start_datetime", "end_datetime"):
+        np.testing.assert_array_equal(decoded[name].values, raster[name].values)

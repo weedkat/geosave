@@ -118,7 +118,7 @@ def _read_asset_pixels(
     from odc.geo.roi import roi_is_empty
     from odc.geo.xr import xr_coords, xr_reproject
 
-    from geosave.geodata.conventions import CRS_COORDINATE
+    from geosave.geodata.conventions import GRID_MAPPING
     from geosave.geodata.io import rasterio
     from geosave.geodata.stac.extensions import projection
 
@@ -152,7 +152,7 @@ def _read_asset_pixels(
     pixels = xr_reproject(window, geobox, resampling="nearest", dst_nodata=np.nan)
     # The file's own CRS attrs survive the warp; the pixels now sit on `geobox`.
     return pixels.odc.assign_crs(geobox.crs).assign_coords(
-        {CRS_COORDINATE: xr_coords(geobox)[CRS_COORDINATE]}
+        {GRID_MAPPING: xr_coords(geobox)[GRID_MAPPING]}
     )
 
 
@@ -777,6 +777,7 @@ def _read_eo_bands(source: DatasetReader) -> list[Band]:
             )
         )
     return bands
+
 
 # Root of a lone raster, as DataTree names its own root node.
 ROOT_PATH = "."

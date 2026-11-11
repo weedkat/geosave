@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Literal
 
-import pandas as pd
 import xarray as xr
 
 from geosave.geodata.conventions import STAC_PROPERTIES
@@ -77,11 +76,9 @@ def composite_ds(
             reduced = reduced.chunk({dim: -1})
         reduced = reduced.interpolate_na(dim=dim, method=interpolation)
 
-    # The bins' label edge is pandas' choice when label is None.
-    side = pd.Grouper(
-        freq=alias, closed=closed, label=label, origin=origin, offset=offset
-    ).label
-    reduced = reduced.gs.write_time_bounds(alias, label=side, dim=dim)
+    reduced = reduced.gs.write_time_bounds(
+        alias, dim=dim, closed=closed, label=label, origin=origin, offset=offset
+    )
 
     if STAC_PROPERTIES in scene.coords:
         records = [{} for _ in range(reduced.sizes[dim])]
@@ -159,11 +156,9 @@ def composite_da(
             reduced = reduced.chunk({dim: -1})
         reduced = reduced.interpolate_na(dim=dim, method=interpolation)
 
-    # The bins' label edge is pandas' choice when label is None.
-    side = pd.Grouper(
-        freq=alias, closed=closed, label=label, origin=origin, offset=offset
-    ).label
-    reduced = reduced.gs.write_time_bounds(alias, label=side, dim=dim)
+    reduced = reduced.gs.write_time_bounds(
+        alias, dim=dim, closed=closed, label=label, origin=origin, offset=offset
+    )
 
     if STAC_PROPERTIES in band.coords:
         records = [{} for _ in range(reduced.sizes[dim])]

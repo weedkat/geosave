@@ -871,9 +871,8 @@ def test_time_bounds_survive_array_conversion() -> None:
 
     restored = dataset.gs.to_dataarray().gs.to_dataset(dim="band")
 
-    starts, ends = restored.gs.time_bounds
-    np.testing.assert_array_equal(starts, bounds[:, 0])
-    np.testing.assert_array_equal(ends, bounds[:, 1])
+    np.testing.assert_array_equal(restored.start_datetime.values, bounds[:, 0])
+    np.testing.assert_array_equal(restored.end_datetime.values, bounds[:, 1])
     np.testing.assert_array_equal(restored.red, dataset.red)
 
 
@@ -928,5 +927,5 @@ def test_expand_rasters_keeps_every_variable_coordinate_and_time_bounds():
         xr.testing.assert_identical(piece, scene.isel(time=position))
         assert list(piece.data_vars) == ["red", "dem"]
         assert piece.attrs == {"title": "Monthly observations"}
-        assert piece.gs.time_bounds[0] == np.datetime64(f"2025-0{position + 1}-01")
+        assert piece.start_datetime.values == np.datetime64(f"2025-0{position + 1}-01")
         assert piece.red.chunks is not None
