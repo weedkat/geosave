@@ -400,7 +400,6 @@ fields appear as attributes, including their annotated types and defaults.
         - geobox
         - validate
         - variables
-        - support_variables
         - raster_variables
         - expand_rasters
         - rgb
@@ -513,10 +512,6 @@ fields appear as attributes, including their annotated types and defaults.
         - scale_and_fill
         - __init__
 
-::: geosave.geodata.core.raster.utils.cf.check_coordinate_change
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.raster.utils.cf.decode_time_bounds
     options:
       show_root_full_path: true
@@ -526,10 +521,6 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.core.raster.utils.cf.encode_time_bounds
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.utils.cf.read_support_variables
     options:
       show_root_full_path: true
 

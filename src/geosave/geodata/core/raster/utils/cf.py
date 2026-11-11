@@ -1,29 +1,10 @@
-"""Read CF structural relationships without interpreting them as raster pixels."""
+"""Encode and decode the CF structure GeoSave stores in netCDF and Zarr files."""
 
 from __future__ import annotations
 
-from collections.abc import Hashable
 
 import cf_xarray  # noqa: F401 registers .cf
 import xarray as xr
-
-
-def read_support_variables(dataset: xr.Dataset) -> tuple[Hashable, ...]:
-    """Name the scalar CRS carriers in Dataset order, including coordinates.
-
-    Other CF structure GeoSave does not model, such as spatial bounds or cell
-    measures, stays as ordinary variables for `.cf` to read.
-    """
-    names = set()
-    for references in dataset.cf.grid_mapping_names.values():
-        names.update(references)
-    # GDAL/ODC can carry WKT without a CF projection name.
-    for name, variable in dataset.variables.items():
-        if not variable.dims and {"crs_wkt", "spatial_ref"}.intersection(
-            variable.attrs
-        ):
-            names.add(name)
-    return tuple(name for name in dataset.variables if name in names)
 
 
 # A boundary variable's vertex dimension, named as cf-xarray's add_bounds does.

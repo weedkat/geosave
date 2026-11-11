@@ -25,25 +25,15 @@ def test_unknown_nonspatial_data_is_not_silently_discarded():
         scene.gs.validate()
 
 
-def test_mapping_data_variable_is_not_a_band_and_keeps_georeferencing(tmp_path):
-    from geosave.geodata.io import open_raster
-
+def test_a_grid_mapping_kept_as_data_is_not_a_band():
+    # Plain xr.open_dataset can leave the grid mapping a data variable.
     scene = build_raster().reset_coords("spatial_ref")
     for name in ("red", "nir"):
         scene[name].attrs["grid_mapping"] = "spatial_ref"
-    scene.gs.validate(georeferenced=True)
-    masked = scene.gs.mask(np.ones((2, 2), dtype=bool), fill=0)
-    assert masked.gs.geobox == scene.gs.geobox
-    assert "spatial_ref" in masked.data_vars
-    assert scene.gs.geobox.crs is not None
-    assert scene.gs.to_dataarray().gs.geobox == scene.gs.geobox
-    path = tmp_path / "mapping.tif"
-    from geosave.geodata.io.formats.geotiff import write_cog
 
-    write_cog(scene, path)
-    with open_raster(path) as restored:
-        assert restored.gs.variables == ("red", "nir")
-        assert restored.gs.geobox == scene.gs.geobox
+    assert scene.gs.raster_variables == ("red", "nir")
+    # Georeferencing reads it as the coordinate it is in every GeoSave reader.
+    assert scene.set_coords("spatial_ref").gs.geobox == build_raster().gs.geobox
 
 
 def test_mask_updates_ancillary_raster_as_data_not_a_conflicting_coordinate():
@@ -116,9 +106,12 @@ def test_thinned_cf_window_keeps_inferred_grid_on_singleton_axes():
                 np.array([[1.0, 2.0], [3.0, 4.0]]),
                 {"grid_mapping": "crs"},
             ),
+        },
+        coords={
+            "y": [1.0, 0.0],
+            "x": [0.0, 1.0],
             "crs": ((), 0, CRS.from_epsg(4326).to_cf()),
         },
-        coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
     )
     target = scene.gs.geobox.zoom_out(2)
     pixels = scene.gs.read_pixels(target)
@@ -137,9 +130,12 @@ def test_reprojection_keeps_foreign_axis_names_and_coherent_mapping():
                 np.ones((2, 2)),
                 {"grid_mapping": "crs"},
             ),
+        },
+        coords={
+            "latitude": [1.0, 0.0],
+            "longitude": [0.0, 1.0],
             "crs": ((), 0, CRS.from_epsg(4326).to_cf()),
         },
-        coords={"latitude": [1.0, 0.0], "longitude": [0.0, 1.0]},
     )
     target = scene.gs.geobox.to_crs("EPSG:3857")
     warped = scene.gs.reproject(target)

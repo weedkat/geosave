@@ -164,7 +164,6 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     """
     if storage.location(path).suffix.lower() not in FILE_SUFFIXES:
         raise ValueError(f"{path} is not a GeoTIFF destination; use .tif or .tiff")
-    ds = ds.set_coords(ds.gs.support_variables)
     ds.gs.validate(same_dims=True)
     if any(variable.gs.geobox is not None for variable in ds.data_vars.values()):
         ds.gs.validate(same_grid=True)
@@ -405,7 +404,7 @@ def _write(
     """
     validate(ds, path)
 
-    ds = ds.set_coords(ds.gs.support_variables).gs.scale_and_fill()
+    ds = ds.gs.scale_and_fill()
 
     cube = ds
     # One file holds one instant, however the axis spells it.

@@ -177,7 +177,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 )
 
         result = composite_ds(
-            self._select_pixels(),
+            self._data,
             freq,
             method,
             dim=dim,
@@ -190,31 +190,12 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         )
         return cast("Dataset", result)
 
-    def _select_pixels(self) -> xr.Dataset:
-        """Hold the CRS carriers as coordinates, so only pixel variables remain data."""
-        return self._data.set_coords(list(self.support_variables))
-
-    def _read_variable(self, name: Hashable) -> xr.DataArray:
-        """Retain native coordinates and attach referenced scalar CRS carriers.
-
-        CF selection also attaches ancillary pixel arrays. Those remain peer
-        data variables during pixel operations, otherwise their unchanged
-        coordinates conflict with independently transformed values.
-        """
-        variable = self._data[name]
-        related = self._data.cf[name]
-        carriers = {}
-        for coordinate in self.support_variables:
-            if coordinate in related.coords and not related[coordinate].dims:
-                carriers[coordinate] = related[coordinate]
-        return variable.assign_coords(carriers)
-
     @property
     def spatial_dims(self) -> tuple[str, str] | None:
         """Return the common spatial axes, or None for missing or differing values."""
         shared = None
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             current = variable.gs.spatial_dims
             if current is None or (shared is not None and current != shared):
                 return None
@@ -226,7 +207,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         """Return the common grid, or None for missing or differing values."""
         shared = None
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             current = variable.gs.geobox
             if current is None or (shared is not None and current != shared):
                 return None
@@ -268,7 +249,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         self._validate_nonempty(variables)
         reference = None
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             try:
                 variable.gs.validate(georeferenced=georeferenced, affine=affine)
                 if same_grid:
@@ -295,7 +276,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         """Check structure before replacing existing placement coordinates."""
         self._validate_nonempty(self._data[list(self.raster_variables)].data_vars)
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             dims = variable.gs.spatial_dims
             if dims is None or any(variable.sizes[dim] == 0 for dim in dims):
                 raise RasterValidationError(
@@ -343,21 +324,18 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         return tuple(str(name) for name in self._data.data_vars)
 
     @property
-    def support_variables(self) -> tuple[Hashable, ...]:
-        """Name the scalar CRS carriers, including coordinate variables."""
-        from .utils.cf import read_support_variables
-
-        return read_support_variables(self._data)
-
-    @property
     def raster_variables(self) -> tuple[Hashable, ...]:
-        """Name data variables excluding CRS carriers.
+        """Name the data variables, leaving out a CF grid mapping kept as data.
 
-        Unknown nonspatial data variables remain included so raster validation
+        A grid mapping is a coordinate in every file GeoSave or ODC reads;
+        plain `xr.open_dataset` can leave it a data variable. Unknown
+        nonspatial data variables remain included so raster validation
         reports them rather than silently discarding them.
         """
-        support = set(self.support_variables)
-        return tuple(name for name in self._data.data_vars if name not in support)
+        mappings = set()
+        for names in self._data.cf.grid_mapping_names.values():
+            mappings.update(names)
+        return tuple(name for name in self._data.data_vars if name not in mappings)
 
     def expand_rasters(self, dim: str | Sequence[str]) -> tuple[Dataset, ...]:
         """Split this Dataset into one lazy slice per position along `dim`.
@@ -568,7 +546,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             True
         """
         self._validate_spatial()
-        placed = grid.write_grid(self._select_pixels(), geobox)
+        placed = grid.write_grid(self._data, geobox)
         for name in placed.gs.raster_variables:
             placed[name] = grid.clear_mapping_attr(placed[name]).variable
         return cast("Dataset", placed)
@@ -618,7 +596,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             return cast("Dataset", self._data)
         variables = {}
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             kernel = read_kernel(resampling, str(name))
             variables[name] = variable.gs.reproject(geobox, resampling=kernel)
         # ODC's Dataset path retains the old CRS carrier; assemble warped variables.
@@ -669,11 +647,11 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         variables = {}
         if isinstance(mask, np.ndarray):
             for name in self.raster_variables:
-                variable = self._read_variable(name)
+                variable = self._data[name]
                 variables[name] = mask_with_np(variable, mask, fill=fill).variable
         else:
             for name in self.raster_variables:
-                variable = self._read_variable(name)
+                variable = self._data[name]
                 variables[name] = mask_with_da(variable, mask, fill=fill).variable
 
         masked = self._data.assign(variables)
@@ -759,7 +737,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             return GeoRegion(extent.to_geometry(), timespan=self.timespan)
         geometry = None
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             if variable.gs.spatial_dims is None:
                 continue
             member = variable.gs.region.extent
@@ -1126,7 +1104,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         variables = {}
         metadata = []
         for name in self.raster_variables:
-            band = self._read_variable(name)
+            band = self._data[name]
             dims = tuple(dim for dim in band.dims if dim not in spatial)
             if dims != axes:
                 raise ValueError(
@@ -1288,7 +1266,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         from odc.geo.xr import xr_coords, xr_reproject
 
         spatial = self.spatial_dims
-        raster = self._select_pixels()
+        raster = self._data
         try:
             raster.gs.validate(georeferenced=True, affine=True)
         except RasterValidationError as error:
@@ -1420,7 +1398,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         """Apply one per-variable change to every data variable."""
         variables = {}
         for name in self.raster_variables:
-            variable = self._read_variable(name)
+            variable = self._data[name]
             variables[name] = change(variable).variable
         raster = self._data.assign(variables)
         # Its pixels are no longer the file's.

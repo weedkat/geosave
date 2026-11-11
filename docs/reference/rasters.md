@@ -57,23 +57,20 @@ A monthly bin label is not necessarily the first contributing observation.
 declarations, falling back to the conventional `time` name. A declared `date`
 coordinate keeps its name through time selection and STAC stamping.
 
-`scene.gs.raster_variables` excludes structural CF bounds and CRS carriers;
-`scene.gs.support_variables` lists those carriers, including coordinates.
-`scene.gs.variables` continues to list all data variables. Ancillary rasters
-and cell measures remain data variables; unknown nonspatial data is not
-silently discarded by raster validation.
+```text
+scene.gs.variables          every data variable
+scene.gs.raster_variables   data variables, minus a CF grid mapping kept as data
+scene.gs.grid_mapping_coords  the scalar coordinates carrying the CRS (spatial_ref)
+```
 
-Masking preserves structural values. Coordinate-changing operations refuse
-support that would need recomputation, rather than keeping stale bounds or
-cell areas. Compositing with time-dependent CF bounds currently requires an
-explicit prior choice of their treatment. Native DataArray extraction cannot
-retain extra-dimensional bounds; `.gs.to_dataarray()` also removes references
-to omitted bounds. Keep a Dataset when those relationships are required.
-GeoTIFF output refuses extra-dimensional CF support; NetCDF/Zarr preserve it.
+GeoSave's readers and ODC hold the grid mapping as a coordinate; after a plain
+`xr.open_dataset`, make it one with `ds.set_coords("spatial_ref")`. CF
+structure GeoSave does not model, such as spatial bounds or cell measures,
+stays as ordinary variables: read it with `.cf`, and recompute or drop it
+yourself after an operation that changes its dimension.
 
-A DataTree aggregates its datasets' timespans. Write bounds on individual
-Datasets before assigning them to the tree; children may have different time
-axes, so there is no tree-wide bounds writer.
+A DataTree aggregates its datasets' timespans; its nodes inherit their
+parents' cells along with `time`.
 
 ## Composites and time selection
 
