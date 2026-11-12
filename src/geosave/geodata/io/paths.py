@@ -46,8 +46,8 @@ def format_path(template: str, raster: xr.Dataset, **fields: object) -> str:
         '20250115/red.tif'
     """
     values = read_scalar_coords(raster)
-    if len(raster.gs.raster_variables) == 1:
-        values["variable"] = str(raster.gs.raster_variables[0])
+    if len(raster.gs.variables) == 1:
+        values["variable"] = str(raster.gs.variables[0])
     values.update(fields)
     missing = fields_named(template).keys() - values.keys()
     if missing:
@@ -64,7 +64,8 @@ def read_scalar_coords(raster: xr.Dataset) -> dict[str, object]:
         >>> read_scalar_coords(chip)
         {'time': Timestamp('2025-01-15 00:00:00')}
     """
-    carriers = raster.gs.grid_mapping_coords
+    crs_coord = raster.odc.crs_coord
+    carriers = () if crs_coord is None else (crs_coord.name,)
     values: dict[str, object] = {}
     for name, coord in raster.coords.items():
         if coord.ndim != 0 or name in carriers:

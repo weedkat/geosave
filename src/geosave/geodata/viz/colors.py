@@ -2,7 +2,7 @@
 
 The default colormap and the colormap picker's choices, and a contrast stretch
 for composites, which HoloViews applies per element but not per channel.
-Classes and categories take `Legend.colors` and `CATEGORY_PALETTE`.
+Classes and categories take `Display.colors` and `CATEGORY_PALETTE`.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def stretch_channels[T: (np.ndarray, xr.DataArray)](
         ValueError: `clim` is empty or inverted, or no limits can be read.
 
     Examples:
-        >>> stretch_channels(ds[["B08", "B04", "B03"]].gs.to_dataarray(), (0.0, 0.3))
+        >>> stretch_channels(ds[["B08", "B04", "B03"]].gs.to_array(), (0.0, 0.3))
     """
     if clim is None:
         low, high = find_stretch_limits(np.asarray(channels), percentiles)

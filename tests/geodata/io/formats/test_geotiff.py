@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
+from tests.conftest import combine_item
+
 import struct
 import subprocess
 from pathlib import Path
@@ -26,7 +30,7 @@ from geosave.geodata import (
 from geosave.geodata.io import rasterio as gdal
 from geosave.geodata.io.formats import geotiff
 from geosave.geodata.warnings import UnreadMaskWarning
-from tests.conftest import build_dataset
+from tests.conftest import build_dataset, place
 from tests.geodata.conftest import (
     _refuse,
     assign_cells,
@@ -36,19 +40,8 @@ from tests.geodata.conftest import (
 )
 
 
-def _interpreted(ds: xr.Dataset, **colours: str) -> xr.Dataset:
-    """Return the raster with the named variables drawn as the given colours."""
-    return ds.assign(
-        {
-            name: attrs.stamp_attrs(ds[name], attrs.GDALBand(colorinterp=colour))
-            for name, colour in colours.items()
-        }
-    )
-
-
-def _colorinterp(band: xr.DataArray) -> str | None:
-    found = attrs.GDALBand.from_attrs(band.attrs)
-    return None if found is None else found.colorinterp
+from geosave.geodata import io
+from geosave.geodata.io.formats import netcdf
 
 
 def test_round_trip_keeps_the_variable_names(tmp_path: Path) -> None:
@@ -88,7 +81,7 @@ def test_a_band_described_by_its_name_gains_no_long_name(tmp_path: Path) -> None
         assert "long_name" not in restored[name].attrs
 
 
-def test_a_scalar_time_survives_as_coverage_attrs(tmp_path: Path) -> None:
+def test_an_instant_is_stated_by_the_tiff_datetime_tag(tmp_path: Path) -> None:
     instant = np.datetime64("2024-03-05T06:07:08")
     written = build_raster(times=0).assign_coords(time=instant)
     path = geotiff.write_cog(written, tmp_path / "scene.tif")
@@ -96,12 +89,30 @@ def test_a_scalar_time_survives_as_coverage_attrs(tmp_path: Path) -> None:
     restored = gdal.open_raster(path)
 
     with rasterio.open(path) as src:
-        assert src.tags()["time_coverage_start"] == "2024-03-05T06:07:08"
-        assert src.tags()["time_coverage_end"] == "2024-03-05T06:07:08"
+        assert src.tags()["TIFFTAG_DATETIME"] == "2024:03:05 06:07:08"
+        # An instant covers no period.
+        assert "time_coverage_start" not in src.tags()
     assert restored.time.values == instant
     # The date lives on the time coordinate alone, so dates join without conflict.
-    assert "time_coverage_start" not in restored.attrs
+    assert "TIFFTAG_DATETIME" not in restored.attrs
     assert "start_datetime" not in restored.coords
+
+
+def test_a_cog_keeps_its_time_and_the_period_it_covers(tmp_path: Path) -> None:
+    passed = np.datetime64("2025-06-01T10:30:00")
+    day = (np.datetime64("2025-06-01T00:00:00"), np.datetime64("2025-06-02T00:00:00"))
+    written = assign_cells(build_raster(times=0).assign_coords(time=passed), [day])
+    path = geotiff.write_cog(written, tmp_path / "scene.tif")
+
+    restored = gdal.open_raster(path)
+
+    with rasterio.open(path) as src:
+        assert src.tags()["TIFFTAG_DATETIME"] == "2025:06:01 10:30:00"
+        assert src.tags()["time_coverage_start"] == "2025-06-01"
+        assert src.tags()["time_coverage_end"] == "2025-06-02"
+    assert restored.time.values == passed
+    assert restored.start_datetime.values == day[0]
+    assert restored.end_datetime.values == day[1]
 
 
 def test_grouped_time_bounds_survive_cog_persistence(tmp_path: Path) -> None:
@@ -191,18 +202,6 @@ def test_one_instant_writes_however_the_axis_spells_it(tmp_path: Path) -> None:
     assert gdal.open_raster(along_an_axis).time == gdal.open_raster(as_a_scalar).time
 
 
-def test_sub_second_time_survives_in_the_coverage_attrs(tmp_path: Path) -> None:
-    instant = np.datetime64("2018-12-26T10:34:39.024000001")
-    written = build_raster(times=0).assign_coords(time=instant)
-
-    destination = geotiff.write_cog(written, tmp_path / "20190507_red.tif")
-    restored = gdal.open_raster(destination)
-
-    with rasterio.open(destination) as src:
-        assert src.tags()["time_coverage_start"] == "2018-12-26T10:34:39.024000001"
-    assert restored.time.values == instant
-
-
 def test_the_standard_datetime_tag_remains_the_fallback(tmp_path: Path) -> None:
     path = tmp_path / "20190507_red.tif"
     with rasterio.open(
@@ -235,7 +234,8 @@ def test_carried_tags_survive_the_round_trip(tmp_path: Path) -> None:
 
     restored = gdal.open_raster(geotiff.write_cog(written, tmp_path / "scene.tif"))
 
-    assert restored.attrs["TIFFTAG_ARTIST"] == "geosave"
+    # A baseline TIFF tag reads back as the ACDD attr it carries.
+    assert restored.attrs["institution"] == "geosave"
 
 
 def test_gtiff_takes_its_own_creation_options(tmp_path: Path) -> None:
@@ -288,24 +288,10 @@ def test_two_bands_naming_one_variable_refuse(tmp_path: Path) -> None:
         gdal.open_raster(clashing)
 
 
-@pytest.mark.parametrize("write", [geotiff.write_cog, geotiff.write_geotiff])
-def test_colour_interpretation_round_trips(tmp_path: Path, write) -> None:
-    written = build_raster(times=0)
-    # uint16 with a role no TIFF photometric holds: the case a creation option
-    # silently drops, so GDAL has to carry it in its own metadata instead.
-    written = _interpreted(written, red="red", nir="nir")
-
-    destination = write(written, tmp_path / "scene.tif")
-
-    with rasterio.open(destination) as src:
-        assert [band.name for band in src.colorinterp] == ["red", "nir"]
-    restored = gdal.open_raster(destination)
-    assert _colorinterp(restored.red) == "red"
-    assert _colorinterp(restored.nir) == "nir"
-
-
 def test_colour_interpretation_leaves_a_cog_readable(tmp_path: Path) -> None:
-    written = _interpreted(build_raster(times=0), red="red")
+    written = build_raster(times=0)
+    written["green"] = written.red.copy()
+    written = written.gs.write_rgb("red", "green", "nir")
 
     destination = geotiff.write_cog(written, tmp_path / "scene.tif")
 
@@ -320,7 +306,7 @@ def test_colour_interpretation_leaves_a_cog_readable(tmp_path: Path) -> None:
         assert src.block_shapes[0] != (src.height, src.width)
 
 
-def test_colour_interpretation_lands_on_each_variable(tmp_path: Path) -> None:
+def test_external_rgb_reads_and_rewrites_the_display(tmp_path: Path) -> None:
     composite = tmp_path / "rgb.tif"
     with rasterio.open(
         composite, "w", driver="GTiff", height=2, width=2, count=3, dtype="uint8"
@@ -334,11 +320,20 @@ def test_colour_interpretation_lands_on_each_variable(tmp_path: Path) -> None:
 
     restored = gdal.open_raster(composite)
 
-    assert [_colorinterp(restored[name]) for name in sorted(restored.data_vars)] == [
-        "red",
-        "green",
-        "blue",
-    ]
+    assert restored.gs.rgb == ("band_1", "band_2", "band_3")
+    # The file has no grid: supply one explicitly before writing the composite.
+    restored = restored.pipe(place, build_raster().gs.geobox)
+    path = geotiff.write_cog(restored, tmp_path / "rewritten.tif")
+    with rasterio.open(path) as saved:
+        assert saved.colorinterp == (
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+        )
+    with open_raster(path) as reopened:
+        assert reopened.gs.rgb == restored.gs.rgb
+        for name in restored.data_vars:
+            np.testing.assert_array_equal(reopened[name], restored[name])
 
 
 def test_an_unreferenced_file_reads_unreferenced(tmp_path: Path) -> None:
@@ -354,7 +349,7 @@ def test_an_unreferenced_file_reads_unreferenced(tmp_path: Path) -> None:
 def test_bands_declaring_different_absent_pixels_refuse_to_write(
     tmp_path: Path,
 ) -> None:
-    written = build_raster().gs.write_nodata(0, target="red")
+    written = build_raster().gs.write_nodata(0, target=["red"])
 
     # GDAL writes one fill value for the file, so rioxarray never sees the mix.
     with pytest.raises(ValueError, match="one GeoTIFF holds one fill value"):
@@ -385,7 +380,7 @@ def test_a_units_string_reaches_gdals_own_band_unit(tmp_path: Path) -> None:
 
 def test_a_legend_colour_map_writes_a_gdal_palette(tmp_path: Path) -> None:
     labelled = build_raster()[["red"]].astype("uint8")
-    written = labelled.gs.write_legend(
+    written = labelled.gs.write_flags(
         {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}
     )
 
@@ -398,7 +393,7 @@ def test_a_legend_colour_map_writes_a_gdal_palette(tmp_path: Path) -> None:
 
 
 def test_the_writer_never_states_a_native_value_twice(tmp_path: Path) -> None:
-    written = build_raster().gs.write_scale_offset(1e-4)
+    written = build_raster().gs.write_packing(attrs.CFPacking(scale_factor=1e-4))
 
     path = geotiff.write_cog(written, tmp_path / "scene.tif")
 
@@ -423,8 +418,8 @@ def test_a_gcp_grid_refuses_to_write_rather_than_lose_its_placing(
         dst.write(np.ones((1, 8, 8), "uint8"))
         dst.gcps = (corners, CRS.from_epsg(32633))
 
-    # A GeoTIFF records this as control points, which this writer does not write.
-    with pytest.raises(ValueError, match="GCPGeoBox"):
+    # Rasters placed by control points are not supported yet.
+    with pytest.raises(NotImplementedError, match="ground control points"):
         geotiff.write_geotiff(gdal.open_raster(source), tmp_path / "out.tif")
 
 
@@ -486,34 +481,32 @@ def test_a_palette_outranks_the_interpretation_a_band_was_read_with(
     labelled = (
         gdal.open_raster(plain)
         .compute()
-        .gs.write_legend(
-            {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}, target="red"
+        .gs.write_flags(
+            {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}, target=["red"]
         )
     )
-    assert labelled.red.attrs["colorinterp"] == "gray"
 
     restored = gdal.open_raster(geotiff.write_cog(labelled, tmp_path / "labels.tif"))
 
-    colours = restored.red.gs.legend.color_map
+    colours = restored.red.gs.display.color_map
     assert colours is not None and colours[1] == "#00FF00"
 
 
 def test_a_palette_read_from_a_cog_writes_to_netcdf(tmp_path: Path) -> None:
-    from geosave.geodata.io.formats import netcdf
 
     label = (
         build_raster()[["red"]]
         .astype("uint8")
-        .gs.write_legend(
-            {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}, target="red"
+        .gs.write_flags(
+            {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}, target=["red"]
         )
     )
     restored = gdal.open_raster(geotiff.write_cog(label, tmp_path / "labels.tif"))
 
-    # NetCDF attrs hold no mappings, so the palette must be read as the Legend spells it.
+    # NetCDF attrs hold no mappings, so the palette must be read as Display spells it.
     again = netcdf.open_netcdf(netcdf.write_netcdf(restored, tmp_path / "labels.nc"))
 
-    assert again.red.gs.legend.color_map == {0: "#000000", 1: "#00FF00"}
+    assert again.red.gs.display.color_map == {0: "#000000", 1: "#00FF00"}
 
 
 @pytest.mark.parametrize(
@@ -536,7 +529,7 @@ def test_saved_paths_preserve_composite_coverage(
         monthly = assign_cells(
             monthly, [(np.datetime64("2024-02-01"), np.datetime64("2024-03-01"))]
         )
-    monthly.gs.to_cog(tmp_path, format_paths="{time:%Y%m}.tif")
+    write_cogs(monthly, tmp_path, format_paths="{time:%Y%m}.tif")
     collection = create_test_collection("image", description="Monthly imagery")
     items = list(
         create_file_items({"image": tmp_path / "202402.tif"}, collection=collection)
@@ -550,7 +543,7 @@ def test_saved_paths_preserve_composite_coverage(
 
     table = create_catalog(items, collections=[collection])
     restored = gs.open_vector(table.gs.to_geoparquet(tmp_path / "catalog.parquet"))
-    raster = restored.iloc[0].gs.to_datatree().gs.to_dataset()
+    raster = combine_item(restored.iloc[0].gs.to_datatree())
     assert raster.to_array().chunks is not None
     assert raster.gs.timespan == (start, end)
     np.testing.assert_allclose(raster.to_array().values, 5)
@@ -561,8 +554,8 @@ def test_cogs_round_trip_lazily(remote) -> None:
     prefix, options = remote
     source = build_raster(times=2)
 
-    paths = source.gs.to_cog(
-        prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
+    paths = write_cogs(
+        source, prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
     )
 
     assert all(str(path).startswith(prefix) for path in paths)
@@ -588,18 +581,166 @@ def test_direct_writer_preserves_explicit_filesystem_options(writer, bucket):
         np.testing.assert_array_equal(restored.red, source.red)
 
 
-@pytest.mark.parametrize("route", ["direct", "dataset", "tree"])
-def test_irregular_coordinates_are_rejected_before_writing(tmp_path, route):
-    raster = xr.Dataset(
-        {"image": (("y", "x"), np.ones((3, 3), dtype="uint8"))},
-        coords={"y": [2.0, 1.0, 0.0], "x": [0.0, 1.0, 5.0]},
-    ).odc.assign_crs("EPSG:4326")
-    with pytest.raises(ValueError, match="regularly spaced"):
-        if route == "direct":
-            geotiff.write_geotiff(raster, tmp_path / "bad.tif")
-        elif route == "dataset":
-            raster.gs.to_cog(tmp_path, format_paths="bad.tif")
-        else:
-            tree = xr.DataTree.from_dict({"scene": raster})
-            tree.gs.to_cog(tmp_path, format_paths="bad.tif", collection="test")
-    assert not list(tmp_path.rglob("*.tif"))
+def test_each_raster_is_written_to_its_destination(tmp_path):
+    files = {
+        UPath(tmp_path / "red.tif"): build_raster()[["red"]],
+        UPath(tmp_path / "nir.tif"): build_raster()[["nir"]],
+    }
+
+    written = geotiff.write_files(files)
+
+    assert [path.name for path in written] == ["red.tif", "nir.tif"]
+    assert all(path.is_file() for path in written)
+
+
+def test_a_deferred_batch_waits_for_compute(tmp_path):
+    files = {UPath(tmp_path / "red.tif"): build_raster()[["red"]].chunk()}
+
+    pending = geotiff.write_files(files, compute=False)
+
+    assert not list(tmp_path.iterdir())
+    assert [path.name for path in pending.compute()] == ["red.tif"]
+
+
+@pytest.mark.parametrize("compute", [True, False])
+def test_a_later_invalid_raster_prevents_every_write(tmp_path, compute):
+    files = {
+        UPath(tmp_path / "a.tif"): build_raster(times=1),
+        UPath(tmp_path / "b.tif"): build_raster(times=2),
+    }
+
+    with pytest.raises(ValueError, match="one instant"):
+        geotiff.write_files(files, compute=compute)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_existing_later_destination_prevents_earlier_writes(tmp_path):
+    (tmp_path / "b.tif").write_bytes(b"keep me")
+    files = {
+        UPath(tmp_path / "a.tif"): build_raster(),
+        UPath(tmp_path / "b.tif"): build_raster(),
+    }
+
+    with pytest.raises(FileExistsError):
+        geotiff.write_files(files)
+
+    assert not (tmp_path / "a.tif").exists()
+    assert (tmp_path / "b.tif").read_bytes() == b"keep me"
+
+
+def test_a_deferred_batch_rechecks_its_destinations_when_computed(tmp_path):
+    files = {
+        UPath(tmp_path / "a.tif"): build_raster(),
+        UPath(tmp_path / "b.tif"): build_raster(),
+    }
+    pending = geotiff.write_files(files, compute=False)
+    (tmp_path / "b.tif").write_bytes(b"created after planning")
+
+    with pytest.raises(FileExistsError):
+        pending.compute()
+
+    assert not (tmp_path / "a.tif").exists()
+
+
+def test_two_destinations_resolving_to_one_file_collide(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    files = {
+        UPath("same.tif"): build_raster(),
+        UPath(tmp_path / "same.tif"): build_raster(),
+    }
+
+    with pytest.raises(ValueError, match="collide"):
+        geotiff.write_files(files)
+    assert not list(tmp_path.iterdir())
+
+
+def test_nodata_only_decoding_restores_integer_geotiff_storage(tmp_path):
+    raw = build_raster().gs.write_nodata(65535)
+    raw.red.data = np.array([[0, 1000], [2000, 65535]], "uint16")
+    decoded = raw.gs.mask_and_scale()
+    path = tmp_path / "nodata.tif"
+
+    geotiff.write_cog(decoded, path)
+    with io.open_raster(path) as stored:
+        assert stored.red.dtype == raw.red.dtype
+        assert stored.red.gs.nodata == 65535
+        np.testing.assert_array_equal(stored.red, raw.red)
+
+
+@pytest.mark.parametrize("writer", [geotiff.write_cog, geotiff.write_geotiff])
+@pytest.mark.parametrize("state", ["raw", "decoded", "mixed", "derived"])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_geotiff_encodes_each_band_once(tmp_path, writer, state, lazy):
+    import rasterio
+    from dask.callbacks import Callback
+
+    raw = build_raster(times=0).gs.write_nodata(0)
+    raw.red.attrs.update(scale_factor=0.01, add_offset=0.5)
+    raw.nir.attrs.update(scale_factor=0.02, add_offset=1.0)
+    expected = xr.decode_cf(raw, decode_coords=False)
+    source = raw
+    if state == "decoded":
+        source = expected
+    elif state == "mixed":
+        source = raw.assign(red=expected.red)
+    elif state == "derived":
+        source = expected * 2
+        expected = source.copy(deep=True)
+        for name in source.data_vars:
+            source[name].encoding = {
+                "dtype": "uint16",
+                "_FillValue": 0,
+                "scale_factor": 0.01,
+                "add_offset": 0.0,
+            }
+    if lazy:
+        source = source.chunk({"x": 1, "y": 1})
+    before = source.copy(deep=True)
+    destination = tmp_path / "bands.tif"
+
+    with Callback(pretask=lambda *_: pytest.fail("planning read pixels")):
+        pending = writer(source, destination, compute=False)
+    assert not destination.exists()
+    pending.compute()
+
+    with io.open_raster(destination, mask_and_scale=True) as reopened:
+        assert reopened.gs.geobox == source.gs.geobox
+        for name in source.data_vars:
+            np.testing.assert_allclose(reopened[name], expected[name], equal_nan=True)
+    with rasterio.open(destination) as stored:
+        assert stored.dtypes == ("uint16", "uint16")
+        assert stored.nodata == 0
+        assert stored.scales == ((0.01, 0.01) if state == "derived" else (0.01, 0.02))
+        assert stored.offsets == ((0.0, 0.0) if state == "derived" else (0.5, 1.0))
+    xr.testing.assert_identical(source, before)
+    for name in source.data_vars:
+        assert source[name].encoding == before[name].encoding
+
+
+@pytest.mark.parametrize("tiff_tags", [False, True])
+def test_acdd_attrs_round_trip_with_or_without_tiff_tags(tmp_path, tiff_tags) -> None:
+    import re
+
+    from geosave.geodata import open_raster
+
+    source = build_raster().assign_attrs(title="Forest", license="CC-BY-4.0")
+    path = geotiff.write_cog(source, tmp_path / "scene.tif", tiff_tags=tiff_tags)
+
+    with rasterio.open(path) as src:
+        tags = src.tags()
+    xml = re.search(rb"<GDALMetadata>.*?</GDALMetadata>", path.read_bytes(), re.S)
+    in_gdal_xml = xml is not None and b"Forest" in xml.group(0)
+    assert in_gdal_xml is not tiff_tags
+    assert ("TIFFTAG_DOCUMENTNAME" in tags) is tiff_tags
+    assert ("TIFFTAG_SOFTWARE" in tags) is tiff_tags
+    restored = open_raster(path)
+    assert restored.attrs["title"] == "Forest"
+    assert restored.attrs["license"] == "CC-BY-4.0"
+
+
+def test_an_extra_nonspatial_axis_cannot_be_stored_as_one_cog(tmp_path):
+    source = build_raster().expand_dims(model=["a", "b"])
+    with pytest.raises(ValueError, match="one instant of one grid"):
+        geotiff.write_cog(source, tmp_path / "scene.tif")
+    assert not (tmp_path / "scene.tif").exists()

@@ -8,6 +8,15 @@ scene.gs.explore("ndvi", basemap="Imagery")
 ```
 
 `explore` returns a native Panel Material UI app with a light/dark theme toggle.
+The map fills the available page space and follows sidebar and browser resizing.
+`height=600` sets the inline notebook page height; served pages fill the browser.
+The header's menu button collapses or reopens the sidebar. **Export map** stays
+available in the header while the sidebar is closed. It downloads
+`geosave-map.html` with the current map, visible-layer legends and raster dates.
+The file embeds its JavaScript and does not need the Explorer or a Python
+session. It captures the current detail; zooming does not read new raster
+pixels. Basemap tiles still need network access. Export is computed when the
+button is clicked, so later downloads reflect changed display settings.
 The compact sidebar groups rasters and vectors separately, with
 visibility and zoom/remove actions on each layer. Style, Info and Identify tabs
 contain the selected layer’s controls, legend and metadata.
@@ -33,6 +42,25 @@ The map uses Panel, HoloViews, GeoViews and Bokeh. Dense point, line and polygon
 use Datashader for numeric, categorical and single-color rendering. Imagery, light, dark and OpenStreetMap basemaps include their
 providers' attribution. Basemaps need network access; the explorer needs a
 live notebook kernel or `panel serve`.
+
+For a shareable map of the current view, capture a standalone HoloViews overlay:
+
+```python
+import holoviews as hv
+
+snapshot = viewer.snapshot()
+hv.save(snapshot, "map.html", backend="bokeh", resources="inline")
+```
+
+The snapshot retains the visible layers, selected date, colors, opacity and
+extent in a fixed-size map frame. It remains usable after changing or closing
+the Explorer. Exported
+HTML supports pan, zoom and rendered hover information without Python, but
+cannot fetch new raster detail. Sidebar controls, tables and drawn regions
+are omitted. Inline resources embed the JavaScript; basemap tiles still need
+network access. Choose `basemap="None"` before capture for a map without tile
+requests. Capturing uncached pixels computes them; output dimensions do not
+bound source reads.
 
 Each raster reads the pixels around the view at one web-map zoom level,
 through `.gs.read_pixels`: a catalog row reads each file's window from the

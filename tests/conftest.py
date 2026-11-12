@@ -9,8 +9,14 @@ import pytest
 import xarray as xr
 from dotenv import load_dotenv
 from odc.geo.geobox import GeoBox
+from odc.geo.xr import xr_coords
 
 from geosave.geodata.core.region import GeoRegion
+
+
+def place(raster, geobox):
+    """Put pixels on a grid as callers do with ODC: its coordinates and CRS coordinate."""
+    return raster.assign_coords(xr_coords(geobox, dims=raster.odc.spatial_dims))
 
 
 def build_dataset(variables, reference=None, *, nodata=None, **coords):
@@ -32,7 +38,7 @@ def build_dataset(variables, reference=None, *, nodata=None, **coords):
     else:
         raster = xr.Dataset(variables, coords=coords)
     if reference is not None:
-        raster = raster.gs.write_grid(reference)
+        raster = place(raster, reference)
     return raster if nodata is None else raster.gs.write_nodata(nodata)
 
 
@@ -42,6 +48,40 @@ def build_dataarray(pixels, reference=None, *, dims, nodata=None, **coords):
         {"pixels": (dims, pixels)}, reference, nodata=nodata, **coords
     )
     return raster["pixels"].rename(None)
+
+
+def write_cogs(raster, root, format_paths, **options):
+    """Write a Dataset as COGs named by a path template, one per date, as test setup.
+
+    A template naming ``{variable}`` writes a file per variable; otherwise every
+    variable of a date shares one file.
+    """
+    from geosave.geodata.io import storage
+    from geosave.geodata.io.formats.geotiff import write_cog, write_files
+    from geosave.geodata.io.paths import read_scalar_coords
+
+    folder = storage.location(root, options.pop("storage_options", None))
+    observations = [raster]
+    if "time" in raster.dims:
+        observations = []
+        for position in range(raster.sizes["time"]):
+            observations.append(raster.isel(time=position))
+    files = {}
+    for observation in observations:
+        labels = read_scalar_coords(observation)
+        if "{variable}" not in format_paths:
+            files[folder / format_paths.format_map(labels)] = observation
+            continue
+        for name in observation.data_vars:
+            path = format_paths.format_map({**labels, "variable": name})
+            files[folder / path] = observation[[name]]
+    return write_files(files, write_cog, **options)
+
+
+def combine_item(tree):
+    """Combine the only Item of a tree loaded from one STAC Item."""
+    (path,) = {leaf.parent.path for leaf in tree.leaves}
+    return tree[path].gs.combine_stac()
 
 
 def build_tree(rasters):

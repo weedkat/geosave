@@ -238,13 +238,10 @@ def _write_dataset(
     raster: xr.Dataset, store: UPath, overwrite: bool, options: dict[str, Any]
 ) -> None:
     """Write one Dataset at the store's root."""
-    from geosave.geodata.core.raster.utils.cf import (
-        drop_coordinate_fill,
-        encode_time_bounds,
-    )
+    from geosave.geodata.core.raster.utils.cf import encode_spatial_axes
 
-    # Cells are stored as CF bounds; coordinates carry no fill (CF §5, §7.1).
-    raster = _recording_order(drop_coordinate_fill(encode_time_bounds(raster)))
+    # Time cells stay start/end coordinates; Zarr stores datetimes as they are.
+    raster = _recording_order(encode_spatial_axes(raster))
     options["encoding"] = {
         **fill_encoding(raster),
         **dict(options.get("encoding") or {}),
@@ -262,19 +259,13 @@ def _write_tree(
     tree: xr.DataTree, store: UPath, overwrite: bool, options: dict[str, Any]
 ) -> None:
     """Write a tree with one group per node."""
-    from geosave.geodata.core.raster.utils.cf import (
-        drop_coordinate_fill,
-        encode_time_bounds,
-    )
+    from geosave.geodata.core.raster.utils.cf import encode_spatial_axes
 
     shared = dict(options.pop("encoding", None) or {})
     nodes = {}
     encoding = {}
     for node in tree.subtree:
-        # Cells are stored as CF bounds; coordinates carry no fill (CF §5, §7.1).
-        dataset = drop_coordinate_fill(
-            encode_time_bounds(node.to_dataset(inherit=False))
-        )
+        dataset = encode_spatial_axes(node.to_dataset(inherit=False))
         recorded = _recording_order(dataset)
         if node.children:
             # A Zarr group lists its subgroups in no order either.
@@ -358,9 +349,7 @@ def open_zarr(
 
 def _read_in_written_order(node: xr.DataTree, nodes: dict[str, xr.Dataset]) -> None:
     """Add `node` and its descendants to `nodes`, groups and variables as written."""
-    from geosave.geodata.core.raster.utils.cf import decode_time_bounds
-
-    dataset = decode_time_bounds(_in_written_order(node.to_dataset(inherit=False)))
+    dataset = _in_written_order(node.to_dataset(inherit=False))
     order = dataset.attrs.pop(_GROUP_ORDER_ATTR, [])
     nodes[node.path] = dataset
     names = [name for name in order if name in node.children]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
@@ -22,8 +24,8 @@ def catalog(scene, tmp_path: Path):
     forest = create_test_collection(
         "forest", description="Forest samples", license="CC-BY-4.0"
     )
-    paths = scene.gs.to_cog(
-        tmp_path, format_paths="forest_{time:%Y%m%dT%H%M%S}/{variable}.tif"
+    paths = write_cogs(
+        scene, tmp_path, format_paths="forest_{time:%Y%m%dT%H%M%S}/{variable}.tif"
     )
     first, second = create_file_items(
         paths, id_format="forest_{start:%Y%m%dT%H%M%S}", collection=forest
@@ -188,9 +190,7 @@ server.serve_forever()
 
 def test_search_returns_an_item_table(scene, tmp_path) -> None:
     forest = create_test_collection("forest", description="Forest samples")
-    paths = scene.gs.to_cog(
-        tmp_path, split_asset=(), format_paths="forest_{time:%Y%m%dT%H%M%S}.tif"
-    )
+    paths = write_cogs(scene, tmp_path, format_paths="forest_{time:%Y%m%dT%H%M%S}.tif")
     rows = create_catalog(
         create_file_items(paths, collection=forest), collections=[forest]
     )

@@ -59,8 +59,8 @@ Plotting reads pixels; the calculation itself can remain lazy.
 ## Save and reopen
 
 ```python
-files = ndvi.gs.to_cog("output", format_paths="ndvi.tif")
-result = gs.open_raster(files[0])
+path = ndvi.gs.to_cog("output/ndvi.tif", overwrite=True)
+result = gs.open_raster(path)
 list(result.data_vars), result.gs.geobox == scene.gs.geobox
 ```
 

@@ -1,4 +1,4 @@
-"""Tests for the spatial dimension convention."""
+"""Tests for the raster structure convention: ODC's names, CF in files."""
 
 from __future__ import annotations
 
@@ -9,14 +9,13 @@ import xarray as xr
 from affine import Affine
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
-
-from geosave.geodata.conventions import to_yx
+from tests.conftest import place
 
 GRID = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")
 
 
 def loaded(dims: tuple[str, str], name: str = "red") -> xr.Dataset:
-    """Build a lazy raster the way a foreign loader names its grid."""
+    """Build a lazy raster whose grid a loader named `dims`."""
     built = xr.Dataset(
         {name: (dims, da.ones(tuple(GRID.shape), chunks=(1, 3)))},
         coords=xr_coords(GRID, dims=dims),
@@ -25,58 +24,57 @@ def loaded(dims: tuple[str, str], name: str = "red") -> xr.Dataset:
     return built
 
 
-@pytest.mark.parametrize("dims", [("latitude", "longitude"), ("lat", "lon")])
-def test_to_yx_renames_a_foreign_grid_without_computing(dims) -> None:
-    result = to_yx(loaded(dims))
+@pytest.mark.parametrize(
+    "dims", [("y", "x"), ("latitude", "longitude"), ("lat", "lon")]
+)
+def test_spatial_dims_follow_odc_names_without_computing(dims) -> None:
+    from dask.callbacks import Callback
 
-    assert result.red.dims == ("y", "x")
-    assert result.odc.geobox == GRID
-    assert isinstance(result.red.data, da.Array)
-    assert result.red.encoding["grid_mapping"] == "spatial_ref"
-
-
-def test_to_yx_finds_a_pair_only_its_cf_attrs_name() -> None:
-    labelled = loaded(("north", "east")).expand_dims(depth=[0.5, 1.5], axis=-1)
-    labelled.north.attrs["axis"] = "Y"
-    labelled.east.attrs["standard_name"] = "longitude"
-
-    result = to_yx(labelled)
-
-    assert result.red.dims == ("y", "x", "depth")
-    assert result.odc.geobox == GRID
+    raster = loaded(dims)
+    with Callback(pretask=lambda *_: pytest.fail("discovery computed pixels")):
+        assert raster.gs.spatial_dims == dims
+        assert raster.red.gs.spatial_dims == dims
+        assert raster.gs.geobox == GRID
 
 
-def test_to_yx_leaves_an_unlabelled_pair_alone() -> None:
-    unlabelled = loaded(("north", "east"))
-    unlabelled.north.attrs = {}
-    unlabelled.east.attrs = {}
-
-    assert to_yx(unlabelled) is unlabelled
-
-
-def test_to_yx_renames_one_band() -> None:
-    result = to_yx(loaded(("latitude", "longitude")).red)
-
-    assert result.dims == ("y", "x")
-    assert result.odc.geobox == GRID
-
-
-def test_a_tree_renames_node_by_node_with_map_over_datasets() -> None:
-    foreign = loaded(("latitude", "longitude"))
-    tree = xr.DataTree.from_dict(
-        {
-            "/": xr.Dataset(coords=xr_coords(GRID)),
-            "/optical": foreign,
-            "/dem": loaded(("y", "x"), name="elevation"),
-        }
+def test_cf_attrs_alone_do_not_name_spatial_axes() -> None:
+    raster = xr.DataArray(
+        np.zeros((2, 3)),
+        dims=("north", "east"),
+        coords={
+            "north": ("north", [0, 1], {"axis": "Y"}),
+            "east": ("east", [0, 1, 2], {"axis": "X"}),
+        },
     )
+    assert raster.gs.spatial_dims is None
 
-    result = tree.map_over_datasets(to_yx)
 
-    assert result["optical"].dataset.red.dims == ("y", "x")
-    assert result["dem"].dataset.elevation.dims == ("y", "x")
-    assert result.dataset.odc.geobox == GRID
-    assert isinstance(result["optical"].dataset.red.data, da.Array)
+def test_reprojecting_onto_a_geographic_grid_names_latitude_longitude() -> None:
+    mercator = GeoBox((2, 3), Affine(1e5, 0, 1.1e6, 0, -1e5, 2.2e6), "EPSG:3857")
+    projected = loaded(("y", "x")).pipe(place, mercator)
+
+    result = projected.gs.reproject(GRID)
+
+    assert result.red.dims == ("latitude", "longitude")
+    assert result.gs.geobox == GRID
+
+
+@pytest.mark.parametrize("suffix", ["nc", "zarr"])
+def test_files_carry_cf_axes_that_memory_does_not(tmp_path, suffix) -> None:
+    from geosave.geodata import open_raster
+
+    raster = loaded(("y", "x"))
+    path = tmp_path / f"grid.{suffix}"
+    if suffix == "nc":
+        raster.gs.to_netcdf(path)
+    else:
+        raster.gs.to_zarr(path)
+
+    assert "axis" not in raster.y.attrs
+    opened = open_raster(path)
+    assert opened.y.attrs["axis"] == "Y"
+    assert opened.x.attrs["standard_name"] == "longitude"
+    assert opened.gs.geobox == GRID
 
 
 def _monthly() -> xr.Dataset:
@@ -92,7 +90,7 @@ def _monthly() -> xr.Dataset:
     )
 
 
-@pytest.mark.parametrize("suffix", ["nc", "zarr"])
+@pytest.mark.parametrize("suffix", ["nc"])
 def test_a_raster_stating_its_cells_twice_is_refused_on_write(tmp_path, suffix):
     monthly = _monthly()
     monthly["cells"] = (
@@ -106,29 +104,6 @@ def test_a_raster_stating_its_cells_twice_is_refused_on_write(tmp_path, suffix):
             monthly.gs.to_netcdf(tmp_path / "monthly.nc")
         else:
             monthly.gs.to_zarr(tmp_path / "monthly.zarr")
-
-
-def test_cf_units_identify_spatial_axes_without_name_guesses():
-    from dask.callbacks import Callback
-
-    raster = loaded(("north", "east"))
-    with Callback(pretask=lambda *_: pytest.fail("discovery computed pixels")):
-        normalized = to_yx(raster)
-    assert normalized.red.dims == ("y", "x")
-    assert normalized.gs.geobox == GRID
-
-
-def test_ambiguous_cf_axes_do_not_choose_a_grid():
-    raster = xr.DataArray(
-        np.zeros((2, 2, 3)),
-        dims=("north", "other", "east"),
-        coords={
-            "north": ("north", [0, 1], {"axis": "Y"}),
-            "other": ("other", [0, 1], {"axis": "Y"}),
-            "east": ("east", [0, 1, 2], {"axis": "X"}),
-        },
-    )
-    assert raster.gs.spatial_dims is None
 
 
 def test_curvilinear_coordinates_do_not_imply_affine_spatial_axes():

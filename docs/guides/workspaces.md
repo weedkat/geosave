@@ -108,8 +108,7 @@ changing only the channel count does not establish that match.
 
 Run one batch through your Dataset, DataModule, and model with
 `pretrained=False` before downloading weights or starting a long job. The
-[offline tutorial](training.md) is the verified starting path. Current starter
-issues and their reproduction evidence are in the [review queue](../contributing/review-2026-11-04.md#training-releases-and-tooling-recheck-before-implementation).
+[offline tutorial](training.md) is the verified starting path.
 
 ## Add another method
 

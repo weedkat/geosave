@@ -10,9 +10,9 @@ from geosave.geodata import attrs
 @pytest.mark.parametrize(
     "value",
     [
-        attrs.Legend.model_validate({"classes": {0: "bg"}, "color_map": None}),
-        attrs.Spectral(common_name="red", center_wavelength=None),
-        attrs.GDALBand(variable_name="red", colorinterp=None),
+        attrs.CFFlags.model_validate({"classes": {0: "bg"}}),
+        attrs.EOBand(common_name="red", center_wavelength=None),
+        attrs.Display(rgb=None, color_map=None),
     ],
     ids=lambda value: type(value).__name__,
 )

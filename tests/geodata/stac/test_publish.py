@@ -2,29 +2,29 @@
 
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
+from tests.conftest import combine_item
+
 
 from datetime import UTC, datetime
 
 import dask
-import dask.array as da
 import numpy as np
 import pystac
 import pytest
 import rasterio
-import xarray as xr
-from dask.callbacks import Callback
 from rasterio.transform import from_origin
 
 from geosave.geodata import (
     open_vector,
 )
 from geosave.geodata.stac.load import load_datatree
-from geosave.geodata.stac.publish import create_stac_item, split_items
+from geosave.geodata.stac.publish import create_stac_item
 from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_dataset
 from tests.geodata.conftest import (
     _refuse,
-    assign_cells,
     build_raster,
     create_file_items,
     create_test_collection,
@@ -74,15 +74,16 @@ def test_a_catalog_loads_one_node_per_asset_whatever_the_asset_order(tmp_path):
     second.datetime = datetime(2025, 1, 2, tzinfo=UTC)
     second.assets = dict(reversed(list(second.assets.items())))
 
-    tree = create_catalog([entry, second]).gs.to_datatree(groupby="id")
-    assert set(tree.gs.datasets) == {"s2/red", "s2/nir", "s2/swir"}
-    assert tree["s2"].sizes["time"] == 2
-    for name, grid in grids.items():
-        node = tree[f"s2/{name}"]
-        assert node.gs.geobox == grid
-        np.testing.assert_array_equal(
-            node[name].values, np.full((2, *grid.shape), list(grids).index(name) + 1)
-        )
+    tree = create_catalog([entry, second]).gs.to_datatree()
+    # Each Item lists its assets as its own leaves, whatever their order.
+    assert tree["s2/first"].isomorphic(tree["s2/second"])
+    for item in ("first", "second"):
+        for name, grid in grids.items():
+            leaf = tree[f"s2/{item}/{name}"]
+            assert leaf.gs.geobox == grid
+            np.testing.assert_array_equal(
+                leaf[name].values, np.full(grid.shape, list(grids).index(name) + 1)
+            )
 
 
 def test_native_paths_publish_actual_band_metadata(tmp_path):
@@ -90,36 +91,17 @@ def test_native_paths_publish_actual_band_metadata(tmp_path):
 
     path = tmp_path / "image.tif"
     source = build_raster(times=1, packed=True)
-    source.gs.to_cog(path.parent, split_asset=(), format_paths=path.name)
+    write_cogs(source, path.parent, format_paths=path.name)
     items = list(create_file_items([path], collection="s2"))
     assert len(items) == 1
     assert items[0].collection_id == "s2"
     assert set(items[0].assets) == {"image"}
     with create_catalog(items).iloc[0].gs.to_datatree() as tree:
-        restored = tree.gs.to_dataset()
+        restored = combine_item(tree)
         assert restored.red.dtype == source.red.dtype
         assert (
             restored.red.gs.packing.scale_factor == source.red.gs.packing.scale_factor
         )
-
-
-def test_catalog_retains_observation_properties_across_native_publication(tmp_path):
-    import geosave as gs
-    from geosave.geodata.stac.raster import stamp_properties_coordinate
-    from tests.geodata.conftest import build_raster, create_test_collection
-
-    source = stamp_properties_coordinate(
-        build_raster(times=1), [{"eo:cloud_cover": 12.0, "platform": "test-satellite"}]
-    )
-    rows = source.gs.to_catalog(
-        tmp_path,
-        format_paths="{variable}.tif",
-        collection=create_test_collection("s2", description="S2"),
-    )
-    saved = rows.gs.to_geoparquet(tmp_path / "catalog.parquet")
-    item = gs.open_vector(saved).iloc[0].gs.to_item()
-    assert item.properties["eo:cloud_cover"] == 12.0
-    assert item.properties["platform"] == "test-satellite"
 
 
 @pytest.fixture
@@ -152,7 +134,7 @@ def item(tmp_path):
 def test_unlisted_bands_use_the_asset_key_without_reading_pixels(item):
     original = item.to_dict()
 
-    raster = load_datatree([item]).gs.to_dataset()
+    raster = combine_item(load_datatree([item]))
 
     assert list(raster.data_vars) == ["visual.1", "visual.2", "visual.3"]
     assert dask.is_dask_collection(raster["visual.3"])
@@ -166,15 +148,11 @@ def test_native_composite_load_retains_bounds(tmp_path):
     # Scenes on June 1 and 2, so the composite spans both.
     ds = build_raster(times=2).gs.mask_and_scale().gs.composite("MS", "median")
     original = next(
-        create_file_items(
-            ds.gs.to_cog(tmp_path, split_asset=(), format_paths="original.tif")
-        )
+        create_file_items(write_cogs(ds, tmp_path, format_paths="original.tif"))
     )
-    loaded = load_datatree([original]).gs.to_dataset()
+    loaded = combine_item(load_datatree([original]))
     rebuilt = next(
-        create_file_items(
-            loaded.gs.to_cog(tmp_path, split_asset=(), format_paths="rebuilt.tif")
-        )
+        create_file_items(write_cogs(loaded, tmp_path, format_paths="rebuilt.tif"))
     )
     assert original.datetime is None
     assert rebuilt.datetime == original.datetime
@@ -186,8 +164,8 @@ def test_native_composite_load_retains_bounds(tmp_path):
 def test_an_item_table_of_cogs_loads_back(remote) -> None:
     prefix, options = remote
     source = build_raster(times=2)
-    paths = source.gs.to_cog(
-        prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
+    paths = write_cogs(
+        source, prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
     )
     # GDAL reads a remote TIFF with the keys in its environment, not fsspec options.
     rows = item_table(paths)
@@ -229,34 +207,18 @@ def test_collections_open_as_groups_in_first_appearance_order(catalog):
     tree = catalog.gs.to_datatree()
 
     assert tree.gs.groups == tuple(dict.fromkeys(catalog["collection"]))
-    assert list(tree.gs.datasets) == ["optical/image", "dem/red"]
-    assert tree["optical"].gs.to_dataset().sizes["time"] == 2
+    assert [leaf.name for leaf in tree.leaves] == ["image", "image", "red"]
+    assert tree["optical"].gs.combine_stac().sizes["time"] == 2
     # The DEM Item is dated, so it loads as one time step, as stac.load_dataset does.
-    assert tree["dem"].gs.to_dataset().sizes["time"] == 1
-    assert tree["optical"].gs.to_dataset().red.chunks is not None
+    assert tree["dem"].gs.combine_stac().sizes["time"] == 1
+    assert tree["optical"].gs.combine_stac().red.chunks is not None
 
 
-def test_an_item_without_a_collection_cannot_name_its_group(catalog):
+def test_an_item_without_a_collection_sits_under_default(catalog):
     rows = catalog.copy()
     rows["collection"] = None
 
-    with pytest.raises(ValueError, match="collection"):
-        rows.gs.to_datatree()
-
-
-def test_rows_on_two_dates_stack_along_time(tmp_path):
-    scene = build_raster(times=2)
-    rows = scene.gs.to_catalog(
-        tmp_path,
-        format_paths="{time:%Y%m%d}/{variable}.tif",
-        collection=create_test_collection("s2", description="S2"),
-    )
-
-    loaded = rows.gs.to_datatree()["s2"].gs.to_dataset()
-
-    assert loaded.sizes["time"] == 2
-    for name in scene.data_vars:
-        np.testing.assert_array_equal(loaded[name].values, scene[name].values)
+    assert rows.gs.to_datatree().gs.groups == ("default",)
 
 
 def write_mixed_scene(tmp_path, crs_by_name=None):
@@ -275,7 +237,7 @@ def write_mixed_scene(tmp_path, crs_by_name=None):
             grid,
             time=np.datetime64("2024-03-05"),
         )
-        paths[name] = raster.gs.to_cog(tmp_path, format_paths=f"{name}.tif")[0]
+        paths[name] = write_cogs(raster, tmp_path, format_paths=f"{name}.tif")[0]
     return next(iter(create_file_items(paths, id_format="mixed", collection="s2")))
 
 
@@ -284,165 +246,11 @@ def test_a_mixed_resolution_row_opens_on_its_native_grids(tmp_path):
 
     scene = load_datatree([entry])
 
-    assert list(scene.gs.datasets) == ["s2/red", "s2/swir"]
-    assert scene["s2/red"].gs.to_dataset().odc.geobox.shape == (64, 64)
-    assert scene["s2/swir"].gs.to_dataset().odc.geobox.shape == (32, 32)
-    assert int(scene["s2/swir"].gs.to_dataset().swir.max()) == 20
-
-
-def test_a_single_grid_row_converts_to_its_scene(tmp_path):
-    scene = build_raster(times=1)
-    rows = scene.gs.to_catalog(
-        tmp_path,
-        format_paths="{variable}.tif",
-        collection=create_test_collection("s2", description="S2"),
-    )
-
-    with rows.iloc[0].gs.to_datatree() as tree:
-        loaded = tree.gs.to_dataset()
-
-        for name in scene.data_vars:
-            np.testing.assert_array_equal(
-                loaded[name].isel(time=0).values, scene[name].isel(time=0).values
-            )
-
-
-# A 1024² raster in Web Mercator, 10 m pixels, its COGs holding overviews 2 and 4.
-PIXEL_SIZE = 10.0
-
-
-@pytest.fixture
-def pyramid_item(tmp_path):
-    from odc.geo.geobox import GeoBox
-
-    grid = GeoBox.from_bbox(
-        (0, 0, 1024 * PIXEL_SIZE, 1024 * PIXEL_SIZE),
-        crs="EPSG:3857",
-        resolution=PIXEL_SIZE,
-    )
-    values = np.arange(1024 * 1024, dtype="uint16").reshape(1024, 1024) % 1000 + 1
-    values[:8, :8] = 0
-    scene = build_dataset(
-        {"red": (("y", "x"), values), "nir": (("y", "x"), values * 2)},
-        grid,
-        nodata=0,
-        time=np.datetime64("2024-03-05"),
-    )
-    files = scene.gs.to_cog(
-        tmp_path, format_paths="{variable}.tif", blocksize=256, overview_count=2
-    )
-    paths = {}
-    for path in files:
-        paths[path.stem] = path
-    return next(iter(create_file_items(paths, id_format="pyramid")))
-
-
-def record_overview_levels(monkeypatch) -> list:
-    """Record the `overview_level` of each file opened, None for the base image."""
-    from geosave.geodata.io import openers
-
-    levels = []
-    original = openers.open_raster
-
-    def open_and_record(source, **options):
-        levels.append(options.get("overview_level"))
-        return original(source, **options)
-
-    monkeypatch.setattr(openers, "open_raster", open_and_record)
-    return levels
-
-
-def read_pixels(entry, geobox, variables=None):
-    return create_catalog([entry]).iloc[0].gs.read_pixels(geobox, variables=variables)
-
-
-def create_view(left, bottom, right, top, pixel_size):
-    from odc.geo.geobox import GeoBox
-
-    return GeoBox.from_bbox(
-        (left, bottom, right, top), crs="EPSG:3857", resolution=pixel_size
-    )
-
-
-def test_read_pixels_reads_the_overview_the_view_needs(pyramid_item, monkeypatch):
-    levels = record_overview_levels(monkeypatch)
-    view = create_view(0, 0, 10240, 10240, 4 * PIXEL_SIZE)
-
-    pixels = read_pixels(pyramid_item, view, variables=["red"])
-
-    assert pixels.odc.geobox == view
-    assert pixels["red"].dtype == np.float32
-    # The base image's header, then overview factor 4: level index 1 of [2, 4]
-    assert levels == [None, 1]
-
-
-def test_read_pixels_reads_the_base_image_when_zoomed_in(pyramid_item, monkeypatch):
-    levels = record_overview_levels(monkeypatch)
-    view = create_view(1000, 1000, 2000, 2000, PIXEL_SIZE)
-
-    pixels = read_pixels(pyramid_item, view, variables=["red"])
-
-    assert levels == [None]
-    assert pixels["red"].shape == (100, 100)
-    assert np.isfinite(pixels["red"].values).all()
-
-
-def test_read_pixels_outside_the_raster_opens_nothing(pyramid_item, monkeypatch):
-    levels = record_overview_levels(monkeypatch)
-    view = create_view(50000, 50000, 60000, 60000, PIXEL_SIZE * 10)
-
-    pixels = read_pixels(pyramid_item, view, variables=["red"])
-
-    assert pixels.odc.geobox == view
-    assert np.isnan(pixels["red"].values).all()
-    assert levels == []
-
-
-def test_read_pixels_opens_only_assets_holding_the_variables(pyramid_item, monkeypatch):
-    levels = record_overview_levels(monkeypatch)
-    view = create_view(1000, 1000, 2000, 2000, PIXEL_SIZE)
-
-    pixels = read_pixels(pyramid_item, view, variables=["nir"])
-
-    assert list(pixels.data_vars) == ["nir"]
-    assert len(levels) == 1
-
-
-def test_read_pixels_turns_nodata_into_nan(pyramid_item):
-    view = create_view(0, 10240 - 160, 160, 10240, PIXEL_SIZE)
-
-    pixels = read_pixels(pyramid_item, view, variables=["red"])
-
-    # The raster's top-left 8×8 pixels hold nodata
-    assert np.isnan(pixels["red"].values[:8, :8]).all()
-    assert np.isfinite(pixels["red"].values[8:, 8:]).all()
-
-
-def test_read_pixels_states_the_grid_it_reads_onto(tmp_path):
-    from odc.geo.geobox import GeoBox
-
-    grid = GeoBox.from_bbox(
-        (500000, 9000000, 500640, 9000640), crs="EPSG:32749", resolution=10
-    )
-    scene = build_dataset(
-        {"red": (("y", "x"), np.ones((64, 64), "uint16"))},
-        grid,
-        time=np.datetime64("2024-03-05"),
-    )
-    entry = next(
-        iter(
-            create_file_items(
-                scene.gs.to_cog(tmp_path, format_paths="red.tif"), id_format="utm"
-            )
-        )
-    )
-    view = GeoBox.from_bbox(
-        grid.extent.to_crs("EPSG:3857").boundingbox, crs="EPSG:3857", shape=(32, 32)
-    )
-
-    pixels = read_pixels(entry, view)
-
-    assert pixels.odc.geobox == view
+    item = scene[f"s2/{entry.id}"]
+    assert [leaf.name for leaf in item.leaves] == ["red", "swir"]
+    assert item["red"].to_dataset().odc.geobox.shape == (64, 64)
+    assert item["swir"].to_dataset().odc.geobox.shape == (32, 32)
+    assert int(item["swir"].swir.max()) == 20
 
 
 def write_png_item(tmp_path, stated_shape=(48, 64)):
@@ -471,7 +279,7 @@ def write_png_item(tmp_path, stated_shape=(48, 64)):
 def test_an_asset_states_the_grid_a_png_lacks(tmp_path):
     entry, grid = write_png_item(tmp_path)
 
-    scene = load_datatree([entry]).gs.to_dataset()
+    scene = combine_item(load_datatree([entry]))
 
     assert scene.odc.geobox == grid
 
@@ -531,69 +339,3 @@ def test_saved_item_preserves_nominal_time_from_interval_properties(tmp_path):
 def _scene():
     source = build_raster(times=2).chunk()
     return source.assign(dem=source.red.isel(time=0, drop=True).astype("float32"))
-
-
-def test_items_follow_time_and_assets_follow_variables_without_computing():
-    scene = _scene()
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        items = split_items({".": scene}, ("time",), ("variable",))
-    assert tasks == []
-    assert [list(item) for item in items] == [["red", "nir", "dem"]] * 2
-    for position, item in enumerate(items):
-        assert item["red"].time.item() == scene.time.values[position].item()
-        assert list(item["red"].data_vars) == ["red"]
-        assert isinstance(item["red"].red.data, da.Array)
-    # A static variable joins every Item rather than being split by time.
-    # It carries the Item's time as a scalar label, like every asset of that Item.
-    xr.testing.assert_identical(items[1]["dem"].dem.drop_vars("time"), scene.dem)
-
-
-def test_a_lone_raster_written_whole_is_the_sole_asset():
-    items = split_items({".": _scene()}, ("time",), ())
-    assert [list(item) for item in items] == [["asset"], ["asset"]]
-    assert list(items[0]["asset"].data_vars) == ["red", "nir", "dem"]
-
-
-def test_tree_assets_keep_their_node_path():
-    scene = build_raster(times=2)
-    rasters = {"s2/r10m": scene, "label": scene[["red"]].rename(red="mask")}
-    by_variable = split_items(rasters, ("time",), ("variable",))
-    assert list(by_variable[0]) == ["s2/r10m/red", "s2/r10m/nir", "label/mask"]
-    whole = split_items(rasters, ("time",), ())
-    assert list(whole[0]) == ["s2/r10m", "label"]
-    (single,) = split_items({"s2": scene.isel(time=[0])}, ("time",), ())
-    assert list(single) == ["s2"]
-
-
-def test_asset_dimensions_add_their_labels_to_the_name():
-    reflectance = build_raster(times=1).gs.to_dataarray().rename("reflectance")
-    (item,) = split_items(
-        {".": reflectance.to_dataset()}, ("time",), ("variable", "band")
-    )
-    assert list(item) == ["reflectance_red", "reflectance_nir"]
-    assert item["reflectance_red"].band.item() == "red"
-    (item,) = split_items({".": reflectance.to_dataset()}, ("time",), ("band",))
-    assert list(item) == ["red", "nir"]
-
-
-def test_absent_split_dimensions_are_skipped():
-    static = build_raster()
-    (item,) = split_items({".": static}, ("time",), ("variable", "level"))
-    assert list(item) == ["red", "nir"]
-
-
-def test_repeated_asset_names_are_rejected():
-    scene = build_raster(times=1).gs.to_dataarray().to_dataset(name="image")
-    scene = scene.assign_coords(band=["red", "red"])
-    with pytest.raises(ValueError, match="repeats"):
-        split_items({".": scene}, ("time",), ("band",))
-
-
-def test_variable_assets_keep_cf_time_bounds():
-    scene = build_raster(times=2)
-    starts = scene.time.values
-    ends = starts + np.timedelta64(1, "D")
-    scene = assign_cells(scene, list(zip(starts, ends, strict=True)))
-    items = split_items({".": scene}, ("time",), ("variable",))
-    assert items[1]["nir"].end_datetime.values == ends[1]

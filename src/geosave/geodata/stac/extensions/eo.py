@@ -50,7 +50,7 @@ class SpectralAttrs(TypedDict, total=False):
 def read_attrs(band: Band) -> SpectralAttrs:
     """Translate an EO band's spectral facts and description into attrs."""
     stated = band.properties
-    facts = attrs.Spectral(
+    facts = attrs.EOBand(
         common_name=stated.get("common_name"),
         center_wavelength=stated.get("center_wavelength"),
         full_width_half_max=stated.get("full_width_half_max"),

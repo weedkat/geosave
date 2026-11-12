@@ -78,7 +78,7 @@ def build(
     if packed:
         raster["red"].attrs["scale_factor"] = 1e-4
     if labelled:
-        raster["cls"] = raster["cls"].gs.write_legend({0: "bg", 1: "crop"})
+        raster["cls"] = raster["cls"].gs.write_flags({0: "bg", 1: "crop"})
 
-    stamped = raster.gs.write_crs()
+    stamped = raster
     return stamped.chunk(chunks) if chunks else stamped

@@ -5,6 +5,7 @@ Build a calculation without reading every pixel:
 ```python
 import dask.array as da
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -15,7 +16,7 @@ grid = GeoBox.from_bbox(
     crs='EPSG:32633', resolution=10,
 )
 pixels = da.arange(16, chunks=4).reshape(4, 4).astype("uint16")
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid)).gs.write_nodata(0)
 subset = scene.isel(y=slice(0, 2), x=slice(0, 2))
 subset
 ```

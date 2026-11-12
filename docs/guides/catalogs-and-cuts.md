@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pystac
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -31,7 +32,7 @@ optical = (
         {"red": (("time", "y", "x"), np.ones((3, 32, 32), dtype="uint16"))},
         coords={"time": dates},
     )
-    .gs.write_grid(grid)
+    .assign_coords(xr_coords(grid))
     .gs.write_nodata(0)
 )
 # Any extent will do: to_catalog sets it to cover the Items it writes.
@@ -101,20 +102,16 @@ is needed. Grouping does not prepare pixels or align grids. See [calendar sampli
 for interval policies, missing slots, and forecasting constraints.
 
 Reading one Item row with
-`items.iloc[0].gs.to_datatree()` opens one node per asset, and
-`.gs.group_grid()` merges assets on one grid; `.gs.to_dataset()`
-merges compatible raster nodes in the selected subtree on one exact grid.
-Organizational nesting does not determine Collection membership. Select
-`tree["s2"]` to limit the inputs. For mixed grids, choose a reference explicitly:
+`items.iloc[0].gs.to_datatree()` opens one node per asset of each Item.
+`tree["s2"].gs.combine_stac()` merges each Item's assets and stacks the Items along
+`time`, on a grid they already share. For mixed grids, choose one explicitly:
 
 ```python title="Adaptation example — a collection with several grids"
-scene = tree.gs.group_grid()["s2"].gs.to_dataset(grid="r20m", resampling="average")
+scene = tree.gs.reproject("EPSG:32633", resolution=20, resampling="average")["s2"].gs.combine_stac()
 ```
 
-`grid` names the node, relative to the one you call on, whose grid every node is
-reprojected onto, or takes a GeoBox. Without it, the nodes must already share a
-grid. Variable names must be unique and coordinates compatible; conversion never
-chooses a grid for you.
+Combining never chooses a grid for you; tiles of one date need a mosaic, as
+`rows.gs.to_dataset(geobox)` loads.
 `samples.footprints` holds each sample's footprint and Item count;
 `samples.footprints.gs.explore()` maps them, and `samples[i].gs.explore()` maps
 one sample's rows, whose raster column opens each row's raster. Persist the
@@ -125,10 +122,10 @@ Item catalog and sample it again after reading.
 Inspect the actual georeferencing without loading raster pixels:
 
 ```python
-tree = rows.gs.to_datatree().gs.group_grid()
+tree = rows.gs.to_datatree()
 tree.gs.spatial_dims  # Shared spatial names, or None when nodes disagree.
 nodes = tree.gs.datasets  # {node path: Dataset}, with lazy pixels preserved.
-image = nodes["s2/r10m"]
+image = nodes["s2/<item>/B04"]
 grid = image.gs.geobox  # CRS, shape, resolution, transform, and bounds.
 
 # Split explicitly: one lazy slice per position, labels kept as scalar coords.
@@ -145,17 +142,15 @@ Each slice carries its labels as scalar coordinates, or its position where a
 dimension has none; other coordinates and spatial metadata stay as they are.
 Validation raises `RasterValidationError`, a `ValueError` subclass available from
 `geosave.geodata`. The error identifies the node and variable and suggests a
-correction, such as assigning a known CRS with `raster.gs.write_crs(...)`.
+correction, such as assigning a known CRS with `raster.odc.assign_crs(...)`.
 Calling operations may add context, such as a requested window that cannot be
 read. Validation returns `None` on success, reads no raster pixels, and does not
 cache results across coordinate or metadata changes.
 
 Splitting needs explicit dimensions, which each slice must have; spatial axes
-cannot be split. Standard latitude/longitude names and CF axis
-attributes are accepted without renaming the input during inspection, validation,
-chipping, NumPy conversion, and CRS annotation. Some transforms still require
-canonical `y`/`x` axes; use `geosave.geodata.conventions.to_yx` explicitly for
-those operations.
+cannot be split. Spatial dimensions are the ones ODC names: `y`/`x` for a
+projected grid, `latitude`/`longitude` for a geographic one. Rename other
+layouts before using `.gs`.
 
 `tree.gs.datasets` includes raster parents and children at any depth, keyed by
 relative node path, with inherited coordinates. Metadata-only nodes are left
@@ -197,7 +192,7 @@ select a native GeoBox and use `stac.load_dataset(items, geobox=grid)` explicitl
 ```python
 scenes = []
 for tree in trees:
-    scenes.append(tree.gs.group_grid()["optical"].gs.to_dataset(grid="r10m"))
+    scenes.append(tree.gs.reproject(grid)["optical"].gs.combine_stac())
 chips = gs.Chips(scenes, size=16, overlap=0.25, mode="reflect")
 chip = chips[0, 0]  # (sample_index, tile_id): a lazy Dataset
 chip.time                         # observation times, unchanged
@@ -253,7 +248,7 @@ starts fresh merger state. Place an output back on its source grid:
 ```python
 source = chips.xarray[0]
 y, x = source.gs.spatial_dims
-output = xr.DataArray(outputs[0], dims=("class", y, x)).gs.write_grid(source.gs.geobox)
+output = xr.DataArray(outputs[0], dims=("class", y, x)).assign_coords(xr_coords(source.gs.geobox))
 ```
 
 This example assumes class scores with one leading axis. Choose output dimensions,

@@ -30,8 +30,8 @@ class GeoCatalogItem:
         >>> row = items.iloc[0]
         >>> row.gs.region.timespan
         (datetime.datetime(2024, 3, 8, 0, 0), datetime.datetime(2024, 3, 8, 0, 0))
-        >>> row.gs.to_datatree().gs.to_dataset()
-        <xarray.Dataset> Dimensions: (y: 50, x: 70) Data variables: red
+        >>> items.iloc[[0]].gs.to_dataset(grid)
+        <xarray.Dataset> Dimensions: (time: 1, y: 50, x: 70) Data variables: red
     """
 
     def __init__(self, row: pd.Series) -> None:
@@ -130,36 +130,53 @@ class GeoCatalogItem:
     ) -> Dataset:
         """Read the row's pixels inside `geobox`, each file from the overview it needs.
 
+        Note:
+            Catalog-to-layer ownership is deferred for review in the CF/xarray
+            adoption plan. RasterLayer still calls this row wrapper, but that
+            coupling is not the settled catalog design. Keep behavior unchanged
+            until the layer's source contract is reviewed.
+
         Args:
             geobox: Grid to read onto, such as a map's view.
-            variables: Variables to read. None reads every data asset.
+            variables: ODC band names or aliases, as in `load_dataset`. None
+                reads every data asset.
 
         Returns:
             Dataset on `geobox`, float32 with nodata as NaN.
 
         Raises:
-            KeyError: A requested variable is not in the row.
+            ValueError: A requested band name or alias is unknown.
 
         Examples:
             >>> row.gs.read_pixels(view, variables=["red"]).red.shape
             (600, 900)
         """
-        from geosave.geodata.stac.publish import read_scene_pixels
+        import numpy as np
 
-        return cast("Dataset", read_scene_pixels(self.to_item(), geobox, variables))
+        from geosave.geodata.stac import load_dataset
+
+        pixels = load_dataset(
+            [self.to_item()],
+            geobox,
+            bands=variables,
+            groupby="id",
+            chunks=None,
+            dtype="float32",
+            nodata=np.nan,
+        )
+        if "time" in pixels.dims:
+            pixels = pixels.isel(time=0, drop=True)
+        return cast("Dataset", pixels)
 
     def to_datatree(self, **options: Any) -> DataTree:
-        """Load the Item lazily, one node per STAC asset on its own grid.
+        """Load the Item lazily as ``{collection}/{item}/{asset}`` nodes, as stated.
 
         Args:
-            **options: Forwarded to `stac.load_datatree`, such as `groupby`,
-                `chunks` or `bands`.
+            **options: Forwarded to `stac.load_datatree`, such as `chunks` or `bands`.
 
         Returns:
-            DataTree of ``{collection}/{asset}`` nodes, as a one-row
-            catalog loads, with the Collection metadata and the Item's time on
-            the collection node. The Item's geometry is its region, beside the
-            whole grids.
+            DataTree as a one-row catalog loads, with the Collection metadata
+            on its collection node.
 
         Raises:
             ValueError: A band states no grid in `proj:*`.
@@ -167,23 +184,18 @@ class GeoCatalogItem:
         Examples:
             >>> scene = rows.iloc[0].gs.to_datatree()
             >>> list(scene.gs.datasets)
-            ['s2/red', 's2/swir']
-            >>> scene.gs.group_grid()["s2"].gs.to_dataset(grid="r10m").gs.variables
-            ('red', 'swir')
+            ['s2/S2B_33UUP_20250115/red', 's2/S2B_33UUP_20250115/swir']
         """
         import pystac
 
         from geosave.geodata.stac.load import load_datatree
-        from geosave.geodata.stac.item import read_footprint
 
         item = self.to_item()
         # pandas carries the table's footer onto each of its rows.
         stored = self._row.attrs.get(FOOTER_KEY, {}).get("collections", {})
         fields = stored.get(item.collection_id)
         collection = None if fields is None else pystac.Collection.from_dict(fields)
-        tree = load_datatree([item], collection=collection, **options)
-        # The Item's geometry is its region; the grid stays whole.
-        footprint = read_footprint([item])
-        if footprint is not None:
-            tree = tree.gs.write_extent(footprint)
-        return cast("DataTree", tree)
+        collections = [] if collection is None else [collection]
+        return cast(
+            "DataTree", load_datatree([item], collections=collections, **options)
+        )

@@ -102,7 +102,7 @@ def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFra
 def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
     """Give the share of present pixels in each class, pooled over bands.
 
-    Bands may differ in grid and size but must share one legend. Pixels equal
+    Bands may differ in grid and size but must share one set of CF flags. Pixels equal
     to a band's fill value are not counted. Every band is read in one dask
     compute.
 
@@ -129,20 +129,21 @@ def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
     bands = list(bands)
     if not bands:
         raise ValueError("class_percent needs at least one band to count")
-    classes = bands[0].gs.legend.classes if bands[0].gs.legend else None
+    first = bands[0].gs.flags
+    classes = None if first is None else first.classes
     if classes is None:
         raise ValueError(
             "the band states no class names, so its values name no classes; "
-            "write a legend with write_legend"
+            "write its flags with write_flags"
         )
 
     counts = []
     for band in bands:
-        legend = band.gs.legend
-        if legend is None or legend.classes != classes:
+        flags = band.gs.flags
+        if flags is None or flags.classes != classes:
             raise ValueError(
-                f"class_percent pool bands by class, but one band's legend "
-                f"differs from {classes}"
+                f"class_percent pool bands by class, but one band's flags "
+                f"differ from {classes}"
             )
         fill = band.gs.nodata
         present = band if fill is None else band.where(band != fill)

@@ -1,5 +1,10 @@
 """Xarray raster structure and coordinate names used by GeoSave.
 
+`.gs` works on 2-D georeferenced rasters, as odc-geo does: one grid, with
+optional `time` observations and a `band` axis that only stacking adds. Over
+ODC it adds time cells, STAC metadata kept on the object, and band attr
+groups. Other layouts (depth, ensembles, rotated poles) are out of scope.
+
 A Dataset: measurements as data variables, each time label's cell as two
 coordinates, the CRS as a scalar coordinate::
 
@@ -36,15 +41,23 @@ A DataArray keeps its cells, because they share the time dimension::
         long_name:  Red reflectance
         units:      1
 
-Where each part lives, in memory and in a netCDF or Zarr file::
+The structure is the one ODC produces; the accessor finds every part by
+name, as ODC does. Spatial dimensions are named by the grid's CRS::
 
-    in memory                              file
-    time(time)                             time(time)  bounds="time_bounds"
-    start_datetime(time) ┐   encode  ──►   time_bounds(time, bounds)
-    end_datetime(time)   ┘   ◄── decode      units, calendar = time's (CF §7.1)
-    x(x), y(y)                             x(x), y(y)  no _FillValue (CF §5)
-    spatial_ref()  grid mapping (ODC)      spatial_ref()
-    red.encoding["grid_mapping"]           red:grid_mapping = "spatial_ref"
+    projected CRS    (..., y, x)
+    geographic CRS   (..., latitude, longitude)
+    time             always "time", as odc-stac names it
+
+Where each part lives, in memory and in a file::
+
+    in memory                    Zarr                     netCDF
+    time(time)                   time(time)               time(time) bounds="time_bounds"
+    start_datetime(time) ┐       start_datetime(time)     time_bounds(time, bounds)  (CF §7.1)
+    end_datetime(time)   ┘       end_datetime(time)
+    x(x), y(y)  ODC attrs        + axis, standard_name (CF §4), no coordinate _FillValue
+    spatial_ref()                spatial_ref(); red:grid_mapping = "spatial_ref"
+
+    GeoTIFF/COG: TIFFTAG_DATETIME and ACDD time_coverage_start/end
 
 Who writes the cells::
 
@@ -53,11 +66,6 @@ Who writes the cells::
     gs.composite(freq)                 the resample bin
     gs.write_time_bounds("MS")         one freq step per label
     a cell ends where the next starts (CF convention)
-
-``.cf`` reads the CF structure; it stores no separate metadata::
-
-    scene.cf.axes            {"X": ["x"], "Y": ["y"], "T": ["time"]}
-    scene.cf.grid_mappings   spatial_ref, with its CRS
 
 STAC metadata keeps its own shape beside it::
 
@@ -72,22 +80,11 @@ collection node's time and cells::
     ├── /B04         B04 (time, y, x)   its own grid
     └── /B11         B11 (time, y, x)   its own grid
 
-GeoSave creators use ``y``/``x``, ``time``, and ``band`` when channels are
-stacked in one DataArray. Native inputs keep other names; CF attrs identify
-their axes.
-
-See https://cf-xarray.readthedocs.io/en/latest/quickstart.html.
+Channels stacked in one DataArray span ``band``. Layouts ODC does not
+recognize, such as a weather model's rotated pole, are renamed by the caller.
 """
 
 from __future__ import annotations
-
-from typing import cast
-
-import cf_xarray  # noqa: F401 registers .cf
-import xarray as xr
-
-# Canonical spatial names for rasters GeoSave creates.
-SPATIAL_DIMENSIONS = ("y", "x")
 
 # Scalar coordinate holding the CRS, which CF reaches through `grid_mapping`.
 GRID_MAPPING = "spatial_ref"
@@ -103,31 +100,10 @@ TIME_COORDINATE = "time"
 START_DATETIME = "start_datetime"
 END_DATETIME = "end_datetime"
 
+# The collection node of Items that name no collection, in a STAC-shaped tree.
+DEFAULT_COLLECTION = "default"
+
+
 # Coordinate along `time` holding each date's STAC Item properties as JSON
 # text: one mapping per date, which NetCDF and Zarr store as a string.
 STAC_PROPERTIES = "stac_properties"
-
-
-def to_yx[T: (xr.DataArray, xr.Dataset)](data: T) -> T:
-    """Rename a foreign spatial pair to `y` and `x`.
-
-    The pair is found by name (`latitude`/`longitude`, `lat`/`lon`) or, under
-    any other name, by the CF `axis` or `standard_name` its coordinates carry.
-
-    Args:
-        data: Band or raster as a loader named its grid.
-
-    Returns:
-        Renamed view sharing its pixels, lazily. A band or raster already on
-        `y` and `x`, or without identifiable spatial dimensions, comes back
-        as itself. A tree normalizes node by node with
-        ``tree.map_over_datasets(to_yx)``.
-
-    Examples:
-        >>> to_yx(xr.open_dataset("era5.nc")).t2m.dims
-        ('time', 'y', 'x')
-    """
-    dims = data.gs.spatial_dims
-    if dims in (None, SPATIAL_DIMENSIONS):
-        return data
-    return cast("T", data.rename(dict(zip(dims, SPATIAL_DIMENSIONS, strict=True))))

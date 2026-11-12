@@ -97,9 +97,7 @@ and use `examples/` as the working directory. Run cells in order with a fresh
 kernel for each notebook. Later lessons reuse earlier files. Read each
 notebook's prerequisites before starting downloads or training.
 
-Each notebook ends with project extensions rather than quizzes. The
-[series plan](contributing/specs/2026-10-09-examples-series-design.md) describes
-the future lessons and their prerequisites.
+Each notebook ends with project extensions rather than quizzes.
 
 ## Next steps
 

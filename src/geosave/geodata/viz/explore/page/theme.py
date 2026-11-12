@@ -53,20 +53,12 @@ EXPLORER_THEME = {
 }
 
 
-# Header and sidebar on the paper background, the title in the text colour.
+# Keep the native header colors so its controls retain their contrast.
 PAGE_STYLE = {
     ".main-content": {"padding": 0},
-    ".header": {
-        "backgroundColor": "var(--mui-palette-background-paper) !important",
-        "color": "text.primary",
-        "boxShadow": "none",
-        "borderBottom": 1,
-        "borderColor": "divider",
-    },
     ".header .title": {
         "fontSize": 16,
         "fontWeight": 650,
-        "color": "var(--mui-palette-text-primary) !important",
     },
     ".sidebar": {"backgroundColor": "background.paper"},
 }

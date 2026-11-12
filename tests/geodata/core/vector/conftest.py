@@ -10,6 +10,7 @@ import pytest
 from odc.geo.geobox import GeoBox
 from shapely.geometry import box, mapping
 
+from tests.conftest import write_cogs
 from geosave.geodata import open_vector
 from tests.conftest import build_dataset, build_tree
 from geosave.geodata.core import GeoCatalog
@@ -129,7 +130,7 @@ def create_scene_items(raster, root, collection=None):
     """Build native Items from files written through the public raster API."""
 
     template = "{time:%Y%m%d}_{variable}.tif" if "time" in raster.dims else "label.tif"
-    scenes = raster.gs.to_cog(root, format_paths=template)
+    scenes = write_cogs(raster, root, format_paths=template)
     return list(
         create_file_items(
             scenes,
@@ -164,7 +165,7 @@ def write_items(root, collection, variable, left, resolution, dates):
         )
         template = f"{collection}_{left}.tif"
         options = {"datetime": TIMELESS}
-    scenes = raster.gs.write_nodata(np.nan).gs.to_cog(root, format_paths=template)
+    scenes = write_cogs(raster.gs.write_nodata(np.nan), root, template)
     id_format = f"{collection}_{left}_{{start:%Y%m%d}}"
     if not dates:
         id_format = f"{collection}_{left}_timeless"

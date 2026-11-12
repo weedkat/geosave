@@ -100,7 +100,7 @@ def test_shadow_refuses_a_grid_that_does_not_measure_metres() -> None:
 
     with pytest.raises(ValueError, match="metres"):
         shadow_mask(mask, cloud="cloud", sun_azimuth=180.0)
-    with pytest.raises(ValueError, match="pixel placement"):
+    with pytest.raises(ValueError, match="grid"):
         shadow_mask(unreferenced, cloud="cloud", sun_azimuth=180.0)
 
 

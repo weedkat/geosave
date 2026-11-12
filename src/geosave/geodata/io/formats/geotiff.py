@@ -12,7 +12,7 @@ from geosave.geodata.io.rasterio import RasterioOpenOptions
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
@@ -20,7 +20,6 @@ import orjson
 import rasterio
 import rioxarray  # noqa: F401  — registers the .rio accessor
 import xarray as xr
-from odc.geo.geobox import GeoBox
 from rasterio.enums import ColorInterp
 
 # rasterio ships this as a compiled module, which no type checker can resolve.
@@ -29,6 +28,7 @@ from rasterio.shutil import (
 )
 from upath import UPath
 from xarray.core.utils import equivalent
+from xarray.conventions import encode_cf_variable
 
 import geosave.geodata.attrs as attrs
 from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from dask.delayed import Delayed
     from rasterio.io import DatasetWriter
 
-    from geosave.geodata import Dataset
 
 type CreationOptionValue = str | int | float | bool
 
@@ -56,6 +55,14 @@ class GeoTIFFWriteOptions(TypedDict, total=False):
     determine which codecs and settings are available.
 
     Attributes:
+        tiff_tags: Write ACDD attrs as baseline TIFF tags, which any TIFF
+            reader shows, instead of GDAL-only metadata: `title` as
+            `TIFFTAG_DOCUMENTNAME`, `summary` as `TIFFTAG_IMAGEDESCRIPTION`,
+            `license` as `TIFFTAG_COPYRIGHT`, `institution` as
+            `TIFFTAG_ARTIST`, and `geosave <version>` as `TIFFTAG_SOFTWARE`.
+            Each attr is written once, as its tag. Reading maps the four tags
+            back to their ACDD attrs either way. False by default; GeoSave's
+            own option, not forwarded to GDAL.
         compress: Compression codec name, such as `"DEFLATE"` or `"LZW"`.
         predictor: Compression predictor: 1 disables prediction, 2 differences
             adjacent samples, and 3 predicts floating-point samples.
@@ -80,6 +87,7 @@ class GeoTIFFWriteOptions(TypedDict, total=False):
     interleave: Literal["PIXEL", "BAND"]
     sparse_ok: bool
     creation_options: dict[str, CreationOptionValue]
+    tiff_tags: bool
 
 
 class COGWriteOptions(GeoTIFFWriteOptions, total=False):
@@ -164,16 +172,8 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     """
     if storage.location(path).suffix.lower() not in FILE_SUFFIXES:
         raise ValueError(f"{path} is not a GeoTIFF destination; use .tif or .tiff")
-    ds.gs.validate(same_dims=True)
-    if any(variable.gs.geobox is not None for variable in ds.data_vars.values()):
-        ds.gs.validate(same_grid=True)
+    ds.gs.validate()
     spatial = ds.gs.spatial_dims
-    grid = ds.gs.geobox
-    if grid is not None and not isinstance(grid, GeoBox):
-        raise ValueError(
-            f"this raster is placed by {type(grid).__name__}, which GeoSave "
-            "does not write as GeoTIFF ground control points; reproject first"
-        )
     dimensions = set()
     for variable in ds.data_vars.values():
         dimensions.update(variable.dims)
@@ -186,18 +186,18 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     if count != 1:
         raise ValueError(
             f"one GeoTIFF holds one instant; {count} dates would share {path}; "
-            'split observations with split_item=("time",)'
+            "select one observation before writing"
         )
     cube = ds.squeeze(TIME_COORDINATE) if TIME_COORDINATE in ds.dims else ds
     time = cube.coords.get(TIME_COORDINATE)
     if time is not None and np.issubdtype(time.dtype, np.datetime64):
         if np.isnat(time.values).any():
             raise ValueError("a GeoTIFF observation time cannot be NaT")
-    _time_coverage(cube)
+    _format_time_tags(cube)
     fill_values = {}
     for name, variable in ds.data_vars.items():
         value = variable.gs.nodata
-        if attrs.Packing.is_stated_in(variable.encoding):
+        if attrs.CFPacking.is_stated_in(variable.encoding):
             value = variable.encoding.get("_FillValue", value)
         fill_values[name] = value
     if not fill_values:
@@ -242,7 +242,7 @@ def write_files(
         >>> write_files({root / "red.tif": scene[["red"]], root / "nir.tif": scene[["nir"]]})
         [UPath('/abs/red.tif'), UPath('/abs/nir.tif')]
     """
-    writer = write_cog if writer is None else writer
+    writer = cast("Callable[..., UPath]", write_cog) if writer is None else writer
     if writer in (write_cog, write_geotiff):
         declared = GTiffWriteOptions if writer is write_geotiff else COGWriteOptions
         unknown = options.keys() - declared.__annotations__.keys()
@@ -289,31 +289,34 @@ def _write_checked(
 
 
 def write_cog(
-    ds: Dataset,
+    ds: xr.DataArray | xr.Dataset,
     path: Location,
     *,
     overwrite: bool = False,
+    compute: bool = True,
     storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> UPath:
+) -> UPath | Delayed:
     """Write one Dataset as a Cloud Optimized GeoTIFF, a band per variable.
 
     Each variable names itself in its band's metadata. A scalar `time`
-    coordinate becomes ACDD ``time_coverage_start`` and ``time_coverage_end``
-    attrs at full precision; a composite's bounds fill them instead.
+    coordinate becomes ``TIFFTAG_DATETIME``, in whole seconds; its period
+    becomes ACDD ``time_coverage_start`` and ``time_coverage_end`` attrs.
 
     Args:
-        ds: Cube of `(y, x)` variables sharing one grid, optionally with one
-            singleton time axis or a scalar time coordinate.
+        ds: Array or Dataset on one grid, optionally with one time step.
+            An array may have a band axis; each entry becomes one file band.
         path: Output path, fsspec URL, or UPath carrying its
             `storage_options`, ending in ``.tif`` or ``.tiff``.
         overwrite: Replace an existing file when true.
+        compute: False returns a delayed path without reading pixels.
         storage_options: Filesystem credentials and connection options, merged
             with any options already carried by the destination UPath.
-        **options: COG creation options.
+        **options: COG creation options, and `tiff_tags=True` to write ACDD
+            attrs as baseline TIFF tags (see `GeoTIFFWriteOptions`).
 
     Returns:
-        Path of the artifact actually written.
+        Path of the artifact actually written, or a delayed path.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -323,41 +326,47 @@ def write_cog(
     Examples:
         >>> write_cog(ds, "scene.tif", compress="DEFLATE")
         UPath('/abs/scene.tif')
+        >>> write_cog(ds.assign_attrs(title="Forest"), "scene.tif", tiff_tags=True)
+        UPath('/abs/scene.tif')
     """
     return _write(
         ds,
         storage.location(path, storage_options),
         "COG",
         overwrite=overwrite,
+        compute=compute,
         options=options,
     )
 
 
 def write_geotiff(
-    ds: Dataset,
+    ds: xr.DataArray | xr.Dataset,
     path: Location,
     *,
     overwrite: bool = False,
+    compute: bool = True,
     storage_options: StorageOptions | None = None,
     **options: Unpack[GTiffWriteOptions],
-) -> UPath:
+) -> UPath | Delayed:
     """Write one Dataset as a plain GeoTIFF, a band per variable.
 
     Reach for `write_cog` unless a consumer needs a striped or otherwise
     non-COG file. Coordinates map to tags exactly as `write_cog` maps them.
 
     Args:
-        ds: Cube of `(y, x)` variables sharing one grid, optionally with one
-            singleton time axis or a scalar time coordinate.
+        ds: Array or Dataset on one grid, optionally with one time step.
+            An array may have a band axis; each entry becomes one file band.
         path: Output path, fsspec URL, or UPath carrying its
             `storage_options`, ending in ``.tif`` or ``.tiff``.
         overwrite: Replace an existing file when true.
+        compute: False returns a delayed path without reading pixels.
         storage_options: Filesystem credentials and connection options, merged
             with any options already carried by the destination UPath.
-        **options: GTiff creation options.
+        **options: GTiff creation options, and `tiff_tags=True` to write ACDD
+            attrs as baseline TIFF tags (see `GeoTIFFWriteOptions`).
 
     Returns:
-        Path of the artifact actually written.
+        Path of the artifact actually written, or a delayed path.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -373,18 +382,20 @@ def write_geotiff(
         storage.location(path, storage_options),
         "GTiff",
         overwrite=overwrite,
+        compute=compute,
         options=options,
     )
 
 
 def _write(
-    ds: Dataset,
+    ds: xr.DataArray | xr.Dataset,
     path: Location,
     driver: Literal["COG", "GTiff"],
     *,
     overwrite: bool,
+    compute: bool = True,
     options: Mapping[str, Any],
-) -> UPath:
+) -> UPath | Delayed:
     """Encode one cube through the GDAL driver `driver` names.
 
     Args:
@@ -402,24 +413,71 @@ def _write(
         ValueError: The suffix or the `time` axis is invalid, or the variables
             declare more than one fill value.
     """
-    validate(ds, path)
+    declared = COGWriteOptions if driver == "COG" else GTiffWriteOptions
+    unknown = options.keys() - declared.__annotations__.keys()
+    if unknown:
+        raise TypeError(f"unsupported raster write options: {sorted(unknown)}")
+    options = dict(options)
+    tiff_tags = bool(options.pop("tiff_tags", False))
 
-    ds = ds.gs.scale_and_fill()
+    if isinstance(ds, xr.DataArray):
+        array = ds
+        if "band" in array.dims:
+            ds = array.to_dataset(dim="band")
+            ds = ds.rename_vars({name: str(name) for name in ds.data_vars})
+            for variable in ds.data_vars.values():
+                variable.attrs = dict(array.attrs)
+                variable.encoding = dict(array.encoding)
+        else:
+            ds = array.to_dataset(
+                name=array.name if array.name is not None else "asset"
+            )
+        ds = ds.assign_attrs(array.attrs)
+
+    validate(ds, path)
+    destination = storage.location(path)
+    if not overwrite and destination.exists():
+        raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
+    if not compute:
+        from dask.delayed import delayed
+
+        write = partial(_write, ds, path, driver, overwrite=overwrite, options=options)
+        return delayed(write)()
+
+    # Dataset.rio.to_raster stacks bands and loses per-variable CF encoding.
+    variables = {}
+    for name in ds.gs.variables:
+        array = ds[name]
+        dtype = np.dtype(array.encoding.get("dtype", array.dtype))
+        # Encoding raw floats would invent a NaN fill over their missing-value code.
+        if (
+            attrs.CFPacking.is_stated_in(array.encoding)
+            or "_Unsigned" in array.encoding
+            or dtype != array.dtype
+        ):
+            variables[name] = encode_cf_variable(
+                array.variable.copy(deep=False), name=name
+            )
+    ds = ds.assign(variables)
 
     cube = ds
     # One file holds one instant, however the axis spells it.
     if TIME_COORDINATE in cube.dims:
         cube = cube.squeeze(TIME_COORDINATE)
 
-    coverage = _time_coverage(cube)
+    time_tags = _format_time_tags(cube)
     if TIME_COORDINATE in cube.coords:
         cube = cube.drop_vars(TIME_COORDINATE)
 
     names = [str(name) for name in cube.data_vars]
 
-    root = {**cube.attrs, **coverage}
-    # A band names itself in its own metadata; GDAL owns the interpretation.
-    bands = [_named(cube[name], name) for name in names]
+    root = {**cube.attrs, **time_tags}
+    if tiff_tags:
+        root = _map_tiff_tags(root)
+    rgb = ds.gs.rgb
+    if rgb is not None:
+        root.update(attrs.Display(rgb=list(rgb)).to_attrs())
+    bands = [cube[name] for name in names]
 
     # Temporal coverage is captured above. Auxiliary coordinates with their own
     # dimensions cannot be represented by rioxarray's raster band array.
@@ -476,7 +534,10 @@ def write_header(
 
     GDAL keeps the description, unit, scale, offset, fill value, interpretation
     and palette as band properties of its own, where `gdalinfo` and QGIS look;
-    every other attr is a plain metadata item, and none is stated twice.
+    every other attr is a plain metadata item, and none is stated twice. The
+    `Display` maps to GDAL: `rgb` to red/green/blue interpretations, a
+    `color_map` to a colour table. Each band names its variable in a
+    `variable_name` item.
 
     Args:
         dst: Raster open for update.
@@ -496,22 +557,21 @@ def write_header(
             f"name them; pass one variable per band, in band order"
         )
 
-    owned = {
-        "scale_factor", "add_offset", "_FillValue", "nodata",
-        "color_map", "colorinterp",
-    }
     # GDAL stores these as band properties, never as dataset JSON tags.
+    owned = {*attrs.CFPacking.KEYS, *attrs.Display.KEYS}
     root_tags = {key: value for key, value in root.items() if key not in owned}
     dst.update_tags(**_as_text(root_tags))
+    display = attrs.Display.from_attrs(root)
+    rgb = [] if display is None or display.rgb is None else display.rgb
 
     scales: list[float] = []
     offsets: list[float] = []
     interpretations: list[ColorInterp] = []
     for index, band in enumerate(bands, start=1):
         packing = band.gs.packing
-        legend = band.gs.legend
-        identity = attrs.GDALBand.from_attrs(band.attrs)
+        band_display = band.gs.display
         tags = {key: value for key, value in band.attrs.items() if key not in owned}
+        tags["variable_name"] = str(band.name)
 
         # Each of these leaves the tags for a band property GDAL keeps it in.
         description = tags.pop("long_name", None)
@@ -525,14 +585,14 @@ def write_header(
 
         scales.append(1.0 if packing is None else packing.scale_factor)
         offsets.append(0.0 if packing is None else packing.add_offset)
-        palette = None if legend is None else legend.color_map
-        interpretation = None if identity is None else identity.colorinterp
-        # A colour table makes a band a palette, whatever it was read as.
-        interpretations.append(
-            ColorInterp.palette
-            if palette is not None
-            else ColorInterp[interpretation or ColorInterp.undefined.name]
-        )
+        palette = None if band_display is None else band_display.color_map
+        if palette is not None:
+            interpretations.append(ColorInterp.palette)
+        elif str(band.name) in rgb:
+            channel = ("red", "green", "blue")[rgb.index(str(band.name))]
+            interpretations.append(ColorInterp[channel])
+        else:
+            interpretations.append(ColorInterp.undefined)
 
         if palette is not None:
             dst.write_colormap(
@@ -556,12 +616,12 @@ def write_header(
         dst.nodata = shared
 
 
-def _time_coverage(cube: xr.Dataset) -> dict[str, str]:
-    """State the period a file covers as ACDD `time_coverage` attrs.
+def _format_time_tags(cube: xr.Dataset) -> dict[str, str]:
+    """State the file's time as `TIFFTAG_DATETIME` and its period as ACDD attrs.
 
-    A TIFF has no coordinates, so the scalar `time` coordinate and a composite's
-    `start_datetime` and `end_datetime` are carried as attrs and restored on
-    read. An instant covers itself: start equals end.
+    A TIFF has no coordinates. The scalar `time` coordinate becomes the TIFF
+    datetime tag, which holds whole seconds; `start_datetime` and
+    `end_datetime` become ACDD `time_coverage_start` and `time_coverage_end`.
 
     Raises:
         ValueError: `time` is not a datetime.
@@ -578,22 +638,32 @@ def _time_coverage(cube: xr.Dataset) -> dict[str, str]:
     if np.isnat(instant):
         return {}
 
-    # Serialize NumPy timestamps: the Python datetimes in timespan lose nanoseconds.
-    start = end = instant
-    if START_DATETIME in cube.coords:
-        start = cube[START_DATETIME].values.min()
-        end = cube[END_DATETIME].values.max()
+    stamp = instant.astype("datetime64[s]").item()
+    tags = {"TIFFTAG_DATETIME": stamp.strftime(raster_reader.GDAL_DATETIME_FORMAT)}
+    if START_DATETIME not in cube.coords:
+        return tags
+
     coverage = attrs.ACDD(
-        time_coverage_start=np.datetime_as_string(start, unit="auto"),
-        time_coverage_end=np.datetime_as_string(end, unit="auto"),
+        time_coverage_start=np.datetime_as_string(
+            cube[START_DATETIME].values.min(), unit="auto"
+        ),
+        time_coverage_end=np.datetime_as_string(
+            cube[END_DATETIME].values.max(), unit="auto"
+        ),
     )
-    return coverage.to_attrs()
+    return {**tags, **coverage.to_attrs()}
 
 
-def _named(band: xr.DataArray, name: str) -> xr.DataArray:
-    """Return the band stating its variable name, its interpretation kept."""
-    stated = attrs.GDALBand.from_attrs(band.attrs) or attrs.GDALBand()
-    return attrs.stamp_attrs(band, stated.model_copy(update={"variable_name": name}))
+def _map_tiff_tags(root: Mapping[str, Any]) -> dict[str, Any]:
+    """Move ACDD attrs onto the baseline TIFF tags `rasterio.TIFF_TAGS` names."""
+    from importlib.metadata import version
+
+    mapped = dict(root)
+    for key, tag in raster_reader.TIFF_TAGS.items():
+        if key in mapped:
+            mapped[tag] = mapped.pop(key)
+    mapped["TIFFTAG_SOFTWARE"] = f"geosave {version('geosave')}"
+    return mapped
 
 
 def _as_text(attrs: Mapping[str, Any]) -> dict[str, str]:
@@ -643,52 +713,3 @@ def open_geotiff(
         storage_options=storage_options,
         **options,
     )
-
-
-def write_items(
-    items: Sequence[Mapping[str, xr.Dataset]],
-    path: Location,
-    *,
-    format_paths: str | None = None,
-    writer=None,
-    storage_options: StorageOptions | None = None,
-    **options: Any,
-):
-    """Name and write every asset of every Item, checking the whole batch first.
-
-    Args:
-        items: ``{asset name: Dataset}`` per Item, as `split_items` returns.
-        path: Destination folder.
-        format_paths: Relative path template over each asset's scalar
-            coordinates, ``{asset}`` and ``{variable}``. None names files by
-            asset, in a folder per instant when dated.
-        writer: GeoTIFF writer; COG when None.
-        storage_options: Filesystem options merged into the destination.
-        **options: Forwarded to `write_files`.
-
-    Returns:
-        Written paths, or one delayed batch.
-
-    Raises:
-        ValueError: `path` names a file, or two assets land at one destination.
-    """
-    from geosave.geodata.io.paths import format_path
-
-    root = storage.location(path, storage_options)
-    if root.suffix.lower() in FILE_SUFFIXES:
-        raise ValueError("path must be a folder; name files with format_paths")
-
-    files = {}
-    for item in items:
-        for name, asset in item.items():
-            template = format_paths
-            if template is None:
-                template = "{asset}.tif"
-                if "time" in asset.coords and asset.time.ndim == 0:
-                    template = "{time:%Y%m%dT%H%M%S}/{asset}.tif"
-            destination = root / format_path(template, asset, asset=name)
-            if destination in files:
-                raise ValueError(f"format_paths destinations collide at {destination}")
-            files[destination] = asset
-
-    return write_files(files, writer, **options)

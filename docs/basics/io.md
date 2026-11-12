@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -19,7 +20,7 @@ grid = GeoBox.from_bbox(
     crs='EPSG:32633', resolution=10,
 )
 pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid)).gs.write_nodata(0)
 files = scene.gs.to_cog(root, split_asset=(), format_paths="scene.tif")
 reopened = gs.open_raster(files[0])
 reopened

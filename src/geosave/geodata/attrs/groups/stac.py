@@ -10,7 +10,7 @@ from pydantic import AliasChoices, Field, field_serializer
 from .base import AttrsGroup, Decoded
 
 
-class StacMetadata(AttrsGroup):
+class StacCollection(AttrsGroup):
     """Retain the source Collection and declared STAC extensions.
 
     It lives on a Dataset's root attrs, written by `stac.load_dataset` and read
@@ -23,7 +23,7 @@ class StacMetadata(AttrsGroup):
         extensions: Schema URIs the Items declare, which the properties need.
 
     Examples:
-        >>> StacMetadata.from_attrs(scene.attrs).collection["id"]
+        >>> StacCollection.from_attrs(scene.attrs).collection["id"]
         'sentinel-2-l2a'
     """
 

@@ -34,46 +34,7 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.base.AttrsGroup
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - KEYS
-        - is_stated_in
-        - from_attrs
-        - to_attrs
-        - __eq__
-
-::: geosave.geodata.attrs.groups.base.Decoded
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.attrs.groups.base.decode
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.attrs.groups.description.Description
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - long_name
-        - standard_name
-        - units
-        - KEYS
-        - is_stated_in
-        - from_attrs
-        - to_attrs
-        - __eq__
-      inherited_members:
-        - KEYS
-        - is_stated_in
-        - from_attrs
-        - to_attrs
-        - __eq__
-
-::: geosave.geodata.attrs.groups.extent.Extent
+::: geosave.geodata.attrs.groups.acdd.ACDDExtent
     options:
       show_root_full_path: true
       filters: []
@@ -94,13 +55,33 @@ fields appear as attributes, including their annotated types and defaults.
         - from_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.gdal.GDALBand
+::: geosave.geodata.attrs.groups.base.AttrsGroup
     options:
       show_root_full_path: true
       filters: []
       members:
-        - variable_name
-        - colorinterp
+        - KEYS
+        - is_stated_in
+        - from_attrs
+        - to_attrs
+        - __eq__
+
+::: geosave.geodata.attrs.groups.base.Decoded
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.attrs.groups.base.decode
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.attrs.groups.cf.CFDescription
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - long_name
+        - standard_name
+        - units
         - KEYS
         - is_stated_in
         - from_attrs
@@ -113,15 +94,7 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.gdal.RGB
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.attrs.groups.legend.Hexes
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.attrs.groups.legend.Legend
+::: geosave.geodata.attrs.groups.cf.CFFlags
     options:
       show_root_full_path: true
       filters: []
@@ -129,9 +102,7 @@ fields appear as attributes, including their annotated types and defaults.
         - flag_values
         - flag_masks
         - flag_meanings
-        - color_map
         - classes
-        - colors
         - check_dtype
         - KEYS
         - is_stated_in
@@ -145,7 +116,7 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.packing.Packing
+::: geosave.geodata.attrs.groups.cf.CFPacking
     options:
       show_root_full_path: true
       filters: []
@@ -154,7 +125,9 @@ fields appear as attributes, including their annotated types and defaults.
         - add_offset
         - fill_value
         - missing_value
-        - check_dtype
+        - valid_min
+        - valid_max
+        - valid_range
         - KEYS
         - is_stated_in
         - from_attrs
@@ -167,7 +140,31 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.spectral.Spectral
+::: geosave.geodata.attrs.groups.display.Display
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - rgb
+        - color_map
+        - colors
+        - KEYS
+        - is_stated_in
+        - from_attrs
+        - to_attrs
+        - __eq__
+      inherited_members:
+        - KEYS
+        - is_stated_in
+        - from_attrs
+        - to_attrs
+        - __eq__
+
+::: geosave.geodata.attrs.groups.display.Hexes
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.attrs.groups.eo.EOBand
     options:
       show_root_full_path: true
       filters: []
@@ -187,7 +184,7 @@ fields appear as attributes, including their annotated types and defaults.
         - to_attrs
         - __eq__
 
-::: geosave.geodata.attrs.groups.stac.StacMetadata
+::: geosave.geodata.attrs.groups.stac.StacCollection
     options:
       show_root_full_path: true
       filters: []
@@ -226,15 +223,15 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.conventions.DEFAULT_COLLECTION
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.conventions.END_DATETIME
     options:
       show_root_full_path: true
 
 ::: geosave.geodata.conventions.GRID_MAPPING
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.conventions.SPATIAL_DIMENSIONS
     options:
       show_root_full_path: true
 
@@ -250,30 +247,29 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.conventions.to_yx
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.raster.base.GeoRaster
     options:
       show_root_full_path: true
       filters: []
       members:
         - spatial_dims
+        - ydim
+        - xdim
         - validate
         - geobox
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - timespan
         - time_coordinate
         - times
         - region
-        - mask_and_scale
-        - scale_and_fill
 
 ::: geosave.geodata.core.raster.base.RasterTime
     options:
@@ -325,17 +321,14 @@ fields appear as attributes, including their annotated types and defaults.
         - composite
         - spatial_dims
         - geobox
-        - validate
-        - expand_rasters
-        - variables
-        - axes
         - nodata
-        - legend
+        - flags
+        - display
+        - class_colors
         - is_categorical
         - description
         - packing
         - spectral
-        - write_grid
         - reproject
         - mask
         - crop
@@ -343,13 +336,13 @@ fields appear as attributes, including their annotated types and defaults.
         - region
         - write_extent
         - clip_extent
-        - write_crs
         - write_nodata
-        - write_legend
-        - write_scale_offset
+        - write_flags
+        - write_packing
         - write_spectral
         - to_numpy
         - to_tensor
+        - mask_and_scale
         - to_item
         - to_catalog
         - to_cog
@@ -363,30 +356,38 @@ fields appear as attributes, including their annotated types and defaults.
         - colorize
         - explore
         - plot
+        - ydim
+        - xdim
+        - validate
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - timespan
         - time_coordinate
         - times
-        - mask_and_scale
-        - scale_and_fill
         - write_time_bounds
       inherited_members:
+        - ydim
+        - xdim
+        - validate
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - timespan
         - time_coordinate
         - times
-        - mask_and_scale
-        - scale_and_fill
         - write_time_bounds
         - __init__
 
@@ -398,13 +399,10 @@ fields appear as attributes, including their annotated types and defaults.
         - composite
         - spatial_dims
         - geobox
-        - validate
         - variables
-        - raster_variables
-        - expand_rasters
         - rgb
         - nodata
-        - legend
+        - flags
         - packing
         - spectral
         - stac_collection
@@ -412,7 +410,6 @@ fields appear as attributes, including their annotated types and defaults.
         - stac_properties
         - acdd
         - write_acdd
-        - write_grid
         - reproject
         - mask
         - crop
@@ -420,49 +417,57 @@ fields appear as attributes, including their annotated types and defaults.
         - region
         - write_extent
         - clip_extent
-        - write_crs
         - write_nodata
-        - write_legend
-        - write_scale_offset
+        - write_flags
+        - write_packing
         - write_spectral
         - write_rgb
         - statistics
         - class_percent
-        - to_dataarray
+        - expand_stac
+        - to_array
         - explore
         - plot
-        - read_pixels
         - to_numpy
         - to_tensor
+        - mask_and_scale
         - to_item
         - to_catalog
         - to_cog
         - to_zarr
         - to_netcdf
+        - ydim
+        - xdim
+        - validate
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - timespan
         - time_coordinate
         - times
-        - mask_and_scale
-        - scale_and_fill
         - write_time_bounds
       inherited_members:
+        - ydim
+        - xdim
+        - validate
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - timespan
         - time_coordinate
         - times
-        - mask_and_scale
-        - scale_and_fill
         - write_time_bounds
         - __init__
 
@@ -482,53 +487,51 @@ fields appear as attributes, including their annotated types and defaults.
         - write_extent
         - region
         - datasets
-        - group_grid
         - crop
-        - to_dataset
+        - reproject
+        - combine_stac
         - plot
         - to_numpy
         - to_tensor
+        - to_cog
         - to_item
         - to_catalog
-        - to_cog
         - to_zarr
         - to_netcdf
+        - ydim
+        - xdim
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
-        - mask_and_scale
-        - scale_and_fill
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
       inherited_members:
+        - ydim
+        - xdim
         - is_georeferenced
         - crs
         - crs_name
-        - grid_mapping_coords
         - bounds
         - resolution
-        - mask_and_scale
-        - scale_and_fill
+        - transform
+        - aspect
+        - map_bounds
+        - output_geobox
         - __init__
 
 ::: geosave.geodata.core.raster.utils.cf.decode_time_bounds
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.cf.drop_coordinate_fill
+::: geosave.geodata.core.raster.utils.cf.encode_spatial_axes
     options:
       show_root_full_path: true
 
 ::: geosave.geodata.core.raster.utils.cf.encode_time_bounds
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.utils.grid.write_crs
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.utils.grid.write_grid
     options:
       show_root_full_path: true
 
@@ -900,6 +903,7 @@ fields appear as attributes, including their annotated types and defaults.
         - interleave
         - sparse_ok
         - creation_options
+        - tiff_tags
       inherited_members:
         - compress
         - predictor
@@ -909,6 +913,7 @@ fields appear as attributes, including their annotated types and defaults.
         - interleave
         - sparse_ok
         - creation_options
+        - tiff_tags
 
 ::: geosave.geodata.io.formats.geotiff.CreationOptionValue
     options:
@@ -937,6 +942,7 @@ fields appear as attributes, including their annotated types and defaults.
         - interleave
         - sparse_ok
         - creation_options
+        - tiff_tags
       inherited_members:
         - compress
         - predictor
@@ -946,6 +952,7 @@ fields appear as attributes, including their annotated types and defaults.
         - interleave
         - sparse_ok
         - creation_options
+        - tiff_tags
 
 ::: geosave.geodata.io.formats.geotiff.GeoTIFFWriteOptions
     options:
@@ -960,6 +967,7 @@ fields appear as attributes, including their annotated types and defaults.
         - interleave
         - sparse_ok
         - creation_options
+        - tiff_tags
 
 ::: geosave.geodata.io.formats.geotiff.open_geotiff
     options:
@@ -982,10 +990,6 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.formats.geotiff.write_header
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.io.formats.geotiff.write_items
     options:
       show_root_full_path: true
 
@@ -1159,6 +1163,10 @@ fields appear as attributes, including their annotated types and defaults.
         - decode_timedelta
         - overview_level
 
+::: geosave.geodata.io.rasterio.TIFF_TAGS
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.io.rasterio.configure_gdal
     options:
       show_root_full_path: true
@@ -1171,11 +1179,7 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.rasterio.read_legend
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.io.rasterio.read_overview_factors
+::: geosave.geodata.io.rasterio.read_class_attrs
     options:
       show_root_full_path: true
 
@@ -1239,10 +1243,6 @@ fields appear as attributes, including their annotated types and defaults.
         - units
 
 ::: geosave.geodata.stac.band.BandFields
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.band.read_aliases
     options:
       show_root_full_path: true
 
@@ -1423,14 +1423,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.item.read_variable_names
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.item.select_data_assets
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.stac.item.select_item_properties
     options:
       show_root_full_path: true
@@ -1467,27 +1459,7 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.publish.ROOT_PATH
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.stac.publish.create_stac_item
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.publish.publish_items
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.publish.read_scene_pixels
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.publish.rename_bands
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.stac.publish.split_items
     options:
       show_root_full_path: true
 
@@ -1808,6 +1780,7 @@ fields appear as attributes, including their annotated types and defaults.
         - details
         - layer_list
         - zoom
+        - snapshot
         - fit_visible
         - add
         - remove
@@ -2015,10 +1988,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.viz.explore.page.TABLES_HEIGHT
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.viz.explore.page.comparison.create_comparison
     options:
       show_root_full_path: true
@@ -2051,6 +2020,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.viz.explore.page.create_sidebar
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.viz.explore.page.export.export_map
     options:
       show_root_full_path: true
 
@@ -2093,11 +2066,23 @@ fields appear as attributes, including their annotated types and defaults.
         - defer_draw
         - redraw
         - zoom
+        - snapshot
         - release
 
 ::: geosave.geodata.viz.explore.page.map.scope_hover
     options:
       show_root_full_path: true
+
+::: geosave.geodata.viz.explore.page.map.set_map_aspect
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.viz.explore.page.reflow.Reflow
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - object
 
 ::: geosave.geodata.viz.explore.page.region.REGION_COLOR
     options:

@@ -2,7 +2,7 @@
 
 `configure_gdal` sets the process environment remote reads use. `read` opens
 one GDAL-supported raster file as a Dataset of its bands: a band is one
-variable, named by the `GDALBand.variable_name` it carries. Tags and native
+variable, named by the `variable_name` tag it carries. Tags and native
 band properties become CF attrs here, leaving rioxarray the pixels and the
 grid.
 """
@@ -40,6 +40,15 @@ from geosave.geodata.warnings import UnreadMaskWarning
 
 # The text GDAL writes in the TIFF datetime tag, whole seconds only.
 GDAL_DATETIME_FORMAT = "%Y:%m:%d %H:%M:%S"
+
+# ACDD attrs and the baseline TIFF tags GDAL writes them as, which any TIFF
+# reader shows; other attrs go to GDAL's private metadata XML.
+TIFF_TAGS = {
+    "title": "TIFFTAG_DOCUMENTNAME",
+    "summary": "TIFFTAG_IMAGEDESCRIPTION",
+    "license": "TIFFTAG_COPYRIGHT",
+    "institution": "TIFFTAG_ARTIST",
+}
 
 if TYPE_CHECKING:
     from geosave.geodata import Dataset
@@ -85,7 +94,7 @@ def open_raster(
 ) -> Dataset:
     """Read any GDAL-readable raster as one variable per band.
 
-    A band naming itself in `GDALBand.variable_name` becomes that variable,
+    A band naming itself in a `variable_name` tag becomes that variable,
     spending the tag; the rest keep rasterio's `band_1`, `band_2`. Its metadata
     stays on the variable, the description as `long_name` unless it is the name.
 
@@ -170,17 +179,15 @@ def open_raster(
                 # Decoded pixels are physical, so the file's packing lives in encoding alone.
                 cube = cube.assign(
                     {
-                        name: attrs.clear_attrs(band, attrs.Packing)
+                        name: attrs.clear_attrs(band, attrs.CFPacking)
                         for name, band in cube.data_vars.items()
                     }
                 )
 
+            # The TIFF datetime tag states the time; ACDD attrs state its period.
             coverage = attrs.ACDD.from_attrs(root)
             instant = None
-            if coverage is not None and coverage.time_coverage_start is not None:
-                instant = np.datetime64(coverage.time_coverage_start)
-            elif "TIFFTAG_DATETIME" in root:
-                # Files from other tools date themselves in GDAL's whole-second tag.
+            if "TIFFTAG_DATETIME" in root:
                 try:
                     instant = np.datetime64(
                         datetime.strptime(
@@ -208,7 +215,6 @@ def open_raster(
                 coverage is not None
                 and coverage.time_coverage_start is not None
                 and coverage.time_coverage_end is not None
-                and coverage.time_coverage_start != coverage.time_coverage_end
             ):
                 cube = cube.assign_coords(
                     {
@@ -230,20 +236,6 @@ def open_raster(
 
         cube.encoding["source"] = absolute_location(source)
         return cast("Dataset", cube)
-
-
-def read_overview_factors(source: Location) -> list[int]:
-    """Return how many base pixels each overview pixel spans, coarsening in order.
-
-    Args:
-        source: Local path or URI to a raster GDAL can open.
-
-    Returns:
-        One factor per overview of the first band, such as `[2, 4, 8]`; empty
-        when the file has none. Index `i` opens with `overview_level=i`.
-    """
-    with rasterio.open(hf_to_s3(source)) as src:
-        return list(src.overviews(1))
 
 
 def hf_to_s3(location: Location) -> str:
@@ -405,29 +397,31 @@ def configure_gdal(
             os.environ[key] = value
 
 
-def read_legend(src: rasterio.DatasetReader, index: int) -> attrs.Legend | None:
-    """Read a band's legend from its CF tags and GDAL colour table.
+def read_class_attrs(src: rasterio.DatasetReader, index: int) -> dict[str, Any]:
+    """Read a band's CF flags and, for a palette band, its class colours.
 
     Args:
         src: Open raster.
         index: One-based band index.
 
     Returns:
-        The band's legend, or None where its tags list no `flag_values`. A
-        palette band takes the colours of its listed values from its table.
+        `CFFlags` and `Display` attrs, empty where the band's tags list no
+        `flag_values`. A palette band takes its listed values' colours from
+        its table.
     """
     tags = src.tags(index)
     if "flag_values" not in tags:
-        return None
-    legend = attrs.Legend.model_validate(tags)
-    if src.colorinterp[index - 1] is not ColorInterp.palette or not legend.flag_values:
-        return legend
+        return {}
+    flags = attrs.CFFlags.model_validate(tags)
+    read = flags.to_attrs()
+    if src.colorinterp[index - 1] is not ColorInterp.palette or not flags.flag_values:
+        return read
     colours = src.colormap(index)
     palette = {}
-    for value in legend.flag_values:
+    for value in flags.flag_values:
         if value in colours:
             palette[value] = colours[value][:3]
-    return attrs.Legend.model_validate({**tags, "color_map": palette})
+    return {**read, **attrs.Display(color_map=palette).to_attrs()}
 
 
 def _attrs(
@@ -471,34 +465,26 @@ def _attrs(
             for key, value in src.tags(index).items()
             if not key.startswith("STATISTICS_")
         }
-        interpretation = src.colorinterp[position]
         native: dict[str, Any] = {
             "long_name": src.descriptions[position],
             "units": src.units[position],
-            "colorinterp": None
-            if interpretation is ColorInterp.undefined
-            else interpretation.name,
         }
         band.update({key: value for key, value in native.items() if value is not None})
 
         # GDAL keeps packing and fill as band properties; they read as CF's attrs.
-        packing = attrs.Packing(
+        packing = attrs.CFPacking(
             scale_factor=src.scales[position],
             add_offset=src.offsets[position],
             fill_value=src.nodatavals[position],
         )
         band.update(packing.to_attrs())
 
-        identity = attrs.GDALBand.model_validate(band)
-        name = identity.variable_name or f"band_{index}"
+        name = band.pop("variable_name", None) or f"band_{index}"
         # rioxarray names an unlabelled band after its position, which is no label.
         if band.get("long_name") == name:
             del band["long_name"]
 
-        legend = read_legend(src, index)
-        if legend is not None and legend.color_map is not None:
-            # Spelled as the Legend writes it: text, which every format's attrs hold.
-            band.update(legend.to_attrs())
+        band.update(read_class_attrs(src, index))
 
         if name in bands:
             raise ValueError(
@@ -506,4 +492,18 @@ def _attrs(
                 f"already names; one file names each variable once"
             )
         bands[name] = band
-    return dict(src.tags()), bands
+
+    root = dict(src.tags())
+    # Baseline TIFF tags read back as the ACDD attrs a `tiff_tags` write moved.
+    for key, tag in TIFF_TAGS.items():
+        if tag in root and key not in root:
+            root[key] = root.pop(tag)
+    # GDAL states a composite per band; GeoSave states it once, on the Dataset.
+    drawing = {}
+    for name, interpretation in zip(bands, src.colorinterp, strict=True):
+        if interpretation.name in ("red", "green", "blue"):
+            drawing[interpretation.name] = name
+    if len(drawing) == 3:
+        rgb = [drawing["red"], drawing["green"], drawing["blue"]]
+        root.update(attrs.Display(rgb=rgb).to_attrs())
+    return root, bands

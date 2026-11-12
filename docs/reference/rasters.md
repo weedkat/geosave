@@ -1,24 +1,32 @@
 # Rasters and trees
 
 Rasters are native xarray objects. Build them with xarray's own constructors and
-place them with `write_grid`. Start with [Your first raster](../first-raster.md),
+place them with ODC's `xr_coords` or `wrap_xr`. Start with [Your first raster](../first-raster.md),
 then see [Raster data](../basics/rasters.md). Accessor methods are listed
 separately for [Dataset](dataset-accessor.md), [DataArray](dataarray-accessor.md),
 and [DataTree](datatree-accessor.md).
 
 ```python
-array = scene.gs.to_dataarray()
-wrapped = array.rename("image").gs.to_dataset()  # Keep the band dimension.
-bands = array.gs.to_dataset(dim="band")  # Split bands into variables.
+array = scene.gs.to_array()
+wrapped = array.to_dataset(name="image")  # Native wrapping keeps all dimensions.
+bands = array.gs.to_dataset()  # Split the labelled "band" dimension.
 
-tree = xr.DataTree.from_dict({"/optical": scene})
-scene = tree.gs.to_dataset()  # Compatible same-grid nodes only.
+tree = rows.gs.to_datatree()
+scene = tree.gs.reproject(grid)["optical"].gs.combine_stac()  # Items along time.
 ```
 
-Raster conversion preserves pixels and does not choose an output grid. For
-mixed-grid trees, pass `grid=` explicitly, as `tree.gs.to_dataset(grid="r10m")`. Native tree constructors keep
+Raster conversion preserves pixels and does not choose an output grid; align
+mixed grids with `tree.gs.reproject` first. Native tree constructors keep
 attrs on the Datasets supplied at each explicit path. Catalog-row
 `gs.to_datatree()` remains the reader that opens raster assets.
+
+Stacking requires matching CF pixel meaning: units (including whether stated),
+packing, unsigned interpretation, flags, validity ranges, calendars and cell
+methods. `combine_attrs` controls descriptive metadata only; it cannot erase
+or override these declarations. The stack has no original storage encoding;
+choose output encoding explicitly when saving packed analysis results.
+Splitting preserves shared attrs on each band, but cannot recover per-band
+metadata lost during stacking. Use native `to_dataset(name=...)` for wrapping.
 
 ## Temporal bounds
 
@@ -59,7 +67,7 @@ coordinate keeps its name through time selection and STAC stamping.
 
 ```text
 scene.gs.variables          every data variable
-scene.gs.raster_variables   data variables, minus a CF grid mapping kept as data
+scene.gs.variables          data variable names
 scene.gs.grid_mapping_coords  the scalar coordinates carrying the CRS (spatial_ref)
 ```
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +14,16 @@ import xarray as xr
 from geosave.geodata import open_vector
 from geosave.geodata.io.formats import geotiff
 from geosave.geodata.io.openers import open_raster
-from tests.geodata.conftest import create_test_collection, build_raster
+from tests.geodata.conftest import build_raster
+
+from shapely import from_wkt
+from odc.geo.geom import Geometry
+from geosave.geodata import io
+
+import zarr
+from geosave.geodata.io.formats import netcdf
+from geosave.geodata.io.formats import zarr as zarr_io
+from geosave.geodata import attrs
 
 
 def _flat():
@@ -81,9 +92,7 @@ def test_a_signed_vector_url_preserves_its_query(tmp_path, monkeypatch) -> None:
 
 
 def test_a_read_geotiff_names_the_file_it_came_from(tmp_path: Path) -> None:
-    (path,) = build_raster().gs.to_cog(
-        tmp_path, split_asset=(), format_paths="scene.tif"
-    )
+    (path,) = write_cogs(build_raster(), tmp_path, format_paths="scene.tif")
 
     assert open_raster(path).encoding["source"] == str(path)
 
@@ -134,29 +143,6 @@ def test_open_vector_does_not_read_a_folder(rows, tmp_path) -> None:
 
     with pytest.raises(ValueError, match="no supported vector format"):
         open_vector(tmp_path / "catalog")
-
-
-def test_several_files_are_not_one_raster(tmp_path: Path) -> None:
-    files = build_raster(times=2).gs.to_cog(tmp_path)
-
-    with pytest.raises(TypeError, match="to_catalog"):
-        open_raster(files)
-
-
-def test_files_laid_out_across_dates_read_back_through_their_catalog(
-    tmp_path: Path,
-) -> None:
-    scene = build_raster(times=2)
-    rows = scene.gs.to_catalog(
-        tmp_path, collection=create_test_collection("s2", description="S2")
-    )
-
-    with rows.gs.to_datatree() as tree:
-        restored = tree["s2"].gs.to_dataset()
-
-        assert sorted(restored.data_vars) == ["nir", "red"]
-        assert restored.sizes["time"] == 2
-        np.testing.assert_array_equal(restored.red.values, scene.red.values)
 
 
 @pytest.mark.parametrize("suffix", [".zarr", ".nc"])
@@ -290,3 +276,90 @@ def test_remote_raster_download_lives_until_close_and_is_removed_on_failure(
     with pytest.raises(FileNotFoundError):
         open_raster(f"{bucket}/missing.tif")
     assert not folders[1].exists()
+
+
+@pytest.mark.parametrize("suffix", ["nc", "zarr", "tif"])
+def test_extent_round_trip(tmp_path, suffix):
+    geometry = Geometry(
+        from_wkt(
+            "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0), "
+            "(1 1, 1 2, 2 2, 2 1, 1 1)), ((5 0, 6 0, 5 1, 5 0)))"
+        ),
+        "EPSG:3857",
+    )
+    raster = build_raster().gs.write_extent(geometry)
+    path = tmp_path / f"raster.{suffix}"
+    if suffix == "nc":
+        io.formats.netcdf.write_netcdf(raster, path)
+    elif suffix == "zarr":
+        io.formats.zarr.write_zarr(raster, path)
+    else:
+        io.formats.geotiff.write_cog(raster, path)
+    with io.open_raster(path) as restored:
+        assert restored.gs.region.extent == geometry
+        assert restored.red.gs.region.extent == geometry
+        np.testing.assert_array_equal(restored.red.values, raster.red.values)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "writer"),
+    [
+        ("tif", geotiff.write_cog),
+        ("nc", netcdf.write_netcdf),
+        ("zarr", zarr_io.write_zarr),
+    ],
+)
+@pytest.mark.parametrize("decoded", [False, True])
+def test_both_representations_round_trip_per_variable_packing(
+    tmp_path, suffix, writer, decoded
+):
+    source = build_raster().gs.write_nodata(65535)
+    source = source.gs.write_packing(
+        attrs.CFPacking(fill_value=65535, scale_factor=0.0001, add_offset=-0.1),
+        target=["red"],
+    )
+    source = source.gs.write_packing(
+        attrs.CFPacking(fill_value=65535, scale_factor=0.0002, add_offset=-0.2),
+        target=["nir"],
+    )
+    for name in source.data_vars:
+        source[name].data = np.array([[0, 2000], [3000, 65535]], "uint16")
+    expected = source.gs.mask_and_scale()
+    written = expected if decoded else source
+    path = tmp_path / f"scene.{suffix}"
+
+    writer(written.chunk({"x": 1, "y": 1}), path)
+
+    with io.open_raster(path, mask_and_scale=False) as restored:
+        assert restored.gs.geobox == source.gs.geobox
+        for name in source.data_vars:
+            assert restored[name].dtype == source[name].dtype
+            np.testing.assert_array_equal(restored[name], source[name])
+            assert "scale_factor" not in restored[name].encoding
+            assert (
+                restored[name].attrs["scale_factor"]
+                == source[name].attrs["scale_factor"]
+            )
+            assert restored[name].attrs["_FillValue"] == 65535
+
+    with io.open_raster(path, mask_and_scale=True) as restored:
+        for name in source.data_vars:
+            np.testing.assert_allclose(
+                restored[name], expected[name], atol=1e-7, equal_nan=True
+            )
+            assert "scale_factor" not in restored[name].attrs
+            assert (
+                restored[name].encoding["scale_factor"]
+                == source[name].attrs["scale_factor"]
+            )
+            assert restored[name].encoding["_FillValue"] == 65535
+
+    # Rewriting an externally decoded read must also encode exactly once.
+    rewritten = tmp_path / f"rewritten.{suffix}"
+    with io.open_raster(path, mask_and_scale=True) as loaded:
+        writer(loaded, rewritten)
+    with io.open_raster(rewritten, mask_and_scale=False) as restored:
+        np.testing.assert_array_equal(restored.red, source.red)
+
+    if suffix == "zarr":
+        assert zarr.open_group(path)["red"].fill_value == 65535

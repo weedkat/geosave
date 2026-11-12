@@ -47,8 +47,9 @@ def check_result(page: str, values: dict) -> None:
         expected = (decoded.nir - decoded.red) / (decoded.nir + decoded.red)
         with gs.open_raster("output/ndvi.tif") as saved:
             assert saved.gs.geobox == scene.gs.geobox
+            # The file stores float32; compare at that precision.
             np.testing.assert_allclose(
-                saved.ndvi.values, expected.values, equal_nan=True
+                saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
             )
     elif page == "guides/ingest-files.md":
         with gs.open_raster("prepared/ndvi.tif") as saved:

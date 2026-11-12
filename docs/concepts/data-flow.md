@@ -56,7 +56,7 @@ chooses a union grid nor opens catalog rows for you.
 items = gs.open_vector("catalog.parquet")
 samples = items.gs.sample(collections=["optical"], freq="MS", window=3)
 with samples[0].gs.to_datatree() as tree:
-    scene = tree["optical"].gs.to_dataset()
+    scene = tree["optical"].gs.combine_stac()
     chips = gs.Chips([scene], size=256)
     pixels = chips[0].gs.to_numpy(dtype="float32")
 ```

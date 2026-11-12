@@ -8,6 +8,8 @@ import panel as pn
 from panel.util.parameters import edit_readonly
 
 from .comparison import create_comparison
+from .export import export_map
+from .reflow import Reflow
 from .theme import EXPLORER_THEME, PAGE_STYLE
 
 if TYPE_CHECKING:
@@ -16,15 +18,12 @@ if TYPE_CHECKING:
 # Width of the sidebar, in pixels.
 SIDEBAR_WIDTH = 300
 
-# Pixels the page adds below the map for the attribute tables.
-TABLES_HEIGHT = 480
-
 
 def create_page(explorer: Explorer) -> pn.ui.Page:
     """Lay out the explorer: basemap, layers, comparison and details beside the map."""
     page = pn.ui.Page(
         title="GeoSave",
-        height=explorer.height + TABLES_HEIGHT,
+        height=explorer.height,
         sidebar_width=SIDEBAR_WIDTH,
         sidebar_resizable=True,
         sizing_mode="stretch_width",
@@ -35,15 +34,24 @@ def create_page(explorer: Explorer) -> pn.ui.Page:
     # widget feedback loop that starves raster updates.
     with edit_readonly(page):
         page.busy = False
+    page.header = [
+        pn.ui.FileDownload(
+            callback=lambda: export_map(explorer),
+            filename="geosave-map.html",
+            label="Export map",
+            icon="download",
+            variant="text",
+            size="small",
+            description="Download the current map and legends as HTML.",
+        )
+    ]
     page.sidebar = [create_sidebar(explorer)]
     page.main = [
         pn.ui.Column(
             explorer.status,
-            explorer.map,
+            Reflow(object=explorer.map, sizing_mode="stretch_both"),
             explorer.tables,
-            sizing_mode="stretch_width",
-            min_width=300,
-            styles={"flex": "1 1 300px", "min-width": "0"},
+            sizing_mode="stretch_both",
             margin=0,
         )
     ]
@@ -81,10 +89,7 @@ def create_sidebar(explorer: Explorer) -> pn.ui.Column:
         pn.ui.Divider(),
         create_comparison(explorer.comparison),
         explorer.details,
-        width=SIDEBAR_WIDTH,
-        min_width=260,
-        scroll=True,
-        height=explorer.height + 350,
+        sizing_mode="stretch_width",
         margin=0,
     )
 

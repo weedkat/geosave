@@ -139,12 +139,13 @@ class AttributeTable(pn.ui.Tabulator):
         date = row.get("datetime", row.get("start_datetime"))
         if pd.notna(date) and hasattr(date, "strftime"):
             title += f" · {date:%Y-%m-%d}"
-        tree = row.gs.to_datatree()
+        import odc.stac
+
         # Viewport reads resample onto the screen anyway, so the row is shown on
-        # its finest node grid to keep the most detail; reads stay lazy.
-        nodes = tree.gs.datasets.values()
-        finest = min(nodes, key=lambda node: abs(node.gs.resolution.x))
-        scene = tree.gs.to_dataset(grid=finest.gs.geobox)
+        # its finest stated grid to keep the most detail; reads stay lazy.
+        (parsed,) = odc.stac.parse_items([row.gs.to_item()])
+        finest = parsed.geoboxes()[0]
+        scene = self.data.iloc[[position]].gs.to_dataset(finest)
         return RasterLayer(scene, row=row, name=title)
 
     @param.depends("raster_rows", watch=True)

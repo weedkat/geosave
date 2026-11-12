@@ -27,7 +27,7 @@ def test_statistics_compute_shared_band_sources_once(as_array):
     )
     if as_array:
         # Conversion requires a spatial pair; a singleton y axis adds no pixels.
-        source = source.expand_dims(y=[0]).gs.to_dataarray()
+        source = source.expand_dims(y=[0]).gs.to_array()
 
     table = source.gs.statistics()
 
@@ -117,7 +117,7 @@ def test_statistics_release_each_rasters_source_before_reading_on():
 
 def _labels(values):
     band = xr.DataArray(np.array(values, dtype="uint8"), dims=("y", "x"))
-    band = band.gs.write_legend({0: "water", 1: "trees", 2: "crops"})
+    band = band.gs.write_flags({0: "water", 1: "trees", 2: "crops"})
     return band.gs.write_nodata(255)
 
 
@@ -143,7 +143,7 @@ def test_class_percent_keep_listed_classes_that_never_occur():
 def test_class_percent_refuse_a_band_without_classes():
     band = xr.DataArray([[1.0, 2.0]], dims=("y", "x"))
 
-    with pytest.raises(ValueError, match="legend"):
+    with pytest.raises(ValueError, match="classes"):
         band.gs.class_percent()
 
 
@@ -171,7 +171,7 @@ def test_class_percent_read_every_tile_in_one_compute():
 
     values = da.from_delayed(pixels(), shape=(4,), dtype="uint8")
     band = xr.DataArray(values, dims="x")
-    band = band.gs.write_legend({0: "water", 1: "trees"}).gs.write_nodata(255)
+    band = band.gs.write_flags({0: "water", 1: "trees"}).gs.write_nodata(255)
 
     percent = band.gs.class_percent()
 
@@ -181,7 +181,7 @@ def test_class_percent_read_every_tile_in_one_compute():
 
 def test_class_percent_drop_the_class_that_names_the_fill():
     band = xr.DataArray(np.array([[0, 1, 255]], dtype="uint8"), dims=("y", "x"))
-    band = band.gs.write_legend({0: "water", 1: "trees", 255: "unlabelled"})
+    band = band.gs.write_flags({0: "water", 1: "trees", 255: "unlabelled"})
 
     percent = band.gs.write_nodata(255).gs.class_percent()
 

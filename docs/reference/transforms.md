@@ -53,7 +53,7 @@ chip = scene.gs.crop_to_grid(grid, constant_value=0)
 warped = scene.gs.reproject(grid, resampling="bilinear")
 clear = scene.gs.mask(scene.scl.isin([4, 5, 6, 7]))
 decoded = clear.gs.mask_and_scale()
-stored = decoded.gs.scale_and_fill()
+decoded.gs.to_netcdf("decoded.nc")
 ```
 
 `crop_to_grid` keeps exact aligned pixel placement and can pad beyond the source
@@ -64,8 +64,8 @@ reconstruct affine spatial coordinates for you.
 
 Masking uses each variable's fill declaration unless a fill is supplied.
 Reprojection is explicit; categorical bands reject blending kernels.
-`scale_and_fill` checks integer conversion lazily and restores CF attrs without
-writing a file. Native NetCDF/Zarr writers retain their own encoding behavior.
+Writers use native CF encoding when saving decoded values. Choose output
+encoding for derived data; there is no public in-memory reverse conversion.
 
 ## Geometry and class colors
 
@@ -88,12 +88,13 @@ preserves lazy raster arrays.
 | `temporal.interpolate` | `.gs.composite(..., interpolation="linear")` or native `.interpolate_na(...)` |
 | `temporal.select` | Native `.sel` on labels, or on `start_datetime`/`end_datetime` for overlap |
 | `temporal.composite` | Decode, then `.gs.composite(...)`; `skip_nodata` is removed |
-| `packing.mask_and_scale`, `packing.scale_and_fill` | Existing `.gs.mask_and_scale()`, `.gs.scale_and_fill()` |
+| `packing.mask_and_scale` | `.gs.mask_and_scale()` |
+| `.gs.scale_and_fill()` | Write decoded values with their native CF encoding; writers own encoding |
 | `nodata.mask` | `.gs.mask(...)` |
 | `nodata.read_mask` | Pass the boolean mask directly to `.gs.mask(...)` |
 | `extent.crop`, `extent.crop_to_grid` | `.gs.crop(...)`, `.gs.crop_to_grid(...)` |
 | `extent.pad` | Explicit aligned grid with `.gs.crop_to_grid(...)`; no standalone geospatial pad |
-| `warp.reproject`, `warp.read_pixels` | `.gs.reproject(...)`, Dataset `.gs.read_pixels(...)` |
+| `warp.reproject` | `.gs.reproject(...)` |
 | `vector.vectorize`, `vector.rasterize` | Raster `.gs.vectorize(...)`, vector `.gs.rasterize(...)` |
 | `color.colorize` | `.gs.colorize()` |
 

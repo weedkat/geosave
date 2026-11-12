@@ -4,6 +4,7 @@ from tests.geodata.conftest import create_test_collection
 from bokeh.models import HoverTool
 
 from geosave.geodata.viz.explore import Explorer, VectorLayer
+from tests.conftest import place
 
 
 def test_hover_preserves_attribute_names_and_datetime_offsets(fields):
@@ -200,19 +201,32 @@ def test_catalog_display_aligns_every_grid_onto_the_finest_node(tmp_path, shifte
     reference = build_raster().gs.geobox
     fine_grid = GeoBox((4, 4), reference.transform * Affine.scale(0.5), reference.crs)
     fine = xr.Dataset({"red": (("y", "x"), np.ones((4, 4), dtype="uint16"))})
-    fine = fine.gs.write_grid(fine_grid).gs.write_nodata(0)
+    fine = fine.pipe(place, fine_grid).gs.write_nodata(0)
     grid = fine_grid.zoom_out(2)
     if shifted:
         grid = GeoBox(grid.shape, Affine.translation(5, 0) * grid.transform, grid.crs)
     coarse = xr.Dataset(
         {"height": (("y", "x"), np.full(grid.shape, 7, dtype="uint16"))}
     )
-    coarse = coarse.gs.write_grid(grid).gs.write_nodata(0)
-    tree = xr.DataTree.from_dict({"fine": fine, "coarse": coarse})
-    catalog = tree.gs.to_catalog(
-        tmp_path,
-        collection=create_test_collection("optical", description="Optical"),
+    coarse = coarse.pipe(place, grid).gs.write_nodata(0)
+    from geosave.geodata.io.formats.geotiff import write_cog
+    from geosave.geodata.stac.catalog import create_catalog
+    from geosave.geodata.stac.publish import create_stac_item
+
+    paths = {
+        "red": write_cog(fine, tmp_path / "red.tif"),
+        "height": write_cog(coarse, tmp_path / "height.tif"),
+    }
+    item = create_stac_item(
+        paths,
+        id="scene",
+        collection="optical",
         input_datetime=datetime(2025, 1, 1, tzinfo=UTC),
+        with_proj=True,
+        with_raster=True,
+    )
+    catalog = create_catalog(
+        [item], collections=[create_test_collection("optical", description="Optical")]
     )
     viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
     layer = viewer.table

@@ -19,6 +19,7 @@ pixels on a grid; real files supply their own georeferencing.
 ```python
 import numpy as np
 import xarray as xr
+from odc.geo.xr import xr_coords
 from odc.geo.geobox import GeoBox
 
 import geosave as gs
@@ -35,8 +36,8 @@ scene = xr.Dataset({
     "red": (("y", "x"), red),
     "nir": (("y", "x"), nir),
     "label": (("y", "x"), label),
-}).gs.write_grid(grid)
-scene.gs.to_cog(".", split_asset=(), format_paths="training-scene.tif", overwrite=True)
+}).assign_coords(xr_coords(grid))
+scene.gs.to_array(dtype="float32").gs.to_cog("training-scene.tif", overwrite=True)
 ```
 
 For the next tutorial, all three variables are stored in one GeoTIFF. A TIFF

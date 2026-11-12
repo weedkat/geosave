@@ -48,16 +48,16 @@ attrs for an Asset; the loader applies them to the raster.
 ## STAC levels and their GeoSave counterparts
 
 A Collection, and the properties all of a raster's Items share, live in the
-root `StacMetadata` attrs; each date's Item properties live on the
+root `StacCollection` attrs; each date's Item properties live on the
 `stac_properties` coordinate. An Item describes one observation, an Asset a
 saved raster, and a band one variable. Translators work with native Datasets
 and asset paths.
 
-::: geosave.geodata.attrs.StacMetadata
+::: geosave.geodata.attrs.StacCollection
 
 ::: geosave.geodata.stac.item
     options:
-      members: [ItemTime, normalize_time, create_item, select_item_properties, read_timespan, read_instant, read_variable_names, TIMELESS]
+      members: [ItemTime, normalize_time, create_item, select_item_properties, read_timespan, read_instant, TIMELESS]
 
 ::: geosave.geodata.stac.raster
     options:

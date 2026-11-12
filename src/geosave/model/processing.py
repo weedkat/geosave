@@ -37,7 +37,7 @@ def to_tensor(
     import torch
 
     if isinstance(raster, xr.Dataset):
-        raster = raster[list(raster.gs.raster_variables)]
+        raster = raster[list(raster.gs.variables)]
         dimensions = {
             frozenset(variable.dims) for variable in raster.data_vars.values()
         }
@@ -174,7 +174,7 @@ def to_raster(
     """
     import torch
 
-    reference.gs.validate(georeferenced=True)
+    reference.gs.validate()
     values = (
         value.detach().cpu().numpy()
         if isinstance(value, torch.Tensor)
@@ -191,7 +191,10 @@ def to_raster(
         raise ValueError(
             "output shape differs from the reference grid; supply its actual grid explicitly"
         )
-    return xr.DataArray(values, dims=dims, name=name).gs.write_grid(grid)
+    from odc.geo.xr import wrap_xr
+
+    placed = wrap_xr(values, grid, dims=tuple(dims), axis=dims.index("y"))
+    return placed.rename(name)
 
 
 def select_variables(raster: xr.Dataset, *, names: Sequence[str]) -> xr.Dataset:
@@ -295,11 +298,11 @@ def validate_raster(
             "Convert a DataArray with to_dataset or select a Dataset from the DataTree."
         )
 
-    raster.gs.validate(georeferenced=True, affine=True)
+    raster.gs.validate()
 
     if dims is not None:
         expected = tuple(dims)
-        for name in raster.gs.raster_variables:
+        for name in raster.gs.variables:
             variable = raster[name]
             if variable.dims != expected:
                 raise ValueError(

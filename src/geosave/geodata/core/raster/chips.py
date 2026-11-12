@@ -79,7 +79,7 @@ class Chips:
         self._tilers: list[Tiler] = []
         self._offsets = [0]
         for sample in self.xarray:
-            sample.gs.validate(affine=True)
+            sample.gs.validate()
             grid = cast("GeoBox", sample.gs.geobox)
             tiler = Tiler(
                 data_shape=tuple(grid.shape),
@@ -155,7 +155,7 @@ class Chips:
         Returns:
             One float32 NumPy array per sample, or None for a sample without
             predictions. Merger normalization fills uncovered pixels with zero.
-            Place an output with ``xr.DataArray(...).gs.write_grid(sample.gs.geobox)``.
+            Place an output with ``odc.geo.xr.wrap_xr(output, sample.gs.geobox)``.
             Merging allocates full outputs in memory; it is not a streaming writer.
 
         Raises:

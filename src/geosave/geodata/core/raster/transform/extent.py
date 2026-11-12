@@ -9,7 +9,8 @@ import xarray as xr
 from odc.geo import SomeCRS
 from odc.geo.geobox import GeoBox
 from odc.geo.geom import BoundingBox, Geometry
-from ..utils.grid import read_window
+from odc.geo.roi import roi_is_empty
+from odc.geo.xr import xr_coords
 
 type Padding = Literal["constant", "edge", "reflect", "wrap"]
 type Region = Geometry | BoundingBox | gpd.GeoSeries | gpd.GeoDataFrame
@@ -59,12 +60,11 @@ def crop[T: (xr.DataArray, xr.Dataset)](
     """Crop one raster to a CRS-bearing region, preserving declared extent."""
     from odc.geo.xr import rasterize
 
-    raster.gs.validate(georeferenced=True)
+    raster.gs.validate()
     footprint = _read_geometry(region).to_crs(cast("SomeCRS", raster.gs.crs))
     cut = raster.odc.crop(footprint, apply_mask=False)
     cut.encoding.pop("source", None)
     if mask:
-        cut.gs.validate(affine=True)
         # Rasterization follows the grid by position, avoiding coordinate drift.
         inside = rasterize(footprint, cast("GeoBox", cut.gs.geobox)).values
         cut = cut.gs.mask(inside)
@@ -79,21 +79,28 @@ def crop_to_grid[T: (xr.DataArray, xr.Dataset)](
     constant_value: int | float = 0,
 ) -> T:
     """Return pixels on an exact aligned grid, clipping declared extent."""
-
-    raster.gs.validate(affine=True)
+    raster.gs.validate()
     source = cast("GeoBox", raster.gs.geobox)
-    slices, widths = read_window(source, geobox)
-    dims = cast("tuple[str, str]", raster.gs.spatial_dims)
-    window = raster.isel(dict(zip(dims, slices, strict=True)))
-    axis_attrs = {}
-    for dim in dims:
-        axis_attrs[dim] = window[dim].attrs
-    window = window.drop_vars(list(axis_attrs))
-    selected = _pad_pixels(
-        window, dict(zip(dims, widths, strict=True)), mode, constant_value
-    )
-    selected = selected.gs.write_grid(geobox)
-    for dim, metadata in axis_attrs.items():
-        selected[dim].attrs = {**metadata, **selected[dim].attrs}
+    try:
+        rows, cols = source.overlap_roi(geobox)
+        inner_rows, inner_cols = geobox.overlap_roi(source)
+    except ValueError as error:
+        raise ValueError(
+            "geobox is not pixel-aligned with the raster: it needs the same CRS "
+            "and pixel size and a whole-pixel offset; reproject otherwise"
+        ) from error
+    if roi_is_empty((rows, cols)):
+        raise ValueError("geobox does not overlap the raster")
+
+    y, x = cast("tuple[str, str]", raster.gs.spatial_dims)
+    height, width = geobox.shape
+    window = raster.isel({y: rows, x: cols})
+    widths = {
+        y: (inner_rows.start, height - inner_rows.stop),
+        x: (inner_cols.start, width - inner_cols.stop),
+    }
+    window = window.drop_vars([y, x])
+    padded = _pad_pixels(window, widths, mode, constant_value)
+    selected = padded.assign_coords(xr_coords(geobox, dims=(y, x)))
     selected.encoding.pop("source", None)
     return selected.gs.clip_extent(geobox.extent)

@@ -23,13 +23,13 @@ Examples:
         >>> sentinel = xr.DataTree.from_dict({"s2/r10m": bands_10m, "s2/r20m": bands_20m})
         >>> sentinel.gs.geobox is None
         True
-        >>> sentinel.gs.to_dataset(grid="s2/r10m").gs.resolution.x
+        >>> sentinel.gs.reproject(bands_10m.gs.geobox).gs.geobox.resolution.x
         10.0
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, TYPE_CHECKING, Unpack, cast
 
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
@@ -48,12 +48,11 @@ from geosave.geodata.errors import RasterValidationError
 if TYPE_CHECKING:
     import geopandas as gpd
     import pystac
-    from collections.abc import Callable
+    from odc.geo import SomeCRS, SomeResolution
     from odc.geo.geom import Geometry
     import holoviews as hv
     import torch
     from numpy.typing import DTypeLike
-    from odc.geo.gcp import GCPGeoBox
 
     from geosave.geodata import Dataset, DataTree, GeoDataFrame
     from geosave.geodata.core.region import GeoRegion
@@ -64,7 +63,6 @@ if TYPE_CHECKING:
     from geosave.geodata.io.formats.zarr import ZarrWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
     from .transform.warp import Resampling
-    from xarray.core.types import CombineAttrsOptions
     from geosave.geodata.utils.datetime import DateRange
 
 
@@ -103,7 +101,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
         return shared
 
     @property
-    def geobox(self) -> GeoBox | GCPGeoBox | None:
+    def geobox(self) -> GeoBox | None:
         """Return the common grid, or None for missing or differing values."""
         shared = None
         for dataset in self.datasets.values():
@@ -116,124 +114,95 @@ class GeoDataTree(GeoRaster["DataTree"]):
     def validate(
         self,
         *,
-        georeferenced: bool = False,
-        affine: bool = False,
         same_grid: bool = False,
-        same_dims: bool = False,
-        same_footprint: bool = False,
-        shared_time: bool = False,
+        stac_pattern: bool = False,
     ) -> None:
-        """Validate each raster and optionally compare spatial structure.
+        """Check every raster node, and the STAC layout when an operation needs it.
 
-        Unreferenced pixels and different grids are valid by default.
-        Spatial coordinates and existing placement are always checked without
-        reading pixels. Empty inputs fail.
+        Each data node needs a grid ODC recognizes, with a CRS. Empty inputs fail.
 
         Args:
-            georeferenced: Require placement and a CRS for every raster.
-            affine: Require one affine `GeoBox` on spatial axes shared by all
-                nodes, so `gs.geobox` is a GeoBox. Implies `same_grid`
-                and `same_dims`.
-            same_grid: Require known, equal ODC grids across all nodes.
-            same_dims: Require matching spatial axis names across all nodes.
-            same_footprint: Require every node to cover the same ground, on
-                any grids: each footprint, its declared extent or else its
-                grid extent, lies within the others grown by one pixel of the
-                coarsest grid.
-            shared_time: Require nodes below this one to define no `time` of
-                their own, so they inherit one timeline that xarray keeps
-                aligned. A lone data node may carry its own.
+            same_grid: Require every data node on one grid, so they merge
+                into one Dataset.
+            stac_pattern: Require the STAC roles counted from the leaves:
+                every node holding data is a leaf (an asset), every leaf sits
+                at one depth below this node, and that depth is at most 3
+                (asset ← Item ← collection), so a whole tree, one collection
+                or one Item validates, also after an operation re-roots it.
 
         Raises:
-            RasterValidationError: A raster is invalid or a requested
-                guarantee fails. The error identifies the node and variable.
+            RasterValidationError: A raster is invalid or the layout differs.
+                The error names the node and how to fix it.
 
         Examples:
-            >>> tree.gs.validate(georeferenced=True, same_grid=True)
+            >>> tree.gs.validate(stac_pattern=True)
         """
-        same_grid = same_grid or affine
-        same_dims = same_dims or affine
         datasets = self.datasets
         self._validate_nonempty(datasets)
-        reference = None
         for path, dataset in datasets.items():
             try:
-                dataset.gs.validate(
-                    georeferenced=georeferenced,
-                    affine=affine,
-                    same_grid=same_grid,
-                    same_dims=same_dims,
-                )
-                if reference is None:
-                    reference = dataset
-                    continue
-                if same_dims:
-                    self._validate_same_dims(dataset, reference)
-                if same_grid:
-                    self._validate_same_grid(dataset, reference)
+                dataset.gs.validate()
             except RasterValidationError as error:
                 error.path = path
                 raise
-        if same_footprint:
-            self._validate_same_footprint(datasets)
-        if shared_time and len(datasets) > 1:
-            for path, node in self._data.subtree_with_keys:
-                # This node is where shared time belongs; only those below it are checked.
-                if path == "." or path not in datasets:
-                    continue
-                if TIME_COORDINATE in node.to_dataset(inherit=False).coords:
-                    raise RasterValidationError(
-                        "This node defines its own time. Move the time its sibling "
-                        "nodes share onto their common parent, which they then inherit.",
-                        path=path,
-                    )
+        if same_grid:
+            self._validate_same_grid(datasets)
+        if stac_pattern:
+            self._validate_stac_pattern()
 
-    def _validate_same_footprint(self, datasets: Mapping[str, Dataset]) -> None:
-        """Require every node's footprint to match the first within one coarse pixel."""
-        footprints = {}
-        tolerance = 0.0
-        for path, dataset in datasets.items():
-            footprints[path] = dataset.gs.region.extent
-            grid = dataset.gs.geobox
-            if grid is not None:
-                resolution = grid.resolution
-                tolerance = max(tolerance, abs(resolution.x), abs(resolution.y))
-        reference_path, reference = next(iter(footprints.items()))
-        # The tolerance is in the first node's units, where its CRS measures.
-        for path, footprint in footprints.items():
-            other = footprint.to_crs(reference.crs)
-            covers = reference.buffer(tolerance).contains(other)
-            covered = other.buffer(tolerance).contains(reference)
-            if not (covers and covered):
+    def _validate_stac_pattern(self) -> None:
+        """Require STAC roles counted from the leaves: asset ← Item ← collection."""
+        hint = (
+            "A STAC tree holds data only on its leaves, one asset each, at most "
+            "collection/item/asset deep; load one with stac.load_datatree(items) "
+            "or catalog.gs.to_datatree()."
+        )
+        first_by_depth: dict[int, str] = {}
+        for path, node in self._data.subtree_with_keys:
+            if node.children:
+                if node.data_vars:
+                    raise RasterValidationError(
+                        f"This node holds data but is not a leaf. {hint}", path=path
+                    )
+                continue
+            if path == ".":
+                continue
+            depth = path.count("/") + 1
+            if depth > 3:
                 raise RasterValidationError(
-                    f"This node covers different ground than {reference_path!r}. "
-                    "Select nodes of one place, or crop them to a shared region.",
+                    f"This leaf sits deeper than collection/item/asset. {hint}",
                     path=path,
                 )
+            first_by_depth.setdefault(depth, path)
+        if len(first_by_depth) > 1:
+            depths = " and ".join(str(depth) for depth in sorted(first_by_depth))
+            raise RasterValidationError(
+                f"Leaves sit at depths {depths}, so their roles differ. {hint}",
+                path=first_by_depth[max(first_by_depth)],
+            )
+
+    def _validate_same_grid(self, datasets: Mapping[str, Dataset]) -> None:
+        """Require one grid across the data nodes, naming every grid when they differ."""
+        nodes_by_grid: dict[GeoBox | None, list[str]] = {}
+        for path, dataset in datasets.items():
+            nodes_by_grid.setdefault(dataset.gs.geobox, []).append(path)
+        if len(nodes_by_grid) == 1:
+            return
+        lines = []
+        for paths in nodes_by_grid.values():
+            lines.append(", ".join(paths))
+        first_other = list(nodes_by_grid.values())[1][0]
+        raise RasterValidationError(
+            f"Nodes are on {len(nodes_by_grid)} grids ({'; '.join(lines)}). Align them "
+            "with tree.gs.reproject(geobox).",
+            path=first_other,
+        )
 
     def _validate_nonempty(self, datasets: Mapping[str, Dataset]) -> None:
         """Require at least one data-bearing node."""
         if not datasets:
             raise RasterValidationError(
                 "There are no raster variables to validate. Select or load raster data first."
-            )
-
-    def _validate_same_dims(self, dataset: Dataset, reference: Dataset) -> None:
-        """Require spatial axis names to match the first node."""
-        if dataset.gs.spatial_dims != reference.gs.spatial_dims:
-            raise RasterValidationError(
-                "Nodes use different spatial dimensions. Rename their spatial axes "
-                "consistently, for example with to_yx, before combining them.",
-                variable=str(next(iter(dataset.data_vars))),
-            )
-
-    def _validate_same_grid(self, dataset: Dataset, reference: Dataset) -> None:
-        """Require equal known ODC placement."""
-        if dataset.gs.geobox != reference.gs.geobox:
-            raise RasterValidationError(
-                "Nodes do not share one grid. Pass grid= to to_dataset with a node "
-                "path or GeoBox to reproject them onto it.",
-                variable=str(next(iter(dataset.data_vars))),
             )
 
     @property
@@ -324,10 +293,9 @@ class GeoDataTree(GeoRaster["DataTree"]):
         Different grids need no alignment. This inspects metadata without
         reading pixels; missing geographic coverage raises ValueError.
         """
-        from geosave.geodata import attrs
         from geosave.geodata.core.region import GeoRegion
 
-        extent = attrs.Extent.from_attrs(self._data.attrs)
+        extent = attrs.ACDDExtent.from_attrs(self._data.attrs)
         if extent is not None:
             return GeoRegion(extent.to_geometry(), timespan=self.timespan)
         if not self._data.children:
@@ -367,68 +335,9 @@ class GeoDataTree(GeoRaster["DataTree"]):
                 continue
             # .dataset would return a DatasetView whose attrs still write through here.
             dataset = node.to_dataset(inherit="all_coords")
-            if dataset.gs.raster_variables:
+            if dataset.gs.variables:
                 rasters[path] = cast("Dataset", dataset)
         return rasters
-
-    def group_grid(self) -> DataTree:
-        """Merge sibling raster nodes on one grid into one node named by its pixel size.
-
-        Reads coordinates only. Nodes without data keep their coordinates and
-        attrs, so asset nodes still inherit what their collection node states.
-
-        Returns:
-            Tree with one data node per grid under each parent, named like
-            `r10m`.
-
-        Raises:
-            ValueError: Two different grids under one parent share a pixel
-                size, or merged nodes name one variable twice.
-
-        Examples:
-            >>> list(tree.gs.datasets)
-            ['s2/B04', 's2/B08', 's2/B11']
-            >>> list(tree.gs.group_grid().gs.datasets)
-            ['s2/r10m', 's2/r20m']
-        """
-        from geosave.geodata.io.paths import format_resolution
-
-        nodes = {}
-        grids = {}
-        for path, node in self._data.subtree_with_keys:
-            own = node.to_dataset(inherit=False)
-            if path == "." or not own.data_vars:
-                nodes["/" if path == "." else path] = own
-                continue
-            geobox = node.to_dataset(inherit="all_coords").gs.geobox
-            name = format_resolution(geobox)
-            parent = path.rsplit("/", 1)[0] if "/" in path else None
-            target = name if parent is None else f"{parent}/{name}"
-            if target not in grids:
-                grids[target] = geobox
-                nodes[target] = own
-                continue
-            if grids[target] != geobox:
-                raise ValueError(
-                    f"{target!r} would hold two different grids; group them by hand"
-                )
-            repeated = set(nodes[target].data_vars) & set(own.data_vars)
-            if repeated:
-                raise ValueError(f"{target!r} would hold {sorted(repeated)} twice")
-            nodes[target] = xr.merge(
-                [nodes[target], own], join="exact", combine_attrs="drop_conflicts"
-            )
-        return cast("DataTree", xr.DataTree.from_dict(nodes))
-
-    def _map_variables(
-        self, change: Callable[[xr.DataArray], xr.DataArray]
-    ) -> DataTree:
-        """Apply one per-variable change to every raster node's variables."""
-        # No pixel moves, so the tree keeps its root and its coordinates.
-        tree = self._data.map_over_datasets(
-            lambda raster: raster.gs._map_variables(change)
-        )
-        return cast("DataTree", tree)
 
     def crop(
         self, region: Geometry | gpd.GeoSeries | gpd.GeoDataFrame, *, mask: bool = True
@@ -448,115 +357,111 @@ class GeoDataTree(GeoRaster["DataTree"]):
         """
         tree = self._data.map_over_datasets(
             lambda raster: (
-                raster.gs.crop(region, mask=mask)
-                if raster.gs.raster_variables
-                else raster
+                raster.gs.crop(region, mask=mask) if raster.gs.variables else raster
             )
         )
         return cast("DataTree", tree)
 
-    def to_dataset(
+    def reproject(
         self,
-        grid: str | GeoBox | None = None,
+        how: GeoBox | SomeCRS,
         *,
-        resampling: Resampling | Mapping[str, Resampling] = "nearest",
-        combine_attrs: CombineAttrsOptions = "drop_conflicts",
-    ) -> Dataset:
-        """Merge this node and its raster descendants into one Dataset.
+        resolution: SomeResolution | None = None,
+        resampling: Resampling = "nearest",
+    ) -> DataTree:
+        """Reproject every raster node with `Dataset.gs.reproject`.
 
-        Without `grid`, the nodes must already share one affine georeferenced
-        grid. With it, every node is first reprojected onto that grid.
-        Variable names must be distinct and coordinates compatible.
+        A GeoBox puts every node on that one grid; a CRS sizes each node's own
+        grid, as `Dataset.gs.reproject` does.
 
         Args:
-            grid: Node path relative to this node, whose grid every node lands
-                on, or an exact GeoBox. None keeps the shared grid.
-            resampling: One kernel, or a mapping from variable name to kernel
-                where `"*"` answers the rest. Used only with `grid`.
-            combine_attrs: Native attr policy or callable; omitted keys warn.
+            how: GeoBox or CRS, as for `Dataset.gs.reproject`.
+            resolution: Output pixel size for a CRS, as for `Dataset.gs.reproject`.
+            resampling: One ODC resampling method for every raster node.
 
         Returns:
-            Dataset with merged variables. Each raster's attrs take precedence
-            over this node's attrs.
-
-        Raises:
-            KeyError: `grid` names no raster node, or a `resampling` mapping
-                names neither a variable nor `"*"`.
-            RasterValidationError: No raster data exists, a raster has no usable
-                grid, or, without `grid`, grids differ. The error names the node.
-            ValueError: Coordinates or dimensions differ, variable names
-                collide, or `resampling` would blend class codes.
+            Tree with unchanged hierarchy and reprojected raster nodes.
 
         Examples:
-            >>> scene = tree["s2"].gs.to_dataset(grid="r10m", resampling={"scl": "mode", "*": "bilinear"})
-            >>> scene.gs.resolution.x
-            10.0
+            >>> aligned = tree.gs.reproject(labels.gs.geobox)
         """
-        from functools import partial
-        from geosave.geodata.conventions import GRID_MAPPING
 
-        rasters = self.datasets
-        try:
-            self._validate_nonempty(rasters)
-        except RasterValidationError as error:
-            error.operation = "Cannot combine the selected rasters into a Dataset"
-            raise
-        if grid is not None:
-            target = grid
-            if isinstance(grid, str):
-                rasters[grid].gs.validate(georeferenced=True, affine=True)
-                target = cast("GeoBox", rasters[grid].gs.geobox)
-            for path, raster in rasters.items():
-                warped = raster.gs.reproject(target, resampling=resampling)
-                rasters[path] = cast("Dataset", warped)
-        try:
-            for path, raster in rasters.items():
-                raster.gs.validate(georeferenced=True, affine=True)
-            first = next(iter(rasters.values()))
-            for path, raster in rasters.items():
-                if raster.gs.geobox != first.gs.geobox:
-                    raise RasterValidationError(
-                        "Nodes do not share one grid. Pass grid= with a node path "
-                        "or GeoBox to reproject them onto it.",
-                        path=path,
-                    )
-        except RasterValidationError as error:
-            error.operation = "Cannot combine the selected rasters into a Dataset"
-            raise
-        nodes = []
-        names = set()
-        dimensions = first[first.gs.raster_variables[0]].dims
-        for path, raster in rasters.items():
-            duplicates = names.intersection(raster.gs.raster_variables)
-            if duplicates:
-                raise ValueError(
-                    f"duplicate variables {sorted(duplicates)} in {path!r}"
-                )
-            names.update(raster.gs.raster_variables)
-            if any(
-                raster[name].dims != dimensions for name in raster.gs.raster_variables
+        def move(raster: xr.Dataset) -> xr.Dataset:
+            if not raster.gs.variables:
+                return raster
+            return raster.gs.reproject(
+                how, resolution=resolution, resampling=resampling
+            )
+
+        return cast("DataTree", self._data.map_over_datasets(move))
+
+    def combine_stac(self) -> Dataset:
+        """Combine a STAC Item, or a collection on one grid, into one Dataset.
+
+        An Item merges its asset leaves into one observation. A collection
+        merges each Item that way, then concatenates the Items along `time`
+        in tree order. The selected node's attrs, such as its
+        Collection, sit beneath the merged ones. Several collections keep
+        independent timelines, so the tree holds them.
+
+        Returns:
+            Lazy Dataset of the Item, or of the collection along `time`.
+
+        Raises:
+            RasterValidationError: The tree is not one Item or collection on one
+                grid (align with `tree.gs.reproject`), or an Item lacks a
+                variable another holds.
+
+        Examples:
+            >>> tree["s2"].gs.combine_stac()
+            <xarray.Dataset> Dimensions: (time: 2, y: 64, x: 64) ...
+            >>> tree["s2/S2B_33UUP_20250115"].gs.combine_stac()
+            <xarray.Dataset> Dimensions: (y: 64, x: 64) ...
+        """
+        self.validate(same_grid=True, stac_pattern=True)
+        depth = self._data.leaves[0].level - self._data.level
+        if depth == 3:
+            raise RasterValidationError(
+                "Collections keep independent timelines, so the tree holds them. "
+                "Combine one collection, such as tree['s2'].gs.combine_stac()."
+            )
+        items = [self._data] if depth < 2 else list(self._data.children.values())
+
+        observations = []
+        for item in items:
+            assets = []
+            for leaf in item.leaves:
+                assets.append(leaf.to_dataset(inherit="all_coords"))
+            observation = xr.merge(
+                assets,
+                join="exact",
+                compat="no_conflicts",
+                combine_attrs="drop_conflicts",
+            )
+            if observations and set(observation.data_vars) != set(
+                observations[0].data_vars
             ):
-                raise ValueError(
-                    f"{path!r} requires equal variable dimensions; no broadcasting"
+                raise RasterValidationError(
+                    "Items of one collection hold the same variables; this Item holds "
+                    f"{sorted(observation.data_vars)}.",
+                    path=item.name,
                 )
-            # Grid equality was checked above. Normalize equivalent CRS placeholders.
-            if GRID_MAPPING in raster.coords and GRID_MAPPING in first.coords:
-                raster = raster.assign_coords(
-                    {GRID_MAPPING: first[GRID_MAPPING].variable}
-                )
-            raster = raster.gs.write_crs()
-            if not raster.coords.to_dataset().equals(first.coords.to_dataset()):
-                raise ValueError(
-                    f"{path!r} requires equal coordinates; select observations first"
-                )
-            nodes.append(raster.assign_attrs({**self._data.attrs, **raster.attrs}))
-        merged = xr.merge(
-            nodes,
-            join="exact",
-            compat="equals",
-            combine_attrs=partial(attrs.combine_attrs, policy=combine_attrs),
+            observations.append(observation)
+
+        combined = observations[0]
+        if depth == 2:
+            # "different" lays each Item's own scalars, as stac_properties, along time.
+            combined = xr.concat(
+                observations,
+                dim=TIME_COORDINATE,
+                join="exact",
+                coords="different",
+                compat="no_conflicts",
+                combine_attrs="drop_conflicts",
+            )
+        return cast(
+            "Dataset", combined.assign_attrs({**self._data.attrs, **combined.attrs})
         )
-        return cast("Dataset", merged)
 
     def plot(self, *, cols: int = 1, xlabel: str | None = None) -> hv.Layout:
         """Draw every group down the page.
@@ -577,7 +482,7 @@ class GeoDataTree(GeoRaster["DataTree"]):
         Raises:
             ValueError: A group names nothing to draw; name its channels with
                 `gs.write_rgb` first or plot it alone with
-                `tree["<collection>"].gs.to_dataset().gs.plot()`.
+                `tree["<collection>"].gs.combine_stac().gs.plot()`.
 
         Examples:
             >>> hv.save(scene.gs.plot(), "scene.png")
@@ -655,159 +560,69 @@ class GeoDataTree(GeoRaster["DataTree"]):
             for name, raster in self.datasets.items()
         }
 
-    def _read_rasters_by_path(self) -> dict[str, Dataset]:
-        """Read every raster node with the attrs its ancestors state for it."""
-        rasters = {}
-        for path, dataset in self.datasets.items():
-            node = self._data if path == "." else self._data[path]
-            metadata = dict(dataset.attrs)
-            # Collection metadata sits on parent nodes; a node's own attrs win.
-            while node is not self._data and node.parent is not None:
-                node = node.parent
-                metadata = {**node.attrs, **metadata}
-            rasters[path] = dataset.assign_attrs(metadata)
-        return rasters
-
-    def to_item(
-        self,
-        path: Location,
-        *,
-        split_item: Sequence[str] = ("time",),
-        split_asset: Sequence[str] = ("variable",),
-        id: str | None = None,
-        format_id: str | None = None,
-        format_paths: str | None = None,
-        collection: pystac.Collection | None = None,
-        **options: Any,
-    ) -> pystac.Item:
-        """Save COG assets and return one native PySTAC Item.
-
-        Args:
-            path: Output folder or filesystem URL.
-            split_item: Observation dimensions; default time, ignored when absent.
-            split_asset: Dimensions partitioning assets within an Item;
-                "variable" gives each data variable its own asset.
-            id: Explicit ID for one observation, overriding format_id.
-            format_id: ID template using scalar observation coordinates.
-            format_paths: Relative asset path template; defaults to {id}/{asset}.tif.
-            collection: Native Collection overriding the stored stac_collection.
-            **options: overwrite, storage_options, cog_options, and
-                create_stac_item metadata options.
-
-        Returns:
-            One Item; more than one observation raises before writing.
-        """
-        from geosave.geodata.stac.publish import split_items
-        from geosave.geodata.stac.publish import publish_items
-
-        self.validate(same_footprint=True, shared_time=True)
-        items = split_items(self._read_rasters_by_path(), split_item, split_asset)
-        if len(items) != 1:
-            raise ValueError(
-                "to_item requires one observation; use to_catalog for multiple Items"
-            )
-        published = publish_items(
-            items,
-            path,
-            id=id,
-            format_id=format_id,
-            format_paths=format_paths,
-            collection=collection,
-            split_item=split_item,
-            **options,
-        )
-        return published[0]
-
-    def to_catalog(
-        self,
-        path: Location,
-        *,
-        split_item: Sequence[str] = ("time",),
-        split_asset: Sequence[str] = ("variable",),
-        id: str | None = None,
-        format_id: str | None = None,
-        format_paths: str | None = None,
-        collection: pystac.Collection | None = None,
-        **options: Any,
-    ) -> GeoDataFrame:
-        """Save COG assets and return a native Item GeoDataFrame.
-
-        Args:
-            path: Output folder or filesystem URL.
-            split_item: Observation dimensions; default time, ignored when absent.
-            split_asset: Dimensions partitioning assets within an Item;
-                "variable" gives each data variable its own asset.
-            id: Explicit ID for one observation, overriding format_id.
-            format_id: ID template using scalar observation coordinates.
-            format_paths: Relative asset path template; defaults to {id}/{asset}.tif.
-            collection: Native Collection overriding the stored stac_collection.
-            **options: overwrite, storage_options, cog_options, and
-                create_stac_item metadata options.
-
-        Returns:
-            GeoDataFrame encoded through stac-geoparquet and Arrow.
-        """
-        from geosave.geodata.stac.publish import split_items
-        from geosave.geodata.stac.publish import publish_items
-        from geosave.geodata.stac.catalog import create_catalog
-
-        self.validate(same_footprint=True, shared_time=True)
-        items = split_items(self._read_rasters_by_path(), split_item, split_asset)
-        published = publish_items(
-            items,
-            path,
-            id=id,
-            format_id=format_id,
-            format_paths=format_paths,
-            collection=collection,
-            split_item=split_item,
-            **options,
-        )
-        return create_catalog(published)
-
     def to_cog(
         self,
         path: Location,
         *,
-        split_item: Sequence[str] = ("time",),
-        split_asset: Sequence[str] = ("variable",),
-        format_paths: str | None = None,
         overwrite: bool = False,
         compute: bool = True,
         storage_options: StorageOptions | None = None,
         **options: Unpack[COGWriteOptions],
     ) -> list[UPath] | Delayed:
-        """Write explicitly partitioned rasters; templates only name files.
+        """Write every leaf as one COG at its node path.
+
+        A leaf holds one instant of one grid, as a COG does, and its path names
+        the file: ``/s2/20250601T000000/red`` becomes
+        ``{path}/s2/20250601T000000/red.tif``. Rename nodes to rename files.
 
         Args:
             path: Output folder or filesystem URL.
-            split_item: Dimensions partitioning observations; default time.
-            split_asset: Dimensions partitioning assets within an Item;
-                "variable" gives each data variable its own asset.
-            format_paths: Relative filename template using scalar coordinates,
-                asset, var, and path. None uses time folders when dated.
             overwrite: Replace existing files.
             compute: False returns one delayed batch without reading pixels.
             storage_options: Filesystem options.
-            **options: Raster creation options.
+            **options: COG creation options.
 
         Returns:
-            Written paths, or a native delayed batch.
+            Written paths in leaf order, or one native delayed batch.
+
+        Raises:
+            ValueError: A leaf cannot be one COG; nothing is written.
+            FileExistsError: A destination exists and overwrite is false.
+
+        Examples:
+            >>> scene.gs.expand_stac().gs.to_cog("out")
+            [UPath('/abs/out/20250601T000000/red.tif'), ...]
         """
-        from geosave.geodata.stac.publish import split_items
+        from geosave.geodata.io import storage
         from geosave.geodata.io.formats import geotiff
 
-        self.validate(shared_time=True)
-        items = split_items(self._read_rasters_by_path(), split_item, split_asset)
-        return geotiff.write_items(
-            items,
-            path,
-            format_paths=format_paths,
-            writer=geotiff.write_cog,
-            compute=compute,
-            overwrite=overwrite,
-            storage_options=storage_options,
-            **options,
+        root = storage.location(path, storage_options)
+        files = {}
+        for leaf in self._data.leaves:
+            name = leaf.relative_to(self._data)
+            files[root / f"{name}.tif"] = leaf.to_dataset(inherit="all_coords")
+        return geotiff.write_files(
+            files, geotiff.write_cog, compute=compute, overwrite=overwrite, **options
+        )
+
+    def to_item(self, path: Location, **options: Any) -> pystac.Item:
+        """STAC Item publication is being rebuilt on `expand_stac` and `to_cog`.
+
+        Raises:
+            NotImplementedError: Always, until publication is rebuilt.
+        """
+        raise NotImplementedError(
+            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
+        )
+
+    def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
+        """STAC catalog publication is being rebuilt on `expand_stac` and `to_cog`.
+
+        Raises:
+            NotImplementedError: Always, until publication is rebuilt.
+        """
+        raise NotImplementedError(
+            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
         )
 
     def to_zarr(

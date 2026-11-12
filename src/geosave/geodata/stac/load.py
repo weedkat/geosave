@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, TypedDict, Unpack
 
@@ -17,7 +17,13 @@ from odc.loader.types import RasterSource, ReaderDriverSpec
 from odc.stac.model import ParsedItem, PropertyLoadRequest
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import END_DATETIME, START_DATETIME, to_yx
+from geosave.geodata.conventions import (
+    DEFAULT_COLLECTION,
+    END_DATETIME,
+    STAC_PROPERTIES,
+    START_DATETIME,
+    TIME_COORDINATE,
+)
 from geosave.geodata.errors import RegionFetchError
 from geosave.geodata.stac import band, item, raster as stac_raster
 from geosave.geodata.utils.mapping import intersect_mappings
@@ -51,13 +57,14 @@ def load_dataset(
     *,
     groupby: str | Callable[[pystac.Item, ParsedItem, int], Any] = "solar_day",
     collection: pystac.Collection | None = None,
+    mask_and_scale: bool = False,
     **options: Unpack[StacLoadOptions],
 ) -> xr.Dataset:
     """Load one collection's selected Items onto one grid.
 
     No search or Collection lookup occurs: choose the Items, including by
     time, before loading. Band metadata keeps the published digital numbers;
-    decode them with `.gs.mask_and_scale()`.
+    decode them with `mask_and_scale=True` or `.gs.mask_and_scale()`.
 
     Args:
         items: Selected Items of one collection; generators are consumed once.
@@ -65,6 +72,7 @@ def load_dataset(
             `GeoBox.from_geopolygon(region.extent, resolution=..., crs=...)`.
         groupby: "id" keeps Items separate; "time" or "solar_day" mosaics groups.
         collection: Optional Collection metadata, supplied without network lookup.
+        mask_and_scale: Decode the stamped Dataset with native xarray CF decoding.
         **options: Typed native ODC options, for reading, chunking and metadata.
 
     Returns:
@@ -86,7 +94,7 @@ def load_dataset(
     settings = _prepare_options(options, groupby)
     sources = _band_sources(matched, settings.get("bands"), settings.get("stac_cfg"))
     _check_source_scales(sources)
-    loaded = to_yx(odc.stac.load(matched, geobox=geobox, **settings))
+    loaded = odc.stac.load(matched, geobox=geobox, **settings)
     # ODC dates a timeless Item 0001-01-01; static data has no time axis instead.
     timeless = True
     for entry in matched:
@@ -94,10 +102,6 @@ def load_dataset(
             timeless = False
     if timeless and loaded.sizes.get("time") == 1:
         loaded = loaded.isel(time=0, drop=True)
-    if "time" in loaded.coords:
-        loaded = loaded.assign_coords(
-            time=loaded.time.assign_attrs(standard_name="time", axis="T")
-        )
     # An Item's own period wins; a solar-day mosaic covers its local day.
     cells = _read_item_cells(loaded, matched)
     if cells is not None:
@@ -108,7 +112,8 @@ def load_dataset(
         loaded = _write_solar_day_cells(loaded)
     loaded = _stamp_date_properties(loaded, settings.get("with_properties"), matched)
     loaded = stamp_band_attrs(matched, loaded, cfg=settings.get("stac_cfg"))
-    loaded = loaded.gs.write_crs()
+    if mask_and_scale:
+        loaded = xr.decode_cf(loaded, decode_coords="all")
     return attrs.stamp_attrs(
         loaded, stac_raster.build_stac_metadata(matched, collection)
     )
@@ -117,115 +122,159 @@ def load_dataset(
 def load_datatree(
     items: Iterable[pystac.Item],
     *,
-    groupby: str | Callable[[pystac.Item, ParsedItem, int], Any] = "solar_day",
-    collection: pystac.Collection | None = None,
+    collections: Sequence[pystac.Collection] = (),
     **options: Unpack[StacLoadOptions],
 ) -> xr.DataTree:
-    """Load one collection as one node per STAC asset, each on its own grid.
+    """Load Items as the STAC hierarchy: one node per asset of each Item, as stated.
 
-    An asset loads on the exact grid its `proj:*` states, so no band is
-    resampled. A multi-band asset holds one variable per band. Observation
-    coordinates every node shares, such as `time`, sit on the collection node,
-    which xarray then keeps aligned across the asset nodes. Merge assets on
-    one grid with `tree.gs.group_grid()`; crop with `tree.gs.crop(region)`.
+    Each asset loads on the exact grid its `proj:*` states, so no band is
+    resampled and Items may state different grids. A multi-band asset holds
+    one variable per band. Each Item node states the Item's time, period and
+    `stac_properties` once, as scalar coordinates its leaves inherit with
+    ``to_dataset(inherit="all_coords")``. Load onto a chosen grid with
+    `stac.load_dataset(items, geobox)` instead.
 
     Args:
-        items: Selected Items of one collection, each stating its bands'
-            grids in `proj:*`.
-        groupby: "id" keeps Items separate; "time" or "solar_day" mosaics groups.
-        collection: Optional Collection metadata; never fetched implicitly.
+        items: Selected Items, of one or several collections, each stating
+            its bands' grids in `proj:*`.
+        collections: Collection metadata for the collection nodes; never
+            fetched implicitly.
         **options: Typed native ODC settings, as for `load_dataset`.
 
     Returns:
-        DataTree of ``{collection}/{asset}`` nodes, such as
-        ``sentinel-2-l2a/B04``, with the Collection metadata and shared
-        coordinates on the collection node; Items naming no collection place
-        their ``{asset}`` nodes at the root.
+        DataTree of ``{collection}/{item}/{asset}`` nodes, such as
+        ``sentinel-2-l2a/S2B_33UUP_20250115/B04``. Each collection node holds
+        its Collection metadata; Items naming no collection sit under
+        ``default``.
 
     Raises:
-        ValueError: Items mix collections, a band states no grid, or Items
-            state different grids for one asset.
+        RegionFetchError: No Items were supplied.
+        ValueError: A band states no grid, or an Item ID or asset key
+            contains '/', which would nest the node.
 
     Examples:
         >>> tree = stac.load_datatree(items)
         >>> list(tree.gs.datasets)
-        ['sentinel-2-l2a/B04', 'sentinel-2-l2a/B08', 'sentinel-2-l2a/B11']
-        >>> list(tree.gs.group_grid().gs.datasets)
-        ['sentinel-2-l2a/r10m', 'sentinel-2-l2a/r20m']
+        ['s2/S2B_33UUP_20250115/B04', 's2/S2B_33UUP_20250115/B11']
     """
-    matched = _check_items(items, collection)
-    identity = collection.id if collection is not None else matched[0].collection_id
+    matched = list(items)
+    if not matched:
+        raise RegionFetchError("no STAC Items supplied for loading")
 
-    # Each asset's grid, as every Item states it in proj:*.
-    grid_by_asset: dict[str, GeoBox] = {}
-    bands_by_asset: dict[str, list[str]] = {}
-    for parsed in odc.stac.parse_items(matched, cfg=options.get("stac_cfg")):
-        for name, source in parsed.resolve_bands(options.get("bands")).items():
-            grid = source.geobox if isinstance(source, RasterSource) else None
-            if grid is None:
-                raise ValueError(
-                    f"{parsed.id}'s band {name!r} states no grid in proj:*; load it "
-                    "onto a chosen grid with stac.load_dataset(items, geobox)"
+    items_by_collection: dict[str, list[pystac.Item]] = {}
+    for entry in matched:
+        identity = entry.collection_id or DEFAULT_COLLECTION
+        items_by_collection.setdefault(identity, []).append(entry)
+
+    nodes = {}
+    for identity, entries in items_by_collection.items():
+        collection = None
+        for stated in collections:
+            if stated.id == identity:
+                collection = stated
+        metadata = stac_raster.build_stac_metadata(entries, collection)
+        nodes[identity] = xr.Dataset(attrs=metadata.to_attrs())
+
+        # Items stating one asset grid load in one ODC call. Distinct instants
+        # per call keep each time slice one Item; a timeless Item loads alone.
+        batches = []
+        for entry in entries:
+            instant = item.read_instant(entry)
+            for asset, (grid, names) in _read_asset_grids(entry, options).items():
+                if "/" in entry.id or "/" in asset:
+                    raise ValueError(
+                        f"Item {entry.id!r} asset {asset!r}: a name with '/' cannot "
+                        "name a tree node; STAC IDs and asset keys should avoid '/'"
+                    )
+                joined = False
+                for key, box, bands, members in batches:
+                    if instant is None or (key, box, bands) != (asset, grid, names):
+                        continue
+                    if instant in members:
+                        continue
+                    members[instant] = entry
+                    joined = True
+                    break
+                if not joined:
+                    batches.append((asset, grid, names, {instant: entry}))
+
+        facts_by_item: dict[str, dict[Hashable, xr.Variable]] = {}
+        for asset, grid, names, members in batches:
+            loaded = load_dataset(
+                list(members.values()),
+                grid,
+                groupby="id",
+                collection=collection,
+                **{**options, "bands": names},
+            )
+            # Whatever varies along time is the Item's: it moves to the Item node.
+            along_time = []
+            for name, coord in loaded.coords.items():
+                if TIME_COORDINATE in coord.dims:
+                    along_time.append(name)
+            if TIME_COORDINATE in loaded.dims and STAC_PROPERTIES not in along_time:
+                along_time.append(STAC_PROPERTIES)
+            for position in range(loaded.sizes.get(TIME_COORDINATE, 1)):
+                observation = loaded
+                if TIME_COORDINATE in loaded.dims:
+                    observation = loaded.isel({TIME_COORDINATE: position})
+                instant = None
+                if TIME_COORDINATE in observation.coords:
+                    instant = pd.Timestamp(observation[TIME_COORDINATE].values)
+                entry = members[instant]
+                leaf = _place_asset(observation, entry)
+                facts = facts_by_item.setdefault(entry.id, {})
+                for name in along_time:
+                    if name in leaf.coords:
+                        facts[name] = leaf[name].variable
+                nodes[f"{identity}/{entry.id}/{asset}"] = leaf.drop_vars(
+                    along_time, errors="ignore"
                 )
-            asset = parsed.collection.band_key(name)[0]
-            if grid_by_asset.setdefault(asset, grid) != grid:
-                raise ValueError(
-                    f"Items state different grids for asset {asset!r}; load them "
-                    "onto one chosen grid with stac.load_dataset(items, geobox)"
-                )
-            names = bands_by_asset.setdefault(asset, [])
-            if name not in names:
-                names.append(name)
-    if not bands_by_asset:
-        raise ValueError("no raster bands selected")
-
-    assets = {}
-    metadata: attrs.StacMetadata | None = None
-    for asset, names in bands_by_asset.items():
-        loaded = load_dataset(
-            matched,
-            grid_by_asset[asset],
-            groupby=groupby,
-            collection=collection,
-            **{**options, "bands": names},
-        )
-        # Collection metadata moves to the collection node.
-        metadata = attrs.StacMetadata.from_attrs(loaded.attrs)
-        loaded = attrs.clear_attrs(loaded, attrs.StacMetadata)
-        # A tree-published asset key carries its node path; the band is the last part.
-        bands = {}
-        for name in loaded.data_vars:
-            bands[name] = str(name).rsplit("/", 1)[-1]
-        assets[asset] = loaded.rename(bands)
-
-    stated = {} if metadata is None else metadata.to_attrs()
-    return _build_collection_tree(identity, stated, assets)
-
-
-def _build_collection_tree(
-    identity: str | None, metadata: Mapping[str, Any], grids: Mapping[str, xr.Dataset]
-) -> xr.DataTree:
-    """Place asset nodes under their collection, sharing coordinates they agree on.
-
-    Items naming no collection place their asset nodes at the root.
-    """
-    candidates = []
-    for raster in grids.values():
-        coords = {}
-        for name, coord in raster.coords.items():
-            # Spatial axes and the CRS belong to each grid; scalars need no sharing.
-            if coord.ndim == 0 or set(coord.dims) & {"y", "x"}:
-                continue
-            # The variable alone: a coordinate array carries the CRS along with it.
-            coords[name] = coord.variable
-        candidates.append(coords)
-    shared = intersect_mappings(candidates)
-    parent = identity or "/"
-    nodes = {parent: xr.Dataset(coords=shared, attrs=dict(metadata))}
-    for path, raster in grids.items():
-        node = path if identity is None else f"{identity}/{path}"
-        nodes[node] = raster.drop_vars(list(shared))
+        for entry in entries:
+            nodes[f"{identity}/{entry.id}"] = xr.Dataset(coords=facts_by_item[entry.id])
     return xr.DataTree.from_dict(nodes)
+
+
+def _place_asset(observation: xr.Dataset, entry: pystac.Item) -> xr.Dataset:
+    """Make one Item's slice of a batch load its asset, as the Item states it."""
+    # A batch fuses only the properties its Items share; the Item states its own.
+    stated = stac_raster.read_properties_coordinate(observation)
+    fields = {
+        **(stated[0] if stated else {}),
+        **item.select_item_properties(entry.properties),
+    }
+    if fields:
+        observation = stac_raster.stamp_properties_coordinate(observation, [fields])
+    observation = attrs.clear_attrs(observation, attrs.StacCollection)
+    # The Item's geometry is each asset's region; the grids stay whole.
+    footprint = item.read_footprint([entry])
+    if footprint is not None:
+        observation = observation.gs.write_extent(footprint)
+    # A tree-published asset key carries its node path; the band is the last part.
+    bands = {}
+    for name in observation.data_vars:
+        bands[name] = str(name).rsplit("/", 1)[-1]
+    return observation.rename(bands)
+
+
+def _read_asset_grids(
+    entry: pystac.Item, options: Mapping[str, Any]
+) -> dict[str, tuple[GeoBox, list[str]]]:
+    """Read each asset's stated grid and the selected bands it holds."""
+    grids: dict[str, tuple[GeoBox, list[str]]] = {}
+    (parsed,) = odc.stac.parse_items([entry], cfg=options.get("stac_cfg"))
+    for name, source in parsed.resolve_bands(options.get("bands")).items():
+        grid = source.geobox if isinstance(source, RasterSource) else None
+        if grid is None:
+            raise ValueError(
+                f"{parsed.id}'s band {name!r} states no grid in proj:*; load it "
+                "onto a chosen grid with stac.load_dataset(items, geobox)"
+            )
+        asset = parsed.collection.band_key(name)[0]
+        grids.setdefault(asset, (grid, []))[1].append(name)
+    if not grids:
+        raise ValueError("no raster bands selected")
+    return grids
 
 
 def _check_items(
@@ -376,11 +425,11 @@ def stamp_band_attrs(
         metadata = band.read_shared_attrs(sources[str(name)])
         stated = variable.assign_attrs({**metadata, **variable.attrs})
 
-        # ODC states its fill as `nodata`; normalize it to CF's spelling.
-        packing = attrs.Packing.from_attrs(stated.attrs)
-        stamped[name] = (
-            stated if packing is None else attrs.stamp_attrs(stated, packing)
-        )
+        # The declaration must match the fill ODC casts into the output dtype.
+        fill = stated.attrs.pop("nodata", stated.attrs.get("_FillValue"))
+        if fill is not None:
+            stated = stated.rio.write_nodata(fill)
+        stamped[name] = stated
     return loaded.assign(stamped)
 
 
@@ -409,7 +458,7 @@ def _check_source_scales(
     for name, entries in sources.items():
         expected = None
         for entry, key, index in entries:
-            stated = attrs.Packing.model_validate(
+            stated = attrs.CFPacking.model_validate(
                 band.read_attrs(entry.assets[key], index)
             )
             # Omitted STAC scale/offset mean identity conversion. Nodata is

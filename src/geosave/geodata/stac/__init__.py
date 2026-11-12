@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .catalog import create_catalog
     from .load import StacLoadOptions, load_dataset, load_datatree
-    from .publish import create_stac_item, publish_items
+    from .publish import create_stac_item
     from .search.api import StacClient, StacProvider
     from .search.query import StacQuery
     from .search.table import StacTable
@@ -21,7 +21,6 @@ _LAZY = {
     "load_dataset": ".load",
     "load_datatree": ".load",
     "create_stac_item": ".publish",
-    "publish_items": ".publish",
 }
 
 
@@ -45,5 +44,4 @@ __all__ = [
     "load_dataset",
     "load_datatree",
     "create_stac_item",
-    "publish_items",
 ]

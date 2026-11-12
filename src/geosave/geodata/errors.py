@@ -21,9 +21,9 @@ class RasterValidationError(ValueError):
         operation: Description of the operation that could not proceed.
 
     Examples:
-        >>> error = RasterValidationError("No CRS. Assign the known CRS with gs.write_crs(...).", variable="red")
+        >>> error = RasterValidationError("No CRS. Assign the known CRS with raster.odc.assign_crs(...).", variable="red")
         >>> str(error)
-        "Raster 'red': No CRS. Assign the known CRS with gs.write_crs(...)."
+        "Raster 'red': No CRS. Assign the known CRS with raster.odc.assign_crs(...)."
     """
 
     def __init__(

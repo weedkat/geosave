@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING, Any, TypedDict
 import pandas as pd
 import pystac
 
-from geosave.geodata.stac import band
-
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -161,71 +159,6 @@ def read_footprint(items: Sequence[pystac.Item]) -> Geometry | None:
     if not shapes:
         return None
     return Geometry(unary_union(shapes), "EPSG:4326")
-
-
-def select_data_assets(item: pystac.Item) -> dict[str, pystac.Asset]:
-    """Select data assets in published order, including assets without stated roles.
-
-    Explicit roles without `data` exclude an asset from native raster reading,
-    grid selection, and variable naming. The Item and its assets are not changed.
-    """
-    return {
-        key: entry
-        for key, entry in item.assets.items()
-        if entry.roles is None or "data" in entry.roles
-    }
-
-
-def read_variable_names(item: pystac.Item) -> dict[str, tuple[str, ...]]:
-    """Name eligible data assets for native raster reading.
-
-    These rules are independent of ODC loader configuration and aliases.
-    A one-band asset is its key. Band `i` of a several-band asset takes the
-    first name it states, `name` then `common_name`, that no asset key spells
-    and no asset of fewer bands, or of an earlier key, claims first; a band
-    claiming none is `key.i`.
-
-    Args:
-        item: Native STAC Item.
-
-    Returns:
-        Asset key mapped to its variable names, in band order.
-
-    Examples:
-        >>> read_variable_names(item)
-        {'B04': ('B04',), 'visual': ('visual.1', 'visual.2', 'visual.3')}
-    """
-    assets = select_data_assets(item)
-    listed = {key: band.read_aliases(entry) for key, entry in assets.items()}
-
-    # Each name goes to the band of the asset with the fewest bands, then the
-    # first key; names spelling an asset key stay with that asset.
-    claims: dict[str, list[tuple[int, str, int]]] = {}
-    for key, bands in listed.items():
-        for index, aliases in enumerate(bands, start=1):
-            for alias in aliases:
-                if alias not in assets:
-                    claims.setdefault(alias, []).append((len(bands), key, index))
-    owner = {alias: min(claimants)[1:] for alias, claimants in claims.items()}
-
-    found = {}
-    for key, bands in listed.items():
-        count = len(bands)
-        if count <= 1:
-            found[key] = (key,)
-            if count == 1:
-                for alias in bands[0]:
-                    if alias == key or owner.get(alias) == (key, 1):
-                        found[key] = (alias,)
-                        break
-            continue
-        variables = []
-        for index in range(1, count + 1):
-            # Prefer the published band name before its common name.
-            taken = [alias for alias, band in owner.items() if band == (key, index)]
-            variables.append(taken[0] if taken else f"{key}.{index}")
-        found[key] = tuple(variables)
-    return found
 
 
 class ItemTime(TypedDict):

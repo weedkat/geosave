@@ -13,10 +13,8 @@ import xarray as xr
 from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from odc.geo import CRS, BoundingBox, Resolution
-    from odc.geo.gcp import GCPGeoBox
+    from affine import Affine
+    from odc.geo import CRS, BoundingBox, Resolution, SomeCRS, SomeResolution
     from odc.geo.geobox import GeoBox
 
     from geosave.geodata.utils.datetime import DateRange
@@ -36,17 +34,7 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
 
     @property
     def time_coordinate(self) -> xr.DataArray | None:
-        """Read the unambiguous CF temporal coordinate, falling back to `time`.
-
-        Raises:
-            ValueError: Multiple coordinates declare temporal identity.
-        """
-        names = set(self._data.cf.coordinates.get("time", []))
-        names.update(self._data.cf.axes.get("T", []))
-        if len(names) > 1:
-            raise ValueError(f"Multiple temporal coordinates are declared: {names}")
-        if names:
-            return self._data.coords[names.pop()]
+        """Read the `time` coordinate, the name ODC and odc-stac give it."""
         return self._data.coords.get(TIME_COORDINATE)
 
     def write_time_bounds(
@@ -159,13 +147,57 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
     def spatial_dims(self) -> tuple[str, str] | None:
         """Return spatial axes in vertical, horizontal order when all rasters agree."""
 
-    @abstractmethod
-    def validate(self, *, georeferenced: bool = False) -> None:
-        """Check raster validity and optionally require geographic placement."""
+    @property
+    def ydim(self) -> str | None:
+        """Name the vertical spatial dimension, as `.odc.ydim` does."""
+        dims = self.spatial_dims
+        return None if dims is None else dims[0]
+
+    @property
+    def xdim(self) -> str | None:
+        """Name the horizontal spatial dimension, as `.odc.xdim` does."""
+        dims = self.spatial_dims
+        return None if dims is None else dims[1]
+
+    def _require_spatial_dims(self) -> tuple[str, str]:
+        """Return the spatial dimensions pixel operations need, placed or not."""
+        from geosave.geodata.errors import RasterValidationError
+
+        dims = self.spatial_dims
+        if dims is None:
+            raise RasterValidationError(
+                "ODC finds no spatial dimensions. Name them as ODC does, "
+                "y/x or latitude/longitude."
+            )
+        return dims
+
+    def validate(self) -> None:
+        """Require a grid ODC recognizes, with a CRS, without reading pixels.
+
+        Raises:
+            RasterValidationError: ODC finds no grid, or the grid has no CRS.
+            NotImplementedError: Pixels are placed by ground control points.
+
+        Examples:
+            >>> scene.gs.validate()
+        """
+        from geosave.geodata.errors import RasterValidationError
+
+        geobox = self.geobox
+        if geobox is None:
+            raise RasterValidationError(
+                "ODC finds no grid. Name the spatial dimensions as ODC does, "
+                "y/x or latitude/longitude, with their coordinates."
+            )
+        if geobox.crs is None:
+            raise RasterValidationError(
+                "The coordinate reference system (CRS) is missing. Declare the "
+                "CRS of the existing coordinates with raster.odc.assign_crs(crs)."
+            )
 
     @property
     @abstractmethod
-    def geobox(self) -> GeoBox | GCPGeoBox | None:
+    def geobox(self) -> GeoBox | None:
         """Return the common grid, or None for missing or differing placement."""
 
     @property
@@ -212,24 +244,6 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         return f"EPSG:{crs.epsg}" if crs.epsg else crs.proj.name
 
     @property
-    def grid_mapping_coords(self) -> tuple[str, ...]:
-        """Name every scalar coordinate that carries a CRS, as CF grid mappings do.
-
-        A raster normally carries one; one written by several tools can carry
-        stale extras, which placing it on a new grid must drop.
-
-        Examples:
-            >>> scene.gs.grid_mapping_coords
-            ('spatial_ref',)
-        """
-        markers = {"crs_wkt", "spatial_ref", "grid_mapping_name"}
-        names = []
-        for name, coord in self._data.coords.items():
-            if not coord.dims and not markers.isdisjoint(coord.attrs):
-                names.append(str(name))
-        return tuple(names)
-
-    @property
     def bounds(self) -> BoundingBox | None:
         """Read the grid's extent in its own CRS, if this object carries one.
 
@@ -250,6 +264,67 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         """
         geobox = self.geobox
         return None if geobox is None else geobox.resolution
+
+    @property
+    def transform(self) -> Affine | None:
+        """Read the pixel-to-world affine transform, as `.odc.transform` does."""
+        geobox = self.geobox
+        return None if geobox is None else geobox.transform
+
+    @property
+    def aspect(self) -> float | None:
+        """Read the width-to-height ratio in pixels, as `.odc.aspect` does."""
+        geobox = self.geobox
+        return None if geobox is None else geobox.aspect
+
+    def map_bounds(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Read south-west and north-east corners in lat/lon, as `.odc.map_bounds` does.
+
+        Returns:
+            ``((lat_s, lon_w), (lat_n, lon_e))``, the order folium and
+            ipyleaflet take.
+
+        Raises:
+            ValueError: This object carries no grid.
+
+        Examples:
+            >>> scene.gs.map_bounds()
+            ((45.0, 13.0), (45.1, 13.1))
+        """
+        geobox = self.geobox
+        if geobox is None:
+            raise ValueError("Not geo registered")
+        return geobox.map_bounds()
+
+    def output_geobox(
+        self,
+        crs: SomeCRS,
+        *,
+        resolution: SomeResolution | Literal["auto", "fit", "same"] = "auto",
+    ) -> GeoBox:
+        """Compute the grid this raster lands on in another CRS, as `.odc.output_geobox` does.
+
+        Args:
+            crs: Destination CRS.
+            resolution: Destination pixel size, or ODC's ``"auto"``, ``"fit"``
+                or ``"same"``.
+
+        Returns:
+            Grid covering this raster's footprint, to pass to `reproject`.
+
+        Raises:
+            ValueError: This object carries no grid.
+
+        Examples:
+            >>> scene.gs.output_geobox("EPSG:3857", resolution=10).crs.epsg
+            3857
+        """
+        from odc.geo.overlap import compute_output_geobox
+
+        geobox = self.geobox
+        if geobox is None:
+            raise ValueError("Not geo registered")
+        return compute_output_geobox(geobox, crs, resolution=resolution)
 
     @property
     @abstractmethod
@@ -281,36 +356,3 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
     @abstractmethod
     def region(self) -> GeoRegion:
         """Read spatial extent and temporal coverage using the concrete raster's rules."""
-
-    @abstractmethod
-    def _map_variables(self, change: Callable[[xr.DataArray], xr.DataArray]) -> DataT:
-        """Apply one per-variable change to every data variable this object holds."""
-
-    def mask_and_scale(self) -> DataT:
-        """Decode CF scale, offset and missing values using xarray.
-
-        Returns:
-            Same kind of object with decoded values and native per-variable
-            storage encoding. Already decoded variables pass through. Lazy
-            arrays remain lazy; coordinates and descriptive attrs are retained.
-        """
-        from .transform import packing
-
-        return self._map_variables(packing.mask_and_scale)
-
-    def scale_and_fill(self) -> DataT:
-        """Restore stored values from each variable's CF encoding without I/O.
-
-        Returns:
-            Same kind of object with stored pixels and CF attrs. Consumed
-            conversion encoding is removed; unrelated encoding is retained.
-            Variables without conversion instructions pass through.
-
-        Raises:
-            ValueError: Attrs and encoding declare conflicting packing, or
-                encoded integer values overflow or collide with missing codes.
-                For lazy arrays, pixel checks run when evaluated.
-        """
-        from .transform import packing
-
-        return self._map_variables(packing.scale_and_fill)

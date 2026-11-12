@@ -359,7 +359,6 @@ class GeoCatalog:
         """
         from odc.geo.geobox import GeoBox
 
-        from geosave.geodata.conventions import SPATIAL_DIMENSIONS
         from geosave.geodata.core.vector.utils.rasterize import (
             burn_column,
             burn_presence,
@@ -369,9 +368,11 @@ class GeoCatalog:
             if like.crs is None:
                 raise ValueError("rasterize target grid carries no CRS")
             geobox = like
+            dims = geobox.dimensions
         else:
-            like.gs.validate(georeferenced=True, affine=True)
+            like.gs.validate()
             geobox = cast("GeoBox", like.gs.geobox)
+            dims = cast("tuple[str, str]", like.gs.spatial_dims)
 
         self.validate(crs=True)
         frame = self._data.to_crs(cast("OdcCRS", geobox.crs))
@@ -380,15 +381,15 @@ class GeoCatalog:
         else:
             pixels = burn_column(frame, geobox, column, fill, dtype, all_touched)
 
-        raster = xr.DataArray(
-            pixels, dims=SPATIAL_DIMENSIONS, name=column or "mask"
-        ).gs.write_grid(geobox)
+        from odc.geo.xr import wrap_xr
+
+        raster = wrap_xr(pixels, geobox, dims=dims).rename(column or "mask")
         if isinstance(like, GeoBox):
             return raster
 
         # Sliced coordinates can drift from regenerated affine coordinates.
         coords = {}
-        for dim in SPATIAL_DIMENSIONS:
+        for dim in dims:
             coords[dim] = like.coords[dim]
         return raster.assign_coords(coords)
 
@@ -685,60 +686,29 @@ class GeoCatalog:
         )
 
     def to_datatree(self, **options: Any) -> DataTree:
-        """Load the Items lazily as ``{collection}/{asset}`` nodes on native grids.
-
-        Each collection loads with `stac.load_datatree`: each STAC asset is a node
-        on the grid it states, and the collection's time sits on its own node.
-        Collections follow their first appearance. Merge assets on one grid
-        with `tree.gs.group_grid()`.
+        """Load the Items lazily as ``{collection}/{item}/{asset}`` nodes, as stated.
 
         Args:
-            **options: Forwarded to `stac.load_datatree`, such as `groupby`
-                or `chunks`.
+            **options: Forwarded to `stac.load_datatree`, such as `chunks` or `bands`.
 
         Returns:
-            DataTree of collection nodes, each carrying its Collection and
-            extension schemas as `StacMetadata` attrs, over their asset nodes.
-            Each collection's region is its Items' geometry, beside the whole
-            grids.
+            DataTree as `stac.load_datatree` builds it, with the table's
+            Collections on their collection nodes.
 
         Raises:
-            ValueError: An Item names no collection, or a band states no grid.
+            ValueError: A band states no grid in `proj:*`.
 
         Examples:
             >>> tree = items.gs.to_datatree()
-            >>> tree.gs.groups
-            ('s2', 'dem')
             >>> list(tree.gs.datasets)
-            ['s2/B04', 's2/B11', 'dem/elevation']
-            >>> list(tree.gs.group_grid().gs.datasets)
-            ['s2/r10m', 's2/r20m', 'dem/r30m']
+            ['s2/S2B_33UUP_20250115/B04', 's2/S2B_33UUP_20250115/B11', 'dem/cop-dem/elevation']
         """
         from geosave.geodata.stac.load import load_datatree
-        from geosave.geodata.stac.item import read_footprint
 
-        items_by_collection: dict[str, list[pystac.Item]] = {}
-        for entry in self.to_items():
-            if not entry.collection_id:
-                raise ValueError(
-                    f"Item {entry.id!r} needs a collection to name its node"
-                )
-            items_by_collection.setdefault(entry.collection_id, []).append(entry)
-        collections = self.collections
-        # Each collection loads on its own grids; their nodes join as siblings.
-        nodes = {}
-        for identity, entries in items_by_collection.items():
-            tree = load_datatree(
-                entries, collection=collections.get(identity), **options
-            )
-            # The Items' geometry is their region; the grid stays whole.
-            footprint = read_footprint(entries)
-            if footprint is not None:
-                tree = tree.gs.write_extent(footprint)
-            for path, node in tree.subtree_with_keys:
-                if path != ".":
-                    nodes[path] = node.to_dataset(inherit=False)
-        return cast("DataTree", xr.DataTree.from_dict(nodes))
+        tree = load_datatree(
+            self.to_items(), collections=list(self.collections.values()), **options
+        )
+        return cast("DataTree", tree)
 
     def to_dataset(self, geobox: GeoBox, **options: Any) -> Dataset:
         """Load one collection's Items lazily onto one grid.

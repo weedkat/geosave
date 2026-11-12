@@ -10,16 +10,16 @@ import geosave as gs
 from geosave.geodata import attrs
 
 band = xr.DataArray(np.array([[0, 1], [2, 255]], dtype="uint8"), dims=("y", "x"))
-band = band.gs.write_nodata(255).gs.write_legend(
+band = band.gs.write_nodata(255).gs.write_flags(
     {0: "background", 1: "forest", 2: "water"}
 )
-attrs.Legend.from_attrs(band.attrs)
+attrs.CFFlags.from_attrs(band.attrs)
 ```
 
 Output:
 
 ```text
-Legend(flag_values=[0, 1, 2], flag_masks=None, flag_meanings='background forest water', color_map=None)
+CFFlags(flag_values=[0, 1, 2], flag_masks=None, flag_meanings='background forest water')
 ```
 
 The attrs remain a plain xarray mapping. A group reads a few related keys as
@@ -32,19 +32,21 @@ Use the `.gs` properties and `write_*` methods for everyday work, as shown in
 
 | Group | Keys | Meaning |
 | --- | --- | --- |
-| `Packing` | `scale_factor`, `add_offset`, `_FillValue`, `missing_value`; also reads `nodata` | CF conversion and missing-value declarations on each variable. |
-| `Description` | `long_name`, `standard_name`, `units` | What a variable's values are (CF chapter 3); `band.gs.description`. Find variables by them with `ds.cf.standard_names`. |
-| `Legend` | `flag_values`, `flag_masks`, `flag_meanings`, `color_map` | Class codes or bit flags and their labels. |
-| `Spectral` | `common_name`, `center_wavelength`, `full_width_half_max` | Band identity and wavelength in micrometres. |
-| `GDALBand` | `variable_name`, `colorinterp` | Band naming and colour interpretation in GDAL formats. |
+| `CFPacking` | `scale_factor`, `add_offset`, `_FillValue`, `missing_value`, `valid_min`, `valid_max`, `valid_range`; also reads `nodata` | CF packed data (§8.1) and missing data (§2.5.1) on each variable; `xr.decode_cf` reads them together. |
+| `CFDescription` | `long_name`, `standard_name`, `units` | What a variable's values are (CF chapter 3); `band.gs.description`. |
+| `CFFlags` | `flag_values`, `flag_masks`, `flag_meanings` | Class codes or bit flags and their labels (CF §3.5); `band.gs.flags`. |
+| `EOBand` | `common_name`, `center_wavelength`, `full_width_half_max` | Band identity and wavelength in micrometres, as STAC `eo` states them. |
+| `Display` | `rgb` (Dataset), `color_map` (variable) | How a raster draws; the GeoTIFF writer maps it to GDAL colour interpretations and colour tables. |
 | `ACDD` | `id`, `title`, `summary`, `keywords`, `institution`, `license` | Dataset identity and discovery metadata on root attrs. |
-| `Extent` | `geospatial_bounds`, `geospatial_bounds_crs` | Declared spatial extent as WKT and its CRS, retained on raster roots and spatial variables. |
+| `ACDDExtent` | `geospatial_bounds`, `geospatial_bounds_crs` | Declared spatial extent as WKT and its CRS, retained on raster roots and spatial variables. |
+| `StacCollection` | `stac_collection`, `stac_extensions` | The STAC Collection and extension URIs on root attrs. |
 
 Band groups live on variables. A time label's cell is not an attr group: it is
-two coordinates on the time dimension, stored in files as CF bounds:
+two coordinates on the time dimension. Zarr stores them as they are; netCDF
+stores CF bounds:
 
 ```text
-in memory                              netCDF / Zarr
+in memory                              netCDF
 start_datetime(time) ┐   encode  ──►   time:bounds = "time_bounds"
 end_datetime(time)   ┘   ◄── decode    time_bounds(time, bounds)
 ```
@@ -56,19 +58,22 @@ Write a group with `attrs.stamp_attrs(obj, value)` and remove one with
 so the original keeps its attrs. Construct a new group to replace a declaration.
 
 ```python
-band = attrs.stamp_attrs(band, attrs.Packing(fill_value=255))
-band = attrs.clear_attrs(band, attrs.Packing)
-band = attrs.stamp_attrs(band, attrs.GDALBand(colorinterp="red"))
+band = attrs.stamp_attrs(band, attrs.CFPacking(fill_value=255))
+band = attrs.clear_attrs(band, attrs.CFPacking)
+band = attrs.stamp_attrs(band, attrs.Display(color_map={0: "#000000"}))
 ```
 
 Writing a group removes all its previous keys before stating the new value.
-This avoids stale aliases. Concrete accessor writes such as `write_nodata`
-and `write_legend` also validate values against the band's dtype; generic
+This avoids stale aliases. `write_nodata` casts the fill to the band's dtype;
+`write_flags` checks class codes against it. Generic
 `stamp_attrs` only replaces the group. Writes share pixels and do not compute
 Dask arrays or recode classes.
 
-GeoSave's `gs.to_dataarray()` requires compatible active CF declarations
-before stacking bands. Native `xr.concat` does not check packing or CRS:
+GeoSave's `gs.to_array()` requires compatible active CF declarations
+before stacking bands, including units, unsigned interpretation, flags, validity
+ranges, calendars and cell methods. Missing units do not agree with declared
+units. `combine_attrs` cannot override or discard these declarations.
+Native `xr.concat` does not check packing or CRS:
 decode and align inputs explicitly before combining them. Attr combination
 follows xarray's policies and does not validate pixel semantics.
 
@@ -77,18 +82,33 @@ follows xarray's policies and does not validate pixel semantics.
 Stored DN carries scale, offset and missing-value declarations in variable
 attrs. `raster.gs.mask_and_scale()` uses xarray's CF decoder and retains the
 consumed fields and original dtype in each variable's encoding.
-`raster.gs.scale_and_fill()` applies the reverse conversion without writing a
-file, returning stored pixels with CF attrs. Both preserve lazy arrays and
-leave the source unchanged. Integer encoding rejects overflow and collisions
-with missing-value codes when the pixels are evaluated.
+Decoding preserves lazy arrays and leaves the source unchanged. Writers encode
+physical values from their native encoding; raw DN is written with its CF attrs.
+There is no separate public reverse-conversion step.
 
-`write_nodata()` and `write_scale_offset()` only declare what existing pixels
+The DataArray accessor decodes one band's values and retains its coordinates.
+The Dataset accessor delegates to `xr.decode_cf(..., decode_coords="all")`,
+including coordinate packing, time bounds and CF relationships. Decode a
+Dataset before selecting a band when sibling bounds are needed. DataTree has
+no decoding accessor; select the Dataset needed for analysis first.
+Native CF names and numeric declarations are the input contract.
+
+The STAC loader declares ODC's output nodata in the loaded dtype using
+rioxarray, so the CF fill matches the actual pixels. For a manually constructed
+array, use `.gs.write_nodata(value)` to declare `_FillValue` at the array's
+precision through native rioxarray. Direct attrs assignments follow xarray's
+behavior, including its warnings and errors; the decoder no longer converts
+textual scaling or casts mismatched missing-value declarations.
+
+
+`write_nodata()` and `write_packing()` only declare what existing pixels
 mean; neither changes pixels. Each preserves the other's declarations.
 
 An undecoded read (`mask_and_scale=False`) retains DN with CF attrs. A decoded
 read retains the storage recipe in encoding. Writers save either representation
-without applying scaling twice. The STAC loaders support the same option after
-loading DN through ODC and translating published band metadata. Before loading,
+without applying scaling twice. STAC loading retains DN by default and translates published band metadata into
+attrs. Use `load_dataset(..., mask_and_scale=True)` to decode immediately, or
+call `.gs.mask_and_scale()` on the loaded Dataset afterward. Before loading,
 GeoSave rejects selected source bands with different effective scales or offsets.
 ODC may still remap different source nodata codes to one output fill value.
 
@@ -105,9 +125,9 @@ do not automatically apply it. It delegates combination to xarray and adds
 keys with disagreeing values and retains keys present in only one input.
 Groups do not affect this key-by-key policy, and aliases are not normalized.
 
-Retained GeoSave combinations, including `gs.to_dataarray()` and DataTree
-`gs.to_dataset()`, accept native policy strings or callables and automatically
-warn about omitted keys. Their default is `"drop_conflicts"`. Native `xr.concat`
+Retained GeoSave combinations accept native policy strings or callables and
+warn about omitted keys. In `gs.to_array()` this policy applies only to
+descriptive attrs; validated CF pixel declarations are always retained. Their default is `"drop_conflicts"`. Native `xr.concat`
 and `xr.merge` default to `"override"`; pass a policy explicitly when that is
 not the desired behavior. Direct native calls need `attrs.combine_attrs` to
 add GeoSave warnings.
@@ -125,11 +145,11 @@ arithmetic and reductions generally discard data encoding; choose a new output
 encoding when saving a derived variable. `.gs.composite()` requires explicit
 decoding first and does not restore the old integer recipe after reduction.
 
-NetCDF and Zarr writers use native xarray encoding. They do not add GeoSave's
-integer overflow or fill-collision checks. To request checked conversion,
-configure the decoded variable's encoding and call `.gs.scale_and_fill()`
-before writing the resulting stored values. GeoTIFF already uses this checked
-conversion. Verify the chosen representation with a round trip.
+NetCDF and Zarr writers use native xarray encoding. The Dataset GeoTIFF writer
+encodes each raster variable with xarray's CF codec before rioxarray stacks the
+bands, preserving per-band scale and offset. All use native quantization and
+casting behavior; GeoSave adds no integer overflow or fill-collision preflight.
+Choose an appropriate dtype, scale and fill, and verify output with a round trip.
 
 GeoTIFF translates these groups into native band properties and tags. STAC
 Items describe them through Raster, EO, and Classification metadata. A STAC
@@ -142,7 +162,7 @@ your workflow needs. See the [attrs reference](../reference/attrs.md) and
 [read and write guide](../basics/io.md).
 
 A raster loaded from STAC carries its STAC metadata in two named places.
-The root `StacMetadata` attrs hold the Collection and the Items' extension
+The root `StacCollection` attrs hold the Collection and the Items' extension
 schemas. The `stac_properties` coordinate along `time` holds one JSON mapping
 per observation: the properties every loaded Item shares, plus those requested
 with `with_properties`. `gs.stac_common_properties` is their intersection.

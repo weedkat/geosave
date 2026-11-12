@@ -5,6 +5,7 @@ Build a small image with two named bands:
 ```python
 import numpy as np
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -17,7 +18,7 @@ grid = GeoBox.from_bbox(
 red = np.arange(1, 17, dtype="uint16").reshape(4, 4)
 scene = (
     xr.Dataset({"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)})
-    .gs.write_grid(grid)
+    .assign_coords(xr_coords(grid))
     .gs.write_nodata(0)
 )
 scene
@@ -163,7 +164,7 @@ for layers, catalogs, performance and serving.
 prediction = np.ones((4, 4), dtype="uint8")
 labels = (
     xr.Dataset({"label": (("y", "x"), prediction)})
-    .gs.write_grid(scene.gs.geobox)
+    .assign_coords(xr_coords(scene.gs.geobox))
     .gs.write_nodata(255)
 )
 labels
@@ -182,9 +183,9 @@ Data variables:
     label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 ```
 
-`write_grid(scene.gs.geobox)` places the prediction on the same grid. Dimensions
+`assign_coords(xr_coords(scene.gs.geobox))` places the prediction on the same grid. Dimensions
 must be named and end in `y, x`, and the pixels must be as large as the grid. A
-`DataArray` takes the same step: `xr.DataArray(prediction, dims=("y", "x")).gs.write_grid(scene.gs.geobox)`.
+`DataArray` takes the same step: `xr.DataArray(prediction, dims=("y", "x")).assign_coords(xr_coords(scene.gs.geobox))`.
 
 ## Prepare an image tensor
 
@@ -249,9 +250,9 @@ A tree is an xarray `DataTree` of collections, each holding one `Dataset` per
 grid, named after its pixel size as ESA's EOPF products name theirs (`r10m`,
 `r20m`). Native `xr.DataTree.from_dict` assigns explicit paths; parent Datasets
 preserve collection attrs. Paths describe organization, not grid identity.
-`sample["optical"].gs.to_dataset()` merges compatible nodes sharing the same
-exact grid. For mixed grids, pass `grid=` with a node path or GeoBox, as
-`sample["optical"].gs.to_dataset(grid="r10m")`. `sample.gs.to_tensor()`
+A STAC tree read from a catalog combines one collection at a time:
+`sample.gs.reproject(grid)["optical"].gs.combine_stac()` stacks its Items along
+`time` on one grid. `sample.gs.to_tensor()`
 returns a dictionary of tensors keyed by grid node path (`"optical/r10m"`).
 
 Continue with [raster grids](../concepts/raster-grids.md) for CRS, alignment,

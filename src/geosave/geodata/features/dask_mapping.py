@@ -9,7 +9,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 
-from geosave.geodata.conventions import SPATIAL_DIMENSIONS, TIME_COORDINATE
+from geosave.geodata.conventions import TIME_COORDINATE
 
 
 def map_spatial_overlap(
@@ -46,10 +46,11 @@ def map_spatial_overlap(
         raise ValueError(f"Halo depth must not be negative, got {depth}")
     reference = fields[0]
     dims = tuple(str(dim) for dim in reference.dims)
-    if dims not in (SPATIAL_DIMENSIONS, (TIME_COORDINATE, *SPATIAL_DIMENSIONS)):
+    spatial = reference.gs.spatial_dims
+    if spatial is None or dims not in (spatial, (TIME_COORDINATE, *spatial)):
         raise ValueError(
-            f"Field has dimensions {dims}; expected {SPATIAL_DIMENSIONS}, "
-            f"optionally preceded by {TIME_COORDINATE!r}"
+            f"Field has dimensions {dims}; expected spatial dimensions ODC "
+            f"recognizes, optionally preceded by {TIME_COORDINATE!r}"
         )
 
     # A Dataset shares indexes but allows each variable its own dimension order.
@@ -63,7 +64,7 @@ def map_spatial_overlap(
         def apply(*blocks: np.ndarray) -> np.ndarray:
             return np.asarray(func(*blocks, **func_kwargs), dtype=dtype)
 
-        overlap = tuple(depth if dim in SPATIAL_DIMENSIONS else 0 for dim in dims)
+        overlap = tuple(depth if dim in spatial else 0 for dim in dims)
         values = da.map_overlap(
             apply,
             *(da.asarray(field.data) for field in fields),

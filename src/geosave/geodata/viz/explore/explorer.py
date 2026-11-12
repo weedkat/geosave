@@ -68,7 +68,7 @@ class Explorer(Viewer):
                 Selecting rows displays their footprints; the Raster control
                 opens supported Item assets separately.
             basemap: Basemap name; None uses Light.
-            height: Map height in pixels.
+            height: Inline page height in pixels. Served pages fill the browser.
         """
         if not layers and not tables:
             raise ValueError("an explorer needs layers or tables")
@@ -119,6 +119,28 @@ class Explorer(Viewer):
     def zoom(self, bbox: BoundingBox) -> None:
         """Frame a layer without changing its display settings."""
         self.map.zoom(bbox)
+
+    def snapshot(self) -> hv.Overlay:
+        """Capture the current map as a standalone HoloViews overlay.
+
+        Captures visible layers, date, display settings and viewport. Reading
+        uncached pixels computes them. Pan and zoom remain available after
+        HTML export, but cannot load new pixels. Basemap tiles need network
+        access; sidebar controls, tables and region drawings are not included.
+
+        Returns:
+            Detached map, usable after this Explorer is changed or closed.
+
+        Raises:
+            RuntimeError: This Explorer has been closed.
+
+        Examples:
+            >>> snapshot = viewer.snapshot()
+            >>> hv.save(snapshot, "map.html", backend="bokeh", resources="inline")
+        """
+        if self.is_closed:
+            raise RuntimeError("cannot capture a closed explorer")
+        return self.map.snapshot()
 
     def fit_visible(self) -> None:
         """Frame the rasters and vectors currently drawn on the map."""

@@ -127,7 +127,7 @@ def stamp_item_properties(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
 
 def build_stac_metadata(
     items: Sequence[pystac.Item], collection: pystac.Collection | None
-) -> attrs.StacMetadata:
+) -> attrs.StacCollection:
     """Read Collection metadata and the schemas declared by Items.
 
     Args:
@@ -148,7 +148,7 @@ def build_stac_metadata(
     extensions = []
     for entry in items:
         extensions.extend(entry.stac_extensions)
-    return attrs.StacMetadata(
+    return attrs.StacCollection(
         collection=fields,
         extensions=list(dict.fromkeys(extensions)),
     )

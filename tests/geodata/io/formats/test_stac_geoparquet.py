@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
+from tests.conftest import combine_item
+
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,7 +78,7 @@ def _cog_items(scene, root, name="forest", **options):
     template = _per_band(cog_template(name, dated=dated))
     id = f"{name}_{{start:%Y%m%dT%H%M%S}}" if dated else name
     return (
-        item_table(scene.gs.to_cog(root, format_paths=template), id=id, **options)
+        item_table(write_cogs(scene, root, format_paths=template), id=id, **options)
     ).gs.to_items()
 
 
@@ -124,14 +128,6 @@ def test_items_linking_to_an_api_root_convert_without_reading_it(
     path = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
     assert len(open_vector(path)) == len(items)
-
-
-def test_a_written_table_is_stac_geoparquet(scene, tmp_path) -> None:
-    path = _save(_cog_items(scene, tmp_path), tmp_path / "items.parquet")
-
-    metadata = pq.read_metadata(path).metadata
-    assert b"stac-geoparquet" in metadata
-    assert b"geo" in metadata
 
 
 def test_rows_load_back_as_the_raster_that_was_written(scene, tmp_path) -> None:
@@ -236,10 +232,10 @@ def test_a_batch_concatenated_onto_a_table_reads_back_whole(
     )
 
     rows = open_vector(path)
-    assert sorted({id.split("/")[0] for id in rows["id"]}) == ["s0", "s1"]
+    assert sorted({id.split("-")[0] for id in rows["id"]}) == ["s0", "s1"]
     assert sorted(table.read_collections(path)) == ["label", "optical"]
     restored = read_items(
-        rows[rows["id"].str.startswith("s1/") & (rows["collection"] == "optical")]
+        rows[rows["id"].str.startswith("s1-") & (rows["collection"] == "optical")]
     )
     np.testing.assert_array_equal(restored.red.values, scene.red.values)
     restored.close()
@@ -347,17 +343,17 @@ def test_importing_core_and_io_loads_no_stac() -> None:
 
 def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     optical = build_raster(times=2, packed=True)[["red"]]
-    optical = optical.gs.write_spectral("red", center_wavelength=0.665, target="red")
+    optical = optical.gs.write_spectral("red", center_wavelength=0.665, target=["red"])
     optical = optical.assign(red=optical.red.assign_attrs(units="1"))
     label = build_raster()[["nir"]].astype("uint8").rename(nir="label")
-    label = label.gs.write_legend(
-        {0: "background", 1: "forest"}, {1: "#00ff00"}, target="label"
+    label = label.gs.write_flags(
+        {0: "background", 1: "forest"}, {1: "#00ff00"}, target=["label"]
     )
     when = datetime(2025, 6, 1, tzinfo=UTC)
-    optical_scenes = optical.gs.to_cog(
-        tmp_path, format_paths="optical_{time:%Y%m%d}_{variable}.tif"
+    optical_scenes = write_cogs(
+        optical, tmp_path, format_paths="optical_{time:%Y%m%d}_{variable}.tif"
     )
-    (label_scene,) = label.gs.to_cog(tmp_path, format_paths="{variable}.tif")
+    (label_scene,) = write_cogs(label, tmp_path, format_paths="{variable}.tif")
     rows = create_catalog(
         [
             *create_file_items(optical_scenes, id_format="optical_{start:%Y%m%d}"),
@@ -368,15 +364,15 @@ def test_described_rasters_round_trip_through_the_table(tmp_path) -> None:
     saved = rows.gs.to_geoparquet(tmp_path / "items.parquet")
 
     restored = (open_vector(saved)).gs.to_items()
-    red = load_datatree([restored[0]]).gs.to_dataset().red
-    label = load_datatree([restored[-1]]).gs.to_dataset().label
+    red = combine_item(load_datatree([restored[0]])).red
+    label = combine_item(load_datatree([restored[-1]])).label
     assert RasterExtension.ext(restored[0].assets["red"]).bands[0].data_type == "uint16"
     assert red.attrs["units"] == "1"
     assert red.gs.packing.scale_factor == pytest.approx(1e-4)
     assert red.gs.spectral.common_name == "red"
     assert red.gs.spectral.center_wavelength == 0.665
     assert red.gs.nodata == optical.red.gs.nodata
-    legend = attrs.Legend.model_validate(label.attrs)
+    legend = attrs.CFFlags.from_attrs(label.attrs)
     assert legend.classes == {0: "background", 1: "forest"}
 
 

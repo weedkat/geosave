@@ -69,27 +69,29 @@ def test_item_supplied_time_has_cf_semantics_without_computing_pixels():
 def test_common_properties_follow_selection_and_roundtrip(tmp_path):
     from dask.callbacks import Callback
 
-    ds = build_raster(times=2).chunk().rename(time="date")
-    ds.date.attrs.update(standard_name="time", axis="T")
+    ds = build_raster(times=2).chunk()
     properties = [
         {"platform": "s2a", "eo:cloud_cover": 10.0, "instruments": ["msi"]},
         {"platform": "s2a", "eo:cloud_cover": 40.0},
     ]
     with Callback(pretask=lambda *_: pytest.fail("metadata computed pixels")):
-        recorded = stac_raster.stamp_properties_coordinate(ds, properties, dim="date")
+        recorded = stac_raster.stamp_properties_coordinate(ds, properties, dim="time")
         assert recorded.gs.stac_common_properties == {"platform": "s2a"}
-        assert recorded.isel(date=0).gs.stac_common_properties == properties[0]
-        assert recorded.isel(date=slice(0, 0)).gs.stac_common_properties == {}
-        reversed_dates = recorded.isel(date=[1, 0])
-        assert reversed_dates.gs.stac_properties["eo:cloud_cover"].tolist() == [40.0, 10.0]
-        assert reversed_dates.gs.stac_properties.index.name == "date"
+        assert recorded.isel(time=0).gs.stac_common_properties == properties[0]
+        assert recorded.isel(time=slice(0, 0)).gs.stac_common_properties == {}
+        reversed_dates = recorded.isel(time=[1, 0])
+        assert reversed_dates.gs.stac_properties["eo:cloud_cover"].tolist() == [
+            40.0,
+            10.0,
+        ]
+        assert reversed_dates.gs.stac_properties.index.name == "time"
         assert recorded.red.data is ds.red.data
 
     path = tmp_path / "properties.nc"
     recorded.compute(scheduler="synchronous").to_netcdf(path, engine="scipy")
     with xr.open_dataset(path, engine="scipy") as restored:
         assert restored.gs.stac_common_properties == {"platform": "s2a"}
-        assert restored.isel(date=0).gs.stac_common_properties == properties[0]
+        assert restored.isel(time=0).gs.stac_common_properties == properties[0]
 
 
 def test_timeless_properties_use_one_scalar_record():

@@ -1,10 +1,11 @@
 # Raster grids
 
-Place new pixel values on an existing raster's grid with `write_grid`:
+Place new pixel values on an existing raster's grid with ODC's `xr_coords`:
 
 ```python
 import numpy as np
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -16,12 +17,12 @@ grid = GeoBox.from_bbox(
 )
 scene = (
     xr.Dataset({"red": (("y", "x"), np.arange(16, dtype="uint16").reshape(4, 4))})
-    .gs.write_grid(grid)
+    .assign_coords(xr_coords(grid))
     .gs.write_nodata(65535)
 )
 prediction = (
     xr.Dataset({"label": (("y", "x"), np.ones((4, 4), dtype="uint8"))})
-    .gs.write_grid(scene.gs.geobox)
+    .assign_coords(xr_coords(scene.gs.geobox))
     .gs.write_nodata(255)
 )
 prediction
@@ -52,14 +53,14 @@ Two 256 × 256 arrays can cover different locations or resolutions.
 To combine their pixels spatially, they need the same CRS, transform, and
 shape. Even rasters in the same CRS can have offset pixel centres.
 
-`write_grid(geobox)` places supplied values on a grid's coordinates. It does not
+`assign_coords(xr_coords(geobox))` places supplied values on a grid's coordinates. It does not
 reproject those values: pixels must be as large as the grid, and dimensions must
 end in `y, x`, or it refuses. Coordinates on other dimensions, such as `time`,
 are set with xarray's own constructor and kept.
 
 Nothing is copied from the raster the grid came from, neither its band attrs nor
 its Dataset attrs, since they would not describe how the new raster was
-produced. Write what the new values mean with `write_nodata`, `write_legend` and
+produced. Write what the new values mean with `write_nodata`, `write_flags` and
 the other `write_*` methods.
 
 ## Change a grid explicitly
@@ -98,36 +99,31 @@ tree can keep different grids in separate groups. When all groups share an
 exact grid, the root publishes common spatial coordinates. Otherwise each
 group retains its own coordinates, and the tree has no common `geobox`.
 
-Use `tree.gs.to_dataset(grid=...)` before pixelwise combination. `grid` is a
-node path relative to the node you call on, or a GeoBox; every node is
-reprojected onto it, then merged. Kernels are keyed by variable name, since the
-merged Dataset needs distinct names anyway:
+Use `tree.gs.reproject(...)` before pixelwise combination. It takes an exact
+GeoBox, or a CRS with a `resolution` that covers every node's footprint, and
+states the one grid on the root. One resampling method applies per call:
 
 ```python
-scene = tree.gs.to_dataset(
-    grid="imagery/r10m",
-    resampling={"*": "bilinear", "quality": "nearest", "mask": "nearest"},
-)
+aligned = tree.gs.reproject(reference.gs.geobox, resampling="bilinear")
+aligned = tree.gs.reproject("EPSG:32633", resolution=10)
 ```
 
-Categorical validation checks every variable after resolving its kernel.
-Constructing a tree does not resample it.
+Categorical variables refuse interpolating kernels. Constructing a tree does
+not resample it.
 
 ## Cropping and windows
 
 `isel(y=..., x=...)` selects pixel positions. `.gs.crop(region)` also masks
 pixels outside a geometry, using nodata. Neither operation changes resolution.
 A catalog window's rows open with `.gs.to_datatree()` as one node per STAC
-asset, each on its own grid (`/s2/B04`, `/s2/B11`). `tree.gs.group_grid()`
-merges assets sharing one exact grid into a node named by its pixel size
-(`/s2/r10m`, `/s2/r20m`); `tree["s2"].gs.to_dataset()` merges only nodes on
-one exact grid. For mixed grids, select a reference explicitly before merging:
+asset, each on its own grid (`/s2/<item>/B04`, `/s2/<item>/B11`).
+`tree["s2"].gs.combine_stac()` requires one grid; align mixed grids explicitly first:
 
 ```python
-scene = tree.gs.group_grid()["s2"].gs.to_dataset(grid="r10m")
+scene = tree.gs.reproject(tree["s2/<item>/B04"].gs.geobox)["s2"].gs.combine_stac()
 ```
 
-Conversion does not select a grid or resample pixels.
+Combining does not select a grid or resample pixels.
 
 Reprojection can be lazy for Dask inputs, but interpolation and nodata behavior
 depend on the resampling backend. Check a small representative area before
@@ -137,8 +133,7 @@ running a large job. See [transforms](../reference/transforms.md),
 ## Measured lazy-warp limitation
 
 The current lazy cross-CRS warp can differ numerically from the eager path on
-the same target grid. A synthetic nearest/bilinear comparison, timings, and
-reproduction scripts are in the [performance review](../contributing/benchmarks/2026-11-04/index.md#cross-crs-performance-and-numerical-comparison).
+the same target grid.
 Choose and validate the resampling behavior your data needs; a correct output
 shape and CRS do not by themselves prove equivalent pixels. The review does
 not recommend silently computing a whole raster to hide this limitation.
@@ -154,9 +149,8 @@ grid from the source, optionally using `resolution=`.
 ```python
 projected = raster.gs.reproject("EPSG:4326", resolution=0.0001)
 matched = raster.gs.reproject(reference.gs.geobox)
-scene = tree.gs.to_dataset(grid=reference.gs.geobox)
+aligned = tree.gs.reproject(reference.gs.geobox)
 ```
 
-Raster objects are not destinations. Select their grid explicitly; for a tree
-with different grids, name a node. A tree is not reprojected as a whole; it
-reaches one grid only on its way to a Dataset.
+Raster objects are not destinations; pass their `gs.geobox`. A tree with a CRS
+destination needs `resolution`, since its nodes may differ in pixel size.

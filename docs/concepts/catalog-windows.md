@@ -9,7 +9,7 @@ samples = items.gs.sample(
     interval="raise",
 )
 with samples[0].gs.to_datatree() as tree:
-    optical = tree["s2"].gs.to_dataset()
+    optical = tree["s2"].gs.combine_stac()
 ```
 
 `sample()` plans membership without opening pixels. Collections independently
@@ -110,7 +110,7 @@ Use their normal accessor to load observations:
 
 ```python
 with samples[0].gs.to_datatree() as tree:
-    optical = tree["s2"].gs.to_dataset()
+    optical = tree["s2"].gs.combine_stac()
     monthly = optical.gs.mask_and_scale().gs.composite("MS", "median")
     # Consume lazy pixels before closing their source tree.
     result = monthly.compute()
@@ -132,7 +132,7 @@ samples = items.gs.sample(
     collections=["temperature"], freq="D", window=30, missing="keep",
 )
 with samples[0].gs.to_datatree() as tree:
-    observations = tree["temperature"].gs.to_dataset()
+    observations = tree["temperature"].gs.combine_stac()
     daily = observations.gs.mask_and_scale().gs.composite("D", "mean")
     filled = daily.chunk(time=-1).interpolate_na(dim="time", method="linear")
     result = filled.compute()

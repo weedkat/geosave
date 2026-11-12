@@ -1,9 +1,13 @@
-"""Encode and decode the CF structure GeoSave stores in netCDF and Zarr files."""
+"""Encode and decode the CF structure GeoSave stores in netCDF and Zarr files.
+
+Zarr keeps time cells as start/end coordinates; only netCDF stores CF bounds.
+"""
 
 from __future__ import annotations
 
 
 import cf_xarray  # noqa: F401 registers .cf
+import odc.geo.xr  # noqa: F401 registers .odc
 import xarray as xr
 
 
@@ -102,20 +106,51 @@ def decode_time_bounds(raster: xr.Dataset) -> xr.Dataset:
     return decoded
 
 
-def drop_coordinate_fill(raster: xr.Dataset) -> xr.Dataset:
-    """Keep `_FillValue` off spatial coordinate variables before writing (CF §5).
+def encode_spatial_axes(raster: xr.Dataset) -> xr.Dataset:
+    """Write CF axis metadata and grid mapping links before writing.
+
+    In memory ODC finds spatial axes by name and the CRS coordinate by its
+    attrs; files carry `axis` and `standard_name` (CF §4), each variable's
+    `grid_mapping` (CF §5.6), and no `_FillValue` on coordinates (CF §5).
 
     Args:
         raster: Dataset about to be written.
 
     Returns:
-        Shallow copy whose spatial coordinates encode no fill value.
+        Shallow copy whose spatial coordinates carry CF attrs, or `raster`
+        unchanged without spatial dimensions.
     """
     dims = raster.gs.spatial_dims
     if dims is None:
         return raster
-    encoded = raster.copy()
-    for dim in dims:
-        if dim in encoded.coords:
-            encoded[dim].encoding = {**encoded[dim].encoding, "_FillValue": None}
+    crs = raster.gs.crs
+    if crs is None:
+        names = {}
+    elif crs.geographic:
+        names = dict(zip(dims, ("latitude", "longitude"), strict=True))
+    else:
+        names = dict(
+            zip(
+                dims,
+                ("projection_y_coordinate", "projection_x_coordinate"),
+                strict=True,
+            )
+        )
+    encoded = raster.copy(deep=False)
+    for dim, axis in zip(dims, ("Y", "X"), strict=True):
+        if dim not in encoded.coords:
+            continue
+        coord = encoded[dim].variable
+        coord.attrs = {**coord.attrs, "axis": axis}
+        if dim in names:
+            coord.attrs["standard_name"] = names[dim]
+        coord.encoding = {**coord.encoding, "_FillValue": None}
+    crs_coord = raster.odc.crs_coord
+    if crs_coord is None:
+        return encoded
+    # As an attr the link survives an `encoding=` the caller passes to the writer.
+    for variable in encoded.data_vars.values():
+        if set(dims) <= set(variable.dims):
+            variable.encoding.pop("grid_mapping", None)
+            variable.attrs["grid_mapping"] = str(crs_coord.name)
     return encoded

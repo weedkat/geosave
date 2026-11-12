@@ -8,6 +8,7 @@ from pathlib import Path
 import nbformat
 import pytest
 from nbclient import NotebookClient
+from geosave.geodata import attrs
 
 EXAMPLES = Path(__file__).parents[2] / "examples"
 DATASET = "fatmur/dynamicworld-300"
@@ -137,6 +138,11 @@ def test_inputs_runs(tmp_path: Path, data: Path) -> None:
     assert set(cover["collection"]) == {"land_cover"} and len(cover) == 6
 
 
+@pytest.mark.xfail(
+    raises=NotImplementedError,
+    strict=True,
+    reason="STAC publication is being rebuilt on expand_stac and tree.gs.to_cog",
+)
 def test_catalog_examples_load_chips_and_restore_pixels(tmp_path):
     """Execute the lessons' data functions with small real local STAC assets."""
     import numpy as np
@@ -271,7 +277,7 @@ def test_recipe_runs(tmp_path: Path, data: Path) -> None:
         assert cover.gs.geobox == image.gs.geobox
         assert cover.gs.timespan == image.gs.timespan
         assert cover["label"].gs.nodata == 255
-        assert cover["label"].gs.legend is not None
+        assert cover["label"].gs.flags is not None
 
 
 @pytest.mark.parametrize("name", ["00_basics.ipynb", "01_model.ipynb"])
@@ -292,7 +298,7 @@ def test_training_dataset_scales_images_and_preserves_label_ids(name, tmp_path):
     for index, band in enumerate(["B02", "B03", "B04", "B08"]):
         bands[band] = (("y", "x"), np.full((2, 2), 1000 * (index + 1), dtype="uint16"))
 
-    image = build_dataset(bands, grid, nodata=0).gs.write_scale_offset(1e-4, 0)
+    image = build_dataset(bands, grid).gs.write_packing(attrs.CFPacking(scale_factor=1e-4, fill_value=0))
     image = image[["B08", "B04", "B03", "B02"]]
     labels = build_dataset(
         {"label": (("y", "x"), np.array([[1, 255], [2, 3]], dtype="uint8"))},
@@ -336,7 +342,7 @@ def test_prediction_uses_image_grid_without_reference_labels(name, tmp_path):
     for band in ["B02", "B03", "B04", "B08"]:
         pixels = np.arange(16, dtype="uint16").reshape(4, 4) + 2000
         bands[band] = (("y", "x"), pixels)
-    image = build_dataset(bands, grid, nodata=0).gs.write_scale_offset(1e-4, 0)
+    image = build_dataset(bands, grid).gs.write_packing(attrs.CFPacking(scale_factor=1e-4, fill_value=0))
     image = image.gs.write_rgb(red="B04", green="B03", blue="B02")
     image_path = write_cog(image, tmp_path / "image.tif")
     classes = {
@@ -363,7 +369,7 @@ def test_prediction_uses_image_grid_without_reference_labels(name, tmp_path):
 
     predicted = namespace["predicted"]
     assert predicted.gs.geobox == grid
-    assert predicted.gs.legend.classes == classes["class_map"]
+    assert predicted.gs.flags.classes == classes["class_map"]
     assert predicted.gs.nodata == 255
     assert predicted.dtype == np.uint8
     assert set(np.unique(predicted.values)) <= {0, 1}

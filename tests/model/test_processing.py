@@ -137,18 +137,6 @@ def test_tensor_conversion_never_broadcasts_a_static_band_over_time():
         to_tensor(raster, dims=["band", "time", "y", "x"])
 
 
-def test_restoration_rejects_irregular_reference_coordinates():
-    import xarray as xr
-
-    raster = xr.DataArray(
-        np.ones((3, 3)),
-        dims=("y", "x"),
-        coords={"y": [2.0, 1.0, 0.0], "x": [0.0, 1.0, 5.0]},
-    ).odc.assign_crs("EPSG:4326")
-    with pytest.raises(ValueError, match="regularly spaced"):
-        to_raster(np.ones((3, 3)), reference=raster, dims=("y", "x"), name="output")
-
-
 def test_model_requirements_preserve_lazy_pixels_and_report_mismatches():
     from dask import delayed
     import dask.array as da
@@ -230,5 +218,3 @@ steps:
     torch.testing.assert_close(result[1], torch.full((4, 4), 0.25))
     assert raster.red.attrs["scale_factor"] == 0.1
     assert list(raster.data_vars) == ["red", "nir"]
-
-

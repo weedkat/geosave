@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.conftest import combine_item, write_cogs
+
 import os
 import uuid
 from urllib.parse import urlsplit
@@ -135,7 +137,7 @@ def item_table(paths, *, id=None, prefix=None, **options):
             name = (
                 item.id if id else PurePath(next(iter(item.assets.values())).href).stem
             )
-            item.id = name if prefix is None else f"{prefix}/{name}"
+            item.id = name if prefix is None else f"{prefix}-{name}"
             items.append(item)
     return create_catalog(
         items,
@@ -200,7 +202,7 @@ def build_raster(
                     "_FillValue": np.uint16(0),
                 }
             )
-    return raw.gs.write_crs()
+    return raw
 
 
 @pytest.fixture
@@ -258,25 +260,23 @@ def tree_templates(sample) -> dict[str, str]:
     """Give every group of a tree its `cog_template` relative to the destination."""
     templates = {}
     for name in sample.gs.groups:
-        raster = sample[name].gs.to_dataset()
+        raster = sample[name].gs.combine_stac()
         templates[name] = cog_template(name, dated="time" in raster.dims)
     return templates
 
 
 def write_collection_cogs(tree, root, templates=None) -> dict[str, list]:
-    """Write each collection of a tree as COGs, keyed by collection, as `item_table` takes them."""
+    """Write each collection of a tree as COGs, keyed by collection, as `item_table` takes them.
+
+    A template naming `{variable}` writes a file per variable; otherwise every
+    variable of a date shares one file, as one asset.
+    """
     templates = templates or tree_templates(tree)
     files = {}
     for name in tree.gs.groups:
-        files[name] = (
-            tree[name]
-            .gs.to_dataset()
-            .gs.to_cog(
-                root,
-                format_paths=templates[name],
-                split_asset=("variable",) if "{variable}" in templates[name] else (),
-            )
-        )
+        raster = tree[name].gs.combine_stac()
+        template = templates[name]
+        files[name] = write_cogs(raster, root, template)
     return files
 
 
@@ -287,7 +287,7 @@ def read_items(rows):
 
     scenes = []
     for entry in rows.gs.to_items():
-        scenes.append(load_datatree([entry]).gs.to_dataset())
+        scenes.append(combine_item(load_datatree([entry])))
     if len(scenes) == 1:
         return scenes[0]
     return xr.concat(

@@ -61,7 +61,7 @@ def read_attrs(band: RasterBand) -> RasterAttrs:
     """
     fields: RasterAttrs = {}
     if band.scale is not None or band.offset is not None:
-        packing = attrs.Packing(
+        packing = attrs.CFPacking(
             scale_factor=1.0 if band.scale is None else band.scale,
             add_offset=0.0 if band.offset is None else band.offset,
         )

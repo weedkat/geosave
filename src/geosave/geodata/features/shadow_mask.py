@@ -51,7 +51,7 @@ def shadow_mask(
     mask = scene[cloud]
     if mask.dtype != bool:
         raise ValueError(f"cloud mask is {mask.dtype}, not boolean")
-    mask.gs.validate(georeferenced=True, affine=True)
+    mask.gs.validate()
     geobox = cast("GeoBox", mask.gs.geobox)
     if cast("CRS", geobox.crs).units != ("metre", "metre"):
         raise ValueError(

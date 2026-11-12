@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from geosave.geodata.core.raster.transform.packing import mask_missing
+from geosave.geodata.core.raster.transform.nodata import mask_missing
 
 from typing import cast
 
@@ -144,7 +144,7 @@ class RasterLayer(Layer):
 
         # 2. The spatial bands, and the band and composite chosen among them
         self.bands = []
-        for band_name in raster.gs.raster_variables:
+        for band_name in raster.gs.variables:
             variable = raster[band_name]
             if variable.gs.spatial_dims is not None:
                 self.bands.append(str(band_name))
@@ -193,7 +193,7 @@ class RasterLayer(Layer):
     @staticmethod
     def _check_mappable(raster: xr.Dataset) -> None:
         """Refuse a raster a web map cannot place."""
-        raster.gs.validate(georeferenced=True, same_grid=True)
+        raster.gs.validate()
         bounds = raster.gs.bounds
         if raster.gs.crs.geographic and bounds.right > 180:
             # Web Mercator reads longitudes past 180° as the ones they wrap to,
@@ -229,14 +229,14 @@ class RasterLayer(Layer):
 
     def _read_axes(self, raster: xr.Dataset) -> dict[str, list[str]]:
         """Return the labels of each band axis besides the grid and time."""
+        spatial = raster.gs.spatial_dims or ()
         axes = {}
         for name in self.bands:
-            for axis, labels in raster[name].gs.axes.items():
-                if axis == "time" or axis in axes:
+            for dim in raster[name].dims:
+                if dim in spatial or dim == "time" or dim in axes:
                     continue
-                if labels is None:
-                    labels = np.arange(raster.sizes[axis])
-                axes[axis] = [str(label) for label in labels]
+                labels = raster[name].get_index(dim)
+                axes[str(dim)] = [str(label) for label in labels]
         return axes
 
     @property
@@ -280,7 +280,7 @@ class RasterLayer(Layer):
         if self.is_rgb or legend is None or not legend.classes:
             return None
         swatches = {}
-        colors = legend.colors
+        colors = self.data[self.band].gs.class_colors or {}
         for code, title in legend.classes.items():
             swatches[str(title)] = colors[code]
         return swatches
@@ -302,8 +302,8 @@ class RasterLayer(Layer):
 
     @property
     def legend(self):
-        """Return the selected band's declared class legend, if any."""
-        return self.data[self.band].gs.legend if not self.is_rgb else None
+        """Return the selected band's CF flags, which name its classes, if any."""
+        return self.data[self.band].gs.flags if not self.is_rgb else None
 
     def select_shown_bands(self):
         """Select the current date, steps and bands without reading pixels."""
@@ -401,7 +401,12 @@ class RasterLayer(Layer):
     def _read_pixels(self, geobox: GeoBox) -> xr.Dataset:
         """Read the shown bands onto `geobox`: from the row's files, or computed."""
         if self.row is None:
-            return self.select_shown_bands().gs.read_pixels(geobox)
+            shown = self.select_shown_bands()
+            variables = {}
+            for name in shown.gs.variables:
+                variables[name] = mask_missing(shown[name]).variable
+            floats = shown.assign(variables).astype("float32")
+            return floats.gs.reproject(geobox).compute()
         names = list(self.select_shown_bands().data_vars)
         return self.row.gs.read_pixels(geobox, variables=names)
 
@@ -423,6 +428,9 @@ class RasterLayer(Layer):
             # Classes take their legend's colours, as `.gs.plot` draws them;
             # a pixel no class names is transparent.
             classes = stamp_attrs(sampled[self.band], legend)
+            display = self.data[self.band].gs.display
+            if display is not None:
+                classes = stamp_attrs(classes, display)
             red, green, blue = classes.gs.colorize().values
             shown = np.isfinite(red).astype("float32")
             red, green, blue = (
@@ -546,12 +554,11 @@ class RasterLayer(Layer):
         if not (bounds.left <= x <= bounds.right and bounds.bottom <= y <= bounds.top):
             return {}
         y_dim, x_dim = self.data.gs.spatial_dims
-        data = (
-            self.select_shown_bands()
-            .gs._map_variables(mask_missing)
-            .sel({x_dim: x, y_dim: y}, method="nearest")
-            .compute()
-        )
+        data = self.select_shown_bands().sel({x_dim: x, y_dim: y}, method="nearest")
+        variables = {}
+        for name, variable in data.data_vars.items():
+            variables[name] = mask_missing(variable).variable
+        data = data.assign(variables).compute()
         return {str(name): str(value.item()) for name, value in data.data_vars.items()}
 
     def get_info(self):

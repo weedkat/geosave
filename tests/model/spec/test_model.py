@@ -11,6 +11,7 @@ import xarray as xr
 from tests.model.spec import operations
 from geosave.model.spec import Input, ModelSpec, Step
 from geosave.model.spec.reference import Reference
+from tests.conftest import place
 
 
 TEXT = Path(__file__).with_name("model_spec.yaml").read_text()
@@ -118,9 +119,9 @@ def test_downstream_option_does_not_enter_acquisition(spec, monkeypatch):
 
     def predict(raster, batch_size):
         calls.append(batch_size)
-        return xr.DataArray(
-            np.zeros((2, 4, 4)), dims=("class", "y", "x")
-        ).gs.write_grid(raster.gs.geobox)
+        return xr.DataArray(np.zeros((2, 4, 4)), dims=("class", "y", "x")).pipe(
+            place, raster.gs.geobox
+        )
 
     monkeypatch.setattr(operations, "predict", predict)
     spec.run(

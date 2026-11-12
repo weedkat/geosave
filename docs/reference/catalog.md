@@ -26,54 +26,43 @@ coverage, while permitting timeless rows. `area=True` requires valid geometries
 with positive area. Geometry, CRS, temporal and Item-column checks can be
 requested independently; `geometry=False` skips the default geometry check.
 
-## Publish raster assets
+## Raster persistence and publication
+
+Raster `to_item` and `to_catalog` currently raise `NotImplementedError` on
+DataArray, Dataset and DataTree while publication moves to the Item/asset tree.
+
+Write one selected array to an explicit file independently of STAC:
 
 ```python
-import geosave as gs
-
-catalog = ds.gs.to_catalog(
-    "data", format_paths="{collection}/{time:%Y%m%d}/{variable}.tif", collection="s2"
-)
-catalog.gs.to_geoparquet("data/catalog.parquet")
+path = ds["red"].isel(time=0).gs.to_cog("data/red.tif")
+pending = ds["red"].isel(time=0).gs.to_gtiff("data/red-copy.tif", compute=False)
+pending.compute()
 ```
 
-The path names raster assets. Its suffix chooses COG, Zarr or NetCDF. Templates
-use the same path fields as `to_cog`, such as `{collection}`, `{time}` and
-`{variable}`; `split_item` and `split_asset` control file splitting. DataTrees use group names as collections and accept
-one template or a mapping of group names to templates. A Dataset can receive
-a collection id or a PySTAC Collection; the latter is retained in the GDF.
-Each Item describes one observation, so multiple dates require `{time}` even
-for Zarr and NetCDF publication.
-
-Writes complete before the catalog is returned. Save the catalog separately
-with `to_geoparquet`, the same method ordinary vector features use. The writer
-selects STAC encoding when `attrs["stac-geoparquet"]` is present. It preserves
-Collection definitions and portable asset references; malformed metadata or
-missing Item fields raise instead of falling back to feature encoding.
-A catalog comes from xarray: `to_catalog` writes the raster's files and builds
-one Item per date from the raster itself, with the STAC metadata it carries.
-A saved catalog opens again with `open_vector`.
+These array writers do not split observations or format paths. Existing native
+Items can still become a catalog with `gs.create_catalog(items)`. Save the
+catalog with `catalog.gs.to_geoparquet(...)`; ordinary feature tables use the
+same method, with format selection based on the table's STAC metadata.
 
 ## Group samples and open pixels
 
 ```python
 samples = catalog.gs.sample(collections=["s2"], window=2)
-tree = samples[0].gs.to_datatree().gs.group_grid()
-scene = tree["s2"].gs.to_dataset(grid="r10m")
+tree = samples[0].gs.to_datatree().gs.reproject(grid)
+scene = tree["s2"].gs.combine_stac()
 chips = gs.Chips([scene], size=128, constant_value=0)
 ```
 
 Sampling groups Items without opening pixels and returns `GeoSamples`: the
 item table, slot membership and each sample's row positions. `samples[i]` returns
 one sample's native rows,
-whose `gs.to_datatree()` opens a lazy DataTree, `/{collection}/{asset}`: one
-node per STAC asset on the grid it states. `tree.gs.group_grid()` merges assets
-sharing one grid into nodes named by pixel size (`r10m`, `r20m`).
-One Item row's `gs.to_datatree()` opens its scene the same way, and
-`.gs.to_dataset()` combines all raster nodes in the selected subtree, including
-organizational groups, only when they share an exact grid. Select `tree["s2"]`
-to limit the inputs and explicitly align mixed grids before conversion.
-Variables must have unique names and compatible coordinates.
+whose `gs.to_datatree()` opens a lazy DataTree, `/{collection}/{item}/{asset}`:
+one node per STAC asset on the grid it states. `tree.gs.reproject(grid)` aligns
+every asset onto one grid. `tree["s2"].gs.combine_stac()` then merges each Item's
+assets and stacks the Items along `time`, with their IDs as an `id` coordinate;
+on an Item it merges that Item's assets. Collections keep independent timelines,
+so combine one at a time. To go straight from a catalog to one grid, use
+`catalog.gs.to_dataset(geobox)`, which also mosaics tiles of one date.
 Chips accepts prepared Datasets or DataArrays, each on one regular grid, and
 returns each chip as a lazy xarray object from `gs.crop_to_grid`. Select and align
 the scene before chipping; convert chips with `gs.to_numpy(dtype=...)`.

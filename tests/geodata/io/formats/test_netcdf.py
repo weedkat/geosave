@@ -14,6 +14,9 @@ from geosave.geodata.io.formats import netcdf
 from tests.geodata.conftest import _size, build_raster
 
 
+from geosave.geodata import io
+
+
 @pytest.mark.parametrize("crs", ["EPSG:32749", "EPSG:4326"])
 @pytest.mark.parametrize("times", [0, 2])
 def test_netcdf_round_trip_preserves_the_profile(
@@ -27,7 +30,8 @@ def test_netcdf_round_trip_preserves_the_profile(
     assert restored.gs.geobox == written.gs.geobox
     assert restored.red.dtype == np.dtype("uint16")
     assert int(restored.red.values.ravel()[0]) == 1000
-    assert restored["y"].attrs["standard_name"] == written["y"].attrs["standard_name"]
+    expected = "latitude" if crs == "EPSG:4326" else "projection_y_coordinate"
+    assert restored["y"].attrs["standard_name"] == expected
 
 
 def test_netcdf_reads_a_file_url(tmp_path: Path) -> None:
@@ -186,3 +190,56 @@ def test_a_foreign_cf_file_decodes_to_start_and_end(tmp_path):
 
     assert {"start_datetime", "end_datetime"} <= set(back.coords)
     assert "nv" not in back.dims
+
+
+@pytest.mark.parametrize("suffix", ["nc"])
+def test_tree_bounds_roundtrip_as_start_and_end(tmp_path, suffix):
+    from geosave.geodata.io import open_raster
+
+    time = np.array(["2025-01-15"], dtype="datetime64[ns]")
+    root = xr.Dataset(
+        {
+            "cells": (
+                ("time", "vertices"),
+                np.array([["2025-01-01", "2025-02-01"]], dtype="datetime64[ns]"),
+            )
+        },
+        coords={"time": ("time", time, {"standard_name": "time", "bounds": "cells"})},
+    )
+    tree = xr.DataTree.from_dict(
+        {".": root, "image": build_raster().expand_dims(time=time)}
+    )
+    path = tmp_path / f"tree.{suffix}"
+    if suffix == "nc":
+        tree.gs.to_netcdf(path)
+    else:
+        tree.gs.to_zarr(path)
+    with open_raster(path) as restored:
+        assert list(restored.gs.datasets) == ["image"]
+        assert restored.gs.timespan[0].day == 1
+        image = restored.gs.datasets["image"]
+        # Stored CF bounds come back as the cell coordinates every reader uses.
+        assert "cells" not in image.variables
+        np.testing.assert_array_equal(
+            image.start_datetime.values, root.cells.values[:, 0]
+        )
+        np.testing.assert_array_equal(
+            image.end_datetime.values, root.cells.values[:, 1]
+        )
+
+
+def test_explicit_output_encoding_uses_current_physical_values(tmp_path):
+    source = build_raster(packed=True)
+    result = source.gs.mask_and_scale() * 2
+    path = tmp_path / "new.nc"
+    settings = {}
+    for name in result.data_vars:
+        settings[name] = {
+            "dtype": "uint16",
+            "scale_factor": 0.0002,
+            "_FillValue": 65535,
+        }
+
+    netcdf.write_netcdf(result, path, encoding=settings)
+    with io.open_raster(path, mask_and_scale=True) as restored:
+        xr.testing.assert_allclose(restored, result)

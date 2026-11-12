@@ -17,6 +17,9 @@ when learning to use GeoSave.
 GeoSave adds accessors and contracts around these objects. A separate wrapper
 should own an invariant that the native object cannot represent cleanly.
 
+See [DataArray, Dataset, and DataTree](../concepts/xarray-structure.md) for
+their dimensions, coordinates, indexes, and node inheritance, with printouts.
+
 ```mermaid
 flowchart LR
     ml --> model
@@ -41,6 +44,52 @@ additional dependencies when their modules are imported.
 Prefect jobs live in `geosave_flows`, a second import package in the same
 distribution, installed with `pip install "geosave[flows]"`. Those jobs compose
 public GeoSave APIs; `geosave` imports neither `geosave_flows` nor Prefect.
+
+## Raster structure
+
+`.gs` works on 2-D georeferenced rasters, as odc-geo does: one grid, optional
+`time` observations, and a `band` axis only where `to_array` stacks
+variables. In memory a raster has the structure ODC produces; the accessor finds
+every part by name, as ODC does. Depth, ensembles and rotated poles are out of
+scope; such layouts are renamed by the caller or belong to an extension.
+
+```text
+<xarray.Dataset>
+Dimensions:  ([time], [band], y, x)      projected → y/x, geographic → latitude/longitude
+Coordinates:
+  * time            datetime64           "time" by name (odc-stac, wrap_xr)
+    start_datetime  (time)               ┐ time cell: STAC period, composite bin
+    end_datetime    (time)               ┘
+    stac_properties (time)               STAC Item properties as JSON
+  * y, x            ODC units, resolution
+    spatial_ref     crs_wkt, GeoTransform
+Data variables:  bands with attr groups (CFPacking, CFFlags, CFDescription, EOBand, Display.color_map)
+Attributes:      StacCollection, ACDD, ACDDExtent (Item footprint), Display.rgb
+```
+
+GeoSave adds time cells, STAC metadata on the object, band attr groups and the
+declared extent over ODC. Grid operations are ODC's; `gs.spatial_dims`,
+`gs.geobox`, `gs.crs`, `gs.transform`, `gs.map_bounds()` and
+`gs.output_geobox()` are shorthands for `.odc`. Place bare pixels with
+`odc.geo.xr.wrap_xr`, declare a CRS with `.odc.assign_crs`. `gs.validate()`
+requires a grid ODC recognizes, with a CRS; pixel operations (`to_numpy`,
+`to_array`, `mask`) need only spatial dimensions.
+
+CF is a file encoding, applied by `core/raster/utils/cf.py`:
+
+| Part | Zarr | netCDF | GeoTIFF/COG |
+| --- | --- | --- | --- |
+| time cell | `start_datetime`/`end_datetime` as stored | CF `time_bounds` (§7.1) | `TIFFTAG_DATETIME`, ACDD `time_coverage_*` |
+| spatial axes | `axis`, `standard_name` (§4), no coordinate `_FillValue` | same | GeoTIFF keys |
+| CRS link | `var:grid_mapping` attr | same | GeoTIFF keys |
+| display | `rgb`, `color_map` attrs | same | `Display.rgb` → red/green/blue colour interpretation, `color_map` → colour table; `variable_name` band tag |
+| ACDD | attrs | attrs | GDAL metadata; `tiff_tags=True` writes `title`, `summary`, `license`, `institution` as baseline TIFF tags |
+
+Attr groups name the standard owning their keys: `CFDescription` (CF ch. 3),
+`CFPacking` (CF §8.1 + §2.5.1: scale, offset, fill, valid range), `CFFlags`
+(CF §3.5), `EOBand` (STAC eo), `ACDD`/`ACDDExtent`, `StacCollection`, and
+GeoSave's own `Display`. Band metadata is per variable and constant along
+`time`; Items whose packing differs are refused at load.
 
 ## Data flow
 
@@ -83,8 +132,7 @@ not `ml/tasks`; Prefect orchestration stays outside the model package.
   Collection/resolution paths are loader and publication conventions, not
   requirements on native DataTree structure. Aligning a tree's nodes always
   takes an explicit target, `how=`; no grid is chosen implicitly.
-- `core/raster/utils/grid.py` owns spatial coordinates and grid metadata;
-  concrete Dataset and DataArray accessors own reading and assigning temporal
+- Concrete Dataset and DataArray accessors own reading and assigning temporal
   coverage coordinates.
   These describe existing observations without changing their pixels. Date
   parsing and calendar calculations stay in `utils/datetime.py`. Accessor
@@ -100,7 +148,7 @@ not `ml/tasks`; Prefect orchestration stays outside the model package.
   published metadata and combine attrs using native policies; `attrs/stamp.py` applies attribute groups. The
   loader places Collection metadata on the Dataset root or collection node,
   and per-observation properties follow ODC's actual grouped time axis.
-- Rasters are built with xarray's own constructors and placed with `write_grid`;
+- Rasters are built with xarray's own constructors and placed with ODC's `wrap_xr`;
   `xr.DataTree.from_dict` assigns explicit paths and parent attrs. Tree
   `gs.to_dataset()` merges compatible same-grid nodes; `gs.align(how=...)`
   explicitly prepares mixed grids before conversion.
@@ -132,7 +180,7 @@ not `ml/tasks`; Prefect orchestration stays outside the model package.
   `layers/` is the model: each layer is a Parameterized holding its
   data and live display settings, draws its viewport, and returns its legend
   as plain values; a `VectorLayer` of catalog rows owns the rasters its
-  raster column opens. Pixels come from geodata's `.gs.read_pixels`.
+  raster column opens. Catalog pixels come from the row's `.gs.read_pixels`.
   `explorer.py` owns the sources, the derived shown layers, the selection and
   the basemap. `page/` is the view, one module per region of the screen: it
   binds widgets to that state by reference, and keeps a class (`Map`,
@@ -194,10 +242,6 @@ not `ml/tasks`; Prefect orchestration stays outside the model package.
   identity. Decoding, casting, resampling, and coordinate changes are explicit.
   See [metadata behavior](../concepts/metadata.md) for the CF representation
   lifecycle and native writer contracts.
-- Raster inspection and Chips discover spatial dimensions, including CF
-  latitude/longitude axes. Some operations still require `y, x`; normalization
-  is explicit. CF coordinate metadata distinguishes projected coordinates from
-  latitude and longitude.
 - Keep internal helpers with the package that uses them. Share an implementation
   only when written callers need the same behavior.
 - Generated workspaces compose library APIs. Edit `src/templates/` to
@@ -215,9 +259,8 @@ or incomplete coverage. Categories live in `geodata.warnings` and derive from
 GeoSaveWarning. The [error reference](../reference/errors.md) lists them.
 
 Tests mirror `src/geosave/`. Persistence tests check round trips; lazy operations
-check deferred execution as well as computed values. Open decisions and active design
-proposals live beside this page: [open decisions](open-decisions.md) and
-[design specs](specs/index.md).
+check deferred execution as well as computed values. Unsettled proposals live in
+[open decisions](open-decisions.md).
 
 ### Explorer component ownership
 
@@ -242,9 +285,11 @@ server start/stop mechanics; Explorer owns independent session copies.
 
 RasterLayer owns a byte-bounded LRU of viewport pixel windows, with a separate
 active-window fast path for over-budget images. The 128 MiB default limits
-retained pixel windows, not total process memory or rendering buffers. Pixel
-reading remains in geodata I/O, including `read_scene_pixels`; no tile server,
-global raster cache, or alternate reader was introduced.
+retained pixel windows, not total process memory or rendering buffers. Catalog-backed
+layers read selected bands through `row.gs.read_pixels` → `stac.load_dataset`
+on the viewport grid; ODC handles COG overviews and source windows. Dataset-only
+layers mask, cast to float32 and `gs.reproject` onto the viewport grid.
+Neither path changes the layer's viewport cache.
 
 ### Sample ownership
 
@@ -255,3 +300,14 @@ execution settings. Explicit `.gs.composite()` reduces decoded observations;
 its optional `interpolation` fills gaps in the reduced pixels through native
 `.interpolate_na()` without inventing observation metadata. No GeoSample wrapper or grouper
 loader exists.
+
+### Raster persistence pause
+
+Raster `to_item` and `to_catalog` raise `NotImplementedError` while publication
+moves to the Item/asset tree. DataArray `to_cog` and `to_gtiff` delegate one
+explicit file to the format writer; they do not split observations or format
+paths. The format writer owns band layout and stored metadata. Dataset/tree
+COG batch writing retains its existing splitting contract pending that review.
+Packing belongs to each concrete accessor: one array, selected raster variables,
+or native tree traversal over Dataset operations. The base declares the public
+packing methods without a shared variable-mapping hook.

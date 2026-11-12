@@ -11,6 +11,12 @@ from dask.callbacks import Callback
 
 from geosave.geodata.viz.explore import Explorer, RasterLayer
 
+import holoviews as hv
+import numpy as np
+from bokeh.document import Document
+from bokeh.models import GlyphRenderer
+from geosave.geodata.viz.explore import VectorLayer
+
 
 @pytest.fixture
 def checked_catalog(scene, fields):
@@ -192,6 +198,8 @@ def test_obsolete_catalog_result_does_not_change_selection(
 
 
 def test_catalog_filter_sort_pagination_keep_row_identity(catalog):
+    import odc.stac
+
     viewer = Explorer(tables={"Scenes": catalog}, basemap="None")
     table = viewer.table
     table.page_size = 1
@@ -199,7 +207,8 @@ def test_catalog_filter_sort_pagination_keep_row_identity(catalog):
     table.page = 2
     table.filters = [{"field": "id", "type": "=", "value": catalog.iloc[2]["id"]}]
     viewer.table.raster_rows = [2]
-    expected = catalog.iloc[2].gs.to_datatree().gs.to_dataset()
+    (parsed,) = odc.stac.parse_items([catalog.iloc[2].gs.to_item()])
+    expected = catalog.iloc[[2]].gs.to_dataset(parsed.geoboxes()[0])
     xr.testing.assert_equal(viewer.layers[-1].data.B04, expected.B04)
     table.filters = []
     assert table.value["raster"].tolist() == [False, False, True]
@@ -325,7 +334,7 @@ def test_catalog_open_failure_preserves_selection_and_existing_layers(
         raise OSError("unavailable file")
 
     # The native row reader owns the error; the explorer keeps its last successful selection.
-    monkeypatch.setattr(type(catalog.iloc[0].gs), "to_datatree", fail)
+    monkeypatch.setattr(type(catalog.iloc[0].gs), "to_item", fail)
     viewer.table.raster_rows = [0]
     assert len(viewer.layers) == 0
     assert viewer.table.raster_rows == []
@@ -334,13 +343,11 @@ def test_catalog_open_failure_preserves_selection_and_existing_layers(
 
 
 def test_class_legend_without_colors_is_visible(scene):
-    from geosave.geodata.attrs import Legend, stamp_attrs
-
     data = scene[["cover"]].copy()
-    data["cover"] = stamp_attrs(data.cover, Legend(classes={0: "water", 1: "trees"}))
+    data["cover"] = data.cover.gs.write_flags({0: "water", 1: "trees"})
     layer = RasterLayer(data)
     assert set(layer.swatches) == {"water", "trees"}
-    assert data.cover.gs.legend.color_map is None
+    assert data.cover.gs.display is None
     plot = layer.draw(None).values()[0]
     assert plot.dimension_values(plot.vdims[-1]).max() == 1
 
@@ -783,5 +790,100 @@ def test_tables_start_unselected_and_keep_selection_when_switching(fields):
         viewer.remove(viewer.layers[0])
         assert first.selection == []
         assert second.selection == [0]
+    finally:
+        viewer.close()
+
+
+@pytest.mark.parametrize("display", ["B04", "cover", "rgb"])
+def test_snapshot_survives_style_changes_and_close(scene, fields, tmp_path, display):
+    layer = RasterLayer(scene, band=None if display == "rgb" else display)
+    viewer = Explorer(layers=[layer, VectorLayer(fields)], basemap="None")
+    try:
+        snapshot = viewer.snapshot()
+        figure = hv.render(snapshot, backend="bokeh")
+        images = []
+        for renderer in figure.select(GlyphRenderer):
+            if "image" in renderer.data_source.data:
+                images.extend(renderer.data_source.data["image"])
+        assert images
+        expected = [image.copy() for image in images]
+        bounds = (figure.x_range.start, figure.x_range.end)
+
+        layer.alpha = 0.2
+        layer.band = "B03"
+        viewer.map.ranges.event(
+            x_range=(bounds[0] + 100, bounds[1] + 100),
+            y_range=viewer.map.ranges.y_range,
+        )
+    finally:
+        viewer.close()
+
+    # Render again after releasing the live caches and subscriptions.
+    figure = hv.render(snapshot, backend="bokeh")
+    assert figure.match_aspect
+    extent_ratio = (figure.x_range.end - figure.x_range.start) / (
+        figure.y_range.end - figure.y_range.start
+    )
+    assert figure.frame_width / figure.frame_height == pytest.approx(
+        extent_ratio, abs=1 / figure.frame_height
+    )
+    actual = []
+    for renderer in figure.select(GlyphRenderer):
+        if "image" in renderer.data_source.data:
+            actual.extend(renderer.data_source.data["image"])
+    assert len(actual) == len(expected)
+    for before, after in zip(expected, actual, strict=True):
+        np.testing.assert_array_equal(before, after)
+    assert (figure.x_range.start, figure.x_range.end) == bounds
+    assert not any(
+        model._callbacks or model._event_callbacks for model in figure.references()
+    )
+
+    # Round-trip the browser document, including its binary image arrays.
+    document = Document()
+    document.add_root(figure)
+    restored = Document.from_json(document.to_json(deferred=False))
+    assert restored.roots[0].x_range.start == bounds[0]
+    destination = tmp_path / "map.html"
+    hv.save(snapshot, destination, backend="bokeh", resources="inline")
+    html = destination.read_text()
+    assert "Bokeh" in html
+    assert '<script src="https://cdn.bokeh.org' not in html
+
+
+def test_snapshot_uses_visibility_and_comparison(scene):
+    first = RasterLayer(scene, band="B04")
+    second = RasterLayer(scene * 2, band="B03")
+    viewer = Explorer(layers=[first, second], basemap="None")
+    try:
+        viewer.comparison.enabled = True
+        snapshot = viewer.snapshot()
+        images = snapshot.traverse(lambda element: element, [hv.Image])
+        assert len(images) == 1
+        assert images[0].vdims[0].name == "B04"
+        first.visible = False
+        second.visible = False
+        assert not viewer.snapshot().traverse(lambda element: element, [hv.Image])
+    finally:
+        viewer.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        viewer.snapshot()
+
+
+def test_snapshot_keeps_selected_date(monthly):
+    import pandas as pd
+
+    viewer = Explorer(layers=[RasterLayer(monthly, band="B04")], basemap="None")
+    try:
+        viewer.period = pd.Period("2024-04", freq="M")
+        snapshot = viewer.snapshot()
+        image = snapshot.traverse(lambda element: element, [hv.Image])[0]
+        april = image.dimension_values("B04", flat=False).copy()
+        viewer.period = pd.Period("2024-05", freq="M")
+        may = viewer.snapshot().traverse(lambda element: element, [hv.Image])[0]
+        np.testing.assert_allclose(
+            may.dimension_values("B04", flat=False), april * 1.5, rtol=1e-6
+        )
+        np.testing.assert_array_equal(image.dimension_values("B04", flat=False), april)
     finally:
         viewer.close()

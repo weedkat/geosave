@@ -44,6 +44,7 @@ nav = [
     { "Concepts" = [
         { "Overview" = "concepts/index.md" },
         { "How the library works" = "concepts/data-flow.md" },
+        { "DataArray, Dataset, and DataTree" = "concepts/xarray-structure.md" },
         { "Raster grids" = "concepts/raster-grids.md" },
         { "Metadata and pixel values" = "concepts/metadata.md" },
         { "Lazy execution" = "concepts/lazy-data.md" },
@@ -102,7 +103,6 @@ nav = [
         { "Architecture" = "contributing/architecture.md" },
         { "Maintain the documentation" = "contributing/documentation.md" },
         { "Open decisions" = "contributing/open-decisions.md" },
-        { "Design specs" = "contributing/specs/index.md" },
     ] },
 ]
 

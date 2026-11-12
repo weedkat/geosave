@@ -31,7 +31,8 @@ def test_zarr_round_trip_preserves_the_profile(
     assert restored.red.dtype == np.dtype("uint16")
     assert int(restored.red.values.ravel()[0]) == 1000
     assert restored.red.dims[-2:] == ("y", "x")
-    assert restored["y"].attrs["standard_name"] == written["y"].attrs["standard_name"]
+    expected = "latitude" if crs == "EPSG:4326" else "projection_y_coordinate"
+    assert restored["y"].attrs["standard_name"] == expected
     assert restored["x"].attrs["axis"] == "X"
     if times:
         assert restored.sizes["time"] == times
@@ -223,7 +224,7 @@ def test_relative_stores_open_after_changing_directory(tmp_path, monkeypatch):
     build_tree({"image": source}).gs.to_zarr("scene.zarr")
     with open_raster("scene.zarr") as opened:
         monkeypatch.chdir(tmp_path.parent)
-        child = opened["image"].gs.to_dataset()
+        child = opened["image"].gs.combine_stac()
         assert "time" in child.coords
         assert "spatial_ref" in child.coords
 
@@ -241,7 +242,7 @@ def test_a_stacked_arrays_attrs_survive_storage(tmp_path):
     )
     source.attrs = {"units": "root-unit", "title": "scene"}
     source.red.attrs = {"units": "band-unit"}
-    stacked = source.gs.to_dataarray()
+    stacked = source.gs.to_array()
     assert isinstance(stacked.data, da.Array)
     path = zarr.write_zarr(stacked.to_dataset(name="pixels"), tmp_path / "bands.zarr")
 
@@ -269,10 +270,10 @@ def test_a_selected_stored_band_keeps_the_shared_attrs_and_lazy_pixels(tmp_path)
         grid,
     )
     source.attrs = {"title": "scene", "nodata": -9999}
-    source.red.attrs = {"nodata": 0, "long_name": "red", "units": "1"}
-    source.nir.attrs = {"nodata": 1, "long_name": "nir", "units": "1"}
+    source.red.attrs = {"_FillValue": np.uint16(0), "long_name": "red", "units": "1"}
+    source.nir.attrs = {"_FillValue": np.uint16(1), "long_name": "nir", "units": "1"}
     path = zarr.write_zarr(
-        source.gs.mask_and_scale().gs.to_dataarray().to_dataset(name="pixels"),
+        source.gs.mask_and_scale().gs.to_array().to_dataset(name="pixels"),
         tmp_path / "bands.zarr",
     )
 
@@ -297,7 +298,7 @@ def test_stored_nodata_preserves_child_crs_and_restacking(tmp_path):
     store = build_tree({"optical": source}).gs.to_zarr(tmp_path / "raw.zarr")
 
     with open_raster(store) as restored:
-        child = restored["optical"].gs.to_dataset()
+        child = restored["optical"].gs.combine_stac()
         assert "spatial_ref" in child.coords
         assert "spatial_ref" not in child.data_vars
         assert child.gs.geobox == grid
@@ -316,10 +317,10 @@ def test_rewriting_a_loaded_child_retains_scalar_time_and_grid(tmp_path):
     source = source.assign_coords(time=np.datetime64("2025-06-01", "ns"))
     store = build_tree({"optical": source}).gs.to_zarr(tmp_path / "raw.zarr")
     with open_raster(store) as restored:
-        child = restored["optical"].gs.to_dataset()
+        child = restored["optical"].gs.combine_stac()
         copied = build_tree({"derived": child}).gs.to_zarr(tmp_path / "copied.zarr")
     with open_raster(copied) as restored:
-        child = restored["derived"].gs.to_dataset()
+        child = restored["derived"].gs.combine_stac()
         assert child.gs.geobox == grid
         assert child.time.values == source.time.values
         np.testing.assert_array_equal(child.red, source.red)
@@ -333,7 +334,7 @@ def test_nan_band_metadata_survives_stacked_storage(tmp_path):
         nodata=np.nan,
     )
     path = zarr.write_zarr(
-        source.gs.to_dataarray().to_dataset(name="pixels"), tmp_path / "nan-bands.zarr"
+        source.gs.to_array().to_dataset(name="pixels"), tmp_path / "nan-bands.zarr"
     )
     with open_raster(path, chunks={}) as reopened:
         restored = reopened.pixels.gs.to_dataset(dim="band")
@@ -374,17 +375,14 @@ def test_a_tree_round_trips_through_one_zarr_store(tmp_path):
             )
 
 
-def test_zarr_stores_cells_as_cf_bounds_and_reads_them_back(tmp_path):
+def test_zarr_stores_cells_as_start_and_end_coordinates(tmp_path):
     from tests.geodata.conftest import build_dated_raster
 
     raster = build_dated_raster()
     path = zarr.write_zarr(raster, tmp_path / "a.zarr")
 
-    time = orjson.loads((path / "time" / "zarr.json").read_bytes())["attributes"]
-    bounds = orjson.loads((path / "time_bounds" / "zarr.json").read_bytes())
-    assert time["bounds"] == "time_bounds"
-    assert bounds["attributes"].get("units", time["units"]) == time["units"]
-    assert not (path / "start_datetime").exists()
+    assert (path / "start_datetime").exists()
+    assert not (path / "time_bounds").exists()
     back = zarr.open_zarr(path)
     for name in ("time", "start_datetime", "end_datetime"):
         np.testing.assert_array_equal(back[name].values, raster[name].values)
@@ -404,9 +402,7 @@ def test_tree_cells_round_trip_on_their_collection_node(tmp_path):
     )
     path = zarr.write_zarr(tree, tmp_path / "tree.zarr")
 
-    # The collection group stores CF bounds, not start/end variables.
-    assert (path / "s2" / "time_bounds").exists()
-    assert not (path / "s2" / "start_datetime").exists()
+    assert (path / "s2" / "start_datetime").exists()
     back = zarr.open_zarr(path)
 
     child = back["s2/r10m"].to_dataset(inherit="all_coords")

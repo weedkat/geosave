@@ -42,7 +42,7 @@ from geosave.geodata import io
 
 # One Item, one node per exact native grid. Closing the tree closes its files.
 with io.open_item(item) as tree:
-    pixels = tree.gs.to_dataset().compute()  # when the Item has one grid
+    pixels = tree[f"{item.collection_id}/{item.id}"].gs.combine_stac().compute()  # when the Item has one grid
 
 # Several selected Items, explicitly assembled onto a common grid.
 cube = stac.load_dataset(items, geobox=grid, groupby="id")

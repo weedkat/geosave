@@ -1,3 +1,4 @@
+from tests.conftest import write_cogs
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from geosave.model.chain import chain_step
 from geosave.model.processing import to_raster
 from modules.segmentation import supervised
 from modules.segmentation.supervised import datasets
+from tests.conftest import place
 
 
 class Segmenter(torch.nn.Module):
@@ -37,15 +39,15 @@ def files(tmp_path):
             np.full((8, 8), value, dtype="uint16"), dims=("y", "x")
         )
         image[band].attrs.update(scale_factor=0.0001, _FillValue=65535)
-    image = image.gs.write_grid(grid)
-    target = xr.Dataset(
-        {"label": (("y", "x"), np.zeros((8, 8), dtype="uint8"))}
-    ).gs.write_grid(grid)
+    image = image.pipe(place, grid)
+    target = xr.Dataset({"label": (("y", "x"), np.zeros((8, 8), dtype="uint8"))}).pipe(
+        place, grid
+    )
     target.label.values[:, 4:] = 1
     target.label.values[0, 0] = 99
     target.label.attrs["_FillValue"] = 99
-    image.gs.to_cog(tmp_path, split_asset=(), format_paths="image.tif")
-    target.gs.to_cog(tmp_path, split_asset=(), format_paths="label.tif")
+    write_cogs(image, tmp_path, format_paths="image.tif")
+    write_cogs(target, tmp_path, format_paths="label.tif")
     spec = ModelSpec.load(
         Path(datasets.__file__).parents[3]
         / "configs/segmentation-supervised/model_spec.yaml"
@@ -117,7 +119,7 @@ def test_raster_pairs_train_reload_and_predict_without_catalog(tmp_path, files):
         prediction[0], reference=image, dims=["band", "y", "x"], name="logits"
     )
     output = logits.argmax("band").rename("classes")
-    output.gs.to_cog(tmp_path, format_paths="prediction.tif")
+    output.gs.to_cog(tmp_path / "prediction.tif")
     with gs.open_raster(tmp_path / "prediction.tif") as reread:
         assert reread.gs.geobox == image.gs.geobox
         np.testing.assert_array_equal(reread.classes.values, output.values)
@@ -130,8 +132,8 @@ def test_raster_pairs_reject_unsafe_training_data(tmp_path, files, problem):
     image, target, spec = files
     message = ""
     if problem == "grid":
-        target = target.gs.write_grid(
-            GeoBox.from_bbox((10, 0, 90, 80), "EPSG:32633", resolution=10)
+        target = target.pipe(
+            place, GeoBox.from_bbox((10, 0, 90, 80), "EPSG:32633", resolution=10)
         )
         message = "grid"
     elif problem == "fraction":
@@ -143,9 +145,7 @@ def test_raster_pairs_reject_unsafe_training_data(tmp_path, files, problem):
         message = "class"
     elif problem == "image_nodata":
         image.B02.values[1, 1] = 65535
-        image.gs.to_cog(
-            tmp_path, split_asset=(), format_paths="image.tif", overwrite=True
-        )
+        write_cogs(image, tmp_path, format_paths="image.tif", overwrite=True)
         message = "finite"
     else:
         # Validate the same selected-raster requirement without file splitting by time.
@@ -156,7 +156,7 @@ def test_raster_pairs_reject_unsafe_training_data(tmp_path, files, problem):
                 raster=image.expand_dims(time=[0, 1]),
             )
         return
-    target.gs.to_cog(tmp_path, split_asset=(), format_paths="label.tif", overwrite=True)
+    write_cogs(target, tmp_path, format_paths="label.tif", overwrite=True)
     with pytest.raises(ValueError, match=message):
         open_dataset(tmp_path, spec)[0]
 

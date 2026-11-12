@@ -104,14 +104,13 @@ def vectorize(
     connectivity: Literal[4, 8] = 4,
 ) -> GeoDataFrame:
     """Polygonize one raster plane with explicit validity and value identity."""
-    from geosave.geodata.conventions import SPATIAL_DIMENSIONS
-
-    flags.gs.validate(georeferenced=True, affine=True)
+    flags.gs.validate()
     geobox = cast("GeoBox", flags.gs.geobox)
-    if flags.ndim != 2 or tuple(flags.dims) != SPATIAL_DIMENSIONS:
+    dims = flags.gs.spatial_dims
+    if flags.ndim != 2 or tuple(flags.dims) != dims:
         raise ValueError(
             "vectorize needs one two-dimensional spatial plane on "
-            f"{SPATIAL_DIMENSIONS}; select extra dimensions from {flags.dims} first"
+            f"{dims}; select extra dimensions from {flags.dims} first"
         )
     if value_name == "geometry":
         raise ValueError("value_name must not replace the geometry column")

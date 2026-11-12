@@ -10,12 +10,14 @@ Create a searchable table from a saved image:
 
 ```python
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pystac
 
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -28,7 +30,7 @@ grid = GeoBox.from_bbox(
 )
 region = gs.GeoRegion.from_geometry(grid.extent, timespan='2025-01-01')
 pixels = np.random.default_rng(0).integers(1, 3000, (64, 64), dtype="uint16")
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid)).gs.write_nodata(0)
 scene = scene.expand_dims(time=[np.datetime64("2025-01-01")])
 
 # Choose the Collection extent deliberately; publication preserves it.
@@ -36,10 +38,16 @@ everywhere = pystac.Extent(
     pystac.SpatialExtent([[-180, -90, 180, 90]]), pystac.TemporalExtent([[None, None]])
 )
 collection = pystac.Collection("forest", "Forest samples", everywhere)
-items = scene.gs.to_catalog(
-    root / "samples", format_paths="forest_{time:%Y%m%d}.tif",
-    format_id="forest_{time:%Y%m%d}", collection=collection,
+# Raster publication accessors are paused. Write a file and describe it explicitly.
+from geosave.geodata.stac.publish import create_stac_item
+
+asset = scene.red.isel(time=0).gs.to_cog(root / "samples" / "red.tif")
+item = create_stac_item(
+    {"red": asset}, id="forest_20250101",
+    input_datetime=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    collection=collection.id, with_proj=True, with_raster=True,
 )
+items = gs.create_catalog([item], collections=[collection])
 path = items.gs.to_geoparquet(root / "catalog.parquet")
 items[["collection", "datetime"]]
 ```
@@ -60,37 +68,14 @@ Here `items` is a GeoPandas `GeoDataFrame`, with one Item per row. Properties
 are table columns; `assets` contains the nested file descriptions. The
 GeoParquet file stores this metadata, while the pixels remain in the TIFF.
 
-`to_catalog` writes the files and builds one Item per date from the raster
-itself: its grid, dates, band attrs, and the STAC metadata it carries (see
-[properties and Collections](#preserve-properties-and-collection-definitions)).
-A selected tree subtree describes one observation series across its grids.
-Collection membership comes from metadata or a native `collection=` argument,
-not node names. The result is a native GeoDataFrame.
+Raster `to_item` and `to_catalog` currently raise `NotImplementedError` while
+publication moves to the Item/asset tree. Array `to_cog` and `to_gtiff` write
+one explicit file; select observations before writing. The saved-file Item
+constructor above remains available, with observation metadata supplied explicitly.
 
-| Task | Input | Public call | Output |
-| --- | --- | --- | --- |
-| Catalog a raster | Dataset, DataArray or DataTree, folder and path format | `raster.gs.to_catalog(path, format_paths=...)` | Item GeoDataFrame of the files written. |
-| Search a table | GeoParquet path and query | `gs.StacClient.open(path).search(query)` | Matching Item GeoDataFrame. |
-| Search a service | API endpoint and query | `gs.StacClient.open(endpoint).search(query)` | Matching Item GeoDataFrame. |
-| Load a collection | Selected Items and output-grid settings | `stac.load_dataset(items, geobox=grid)` | Dataset on the target grid; Dask-backed by default. |
-
-`split_item=("time",)` creates one Item per time label. Dataset variables become
-separate assets by default, `split_asset=("variable",)`; use `split_asset=()`
-for a multiband file. A DataArray's bands count as its variables. Formatting only names those
-outputs: it never selects or splits data. A single asset is named `asset`.
-
-Use `format_id` with scalar coordinates, or `id` for one explicit identity.
-Default IDs use the observation time or interval and additional split coordinates.
-Undated rasters require `input_datetime=` or explicit `start_datetime` and
-`end_datetime` properties. Missing time, duplicate identities, and colliding paths
-fail before writing.
-
-`scene.gs.to_item(...)` saves the same assets and returns one native PySTAC Item.
-Use `gs.create_catalog([item])` to convert existing Items without raster writes.
+`gs.create_catalog(items)` converts existing native Items without raster writes.
 Collections can remain in memory without a self href; STAC GeoParquet embeds
-their definitions in its footer. Exporting standalone JSON links requires actual
-Collection document addresses, assigned with `collection.set_self_href(...)`.
-That method does not save or upload the document.
+their definitions in its footer.
 
 ## Search the local table
 
@@ -177,7 +162,7 @@ Collection metadata is supplied explicitly and never fetched by a loader.
 
 ```python
 tree = stac.load_datatree(selected, collection=client.collection("forest"))
-tree.gs.group_grid()            # assets on one grid merge into r10m, r20m, ...
+scene = tree.gs.reproject(grid)["forest"].gs.combine_stac()   # Items along time on one grid
 ```
 
 A tree has a collection node and one node per STAC asset, each on the exact
@@ -257,29 +242,27 @@ raster = stac.load_dataset(
 )
 raster.gs.stac_properties              # one row per date: the requested properties
 clear = raster.sel(time=raster.gs.stac_properties["eo:cloud_cover"] < 30)
-catalog = clear.gs.to_catalog(root / "prepared", format_paths="{time:%Y%m%d}_{asset}.tif")
-catalog.gs.to_geoparquet(root / "prepared.parquet")
+clear.red.isel(time=0).gs.to_cog(root / "prepared" / "red.tif")
 ```
 
-A loaded raster carries its STAC metadata, so `to_catalog` needs nothing more:
+A loaded raster carries metadata for analysis and future tree publication:
 
 | Metadata | Lives on | Read with |
 | --- | --- | --- |
-| Collection | root `StacMetadata` attrs | `raster.gs.stac_collection` |
+| Collection | root `StacCollection` attrs | `raster.gs.stac_collection` |
 | Properties shared by selected observations | derived from `stac_properties` | `raster.gs.stac_common_properties` |
 | Properties requested with `with_properties` | `stac_properties` coordinate, one JSON mapping per date | `raster.gs.stac_properties` |
 
-Each published Item reads its observation's property mapping.
+The planned publisher will read each observation's property mapping.
 No other coordinate becomes a property, and dates, `proj:*` and band fields
 always come from the raster's own time, grid and attrs. A date odc-stac builds
 from several Items takes its fused value of each requested property; an Item
 lacking a key leaves it out. Cropping does not recalculate source cloud cover:
 recompute it or drop it from `stac_properties` when it no longer describes the
-output. A derived product, such as a composite, names its own collection with
-`to_catalog(..., collection=...)`.
+output. Publication of derived products remains pending.
 
 Reopening a catalog row with `row.gs.to_datatree()` puts its properties back on
-`stac_properties` and its Collection on `StacMetadata`, so catalog, xarray and
+`stac_properties` and its Collection on `StacCollection`, so catalog, xarray and
 catalog again agree. Composite nominal time and explicit resampling bounds are
 both published when those bounds are present on the raster. `stac.load_dataset`
 keeps ODC's time representation and does not reconstruct composite bounds.

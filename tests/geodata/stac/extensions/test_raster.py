@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import write_cogs
+
 import dask
 import numpy as np
 import pytest
@@ -19,9 +21,7 @@ def _refuse(*args, **kwargs):
 
 def test_a_saved_cog_states_what_it_stores(scene, tmp_path) -> None:
     (file, *_) = flat(
-        scene.gs.to_cog(
-            tmp_path, split_asset=(), format_paths="forest_{time:%Y%m%d}.tif"
-        )
+        write_cogs(scene, tmp_path, format_paths="forest_{time:%Y%m%d}.tif")
     )
 
     with open_raster(file) as saved, dask.config.set(scheduler=_refuse):

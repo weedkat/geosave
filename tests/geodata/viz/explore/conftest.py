@@ -1,3 +1,4 @@
+from tests.conftest import write_cogs
 import geopandas as gpd
 import numpy as np
 import pytest
@@ -23,8 +24,8 @@ def scene() -> xr.Dataset:
         create_grid(),
     )
     raster["cover"] = (("y", "x"), (values > 0.5).astype("uint8"))
-    raster = raster.gs.write_legend(
-        {0: "water", 1: "trees"}, {0: "#419bdf", 1: "#397d49"}, target="cover"
+    raster = raster.gs.write_flags(
+        {0: "water", 1: "trees"}, {0: "#419bdf", 1: "#397d49"}, target=["cover"]
     )
     return raster.gs.write_rgb("B04", "B03", "B02")
 
@@ -55,8 +56,8 @@ def fields() -> gpd.GeoDataFrame:
 def catalog(monthly: xr.Dataset, tmp_path) -> gpd.GeoDataFrame:
     """An item table of the monthly scene, one COG per date."""
 
-    files = monthly[["B04"]].gs.to_cog(
-        tmp_path, format_paths="s_{time:%Y%m%d}_{variable}.tif"
+    files = write_cogs(
+        monthly[["B04"]], tmp_path, format_paths="s_{time:%Y%m%d}_{variable}.tif"
     )
     collection = create_test_collection("monthly", description="Monthly imagery")
     return create_catalog(
@@ -79,7 +80,7 @@ def rgb_catalog(scene: xr.Dataset, tmp_path):
         scene.gs.geobox,
         time=np.datetime64("2024-03-05"),
     ).gs.write_rgb("red", "green", "blue")
-    files = image.gs.to_cog(tmp_path, format_paths="rgb.tif")
+    files = write_cogs(image, tmp_path, format_paths="rgb.tif")
     collection = create_test_collection("rgb", description="Browser RGB fixture")
     items = create_catalog(
         create_file_items(files, id_format="rgb", collection=collection),

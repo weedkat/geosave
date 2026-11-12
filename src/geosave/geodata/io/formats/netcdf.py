@@ -178,7 +178,7 @@ def _write(
 ) -> UPath:
     """Write a checked raster to a local file, uploading it when the store is remote."""
     from geosave.geodata.core.raster.utils.cf import (
-        drop_coordinate_fill,
+        encode_spatial_axes,
         encode_time_bounds,
     )
 
@@ -187,7 +187,7 @@ def _write(
         nodes = {}
         for node in raster.subtree:
             dataset = node.to_dataset(inherit=False)
-            nodes[node.path] = drop_coordinate_fill(encode_time_bounds(dataset))
+            nodes[node.path] = encode_spatial_axes(encode_time_bounds(dataset))
         raster = xr.DataTree.from_dict(nodes)
         shared = dict(options.pop("encoding", None) or {})
         encoding: dict[str, dict[Hashable, Any]] = {}
@@ -200,7 +200,7 @@ def _write(
         # A group's grid mapping must sit in that group for its CF decoding.
         options["write_inherited_coords"] = True
     else:
-        raster = drop_coordinate_fill(encode_time_bounds(raster))
+        raster = encode_spatial_axes(encode_time_bounds(raster))
 
     def save(target: Path) -> None:
         raster.to_netcdf(target, mode="w", engine=engine, compute=True, **options)

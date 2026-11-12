@@ -1,4 +1,4 @@
-"""Apply positional or named boolean masks to one raster array."""
+"""Mask missing pixels or apply boolean masks to one raster array."""
 
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ def mask_with_da(
 
     # Equivalent CRS carriers can have different scalar placeholder values.
     # Keep the raster's carrier rather than merging it with the condition's.
-    for name in mask.gs.grid_mapping_coords:
-        mask = mask.drop_vars(name)
+    if mask.odc.crs_coord is not None:
+        mask = mask.drop_vars(mask.odc.crs_coord.name)
 
     if fill is None:
         packing = raster.gs.packing
@@ -49,3 +49,15 @@ def mask_with_da(
         raster = raster.gs.write_nodata(fill)
 
     return raster.where(mask, fill)
+
+
+def mask_missing(array: xr.DataArray) -> xr.DataArray:
+    """Decode CF missing values for display without changing stored-value units."""
+    from xarray.coding.variables import CFMaskCoder
+
+    variable = array.variable.copy(deep=False)
+    variable.encoding.setdefault("dtype", array.dtype)
+    masked = CFMaskCoder().decode(variable, name=array.name)
+    result = xr.DataArray(masked, coords=array.coords, name=array.name)
+    result.encoding = dict(masked.encoding)
+    return result

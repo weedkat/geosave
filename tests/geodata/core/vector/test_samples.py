@@ -101,12 +101,13 @@ def test_grouped_rows_load_raw_dates_and_prepare_explicitly(tiles):
     rows = samples[0]
     assert rows.equals(tiles.iloc[samples.indices[0]])
     with rows.gs.to_datatree() as tree:
-        optical = tree["s2"].gs.to_dataset()
-        radar = tree["s1"].gs.to_dataset()
+        optical = tree["s2"].gs.combine_stac()
+        radar = tree["s1"].gs.combine_stac()
         assert optical.sizes["time"] == 3
         assert radar.sizes["time"] == 2
         assert radar.gs.resolution.x == 20
-        assert "time" not in tree["dem"].gs.to_dataset().dims
+        (dem,) = tree["dem"].children.values()
+        assert "time" not in dem.gs.combine_stac().dims
         assert pd.DatetimeIndex(optical.time.values).day.tolist() == [5, 20, 4]
         monthly = optical.gs.mask_and_scale().gs.composite("MS", "mean")
         assert monthly.red.chunks is not None
@@ -123,7 +124,7 @@ def test_missing_slots_do_not_modify_selected_rows_or_loaded_dates(tiles):
     samples = rows.gs.sample(collections=["s2"], freq="MS", window=3, missing="keep")
     assert samples.slots[0].iloc[1]["indices"] == []
     with samples[0].gs.to_datatree() as tree:
-        observations = tree["s2"].gs.to_dataset()
+        observations = tree["s2"].gs.combine_stac()
         assert 2 not in pd.DatetimeIndex(observations.time.values).month
         monthly = observations.gs.mask_and_scale().gs.composite("MS", "mean")
         assert monthly.red.isel(time=1).isnull().all().compute().item()
@@ -133,7 +134,7 @@ def test_missing_slots_do_not_modify_selected_rows_or_loaded_dates(tiles):
 
 
 def test_selected_collection_metadata_describes_all_rows(tiles):
-    from geosave.geodata.attrs import StacMetadata
+    from geosave.geodata.attrs import StacCollection
     from geosave.geodata.stac.catalog import create_catalog
 
     entries = tiles.gs.to_items()
@@ -142,7 +143,7 @@ def test_selected_collection_metadata_describes_all_rows(tiles):
     rows = create_catalog(entries)
     samples = rows.gs.sample(collections=["s2"], freq="MS", window=2)
     with samples[0].gs.to_datatree() as tree:
-        metadata = StacMetadata.from_attrs(tree["s2"].attrs)
+        metadata = StacCollection.from_attrs(tree["s2"].attrs)
         assert metadata is not None
         assert "platform" not in tree["s2"].to_dataset().gs.stac_common_properties
 

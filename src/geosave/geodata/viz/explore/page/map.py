@@ -42,6 +42,11 @@ BASEMAPS = {
 CLICK_TOLERANCE = 5
 
 
+def set_map_aspect(plot, _):
+    """Keep Web Mercator metres square as the browser sizes the map."""
+    plot.state.match_aspect = True
+
+
 def scope_hover(plot, _):
     """Keep dynamically added glyphs out of unrelated attribute hover tools.
 
@@ -80,7 +85,7 @@ class Map(Viewer):
     clicked_values = param.Dict(default=None, allow_None=True)
 
     def __init__(self, explorer: Explorer, height: int) -> None:
-        """Frame every layer of `explorer` in a map `height` pixels tall."""
+        """Frame every layer, using `height` before a browser size is available."""
         super().__init__()
         self._explorer = explorer
         self.height = height
@@ -124,9 +129,7 @@ class Map(Viewer):
                 transient=True,
             ),
         ]
-        self.pane = pn.ui.HoloViews(
-            backend="bokeh", sizing_mode="stretch_width", height=height
-        )
+        self.pane = pn.ui.HoloViews(backend="bokeh", sizing_mode="stretch_both")
         # Every event redraws: a repeated settings event, or a zoom to the
         # range already shown, must still run the hooks. Layers keep their own
         # caches, so a redraw reads no pixels it already has.
@@ -176,6 +179,28 @@ class Map(Viewer):
         """Frame `bbox`, in Web Mercator metres, keeping the map's aspect."""
         self._frame_extent(frame_bbox(bbox))
 
+    def snapshot(self) -> hv.Overlay:
+        """Freeze the current view without live streams or drawing tools."""
+        plot = self._draw(**self.ranges.contents)
+        # The invisible anchor carries the live viewport streams. Detach every
+        # element so rendering the snapshot cannot subscribe to this map.
+        snapshot = plot.map(lambda element: element.clone(link=False), hv.Element)
+        left, right = self.ranges.x_range
+        bottom, top = self.ranges.y_range
+        # A standalone map has no Python resize callback to adjust its ranges.
+        # Fix the frame's aspect to the captured extent instead.
+        return snapshot.opts(
+            responsive=False,
+            width=None,
+            height=None,
+            frame_width=max(1, round(self.height * (right - left) / (top - bottom))),
+            frame_height=self.height,
+            hooks=[scope_hover, set_map_aspect],
+            tools=["hover"],
+            active_tools=["pan", "wheel_zoom"],
+            backend="bokeh",
+        )
+
     def _draw(self, x_range=None, y_range=None, **_: Any) -> hv.Overlay:
         # HoloViews attaches a stream to the plot at its source's position in
         # the overlay, so the anchor leads and keeps its position as layers
@@ -207,7 +232,7 @@ class Map(Viewer):
         return plot.opts(
             projection=gv.tile_sources.OSM.crs,
             responsive=True,
-            height=self.height,
+            height=None,
             xlim=self.ranges.x_range,
             ylim=self.ranges.y_range,
             xaxis=None,
@@ -227,7 +252,7 @@ class Map(Viewer):
         # data_aspect instead resizes the figure, first to thousands of pixels
         # tall; tiles fetched for that never draw, so the page never idles.
         # HoloViews resets it on each redraw.
-        figure.match_aspect = True
+        set_map_aspect(plot, _)
         if self.region.has_tools(figure):
             return
         # Hover starts off; the toolbar's hover button turns it on.

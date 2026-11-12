@@ -40,18 +40,6 @@ class BandAttrs(
     """CF storage, spectral and classification attrs published for a band."""
 
 
-def read_aliases(asset: pystac.Asset) -> list[tuple[str, ...]]:
-    """Return each band's published name and common name, in band order."""
-    aliases = []
-    for entry in _read_fields(asset):
-        names = (
-            entry.get("name"),
-            entry.get("common_name", entry.get("eo:common_name")),
-        )
-        aliases.append(tuple(name for name in names if name is not None))
-    return aliases
-
-
 def read_attrs(asset: pystac.Asset, index: int) -> BandAttrs:
     """Translate one published band into raster attrs.
 

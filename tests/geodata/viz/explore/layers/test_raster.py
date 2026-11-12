@@ -1,8 +1,10 @@
+from tests.conftest import write_cogs
 import dask.array as da
 import numpy as np
 import pytest
 from dask.callbacks import Callback
 
+from geosave.geodata.io.formats.geotiff import write_cog
 from geosave.geodata.viz.explore import RasterLayer
 
 
@@ -11,6 +13,7 @@ def restore_plot_backend():
     import holoviews as hv
 
     backend = hv.Store.current_backend
+    hv.extension("bokeh")
     yield
     hv.Store.set_current_backend(backend)
 
@@ -27,17 +30,17 @@ def create_layer_view(layer):
 
 
 def count_reads(monkeypatch) -> list:
-    """Record each Dataset passed to `GeoDataset.read_pixels`."""
+    """Record each Dataset a layer reprojects onto its view."""
     from geosave.geodata.core.raster.dataset import GeoDataset
 
     read_data = []
-    original = GeoDataset.read_pixels
+    original = GeoDataset.reproject
 
-    def read_and_record(self, geobox):
+    def read_and_record(self, how, **options):
         read_data.append(self._data)
-        return original(self, geobox)
+        return original(self, how, **options)
 
-    monkeypatch.setattr(GeoDataset, "read_pixels", read_and_record)
+    monkeypatch.setattr(GeoDataset, "reproject", read_and_record)
     return read_data
 
 
@@ -111,6 +114,8 @@ def test_a_read_covers_only_the_shown_date(monthly, monkeypatch):
 
 
 def test_row_layer_reads_its_rows_shown_bands(catalog, monkeypatch):
+    import odc.stac
+
     from geosave.geodata.core.vector.item import GeoCatalogItem
 
     requested = []
@@ -122,7 +127,8 @@ def test_row_layer_reads_its_rows_shown_bands(catalog, monkeypatch):
 
     monkeypatch.setattr(GeoCatalogItem, "read_pixels", read_and_record)
     row = catalog.iloc[1]
-    layer = RasterLayer(row.gs.to_datatree().gs.to_dataset(), row=row)
+    (parsed,) = odc.stac.parse_items([row.gs.to_item()])
+    layer = RasterLayer(catalog.iloc[[1]].gs.to_dataset(parsed.geoboxes()[0]), row=row)
 
     image = layer.draw(create_layer_view(layer)).values()[0]
 
@@ -147,9 +153,7 @@ def test_geographic_file_renders_through_its_windows(tmp_path):
     grid = GeoBox.from_bbox((100, 0, 101, 1), "EPSG:4326", shape=(64, 64))
     values = np.random.default_rng(0).random((64, 64)).astype("float32")
     path = tmp_path / "geographic.tif"
-    build_raster({"value": (("y", "x"), values)}, grid).gs.to_cog(
-        path.parent, split_asset=(), format_paths=path.name
-    )
+    write_cog(build_raster({"value": (("y", "x"), values)}, grid), path)
 
     pixels = _render_pixels(RasterLayer(open_raster(path)))
 
@@ -296,7 +300,7 @@ def test_rgb_scene_overview_is_bounded(scene, tmp_path):
         grid,
     ).gs.write_rgb(*scene.gs.rgb)
     path = tmp_path / "rgb.tif"
-    data.gs.to_cog(path.parent, split_asset=(), format_paths=path.name)
+    write_cogs(data, path.parent, format_paths=path.name)
     loaded = open_raster(path)
     layer = RasterLayer(loaded)
     sampled = loaded.isel(x=slice(0, 32), y=slice(0, 32)).compute()
@@ -382,3 +386,54 @@ def test_identify_uses_declared_spatial_dimensions():
     scene.col.attrs["axis"] = "X"
     layer = RasterLayer(scene)
     assert layer.identify(float(scene.col[1]), float(scene.row[0])) == {"value": "1.0"}
+
+
+def test_multiband_item_viewport_uses_the_loaded_band_names(tmp_path):
+    from datetime import UTC, datetime
+
+    from geosave.geodata.io.formats.geotiff import write_cog
+    from geosave.geodata.stac.catalog import create_catalog
+    from geosave.geodata.stac.publish import create_stac_item
+    from tests.geodata.conftest import build_raster
+
+    source = build_raster()
+    source.red.data = np.full_like(source.red.data, 2)
+    source.nir.data = np.full_like(source.nir.data, 4)
+    path = write_cog(source, tmp_path / "image.tif")
+    entry = create_stac_item(
+        {"image": path},
+        id="scene",
+        input_datetime=datetime(2025, 1, 1, tzinfo=UTC),
+        with_proj=True,
+        with_raster=True,
+    )
+    entry.assets["image"].extra_fields["bands"] = [{"name": "red"}, {"name": "nir"}]
+    catalog = create_catalog([entry])
+    row = catalog.iloc[0]
+    scene = catalog.gs.to_dataset(source.gs.geobox)
+    name = list(scene.data_vars)[1]
+    layer = RasterLayer(scene, row=row, band=name)
+
+    pixels = layer._read_pixels(source.gs.geobox)
+
+    assert list(pixels.data_vars) == [name]
+    assert pixels.gs.geobox == source.gs.geobox
+    assert pixels[name].dims == ("y", "x")
+    np.testing.assert_array_equal(pixels[name], 4)
+
+
+def test_dataset_viewport_keeps_calculations_on_file_pixels(tmp_path):
+    from geosave.geodata.io import open_raster
+    from geosave.geodata.io.formats.geotiff import write_cog
+    from tests.geodata.conftest import build_raster
+
+    source = build_raster()[["red"]]
+    source.red.data = np.full_like(source.red.data, 2)
+    path = write_cog(source, tmp_path / "red.tif")
+    with open_raster(path) as loaded:
+        changed = loaded.assign(red=loaded.red * 3)
+        layer = RasterLayer(changed)
+
+        pixels = layer._read_pixels(source.gs.geobox)
+
+    np.testing.assert_array_equal(pixels.red, 6)

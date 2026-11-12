@@ -7,6 +7,7 @@ from matplotlib.axes import Axes
 from odc.geo.geobox import GeoBox
 
 from tests.conftest import build_dataset as build_raster
+from geosave.geodata import attrs
 
 matplotlib.use("agg")
 hv.extension("matplotlib")
@@ -25,7 +26,9 @@ def geobox() -> GeoBox:
 def optical() -> xr.Dataset:
     values = np.arange(16, dtype="uint16").reshape(4, 4) * 100
     raster = build_raster({"B04": (("y", "x"), values)}, geobox())
-    return raster.gs.write_scale_offset(1e-4, target="B04").gs.write_nodata(0, target="B04")
+    return raster.gs.write_packing(attrs.CFPacking(scale_factor=1e-4), target=["B04"]).gs.write_nodata(
+        0, target=["B04"]
+    )
 
 
 @pytest.fixture
@@ -35,10 +38,10 @@ def labels() -> xr.Dataset:
         [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
     )
     raster = build_raster({"landcover": (("y", "x"), codes)}, geobox())
-    return raster.gs.write_legend(
+    return raster.gs.write_flags(
         {0: "water", 1: "trees", 8: "snow"},
         {0: "#419bdf", 1: "#397d49", 8: "#b39fe1"},
-        target="landcover",
+        target=["landcover"],
     )
 
 
@@ -95,10 +98,10 @@ class TestClassMap:
         hv.render(drawn)
 
     def test_accepts_an_rgb_tuple_palette(self, labels: xr.Dataset) -> None:
-        recoloured = labels.gs.write_legend(
+        recoloured = labels.gs.write_flags(
             {0: "water", 1: "trees", 8: "snow"},
             {0: (65, 155, 223), 1: (57, 125, 73), 8: (179, 159, 225)},
-            target="landcover",
+            target=["landcover"],
         )
 
         red = map_of(recoloured.gs.plot("landcover")).dimension_values("R", flat=False)
@@ -110,8 +113,8 @@ class TestClassMap:
             [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
         )
         raster = build_raster({"cover": (("y", "x"), codes)}, geobox(), nodata=0)
-        raster = raster.gs.write_legend(
-            {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target="cover"
+        raster = raster.gs.write_flags(
+            {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target=["cover"]
         )
 
         drawn = map_of(raster.gs.plot("cover"))
@@ -128,8 +131,8 @@ class TestClassMap:
         values = np.zeros((4, 4), dtype="uint8")
         values[2:] = 1
         raster = build_raster({"cover": (("y", "x"), values)}, geobox())
-        raster = raster.gs.write_legend(
-            {0: "water", 1: "trees"}, {0: "#419bdf"}, target="cover"
+        raster = raster.gs.write_flags(
+            {0: "water", 1: "trees"}, {0: "#419bdf"}, target=["cover"]
         )
 
         red = map_of(raster.gs.plot("cover")).dimension_values("R", flat=False)

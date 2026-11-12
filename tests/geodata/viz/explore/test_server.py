@@ -17,10 +17,132 @@ from types import SimpleNamespace
 import panel as pn
 import pytest
 
-from geosave.geodata.viz.explore import Explorer
+from geosave.geodata.viz.explore import Explorer, RasterLayer
 from geosave.geodata.viz.explore.server import servers
 
 pytestmark = pytest.mark.slow
+
+
+def test_header_download_survives_server_shutdown(scene, port, tmp_path):
+    playwright = pytest.importorskip("playwright.sync_api")
+    viewer = Explorer(
+        layers=[RasterLayer(scene, band="cover", name="Land cover")], basemap="None"
+    )
+    viewer.serve(port=port, threaded=True, open=False, verbose=False)
+    try:
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(
+                executable_path=os.environ.get("GEOSAVE_BROWSER"),
+                args=["--no-sandbox"],
+            )
+            page = browser.new_page(viewport={"width": 1400, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://localhost:{port}/")
+            download = page.get_by_role("button").filter(has_text="Export map")
+            download.wait_for(timeout=60000)
+            page.locator("canvas").first.wait_for(state="visible")
+            original_width = page.locator(".bk-Canvas").first.bounding_box()["width"]
+            page.get_by_role("button", name="Close drawer", exact=True).click()
+            page.get_by_role("button", name="Open drawer", exact=True).wait_for()
+            page.wait_for_function(
+                """([canvas, container, original]) =>
+                    container.getBoundingClientRect().width > original * 1.1 && Math.abs(
+                    canvas.getBoundingClientRect().width -
+                    container.getBoundingClientRect().width
+                ) < 2""",
+                arg=[
+                    page.locator("canvas").first.element_handle(),
+                    page.locator(".bk-Canvas").first.element_handle(),
+                    original_width,
+                ],
+                timeout=5000,
+            )
+            with page.expect_download(timeout=60000) as pending:
+                download.click()
+            destination = tmp_path / "map.html"
+            pending.value.save_as(destination)
+            page.get_by_role("button", name="Open drawer", exact=True).click()
+            page.get_by_role("button", name="Close drawer", exact=True).wait_for()
+            page.wait_for_function(
+                """([canvas, original]) => Math.abs(
+                    canvas.getBoundingClientRect().width
+                    - original
+                ) < 2""",
+                arg=[page.locator("canvas").first.element_handle(), original_width],
+            )
+            original_height = page.locator("canvas").first.bounding_box()["height"]
+            for width, height in [(1600, 1200), (1400, 1000)]:
+                page.set_viewport_size({"width": width, "height": height})
+                page.wait_for_function(
+                    """([canvas, container, width, height]) => {
+                        const actual = canvas.getBoundingClientRect()
+                        const allocated = container.getBoundingClientRect()
+                        return Math.abs(actual.width - width) < 2 &&
+                            Math.abs(actual.height - height) < 2 &&
+                            Math.abs(actual.width - allocated.width) < 2 &&
+                            Math.abs(actual.height - allocated.height) < 2
+                    }""",
+                    arg=[
+                        page.locator("canvas").first.element_handle(),
+                        page.locator(".bk-Canvas").first.element_handle(),
+                        original_width + width - 1400,
+                        original_height + height - 1000,
+                    ],
+                    timeout=5000,
+                )
+            handle = page.get_by_title("Drag to resize sidebar").bounding_box()
+            assert handle is not None
+            page.mouse.move(handle["x"] + handle["width"] / 2, handle["y"] + 100)
+            page.mouse.down()
+            page.mouse.move(handle["x"] + handle["width"] / 2 + 100, handle["y"] + 100)
+            page.mouse.up()
+            page.wait_for_function(
+                """([canvas, original]) => Math.abs(
+                    canvas.getBoundingClientRect().width - (original - 100)
+                ) < 2""",
+                arg=[page.locator("canvas").first.element_handle(), original_width],
+                timeout=5000,
+            )
+            page.close()
+            viewer.close()
+
+            exported = browser.new_page()
+            exported.on("pageerror", lambda error: errors.append(str(error)))
+            requests = []
+            exported.on("request", lambda request: requests.append(request.url))
+            exported.goto(destination.as_uri())
+            exported.get_by_text("Land cover", exact=True).wait_for(timeout=30000)
+            assert exported.get_by_text("water", exact=True).is_visible()
+            assert exported.get_by_text("trees", exact=True).is_visible()
+            assert exported.locator("canvas").count() > 0
+            span = exported.evaluate("""() => {
+                const figure = [...Bokeh.documents[0]._all_models.values()]
+                    .find(model => model.type === 'Figure');
+                return figure.x_range.end - figure.x_range.start;
+            }""")
+            canvas = exported.locator("canvas").first.bounding_box()
+            assert canvas is not None
+            exported.mouse.move(
+                canvas["x"] + canvas["width"] / 2,
+                canvas["y"] + canvas["height"] / 2,
+            )
+            exported.mouse.wheel(0, -200)
+            exported.wait_for_function(
+                """span => {
+                const figure = [...Bokeh.documents[0]._all_models.values()]
+                    .find(model => model.type === 'Figure');
+                return figure.x_range.end - figure.x_range.start < span;
+            }""",
+                arg=span,
+            )
+            assert not any(
+                url.startswith(("http:", "https:", "ws:")) for url in requests
+            )
+            assert errors == []
+            browser.close()
+    finally:
+        viewer.close()
 
 
 @pytest.fixture

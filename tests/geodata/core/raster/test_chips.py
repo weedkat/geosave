@@ -12,6 +12,7 @@ from tiler import Merger, Tiler
 
 from geosave.geodata import Chips, open_raster
 from tests.conftest import build_dataset
+from tests.conftest import place
 
 
 def scene(shape=(5, 7)):
@@ -28,7 +29,7 @@ def test_irregular_mode_rejected_before_computing_sources():
 
 
 def test_unreferenced_source_rejected():
-    with pytest.raises(ValueError, match="pixel placement"):
+    with pytest.raises(ValueError, match="grid"):
         Chips([xr.DataArray(np.zeros((4, 4)), dims=("y", "x"))], size=4)
 
 
@@ -152,8 +153,8 @@ def test_merged_prediction_round_trips_on_source_grid(tmp_path):
         predictions.append((key, chips[key].gs.to_numpy() * 2))
     (merged,) = chips.merge(predictions)
     output = xr.DataArray(merged[0], dims=("y", "x"), name="prediction")
-    output = output.gs.write_grid(source.gs.geobox)
-    (path,) = output.gs.to_cog(tmp_path, format_paths="prediction.tif")
+    output = output.pipe(place, source.gs.geobox)
+    path = output.gs.to_cog(tmp_path / "prediction.tif")
     with open_raster(path) as restored:
         np.testing.assert_allclose(restored.prediction, source.image * 2)
         assert restored.gs.geobox == source.gs.geobox

@@ -10,7 +10,7 @@ from tests.geodata.conftest import build_raster
 
 def test_a_spectral_variable_names_its_band() -> None:
     scene = build_raster().gs.write_spectral(
-        "red", center_wavelength=0.665, target="red"
+        "red", center_wavelength=0.665, target=["red"]
     )
 
     red = eo.build_band(scene.red.assign_attrs(long_name="Red"))

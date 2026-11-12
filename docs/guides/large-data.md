@@ -8,6 +8,7 @@ import geopandas as gpd
 from shapely.geometry import box
 
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -20,7 +21,7 @@ grid = GeoBox.from_bbox(
 pixels = da.random.RandomState(0).randint(
     0, 3000, (256, 256), chunks=128
 ).astype("uint16")
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).gs.write_grid(grid).gs.write_nodata(0)
+scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid)).gs.write_nodata(0)
 scene
 ```
 

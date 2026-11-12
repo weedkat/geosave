@@ -5,21 +5,6 @@ from __future__ import annotations
 import subprocess
 import sys
 
-import numpy as np
-
-from tests.conftest import build_dataarray
-
-
-def test_the_root_array_constructor_builds_native_xarray() -> None:
-    import xarray as xr
-
-    pixels = np.zeros((2, 3), dtype="uint8")
-    built = build_dataarray(pixels, dims=("y", "x"))
-
-    assert isinstance(built, xr.DataArray)
-    assert built.name is None
-    assert built.data is pixels
-
 
 def test_importing_the_root_registers_raster_and_vector_accessors_without_torch() -> (
     None

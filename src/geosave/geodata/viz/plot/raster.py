@@ -10,19 +10,17 @@ import numpy as np
 
 from geosave.geodata.conventions import (
     BAND_DIMENSION,
-    SPATIAL_DIMENSIONS,
     TIME_COORDINATE,
 )
 from geosave.geodata.viz.colors import DEFAULT_CMAP, stretch_channels
 
 if TYPE_CHECKING:
+    import geosave.geodata.attrs as attrs
     from collections.abc import Callable, Sequence
 
     import xarray as xr
     from matplotlib.collections import PathCollection
     from holoviews.plotting.mpl.element import OverlayPlot
-
-    from geosave.geodata.attrs import Legend
 
 
 def draw_raster(
@@ -75,9 +73,9 @@ def draw_raster(
         place = raster.gs.region.locate()
         xlabel = place.to_address() if place is not None else None
 
-    y, x = SPATIAL_DIMENSIONS
-    legend = None if band is None else raster[band].gs.legend
-    has_classes = legend is not None and bool(legend.classes)
+    y, x = cast("tuple[str, str]", raster.gs.spatial_dims)
+    flags = None if band is None else raster[band].gs.flags
+    has_classes = flags is not None and bool(flags.classes)
 
     # A band without classes draws through its colormap
     if band is not None and not has_classes:
@@ -104,7 +102,7 @@ def draw_raster(
     if has_classes and clim is not None:
         raise ValueError(
             "the band lists classes, so clim cannot apply; its palette is "
-            "Legend.color_map"
+            "its Display.color_map"
         )
 
     # Classes take their legend's colours; a composite stretches once for every date
@@ -112,7 +110,7 @@ def draw_raster(
         channels = raster[cast("str", band)].gs.colorize()
     else:
         channels = stretch_channels(
-            raster[list(cast("tuple", rgb))].gs.to_dataarray(), clim
+            raster[list(cast("tuple", rgb))].gs.to_array(), clim
         )
     plot = _draw_dates(
         channels,
@@ -121,7 +119,7 @@ def draw_raster(
         ),
     )
     if has_classes:
-        plot = plot * _draw_swatches(cast("Legend", legend))
+        plot = plot * _draw_swatches(raster[cast("str", band)])
         plot.opts(
             hv.opts.Overlay(
                 legend_position="right", hooks=[_share_legend], backend="matplotlib"
@@ -143,7 +141,7 @@ def _choose_variables(
     if band is not None and rgb is not None:
         raise ValueError("name a band or a composite, not both")
     if band is None and rgb is None:
-        variables = list(raster.gs.raster_variables)
+        variables = list(raster.gs.variables)
         if len(variables) == 1:
             band = variables[0]
         else:
@@ -160,7 +158,7 @@ def _choose_variables(
     if missing:
         raise KeyError(
             f"{missing} are not data variables of this raster; it carries "
-            f"{list(raster.gs.raster_variables)}"
+            f"{list(raster.gs.variables)}"
         )
     return band, rgb
 
@@ -180,16 +178,17 @@ def _draw_dates(
     )
 
 
-def _draw_swatches(legend: Legend) -> hv.Overlay:
+def _draw_swatches(band: xr.DataArray) -> hv.Overlay:
     """Return a legend entry per class: its name beside a square of its colour."""
-    colors = legend.colors
+    flags = cast("attrs.CFFlags", band.gs.flags)
+    colors = cast("dict[int, str]", band.gs.class_colors)
     # A point off the axes carries each entry; the legend shows its marker
     return hv.Overlay(
         [
             hv.Points([(np.nan, np.nan)], label=name).opts(
                 color=colors[code], marker="s", s=80, backend="matplotlib"
             )
-            for code, name in (legend.classes or {}).items()
+            for code, name in (flags.classes or {}).items()
         ]
     )
 

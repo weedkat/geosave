@@ -1,77 +1,106 @@
 from __future__ import annotations
 
+
 from pathlib import Path
 
 import dask
-import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
 
 from geosave.geodata import open_raster
 from tests.conftest import build_tree
-from geosave.geodata.io import rasterio as gdal
 from geosave.geodata.io import storage
 from tests.geodata.conftest import (
+    _refuse,
     build_raster,
-    item_table,
-    write_collection_cogs,
 )
 from tests.geodata.conftest import titled as _titled
 from tests.geodata.core.raster.conftest import optical
+from tests.conftest import place
+
+from shapely import from_wkt
+from odc.geo.geom import Geometry
 
 
-def test_shared_time_requires_siblings_to_inherit_one_timeline():
-    from geosave.geodata.errors import RasterValidationError
-
-    scene = build_raster(times=2)
-    siblings = xr.DataTree.from_dict({"s2/fine": scene, "s2/coarse": scene})
-    with pytest.raises(RasterValidationError, match="own time"):
-        siblings["s2"].gs.validate(shared_time=True)
-
-    # Defined once on the parent, the time is inherited and agrees by construction.
-    parent = xr.Dataset(coords={"time": scene.time})
-    shared = xr.DataTree.from_dict(
+def build_stac_layout():
+    """One collection, one Item, two assets: the layout stac.load_datatree builds."""
+    scene = build_raster()
+    return xr.DataTree.from_dict(
         {
-            "s2": parent,
-            "s2/fine": scene.drop_vars("time"),
-            "s2/coarse": scene.drop_vars("time"),
+            "s2/item-a": xr.Dataset(coords={"time": np.datetime64("2025-06-01", "ns")}),
+            "s2/item-a/red": scene[["red"]],
+            "s2/item-a/nir": scene[["nir"]],
         }
     )
-    shared["s2"].gs.validate(shared_time=True)
-    with pytest.raises(ValueError, match="not aligned"):
-        xr.DataTree.from_dict(
+
+
+@pytest.mark.parametrize(
+    "select", ["/", "s2", "s2/item-a"], ids=["tree", "collection", "item"]
+)
+def test_stac_pattern_accepts_any_stac_subtree(select):
+    tree = build_stac_layout()[select]
+
+    tree.gs.validate(stac_pattern=True)
+    tree.copy().gs.validate(stac_pattern=True)
+
+
+def test_stac_pattern_accepts_a_collection_after_an_operation():
+    collection = build_stac_layout()["s2"]
+
+    collection.gs.reproject(build_raster().gs.geobox).gs.validate(stac_pattern=True)
+
+
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        (
             {
-                "s2": parent,
-                "s2/fine": scene.assign_coords(
-                    time=scene.time + np.timedelta64(1, "D")
-                ),
-            }
-        )
-    # A lone data node may carry its own time.
-    xr.DataTree.from_dict({"s2/fine": scene})["s2"].gs.validate(shared_time=True)
-
-
-def test_same_footprint_accepts_nested_grids_and_refuses_other_ground():
+                "s2/item-a": build_raster()[["red"]],
+                "s2/item-a/nir": build_raster()[["nir"]],
+            },
+            "s2/item-a.*not a leaf",
+        ),
+        (
+            {
+                "s2/item-a/red": build_raster()[["red"]],
+                "s2/nir": build_raster()[["nir"]],
+            },
+            "depths 2 and 3",
+        ),
+        ({"a/b/c/d": build_raster()[["red"]]}, "a/b/c/d.*deeper"),
+    ],
+    ids=["data on an Item node", "leaves at two depths", "depth 4"],
+)
+def test_stac_pattern_refuses_and_names_the_node(layout, message):
     from geosave.geodata.errors import RasterValidationError
 
-    fine = build_raster()
-    coarse_grid = fine.gs.geobox.zoom_out(2)
-    coarse = xr.Dataset(
-        {"swir": (("y", "x"), np.ones(coarse_grid.shape, "uint16"))}
-    ).gs.write_grid(coarse_grid)
-    xr.DataTree.from_dict({"fine": fine, "coarse": coarse}).gs.validate(
-        same_footprint=True
-    )
+    with pytest.raises(RasterValidationError, match=message) as caught:
+        xr.DataTree.from_dict(layout).gs.validate(stac_pattern=True)
+    assert "load_datatree" in str(caught.value)
 
-    # One pixel of edge difference is snapping; half a scene is other ground.
-    wide_grid = fine.gs.geobox.zoom_to(shape=(10, 10))
-    wide = xr.Dataset(
-        {"red": (("y", "x"), np.ones(wide_grid.shape, "uint16"))}
-    ).gs.write_grid(wide_grid)
-    tree = xr.DataTree.from_dict({"wide": wide, "half": wide.isel(x=slice(0, 5))})
-    with pytest.raises(RasterValidationError, match="different ground"):
-        tree.gs.validate(same_footprint=True)
+
+def test_any_tree_of_valid_rasters_validates_without_a_pattern():
+    scene = build_raster()
+    tree = xr.DataTree.from_dict({"fine": scene, "nested/deeper/coarse": scene})
+
+    tree.gs.validate()
+
+
+def test_georeferenced_validation_checks_each_node():
+    from geosave.geodata.errors import RasterValidationError
+
+    scene = build_raster()
+    tree = xr.DataTree.from_dict({"placed": scene})
+    tree.gs.validate()
+
+    pixels = xr.Dataset({"red": (("y", "x"), np.ones((2, 2)))})
+    tree["nested/pixels"] = xr.DataTree(pixels)
+
+    with pytest.raises(RasterValidationError) as caught:
+        tree.gs.validate()
+
+    assert caught.value.path == "nested/pixels"
 
 
 def test_grid_summary_tracks_cropped_coordinates_without_reading_pixels():
@@ -92,111 +121,6 @@ def test_grid_summary_tracks_cropped_coordinates_without_reading_pixels():
     )
 
 
-@pytest.mark.parametrize("time", [np.datetime64("NaT", "ns"), "not-a-date"])
-def test_invalid_group_dates_are_rejected_before_any_cog_is_written(tmp_path, time):
-    first = build_raster(times=1)
-    second = build_raster(times=1).assign_coords(time=[time])
-    tree = xr.DataTree.from_dict({"first": first, "second": second})
-    with pytest.raises(ValueError):
-        tree.gs.to_cog(tmp_path, split_asset=(), format_paths="{asset}.tif")
-    assert not list(tmp_path.iterdir())
-
-
-@pytest.mark.parametrize("compute", [True, False])
-def test_a_later_invalid_cog_group_is_rejected_before_any_write(tmp_path, compute):
-    valid = build_raster()
-    invalid = build_raster().gs.write_nodata(0, target="red")
-    tree = xr.DataTree.from_dict({"first": valid, "second": invalid})
-    with pytest.raises(ValueError, match="fill value"):
-        tree.gs.to_cog(
-            tmp_path,
-            split_asset=(),
-            format_paths="{asset}.tif",
-            compute=compute,
-        )
-    assert not list(tmp_path.iterdir())
-
-
-def test_group_destinations_are_checked_together_before_writing(tmp_path):
-    tree = xr.DataTree.from_dict({"first": build_raster(), "second": build_raster()})
-    with pytest.raises(ValueError, match="collid"):
-        tree.gs.to_cog(
-            tmp_path,
-            format_paths="same.tif",
-        )
-    assert not list(tmp_path.iterdir())
-
-
-@pytest.mark.parametrize(
-    ("times", "split_vars", "template", "files"),
-    [
-        (0, False, "{asset}.tif", 1),
-        (0, True, "{asset}.tif", 2),
-        (2, False, "{asset}_{time:%Y%m%d}.tif", 2),
-        (2, True, "{asset}_{time:%Y%m%d}.tif", 4),
-    ],
-)
-def test_cog_export_retains_groups_with_repeated_band_names(
-    tmp_path: Path, times: int, split_vars: bool, template: str, files: int
-) -> None:
-    image = build_raster(times=times)
-    label = (image // 1000).astype("uint8")
-    # Time the nodes share sits once on their parent, which they inherit.
-    root = xr.Dataset(coords={"time": image.time}) if times else xr.Dataset()
-    shared = [name for name in ("time",) if times]
-    written = xr.DataTree.from_dict(
-        {
-            "/": root,
-            "image.v2": image.drop_vars(shared),
-            "label.v1": label.drop_vars(shared),
-        }
-    )
-
-    saved = written.gs.to_cog(
-        tmp_path, split_asset=("variable",) if split_vars else (), format_paths=template
-    )
-
-    assert len(saved) == 2 * files
-    for group in ("image.v2", "label.v1"):
-        paths = [
-            Path(f)
-            for f in saved
-            if str(Path(f).relative_to(tmp_path)).startswith(group)
-        ]
-        assert len(paths) == files
-        source = written[group].gs.to_dataset()
-        for path in paths:
-            with gdal.open_raster(path) as restored:
-                expected = source.sel(time=restored.time) if times else source
-                assert restored.gs.geobox == source.gs.geobox
-                for name in restored.data_vars:
-                    assert restored[name].dtype == source[name].dtype
-                    np.testing.assert_array_equal(restored[name], expected[name])
-
-
-def test_groups_sharing_a_path_refuse_before_writing(tmp_path: Path) -> None:
-    image = build_raster()
-    written = xr.DataTree.from_dict({"image": image, "label": image})
-
-    with pytest.raises(ValueError, match=r"collide.*scene\.tif"):
-        written.gs.to_cog(tmp_path, format_paths="scene.tif")
-    assert not list(tmp_path.iterdir())
-
-
-def test_tree_publication_rejects_nodes_with_different_observations(tmp_path):
-    tree = xr.DataTree.from_dict(
-        {
-            "optical": build_raster(times=2),
-            "dem": build_raster(),
-        }
-    )
-
-    # The dated node keeps its own time, so the nodes share no timeline.
-    with pytest.raises(ValueError, match="own time"):
-        tree.gs.to_item(tmp_path)
-    assert not list(tmp_path.iterdir())
-
-
 def test_one_groups_scalar_time_does_not_date_the_others() -> None:
     dated = build_raster(times=1).isel(time=0)
     undated = build_raster(times=0)[["red"]].rename(red="label")
@@ -204,8 +128,8 @@ def test_one_groups_scalar_time_does_not_date_the_others() -> None:
     built = build_tree({"optical": dated, "label": undated})
 
     assert "time" not in built.coords
-    assert "time" not in built["label"].gs.to_dataset().coords
-    assert "time" in built["optical"].gs.to_dataset().coords
+    assert "time" not in built["label"].gs.combine_stac().coords
+    assert "time" in built["optical"].gs.combine_stac().coords
 
 
 def test_group_extraction_preserves_all_root_coordinates():
@@ -216,17 +140,18 @@ def test_group_extraction_preserves_all_root_coordinates():
             "/image": raster.drop_vars(list(raster.coords)),
         }
     )
-    xr.testing.assert_equal(tree["image"].gs.to_dataset(), raster)
+    # A data node with nothing between converts to itself: its time stays scalar.
+    xr.testing.assert_equal(tree["image"].gs.combine_stac(), raster)
     mapped = tree.map_over_datasets(lambda ds: ds.copy())
-    xr.testing.assert_equal(mapped["image"].gs.to_dataset(), raster)
+    xr.testing.assert_equal(mapped["image"].gs.combine_stac(), raster)
 
 
 def test_tree_region_combines_valid_footprints_in_different_crs() -> None:
     from odc.geo.geobox import GeoBox
 
     projected = build_raster()
-    geographic = build_raster().gs.write_grid(
-        GeoBox.from_bbox((111, -9, 111.01, -8.99), crs="EPSG:4326", shape=(2, 2))
+    geographic = build_raster().pipe(
+        place, GeoBox.from_bbox((111, -9, 111.01, -8.99), crs="EPSG:4326", shape=(2, 2))
     )
     tree = build_tree({"whole": projected, "geographic": geographic})
     expected = projected.gs.region.extent.union(
@@ -245,11 +170,11 @@ def test_tree_round_trip_preserves_groups_and_grid(
     assert store == tmp_path / "tree.zarr"
     assert restored.gs.groups == tree.gs.groups
     assert restored.gs.geobox == tree.gs.geobox
-    assert restored["optical"].gs.to_dataset().red.dtype == np.dtype("uint16")
+    assert restored["optical"].gs.combine_stac().red.dtype == np.dtype("uint16")
 
 
 def test_every_group_opens_on_its_own(tmp_path: Path, tree: xr.DataTree) -> None:
-    store = tree["optical"].gs.to_dataset().gs.to_netcdf(tmp_path / "optical.nc")
+    store = tree["optical"].gs.combine_stac().gs.to_netcdf(tmp_path / "optical.nc")
 
     solo = open_raster(store)
 
@@ -258,23 +183,8 @@ def test_every_group_opens_on_its_own(tmp_path: Path, tree: xr.DataTree) -> None
     assert "spatial_ref" in solo.coords
 
 
-def test_a_deferred_tree_write_resolves_to_its_stores(
-    tmp_path, tree: xr.DataTree
-) -> None:
-    pending = tree.chunk().gs.to_zarr(tmp_path / "later.zarr", compute=False)
-
-    assert not (tmp_path / "later.zarr").exists()
-    (store,) = dask.compute(pending)
-
-    assert store == tmp_path / "later.zarr"
-    np.testing.assert_array_equal(
-        open_raster(store)["optical"].gs.to_dataset().red,
-        tree["optical"].gs.to_dataset().red,
-    )
-
-
 def test_a_single_store_is_not_a_tree(tmp_path, tree: xr.DataTree) -> None:
-    store = tree["optical"].gs.to_dataset().gs.to_zarr(tmp_path / "optical.zarr")
+    store = tree["optical"].gs.combine_stac().gs.to_zarr(tmp_path / "optical.zarr")
 
     with open_raster(store) as opened:
         assert isinstance(opened, xr.Dataset)
@@ -329,48 +239,12 @@ def test_native_mapping_changes_every_grid_node_and_keeps_the_nodes_above() -> N
     assert renamed["optical"].attrs["title"] == "Optical"
 
 
-def test_a_tree_reads_the_pixel_operations_through_gs(tree: xr.DataTree) -> None:
-    import shapely
-
-    left, bottom, right, top = tree.gs.bounds.bbox
-    column = gpd.GeoDataFrame(
-        geometry=[shapely.box(left, bottom, (left + right) / 2, top)],
-        crs=tree.gs.crs,
-    )
-
-    assert tree.gs.mask_and_scale().gs.groups == tree.gs.groups
-    # One mask fits one grid, so a tree masks through its nodes, not as a whole.
-    assert not hasattr(tree.gs, "mask")
-    assert tree.gs.crop(column, mask=False).gs.geobox.shape == (2, 1)
-
-
 def test_a_tree_merges_onto_a_target_rasters_own_grid(tree: xr.DataTree) -> None:
     target = build_raster(crs="EPSG:32748").rename(red="other_red", nir="other_nir")
 
-    merged = tree["optical"].gs.to_dataset(grid=target.gs.geobox)
+    merged = tree["optical"].gs.reproject(target.gs.geobox).gs.combine_stac()
 
     assert merged.gs.geobox == target.gs.geobox
-    assert not hasattr(tree.gs, "reproject")
-
-
-def test_a_saved_tree_indexes_one_item_per_group_scene(tmp_path: Path) -> None:
-    optical = build_raster(times=2)
-    sample = build_tree({"optical": optical, "dem": build_raster()})
-
-    saved = write_collection_cogs(
-        sample,
-        tmp_path,
-        {"optical": "optical_{time:%Y%m%dT%H%M%S}.tif", "dem": "dem.tif"},
-    )
-    rows = item_table(saved, prefix="s0")
-
-    assert rows["id"].tolist() == [
-        "s0/optical_20250601T000000",
-        "s0/optical_20250602T000000",
-        "s0/dem",
-    ]
-    assert rows["collection"].tolist() == ["optical", "optical", "dem"]
-    assert rows.iloc[2]["assets"]["image"]["href"] == str(tmp_path / "dem.tif")
 
 
 def test_plot_takes_a_caption_without_asking_the_network(monkeypatch) -> None:
@@ -415,118 +289,44 @@ def test_a_tree_round_trips_through_a_upath_carrying_its_options(remote) -> None
         assert opened.gs.groups == ("optical", "label")
 
 
-def test_a_tree_keys_written_paths_by_node(tmp_path):
-    image = build_raster(times=1)
-    label = image[["red"]].rename(red="label")
-    tree = xr.DataTree.from_dict(
-        {
-            "/": xr.Dataset(coords={"time": image.time}),
-            "optical": image.drop_vars("time"),
-            "label": label.drop_vars("time"),
-        }
-    )
-
-    files = tree.gs.to_cog(
-        tmp_path,
-        split_asset=(),
-        format_paths="{asset}_{time:%Y%m%d}.tif",
-    )
-
-    assert [path.name for path in files] == [
-        "optical_20250601.tif",
-        "label_20250601.tif",
-    ]
-
-
-@pytest.mark.parametrize("method", ["to_cog", "to_netcdf"])
+@pytest.mark.parametrize("method", ["to_cog", "to_netcdf", "to_zarr"])
 def test_a_deferred_write_computes_to_the_eager_result(tmp_path, method):
     from dask.delayed import Delayed
     from upath import UPath
 
-    tree = xr.DataTree.from_dict({"image": build_raster(), "label": build_raster()})
-    if method == "to_cog":
-        pending = tree.gs.to_cog(
-            tmp_path,
-            format_paths="{asset}.tif",
-            compute=False,
-        )
-    else:
-        pending = tree.gs.to_netcdf(tmp_path / "scene.nc", compute=False)
+    from dask.callbacks import Callback
+
+    source = build_raster().chunk({"y": 1, "x": 1})
+    tree = xr.DataTree.from_dict({"image": source, "label": source})
+    suffix = ".nc" if method == "to_netcdf" else ".zarr"
+    tasks = []
+    with Callback(pretask=lambda key, graph, state: tasks.append(key)):
+        if method == "to_cog":
+            pending = tree.gs.to_cog(tmp_path, compute=False)
+        else:
+            pending = getattr(tree.gs, method)(
+                tmp_path / f"scene{suffix}", compute=False
+            )
+    assert tasks == []
     assert isinstance(pending, Delayed)
     assert list(tmp_path.iterdir()) == []
     saved = pending.compute()
     if method == "to_cog":
         assert [str(path.relative_to(tmp_path)) for path in saved] == [
-            "image/red.tif",
-            "image/nir.tif",
-            "label/red.tif",
-            "label/nir.tif",
+            "image.tif",
+            "label.tif",
         ]
         assert all(isinstance(path, UPath) for path in saved)
         with open_raster(saved[0]) as restored:
             np.testing.assert_array_equal(
-                restored.red, tree["image"].gs.to_dataset().red
+                restored.red, tree["image"].gs.combine_stac().red
             )
     else:
-        assert saved == tmp_path / "scene.nc"
+        assert saved == tmp_path / f"scene{suffix}"
         with open_raster(saved) as restored:
             np.testing.assert_array_equal(
-                restored["label"].gs.to_dataset().red, tree["label"].gs.to_dataset().red
-            )
-
-
-@pytest.mark.parametrize(
-    ("method", "backend"),
-    [
-        ("to_cog", "geotiff"),
-        ("to_zarr", "zarr"),
-        ("to_netcdf", "netcdf"),
-    ],
-)
-def test_deferred_writes_reach_formats_with_lazy_pixels(
-    tmp_path, monkeypatch, method, backend
-):
-    from geosave.geodata.io.formats import geotiff
-    from geosave.geodata.io.formats import netcdf
-    from geosave.geodata.io.formats import zarr
-
-    source = build_raster().chunk({"y": 1, "x": 1})
-    tree = xr.DataTree.from_dict({"image": source, "label": source})
-    module = {"geotiff": geotiff, "zarr": zarr, "netcdf": netcdf}[backend]
-    # The step that runs when the delayed result computes, and receives the pixels.
-    name = "write_cog" if backend == "geotiff" else "_write"
-    write = getattr(module, name)
-    chunks = []
-
-    def save(raster, destination, *args, **options):
-        rasters = (
-            raster.gs.datasets.values() if isinstance(raster, xr.DataTree) else [raster]
-        )
-        for each in rasters:
-            chunks.append(each.red.chunks)
-        return write(raster, destination, *args, **options)
-
-    monkeypatch.setattr(module, name, save)
-    if method == "to_cog":
-        pending = tree.gs.to_cog(
-            tmp_path,
-            split_asset=(),
-            format_paths="{asset}.tif",
-            compute=False,
-        )
-    else:
-        suffix = ".zarr" if method == "to_zarr" else ".nc"
-        pending = getattr(tree.gs, method)(tmp_path / f"scene{suffix}", compute=False)
-    assert chunks == []
-    pending.compute()
-    assert chunks == [source.red.chunks, source.red.chunks]
-    if method == "to_cog":
-        with open_raster(tmp_path / "image.tif") as restored:
-            np.testing.assert_array_equal(restored.red, source.red)
-    else:
-        with open_raster(tmp_path / f"scene{suffix}") as restored:
-            np.testing.assert_array_equal(
-                restored["image"].gs.to_dataset().red, source.red
+                restored["label"].gs.combine_stac().red,
+                tree["label"].gs.combine_stac().red,
             )
 
 
@@ -555,10 +355,11 @@ def build_mixed_collection():
     )
 
 
-def test_a_collection_converts_after_explicit_fine_grid_alignment():
+def test_a_collection_converts_onto_a_stated_resolution():
     tree = build_mixed_collection()
+    fine = tree.gs.datasets["s2/r10m"].gs.geobox
 
-    dataset = tree["s2"].gs.to_dataset(grid="r10m")
+    dataset = tree["s2"].gs.reproject(fine).gs.combine_stac()
 
     assert abs(dataset.odc.geobox.resolution.x) == 10
     assert set(dataset.data_vars) == {"red", "swir"}
@@ -568,27 +369,14 @@ def test_a_collection_converts_after_explicit_fine_grid_alignment():
 
 def test_a_coarser_member_averages_blocks_when_asked():
     tree = build_mixed_collection()
+    coarse = tree.gs.datasets["s2/r20m"].gs.geobox
 
-    dataset = tree["s2"].gs.to_dataset(grid="r20m", resampling="average")
+    aligned = tree["s2"].gs.reproject(coarse, resampling="average")
+    dataset = aligned.gs.combine_stac()
 
     assert abs(dataset.odc.geobox.resolution.x) == 20
     red = tree["s2/r10m"].dataset.red.isel(time=0).values
     assert float(dataset.red.isel(time=0, y=0, x=0)) == float(red[:2, :2].mean())
-
-
-def test_organizational_nesting_merges_on_a_relative_grid_path():
-    tree = build_mixed_collection()
-    both = build_tree(
-        {
-            **tree.gs.datasets,
-            "dem/r10m": tree.gs.datasets["s2/r10m"].rename(red="height"),
-        }
-    )
-
-    dataset = both.gs.to_dataset(grid="s2/r20m")
-
-    assert set(dataset.data_vars) == {"red", "swir", "height"}
-    assert dataset.odc.geobox == both["s2/r20m"].gs.geobox
 
 
 @pytest.mark.parametrize("shift", [0, 5])
@@ -605,8 +393,8 @@ def test_different_grids_require_alignment_without_reading_pixels(shift):
     )
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args[0])):
-        with pytest.raises(RasterValidationError, match="grid=") as caught:
-            broken["s2"].gs.to_dataset()
+        with pytest.raises(RasterValidationError, match="reproject") as caught:
+            broken["s2"].gs.combine_stac()
     assert caught.value.path == "r20m"
     assert tasks == []
 
@@ -614,8 +402,9 @@ def test_different_grids_require_alignment_without_reading_pixels(shift):
 def test_a_collections_metadata_reaches_its_dataset():
     tree = build_mixed_collection()
     tree["s2"].attrs["title"] = "Sentinel-2"
+    fine = tree.gs.datasets["s2/r10m"].gs.geobox
 
-    dataset = tree["s2"].gs.to_dataset(grid="r10m")
+    dataset = tree["s2"].gs.reproject(fine).gs.combine_stac()
 
     assert dataset.attrs["title"] == "Sentinel-2"
 
@@ -662,76 +451,219 @@ def test_grid_nodes_have_no_collection_hierarchy_requirement():
     assert nodes["qa"].gs.geobox == source.gs.geobox
 
 
-def test_to_dataset_includes_lazy_root_and_deeply_nested_rasters():
-    raster = build_mixed_collection().gs.datasets["s2/r10m"].chunk({"y": 16, "x": 16})
-    tree = xr.DataTree.from_dict(
-        {"/": raster, "organization/sensor/detail": raster.rename(red="height")}
-    )
-
-    from dask.callbacks import Callback
-
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        dataset = tree.gs.to_dataset()
-
-    assert tasks == []
-    assert set(dataset.data_vars) == {"red", "height"}
-    assert dataset.red.chunks is not None
-    assert dataset.height.chunks is not None
-    xr.testing.assert_equal(dataset.red, raster.red)
-    xr.testing.assert_equal(dataset.height, raster.red.rename("height"))
+def test_combine_reports_missing_rasters():
+    with pytest.raises(ValueError, match="no raster variables"):
+        xr.DataTree().gs.combine_stac()
 
 
-@pytest.mark.parametrize(
-    ("tree", "message"),
-    [
-        (xr.DataTree(), "no raster variables"),
-        (
-            xr.DataTree(xr.Dataset({"red": (("y", "x"), np.ones((2, 2)))})),
-            "write_grid",
-        ),
-    ],
-)
-def test_to_dataset_reports_missing_rasters_or_grids(tree, message):
-    with pytest.raises(ValueError, match=message):
-        tree.gs.to_dataset()
-
-
-def test_group_grid_merges_siblings_on_one_grid_and_keeps_others_apart():
+def build_stac_tree():
+    """Two Items of one collection, each with a 10 m and a 20 m asset, plus a timeless DEM."""
     from tests.conftest import build_dataset
     from tests.geodata.conftest import geobox as make_geobox
 
     fine = make_geobox(shape=(4, 4))
     coarse = fine.zoom_out(2)
-    tree = xr.DataTree.from_dict(
-        {
-            "/s2": xr.Dataset(attrs={"title": "s2"}),
-            "/s2/B04": build_dataset({"B04": (("y", "x"), np.ones((4, 4)))}, fine),
-            "/s2/B08": build_dataset({"B08": (("y", "x"), np.ones((4, 4)))}, fine),
-            "/s2/B11": build_dataset({"B11": (("y", "x"), np.ones((2, 2)))}, coarse),
-        }
-    )
-
-    grouped = tree.gs.group_grid()
-
-    assert set(grouped.gs.datasets) == {"s2/r10m", "s2/r20m"}
-    assert list(grouped["s2/r10m"].data_vars) == ["B04", "B08"]
-    assert grouped["s2/r10m"].gs.geobox == fine
-    assert grouped["s2"].attrs == {"title": "s2"}
+    nodes = {"s2": xr.Dataset(attrs={"title": "s2"})}
+    for day, value in (("2025-06-01", 1.0), ("2025-06-06", 2.0)):
+        when = np.datetime64(day, "ns")
+        nodes[f"s2/{day}"] = xr.Dataset(coords={"time": when})
+        nodes[f"s2/{day}/B04"] = build_dataset(
+            {"B04": (("y", "x"), np.full((4, 4), value))}, fine
+        )
+        nodes[f"s2/{day}/B11"] = build_dataset(
+            {"B11": (("y", "x"), np.full((2, 2), value))}, coarse
+        )
+    height = build_dataset({"height": (("y", "x"), np.zeros((4, 4)))}, fine)
+    nodes["dem/cop/height"] = height
+    return xr.DataTree.from_dict(nodes)
 
 
-def test_group_grid_refuses_two_grids_with_one_pixel_size():
+def test_items_merge_by_time_and_concat_along_it():
+    tree = build_stac_tree().filter(lambda node: "B11" not in node.data_vars)
+
+    dataset = tree["s2"].gs.combine_stac()
+
+    assert dataset.sizes["time"] == 2
+    assert list(dataset.data_vars) == ["B04"]
+    np.testing.assert_array_equal(dataset.B04.isel(y=0, x=0).values, [1.0, 2.0])
+    assert dataset.attrs["title"] == "s2"
+
+
+def test_an_item_merges_its_assets_and_keeps_its_time_scalar():
+    tree = build_stac_tree()
+    grid = tree["s2/2025-06-01/B04"].gs.geobox
+
+    dataset = tree.gs.reproject(grid)["s2/2025-06-01"].gs.combine_stac()
+
+    assert set(dataset.data_vars) == {"B04", "B11"}
+    assert dataset.time.ndim == 0
+    assert dataset.gs.geobox == grid
+
+
+def test_collections_keep_independent_timelines():
+    tree = build_stac_tree()
+
+    with pytest.raises(ValueError, match="independent timelines"):
+        tree.gs.reproject(tree["s2/2025-06-01/B04"].gs.geobox).gs.combine_stac()
+
+
+def test_a_collection_refuses_an_item_missing_a_band():
+    tree = build_stac_tree()
+    moved = tree.gs.reproject(tree["s2/2025-06-01/B04"].gs.geobox)
+    gappy = moved.filter(lambda node: node.path != "/s2/2025-06-06/B11")
+
+    with pytest.raises(ValueError, match="same variables") as caught:
+        gappy["s2"].gs.combine_stac()
+    assert caught.value.path == "2025-06-06"
+
+
+def test_a_timeless_item_combines_without_time():
     from tests.conftest import build_dataset
     from tests.geodata.conftest import geobox as make_geobox
 
-    fine = make_geobox(shape=(4, 4))
-    shifted = make_geobox(shape=(2, 2))
-    tree = xr.DataTree.from_dict(
-        {
-            "/s2/B04": build_dataset({"B04": (("y", "x"), np.ones((4, 4)))}, fine),
-            "/s2/B05": build_dataset({"B05": (("y", "x"), np.ones((2, 2)))}, shifted),
-        }
-    )
+    box = make_geobox(shape=(4, 4))
+    height = build_dataset({"height": (("y", "x"), np.zeros((4, 4)))}, box)
+    one = xr.DataTree.from_dict({"dem/cop/height": height})
 
-    with pytest.raises(ValueError, match="r10m"):
-        tree.gs.group_grid()
+    assert one["dem/cop"].gs.combine_stac().height.dims == ("y", "x")
+
+
+def test_differing_grids_with_nothing_stated_name_the_grids():
+    from geosave.geodata.errors import RasterValidationError
+
+    with pytest.raises(RasterValidationError, match="2 grids.*reproject"):
+        build_stac_tree()["s2"].gs.combine_stac()
+
+
+def test_a_resolution_lands_every_node_on_one_grid_over_their_extent():
+    tree = build_stac_tree()
+    fine = tree["s2/2025-06-01/B04"].gs.geobox
+
+    dataset = tree["s2"].gs.reproject(fine).gs.combine_stac()
+
+    assert dataset.gs.geobox == fine
+    assert set(dataset.data_vars) == {"B04", "B11"}
+    assert dataset.sizes["time"] == 2
+
+
+def test_reproject_moves_every_leaf_lazily():
+    tree = build_stac_tree().chunk()
+    grid = tree["s2/2025-06-01/B11"].gs.geobox
+
+    with dask.config.set(scheduler=_refuse):
+        moved = tree.gs.reproject(grid)
+
+    for leaf in moved.leaves:
+        assert leaf.to_dataset(inherit="all_coords").gs.geobox == grid
+    assert moved["s2"].attrs == {"title": "s2"}
+
+
+def test_a_reprojected_tree_chips_every_leaf_by_one_window():
+    tree = build_stac_tree()
+    moved = tree.gs.reproject(tree["s2/2025-06-01/B04"].gs.geobox)
+
+    chip = moved.isel(y=slice(0, 2), x=slice(0, 2))
+
+    for leaf in chip.leaves:
+        assert leaf.to_dataset(inherit="all_coords")[leaf.name].shape == (2, 2)
+    times = chip["s2/2025-06-06"].to_dataset(inherit=False).time.values
+    assert times == np.datetime64("2025-06-06")
+
+
+def test_combine_after_reproject_stacks_the_collection_lazily():
+    tree = build_stac_tree().chunk()
+    grid = tree["s2/2025-06-01/B04"].gs.geobox
+
+    with dask.config.set(scheduler=_refuse):
+        dataset = tree.gs.reproject(grid)["s2"].gs.combine_stac()
+
+    assert dataset.gs.geobox == grid
+    assert set(dataset.data_vars) == {"B04", "B11"}
+    assert dataset.sizes["time"] == 2
+
+
+def test_same_grid_names_nodes_on_another_grid():
+    from geosave.geodata.errors import RasterValidationError
+
+    with pytest.raises(RasterValidationError, match="grid") as caught:
+        build_stac_tree()["s2"].gs.validate(same_grid=True)
+    assert "B11" in caught.value.path
+
+
+def test_combine_matches_the_catalog_loader_on_a_fresh_catalog(rows, grid):
+    tree = rows.gs.to_datatree().gs.reproject(grid)
+    optical = rows[rows["collection"] == "optical"]
+
+    combined = tree["optical"].gs.combine_stac()
+    loaded = optical.gs.to_dataset(grid)
+
+    for name in ("red", "nir"):
+        expected = loaded[name].transpose(*combined[name].dims)
+        np.testing.assert_array_equal(combined[name].values, expected.values)
+
+
+def test_to_cog_writes_one_file_per_asset_leaf(tmp_path):
+    from tests.geodata.conftest import build_raster
+
+    scene = build_raster(times=2)
+
+    files = scene.gs.expand_stac().gs.to_cog(tmp_path)
+
+    days = ["20250601T000000", "20250602T000000"]
+    expected = []
+    for day in days:
+        for name in ("red", "nir"):
+            expected.append(tmp_path / day / f"{name}.tif")
+    assert [Path(f) for f in files] == expected
+    with open_raster(files[2]) as restored:
+        np.testing.assert_array_equal(restored.red.squeeze(), scene.red.isel(time=1))
+
+
+def test_to_cog_refuses_existing_files_before_writing(tmp_path):
+    from tests.geodata.conftest import build_raster
+
+    tree = build_raster(times=2).gs.expand_stac(asset="image")
+    first, second = tree.gs.to_cog(tmp_path)
+    second.unlink()
+
+    with pytest.raises(FileExistsError):
+        tree.gs.to_cog(tmp_path)
+    assert not second.exists()
+
+
+def test_to_cog_defers_the_whole_batch(tmp_path):
+    from tests.geodata.conftest import build_raster
+
+    tree = build_raster(times=2).chunk().gs.expand_stac(asset="image")
+
+    with dask.config.set(scheduler=_refuse):
+        pending = tree.gs.to_cog(tmp_path, compute=False)
+    assert not list(tmp_path.iterdir())
+    assert len(pending.compute()) == 2
+
+
+@pytest.fixture
+def city():
+    return Geometry(from_wkt("POLYGON ((13 52, 14 52, 13 53, 13 52))"), "EPSG:4326")
+
+
+def test_extent_needs_no_grid_and_tree_nodes_stand_alone(city):
+    raster = xr.Dataset({"red": (("y", "x"), np.zeros((2, 2)))})
+    tree = xr.DataTree.from_dict({"a": raster, "b/deep": raster})
+    written = tree.gs.write_extent(city)
+
+    assert written.gs.region.extent == city
+    assert written["b/deep"].to_dataset().red.gs.region.extent == city
+    assert raster.attrs == {}
+    assert written["a"].gs.geobox is None
+
+
+def test_dataset_and_tree_union_variable_extents(city):
+    left = build_raster()[["red"]].gs.write_extent(city)
+    other = Geometry(from_wkt("POLYGON ((15 52, 16 52, 15 53, 15 52))"), "EPSG:4326")
+    right = build_raster()[["nir"]].gs.write_extent(other.to_crs("EPSG:3857"))
+    dataset = xr.Dataset({"red": left.red, "nir": right.nir})
+    tree = xr.DataTree.from_dict({"left": left, "right": right})
+    expected = city.union(other)
+    assert dataset.gs.region.extent.geom.equals_exact(expected.geom, 1e-8)
+    assert tree.gs.region.extent.geom.equals_exact(expected.geom, 1e-8)

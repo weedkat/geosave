@@ -5,6 +5,7 @@ Give a label raster its class names and a missing-data value:
 ```python
 import numpy as np
 import xarray as xr
+from odc.geo.xr import xr_coords
 
 import geosave as gs
 
@@ -20,8 +21,8 @@ codes = np.array([
     [1, 1, 2, 2],
     [1, 2, 2, 255],
 ], dtype="uint8")
-labels = xr.Dataset({"label": (("y", "x"), codes)}).gs.write_grid(grid).gs.write_nodata(255)
-labels = labels.gs.write_legend(
+labels = xr.Dataset({"label": (("y", "x"), codes)}).assign_coords(xr_coords(grid)).gs.write_nodata(255)
+labels = labels.gs.write_flags(
     {0: "background", 1: "forest", 2: "water"}, target="label"
 )
 labels["label"]
@@ -53,7 +54,7 @@ for geospatial operations and file formats.
 ## Read the meaning of a band
 
 ```python
-labels["label"].gs.legend.classes
+labels["label"].gs.flags.classes
 ```
 
 Output:
@@ -83,10 +84,9 @@ not. Do not choose a valid class as nodata unless you intend to exclude it.
 | Operation | Input | Result |
 | --- | --- | --- |
 | `.gs.write_nodata(value)` | A fill value representable in each selected dtype | New object with nodata attrs; existing pixels keep their values. |
-| `.gs.write_legend(classes)` | Integer codes mapped to names | New object with class metadata; existing pixels keep their values. |
+| `.gs.write_flags(classes)` | Integer codes mapped to names | New object with class metadata; existing pixels keep their values. |
 | `.gs.mask(valid)` | Boolean mask, `True` where pixels are valid | New object with invalid pixels replaced by each variable's nodata. |
 | `.gs.mask_and_scale()` | Stored values with optional nodata and packing | New object with missing values masked and packing decoded. |
-| `.gs.scale_and_fill()` | Decoded values with CF storage encoding | New object with stored pixels and CF attrs, without writing a file. |
 
 The writers return a new xarray object; assign their result to keep the change.
 Masking needs a declared nodata value or an explicit `fill=`. Attribute writers
@@ -100,9 +100,9 @@ offset. Decode before using those values in your own calculations:
 ```python
 stored = (
     xr.DataArray(np.array([[0, 1000], [2000, 3000]], dtype="uint16"), dims=("y", "x"))
-    .gs.write_grid(grid[:2, :2])
+    .assign_coords(xr_coords(grid[:2, :2]))
     .gs.write_nodata(0)
-    .gs.write_scale_offset(scale_factor=0.0001)
+    .gs.write_packing(attrs.CFPacking(scale_factor=0.0001))
 )
 reflectance = stored.gs.mask_and_scale()
 reflectance.compute()
@@ -126,12 +126,17 @@ and NaN for missing pixels. It preserves lazy arrays and leaves `stored`
 unchanged. The consumed nodata, scale and offset move from variable attrs to
 variable encoding, alongside the original storage dtype. Writers use that
 encoding to restore the stored representation. Supply explicit output encoding
-to choose a different representation. `reflectance.gs.scale_and_fill()` performs
-the same reverse conversion in memory and restores CF attrs without I/O.
+to choose a different representation. No manual reverse conversion is needed.
+Decoding expects native CF names and numeric values. Use `write_nodata` for a
+manually constructed array: it delegates dtype conversion to rioxarray, so the
+fill is stated at the array's precision. Direct attrs are not repaired during
+decoding.
 
 Readers return stored values by default. Use `gs.open_raster(path,
-mask_and_scale=True)` to decode while opening; `stac.load_dataset` and
-`stac.load_datatree` support the same choice after ODC ingestion. Spectral indices already decode
+mask_and_scale=True)` to decode while opening. STAC loading retains DN by default; use
+`load_dataset(..., mask_and_scale=True)` for immediate in-memory decoding, or
+`.gs.mask_and_scale()` on a loaded Dataset or DataArray. Dataset decoding also
+interprets CF coordinates and relationships. Spectral indices already decode
 the bands they select; cloud-mask functions expect decoded reflectance.
 
 ## Add descriptive metadata
@@ -181,7 +186,7 @@ compatible active CF packing.
 Dataset-level identity and discovery fields use ACDD metadata, available as
 `raster.gs.acdd` and written with `raster.gs.write_acdd(gs.attrs.ACDD(...))`.
 Band-level nodata, packing, spectral facts, and legends stay on the variables.
-When loading STAC, Collection metadata is retained as `StacMetadata` on the
+When loading STAC, Collection metadata is retained as `StacCollection` on the
 raster root, while each Asset's band metadata describes its variables.
 
 Read [metadata rules](../concepts/metadata.md) for validated groups, joins, and

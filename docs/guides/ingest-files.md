@@ -44,8 +44,8 @@ values. Preserve categorical label codes instead of treating them as imagery.
 ## Save and check the result
 
 ```python
-files = ndvi.gs.to_cog("prepared", format_paths="ndvi.tif")
-result = gs.open_raster(files[0])
+path = ndvi.gs.to_cog("prepared/ndvi.tif", overwrite=True)
+result = gs.open_raster(path)
 result.gs.geobox == patch.gs.geobox
 ```
 
@@ -66,7 +66,7 @@ scene.close()
 
 | Data | Read | Write |
 | --- | --- | --- |
-| GeoTIFF | `gs.open_raster(path)` | `raster.gs.to_cog(folder, format_paths="scene.tif")` |
+| GeoTIFF | `gs.open_raster(path)` | `array.gs.to_cog("scene.tif")` |
 | Multidimensional raster | `gs.open_raster(path)` | `raster.gs.to_zarr(path)` or `.gs.to_netcdf(path)` |
 | Vector features | `gs.open_vector(path)` | `features.gs.to_geoparquet(path)` |
 

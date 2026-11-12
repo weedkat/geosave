@@ -6,6 +6,7 @@ import sys
 import dask.array as da
 import xarray as xr
 from odc.geo.geobox import GeoBox
+from odc.geo.xr import xr_coords
 
 import geosave  # noqa: F401  registers the .gs accessors
 from geosave.model.spec import ModelSpec
@@ -27,7 +28,7 @@ def sample_raster() -> xr.Dataset:
                 ("B08", 6000),
             )
         }
-    ).gs.write_grid(grid)
+    ).assign_coords(xr_coords(grid))
     for variable in optical.data_vars.values():
         variable.attrs.update(scale_factor=0.0001, add_offset=0.0)
     return optical

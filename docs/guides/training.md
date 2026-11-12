@@ -25,6 +25,7 @@ import lightning as L
 import torch
 import xarray as xr
 import torch.nn.functional as F
+from odc.geo.xr import xr_coords
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
@@ -124,15 +125,15 @@ def predictions():
 
 pixels = valid.chips.merge(predictions())[0]
 source = valid.chips.xarray[0]
-scores = xr.DataArray(pixels, dims=("class", "y", "x")).gs.write_grid(source.gs.geobox)
+scores = xr.DataArray(pixels, dims=("class", "y", "x")).assign_coords(xr_coords(source.gs.geobox))
 prediction = scores.argmax("class").astype("uint8").rename("prediction")
-prediction.gs.to_cog("output", format_paths="prediction.tif", overwrite=True)
+prediction.gs.to_cog("output/prediction.tif", overwrite=True)
 prediction.gs.plot(cmap=["#263b50", "#65b98b"], xlabel="")
 ```
 
 The DataLoader added a batch dimension during training; here `unsqueeze(0)`
 adds one for inference. We merge class scores on the chip grid before choosing
-the winning class. `Chips.merge()` returns NumPy; `gs.write_grid` places it on the
+the winning class. `Chips.merge()` returns NumPy; `odc.geo.xr.xr_coords` places it on the
 validation region's grid, so
 `output/prediction.tif` can be opened in a GIS.
 

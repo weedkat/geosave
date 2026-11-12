@@ -54,7 +54,7 @@ scene = stac.load_dataset(
 ).isel(time=0)
 # Earth Search's COG conversion has already applied the offset for this Item.
 if item.properties.get("earthsearch:boa_offset_applied"):
-    scene = scene.gs.write_scale_offset(1e-4, 0)
+    scene = scene.gs.write_packing(attrs.CFPacking(scale_factor=1e-4))
 scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 ```
 
