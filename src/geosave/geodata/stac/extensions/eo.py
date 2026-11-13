@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+
 import pystac
 import xarray as xr
 from pystac.extensions.eo import Band, EOExtension
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.stac.stamps import LoadSource, register_stamp, write_band_attrs
 
 
 def build_band(variable: xr.DataArray) -> Band:
@@ -70,75 +70,3 @@ def read_attrs(band: Band) -> SpectralAttrs:
 def write_asset(asset: pystac.Asset, bands: list[Band]) -> None:
     """Write spectral bands and declare the EO schema on the owner."""
     EOExtension.ext(asset, add_if_missing=True).bands = bands
-
-
-def read_item_attrs(item: pystac.Item, name: str) -> SpectralAttrs:
-    """Translate the EO fields of the band ODC loads as `name` into attrs."""
-    from geosave.geodata.stac.band import read_band  # band imports this module
-
-    fields = {}
-    for key, value in read_band(item, name).items():
-        fields[key.removeprefix("eo:")] = value
-    return read_attrs(Band(fields))
-
-
-@register_stamp("eo")
-def stamp_eo(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
-    """Write each loaded band's spectral facts and description.
-
-    The variable's own attrs win over STAC's. Attrs are kept only when every
-    Item that states them agrees.
-
-    Args:
-        loaded: Dataset returned by the ODC load.
-        source: Items that were loaded.
-
-    Returns:
-        `loaded` with `common_name`, `center_wavelength`, `full_width_half_max`
-        and `long_name` stated.
-    """
-    return write_band_attrs(loaded, source, read_item_attrs)
-
-
-def read_colour(item: pystac.Item, name: str) -> str | None:
-    """Read the colour name the Item states for the band ODC loads as `name`."""
-    from geosave.geodata.stac.band import read_band  # band imports this module
-
-    fields = read_band(item, name)
-    return fields.get("eo:common_name", fields.get("common_name"))
-
-
-@register_stamp("rgb")
-def stamp_rgb(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
-    """State the RGB composite the bands' common names give.
-
-    The first band naming each colour is used. Nothing is written unless red,
-    green and blue are all named.
-
-    Args:
-        loaded: Dataset returned by the ODC load.
-        source: Items that were loaded.
-
-    Returns:
-        `loaded` with `Display.rgb` stated, or unchanged without all three colours.
-    """
-    names_by_colour: dict[str, str] = {}
-    for name in loaded.data_vars:
-        colours = set()
-        for item in source.items:
-            colour = read_colour(item, str(name))
-            if colour is not None:
-                colours.add(colour)
-
-        # Items that disagree on a band's colour state none.
-        if len(colours) != 1:
-            continue
-        colour = colours.pop()
-        if colour in ("red", "green", "blue"):
-            names_by_colour.setdefault(colour, str(name))
-    if len(names_by_colour) < 3:
-        return loaded
-
-    return loaded.gs.write_rgb(
-        names_by_colour["red"], names_by_colour["green"], names_by_colour["blue"]
-    )

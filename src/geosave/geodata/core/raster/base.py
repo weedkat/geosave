@@ -101,7 +101,8 @@ class RasterStacProperties[DataT: xr.DataArray | xr.Dataset]:
                     f"Property {name!r} has length {len(items)}, "
                     f"but {item_dim!r} has {self._data.sizes[item_dim]}"
                 )
-            coord = xr.Variable(item_dim, items)
+            # An array keeps its dtype, so object strings are not re-inferred.
+            coord = xr.Variable(item_dim, np.asarray(values))
         else:
             coord = xr.Variable((), values)
 
