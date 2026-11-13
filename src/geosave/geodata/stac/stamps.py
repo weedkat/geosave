@@ -1,6 +1,6 @@
 """Registry of named stamps that write STAC metadata onto a loaded Dataset."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +103,34 @@ def run_stamps(
     return loaded
 
 
+def write_band_attrs(
+    loaded: xr.Dataset,
+    source: LoadSource,
+    read: Callable[[pystac.Item, str], Mapping[str, Any]],
+) -> xr.Dataset:
+    """Write, per loaded variable, the attrs every Item's band states alike.
+
+    The variable's own attrs win over STAC's; attrs Items disagree on are dropped.
+
+    Args:
+        loaded: Dataset returned by the ODC load.
+        source: Items that were loaded.
+        read: Reads the attrs one Item states for the band ODC loads as a name.
+
+    Returns:
+        `loaded` with the agreed attrs added to each variable.
+    """
+    stamped = {}
+    for name, variable in loaded.data_vars.items():
+        observations = []
+        for item in source.items:
+            observations.append(xr.Dataset(attrs=dict(read(item, str(name)))))
+        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
+
+        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
+    return loaded.assign(stamped)
+
+
 def read_title(item: pystac.Item, name: str) -> str | None:
     """Read the title naming the band ODC loads as `name`.
 
@@ -138,18 +166,12 @@ def stamp_title(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
     Returns:
         `loaded` with `long_name` stated.
     """
-    stamped = {}
-    for name, variable in loaded.data_vars.items():
-        observations = []
-        for item in source.items:
-            title = read_title(item, str(name))
-            observations.append(
-                xr.Dataset(attrs={} if title is None else {"long_name": title})
-            )
-        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
 
-        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
-    return loaded.assign(stamped)
+    def read(item: pystac.Item, name: str) -> dict[str, str]:
+        title = read_title(item, name)
+        return {} if title is None else {"long_name": title}
+
+    return write_band_attrs(loaded, source, read)
 
 
 # Importing the extension modules registers their stamps. This stays at the end

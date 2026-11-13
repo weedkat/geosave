@@ -16,6 +16,7 @@ from geosave.geodata.stac.stamps import (
     register_stamp,
     run_stamps,
     stamp_title,
+    write_band_attrs,
 )
 
 
@@ -169,3 +170,16 @@ def test_title_keeps_the_loaded_name():
     stamped = stamp_title(loaded, LoadSource([_titled_item()], None, "id"))
 
     assert stamped.red.attrs["long_name"] == "Mine"
+
+
+def test_write_band_attrs_keeps_agreed_attrs_and_the_loaded_ones():
+    items = [_titled_item("a"), _titled_item("b")]
+    states = {"a": {"x": 1, "y": 1, "z": 1}, "b": {"x": 1, "y": 2, "z": 1}}
+    loaded = _pixels("red")
+    loaded["red"].attrs["z"] = "mine"
+
+    stamped = write_band_attrs(
+        loaded, LoadSource(items, None, "id"), lambda item, name: states[item.id]
+    )
+
+    assert stamped.red.attrs == {"x": 1, "z": "mine"}

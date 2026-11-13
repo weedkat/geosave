@@ -9,7 +9,7 @@ import xarray as xr
 from pystac.extensions.eo import Band, EOExtension
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.stac.stamps import LoadSource, register_stamp
+from geosave.geodata.stac.stamps import LoadSource, register_stamp, write_band_attrs
 
 
 def build_band(variable: xr.DataArray) -> Band:
@@ -97,15 +97,7 @@ def stamp_eo(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
         `loaded` with `common_name`, `center_wavelength`, `full_width_half_max`
         and `long_name` stated.
     """
-    stamped = {}
-    for name, variable in loaded.data_vars.items():
-        observations = []
-        for item in source.items:
-            observations.append(xr.Dataset(attrs=read_item_attrs(item, str(name))))
-        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
-
-        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
-    return loaded.assign(stamped)
+    return write_band_attrs(loaded, source, read_item_attrs)
 
 
 def read_colour(item: pystac.Item, name: str) -> str | None:

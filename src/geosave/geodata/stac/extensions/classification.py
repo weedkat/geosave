@@ -13,7 +13,7 @@ from pystac.extensions.classification import Classification, ClassificationExten
 from pystac.extensions.raster import RasterBand
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.stac.stamps import LoadSource, register_stamp
+from geosave.geodata.stac.stamps import LoadSource, register_stamp, write_band_attrs
 
 # What the schema lets a class be named.
 _CLASS_NAME = re.compile(r"[0-9A-Za-z_-]+")
@@ -117,12 +117,4 @@ def stamp_classification(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
     Returns:
         `loaded` with `flag_values`, `flag_meanings` and `color_hints` stated.
     """
-    stamped = {}
-    for name, variable in loaded.data_vars.items():
-        observations = []
-        for item in source.items:
-            observations.append(xr.Dataset(attrs=read_item_attrs(item, str(name))))
-        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
-
-        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
-    return loaded.assign(stamped)
+    return write_band_attrs(loaded, source, read_item_attrs)

@@ -16,7 +16,7 @@ from pystac.extensions.raster import (
 )
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.stac.stamps import LoadSource, register_stamp
+from geosave.geodata.stac.stamps import LoadSource, register_stamp, write_band_attrs
 
 
 def read_json_number(value: float) -> float:
@@ -139,16 +139,13 @@ def stamp_raster(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
     Raises:
         ValueError: If Items pack a loaded band with different scale/offset.
     """
-    stamped = {}
-    for name, variable in loaded.data_vars.items():
+    for name in loaded.data_vars:
         check_packing(str(name), source.items)
 
-        observations = []
-        for item in source.items:
-            observations.append(xr.Dataset(attrs=read_item_attrs(item, str(name))))
-        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
-
-        variable = variable.assign_attrs({**stated, **variable.attrs})
+    stamped = {}
+    for name, variable in write_band_attrs(
+        loaded, source, read_item_attrs
+    ).data_vars.items():
         fill = variable.attrs.pop("nodata", variable.attrs.get("_FillValue"))
         if fill is not None:
             variable = variable.rio.write_nodata(fill)
