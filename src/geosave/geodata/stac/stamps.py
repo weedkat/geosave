@@ -105,3 +105,4 @@ def run_stamps(
 
 # Importing the extension modules registers their stamps. This stays at the end
 # because those modules import register_stamp and LoadSource from here.
+from geosave.geodata.stac.extensions import raster  # noqa: E402,F401
