@@ -12,7 +12,7 @@ from .groups.acdd import ACDD, ACDDExtent
 from .groups.cf import CFDescription, CFFlags, CFPacking
 from .groups.display import Display
 from .groups.eo import EOBand
-from .groups.stac import StacCollection
+from .groups.stac import StacCollection, StacProperty
 
 __all__ = [
     "ACDD",
@@ -26,6 +26,7 @@ __all__ = [
     "Display",
     "EOBand",
     "StacCollection",
+    "StacProperty",
     "clear_attrs",
     "decode",
     "stamp_attrs",

@@ -5,12 +5,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Hashable
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
+import geosave.geodata.attrs as attrs
 from geosave.geodata.core.conventions import (
     END_DATETIME,
     START_DATETIME,
@@ -26,6 +28,85 @@ if TYPE_CHECKING:
     from geosave.geodata.utils.datetime import DateRange
 
     from geosave.geodata.core.region import GeoRegion
+
+
+class RasterStacProperties[DataT: xr.DataArray | xr.Dataset]:
+    """Read and write STAC Item properties held as marked coordinates.
+
+    A coordinate is a property exactly when its attrs hold `stac_property`.
+    A per-Item property follows the Item dimension; a shared one is scalar.
+    """
+
+    _data: DataT
+
+    @property
+    def stac_properties(self) -> dict[str, Hashable]:
+        """Map each STAC property name to the coordinate that holds it.
+
+        Examples:
+            >>> ds.gs.stac_properties
+            {'eo:cloud_cover': 'eo:cloud_cover'}
+        """
+        found: dict[str, Hashable] = {}
+        for key, coord in self._data.coords.items():
+            if "stac_property" not in coord.attrs:
+                continue
+            group = attrs.StacProperty.from_attrs(coord.attrs)
+            found[group.name] = key
+        return found
+
+    def write_stac_property(
+        self, name: str, values: Any, *, item_dim: str = TIME_COORDINATE
+    ) -> DataT:
+        """Write one STAC property as a marked coordinate.
+
+        Args:
+            name: STAC property name, such as "eo:cloud_cover".
+            values: A scalar shared by every Item, or one scalar per Item. None
+                marks a missing value.
+            item_dim: Dimension the per-Item values follow.
+
+        Returns:
+            New raster with the coordinate; pixels are not read.
+
+        Raises:
+            KeyError: Per-Item values are given and `item_dim` is absent.
+            ValueError: The length differs from `item_dim`, a value is not a
+                scalar, or `name` is a dimension or variable name.
+
+        Examples:
+            >>> ds.gs.write_stac_property("platform", "Sentinel-2B")["platform"].dims
+            ()
+        """
+        taken = set(self._data.dims)
+        if isinstance(self._data, xr.Dataset):
+            taken.update(self._data.data_vars)
+        else:
+            taken.add(self._data.name)
+        if name in taken:
+            raise ValueError(f"{name!r} is a dimension or variable, not a property")
+
+        if isinstance(values, (tuple, dict, set)):
+            raise ValueError(f"Property {name!r} values must be scalar")
+
+        if isinstance(values, (list, np.ndarray)):
+            items = list(values)
+            for item in items:
+                if isinstance(item, (list, tuple, dict, set, np.ndarray)):
+                    raise ValueError(f"Property {name!r} values must be scalar")
+            if item_dim not in self._data.dims:
+                raise KeyError(f"Dimension {item_dim!r} is absent")
+            if len(items) != self._data.sizes[item_dim]:
+                raise ValueError(
+                    f"Property {name!r} has length {len(items)}, "
+                    f"but {item_dim!r} has {self._data.sizes[item_dim]}"
+                )
+            coord = xr.Variable(item_dim, items)
+        else:
+            coord = xr.Variable((), values)
+
+        coord = attrs.stamp_attrs(coord, attrs.StacProperty(name=name))
+        return self._data.assign_coords({name: coord})
 
 
 class RasterTime[DataT: xr.DataArray | xr.Dataset]:

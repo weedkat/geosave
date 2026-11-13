@@ -60,7 +60,7 @@ from geosave.geodata.core.conventions import (
 from geosave.geodata.core.raster.utils.statistics import class_percent, statistics
 from geosave.geodata.core.raster.utils.tensor import as_tensor
 
-from .base import GeoRaster, RasterTime
+from .base import GeoRaster, RasterStacProperties, RasterTime
 from .transform.temporal import Reducer, Interpolation
 
 if TYPE_CHECKING:
@@ -118,7 +118,9 @@ def same_pixel_meaning(raster: xr.Dataset) -> None:
             )
 
 
-class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
+class GeoDataset(
+    RasterTime["Dataset"], RasterStacProperties["Dataset"], GeoRaster["Dataset"]
+):
     """Read and transform one raster Dataset.
 
     Each member reads only what it needs, so a Dataset mid-computation still

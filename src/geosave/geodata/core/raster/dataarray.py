@@ -22,7 +22,7 @@ from geosave.geodata.core.raster.utils.statistics import class_percent, statisti
 from geosave.geodata.core.raster.utils.tensor import as_tensor
 
 
-from .base import GeoRaster, RasterTime, Rule
+from .base import GeoRaster, RasterStacProperties, RasterTime, Rule
 from .transform.temporal import Reducer, Interpolation
 
 if TYPE_CHECKING:
@@ -103,7 +103,9 @@ def compatible_resampling(method: str) -> Rule[xr.DataArray]:
     return check
 
 
-class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
+class GeoDataArray(
+    RasterTime["DataArray"], RasterStacProperties["DataArray"], GeoRaster["DataArray"]
+):
     """Read and transform one raster DataArray.
 
     A DataArray is the unit a panel draws, so this accessor carries what

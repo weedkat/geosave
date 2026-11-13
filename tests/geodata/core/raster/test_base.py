@@ -211,3 +211,124 @@ def test_cells_follow_a_named_label_coordinate():
     dated = raster.gs.write_time_bounds("MS", dim="acquired")
 
     assert dated.start_datetime.dims == ("acquired",)
+
+
+@pytest.fixture
+def scene() -> xr.Dataset:
+    return build_raster(times=3)
+
+
+def marked(scene: xr.Dataset) -> xr.Dataset:
+    out = scene.gs.write_stac_property("platform", "Sentinel-2B")
+    return out.gs.write_stac_property("eo:cloud_cover", [0.4, 12.1, 3.0])
+
+
+def test_write_scalar_and_per_step_properties(scene: xr.Dataset) -> None:
+    out = marked(scene)
+
+    assert out["platform"].dims == ()
+    assert out["eo:cloud_cover"].dims == ("time",)
+    assert out["eo:cloud_cover"].attrs["stac_property"] == "eo:cloud_cover"
+    assert out.gs.stac_properties == {
+        "platform": "platform",
+        "eo:cloud_cover": "eo:cloud_cover",
+    }
+
+
+def test_write_property_on_a_band(scene: xr.Dataset) -> None:
+    out = scene.red.gs.write_stac_property("eo:cloud_cover", [1.0, 2.0, 3.0])
+
+    assert out.gs.stac_properties == {"eo:cloud_cover": "eo:cloud_cover"}
+
+
+def test_write_property_keeps_missing_values(scene: xr.Dataset) -> None:
+    out = scene.gs.write_stac_property("platform", ["a", None, "c"])
+
+    assert out["platform"].values.tolist() == ["a", None, "c"]
+
+
+def test_unmarked_coordinates_are_not_properties(scene: xr.Dataset) -> None:
+    out = scene.assign_coords(month=("time", [2, 2, 3]))
+
+    assert "month" not in out.gs.stac_properties
+
+
+def test_write_along_another_item_dim(scene: xr.Dataset) -> None:
+    out = scene.rename(time="scene").gs.write_stac_property(
+        "dw:id", ["a", "b", "c"], item_dim="scene"
+    )
+
+    assert out["dw:id"].dims == ("scene",)
+
+
+def test_write_refuses_wrong_length_missing_dim_and_nested_values(
+    scene: xr.Dataset,
+) -> None:
+    with pytest.raises(ValueError, match="length"):
+        scene.gs.write_stac_property("a", [1, 2])
+    with pytest.raises(KeyError):
+        scene.gs.write_stac_property("a", [1, 2, 3], item_dim="scene")
+    with pytest.raises(ValueError, match="scalar"):
+        scene.gs.write_stac_property("a", [["msi"], "b", "c"])
+    with pytest.raises(ValueError, match="scalar"):
+        scene.gs.write_stac_property("a", {"k": 1})
+
+
+@pytest.mark.parametrize("name", ["time", "x", "red"])
+def test_write_refuses_names_of_dims_and_variables(
+    scene: xr.Dataset, name: str
+) -> None:
+    with pytest.raises(ValueError, match=name):
+        scene.gs.write_stac_property(name, "v")
+
+
+def test_write_refuses_the_band_name(scene: xr.Dataset) -> None:
+    with pytest.raises(ValueError, match="red"):
+        scene.red.gs.write_stac_property("red", "v")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda ds: ds.isel(time=[0, 2]),
+        lambda ds: ds.sel(time=ds.time[1:]),
+        lambda ds: ds[["red"]],
+        lambda ds: ds * 2,
+        lambda ds: ds.where(ds.red > 0),
+        lambda ds: ds.mean(["x", "y"]),
+        lambda ds: xr.concat([ds, ds], "time"),
+        lambda ds: xr.merge([ds, ds]),
+    ],
+    ids=["isel", "sel", "select", "multiply", "where", "mean_xy", "concat", "merge"],
+)
+def test_marks_survive_operations_that_keep_the_coordinate(
+    scene: xr.Dataset, operation
+) -> None:
+    out = operation(marked(scene))
+
+    assert set(out.gs.stac_properties) == {"platform", "eo:cloud_cover"}
+
+
+def test_per_step_marks_go_with_time_reductions(scene: xr.Dataset) -> None:
+    out = marked(scene).mean("time")
+
+    assert "eo:cloud_cover" not in out.coords
+    assert out["platform"].attrs["stac_property"] == "platform"
+
+
+@pytest.mark.parametrize("fmt", ["netcdf", "zarr"])
+def test_property_coordinates_round_trip_through_files(
+    scene: xr.Dataset, tmp_path, fmt: str
+) -> None:
+    raster = marked(scene)
+    if fmt == "netcdf":
+        path = tmp_path / "scene.nc"
+        raster.to_netcdf(path)
+        back = xr.open_dataset(path)
+    else:
+        path = tmp_path / "scene.zarr"
+        raster.to_zarr(path)
+        back = xr.open_zarr(path)
+
+    assert back.gs.stac_properties == raster.gs.stac_properties
+    assert back["eo:cloud_cover"].values.tolist() == [0.4, 12.1, 3.0]

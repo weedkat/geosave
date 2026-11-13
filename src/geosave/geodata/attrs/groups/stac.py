@@ -42,3 +42,23 @@ class StacCollection(AttrsGroup):
     def _serialize_as_json(self, value: object) -> str | None:
         """Write a field as JSON text, since NetCDF attrs cannot hold a mapping."""
         return None if value is None else orjson.dumps(value).decode()
+
+
+class StacProperty(AttrsGroup):
+    """Mark a coordinate as one STAC Item property.
+
+    It lives on the coordinate's own attrs, so the mark follows the coordinate
+    through selection, concatenation and files.
+
+    Attributes:
+        name: The STAC property name, such as "eo:cloud_cover".
+
+    Examples:
+        >>> StacProperty(name="platform").to_attrs()
+        {'stac_property': 'platform'}
+    """
+
+    name: str = Field(
+        validation_alias=AliasChoices("stac_property"),
+        serialization_alias="stac_property",
+    )
