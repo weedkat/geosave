@@ -4,9 +4,11 @@ import xarray as xr
 
 import geosave.geodata.attrs as attrs
 
+from .registry import register_stamp
 from .source import LoadSource
 
 
+@register_stamp("collection")
 def stamp_collection(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """State the Collection, without its links, and the Items' extension schemas.
 

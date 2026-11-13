@@ -335,8 +335,7 @@ def _split_scene() -> xr.Dataset:
         day = value.astype("datetime64[D]")
         days.append((day, day + np.timedelta64(1, "D")))
     scene = assign_cells(scene, days)
-    properties = [{"eo:cloud_cover": 10.0}, {"eo:cloud_cover": 40.0}]
-    scene = scene.assign_coords(stac_properties=("time", properties))
+    scene = scene.gs.write_stac_property("eo:cloud_cover", [10.0, 40.0])
     return scene.assign_attrs(title="Two passes")
 
 
@@ -394,7 +393,7 @@ def test_coordinates_and_attrs_go_to_their_stac_level():
         "time",
         "start_datetime",
         "end_datetime",
-        "stac_properties",
+        "eo:cloud_cover",
     }
     assert item.time.values == scene.time.values[1]
     assert item.attrs == {"title": "Two passes"}

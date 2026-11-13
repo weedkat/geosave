@@ -19,14 +19,14 @@ from geosave.geodata.stac.stamps import (
 def registered() -> Iterator[None]:
     """Register two test stamps writing attr `a`, and remove them afterwards."""
 
+    @register_stamp("first")
     def first(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
         return loaded.assign_attrs(a="first", b="kept")
 
+    @register_stamp("second")
     def second(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
         return loaded.assign_attrs(a="second")
 
-    register_stamp("first", first)
-    register_stamp("second", second)
     yield
     del STAMPS["first"]
     del STAMPS["second"]
@@ -57,4 +57,7 @@ def test_an_unknown_name_runs_no_stamp(registered) -> None:
 
 def test_a_taken_name_cannot_be_registered() -> None:
     with pytest.raises(ValueError, match="raster"):
-        register_stamp("raster", lambda loaded, source: loaded)
+
+        @register_stamp("raster")
+        def again(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+            return loaded

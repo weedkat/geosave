@@ -4,20 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Self
 
-import numpy as np
 import pystac
 import xarray as xr
-from shapely.geometry import mapping, shape
 
 import geosave.geodata.attrs as attrs
 
-from geosave.geodata.core.conventions import (
-    END_DATETIME,
-    START_DATETIME,
-    STAC_PROPERTIES,
-    TIME_COORDINATE,
-)
-from geosave.geodata.stac import item as stac_item
 from geosave.geodata.stac.extensions import eo, projection
 from geosave.geodata.stac.extensions import raster as raster_extension
 
@@ -51,7 +42,7 @@ class StacItem(pystac.Item):
             item: Item node of a STAC tree.
             id: Item id; None takes the node's name.
             collection: Id of the Collection the Item belongs to.
-            properties: Item properties, over the node's `stac_properties`.
+            properties: Item properties, over the node's marked property coordinates.
             geometry: GeoJSON footprint in WGS84; None takes the union of the
                 node's assets' grids.
             stac_extensions: Schema URIs to declare beside those its assets add.
@@ -61,47 +52,10 @@ class StacItem(pystac.Item):
             with `add_raster_asset`.
 
         Raises:
-            ValueError: The node states no time, or a period out of order.
+            NotImplementedError: Always, while publication is rebuilt.
         """
-        coords = item.to_dataset(inherit=False).coords
-
-        # The Item's time coordinates are scalar on its node.
-        instants: dict[str, str | None] = {}
-        for name in (TIME_COORDINATE, START_DATETIME, END_DATETIME):
-            instants[name] = None
-            if name in coords:
-                instants[name] = str(np.datetime_as_string(coords[name].values))
-        time = stac_item.normalize_time(
-            instants[TIME_COORDINATE], instants[START_DATETIME], instants[END_DATETIME]
-        )
-
-        stated = {}
-        if STAC_PROPERTIES in coords:
-            stated = dict(coords[STAC_PROPERTIES].item())
-        stated.update(properties or {})
-
-        if geometry is None:
-            # Four points a side keep a projected grid's edges close in WGS84
-            # without the hundreds of vertices `geographic_extent` adds.
-            footprints = []
-            for leaf in item.leaves:
-                geobox = leaf.to_dataset(inherit=False).odc.geobox
-                footprints.append(geobox.footprint("EPSG:4326", npoints=4))
-            footprint = footprints[0]
-            for other in footprints[1:]:
-                footprint = footprint.union(other)
-            geometry = mapping(footprint.geom)
-
-        return cls(
-            id if id is not None else str(item.name),
-            geometry,
-            list(shape(geometry).bounds),
-            time["datetime"],
-            stated,
-            start_datetime=time["start_datetime"],
-            end_datetime=time["end_datetime"],
-            stac_extensions=stac_extensions,
-            collection=collection,
+        raise NotImplementedError(
+            "STAC publication is being rebuilt on coordinates marked stac_property"
         )
 
     def add_raster_asset(

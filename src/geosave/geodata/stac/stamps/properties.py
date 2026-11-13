@@ -1,100 +1,73 @@
-"""Stamp that writes Item properties as coordinates marked `stac_property`."""
+"""Stamp that writes the Item properties of a load as coordinates."""
 
 from typing import Any
 
-import numpy as np
 import pystac
 import xarray as xr
 
-from geosave.geodata.stac.item import select_item_properties
-
+from .registry import register_stamp
 from .source import LoadSource
 
 
+@register_stamp("properties")
 def stamp_properties(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
-    """Write each scalar Item property as a coordinate marked `stac_property`.
+    """Write each scalar property every Item states alike, marked `stac_property`.
 
-    A property every Item states alike is a scalar coordinate. When every
-    `time` step is one Item, a property they differ on follows `time`,
-    missing where an Item lacks it; otherwise it is left out. List- and
-    dict-valued properties are left out.
+    A property the Items differ on is left out; request it with
+    `with_properties` to keep ODC's per-step value. List- and dict-valued
+    properties are left out.
 
     Args:
         loaded: Dataset returned by the ODC load.
         source: Items that were loaded.
 
     Returns:
-        `loaded` with one coordinate per property.
+        `loaded` with one scalar coordinate per shared property.
     """
-    stepped = source.match_steps(loaded)
-    items = source.items if stepped is None else stepped
-
     readings = []
-    keys = {}
-    for item in items:
-        reading = _read_scalars(item)
-        readings.append(reading)
-        for key in reading:
-            keys[key] = None
+    for item in source.items:
+        readings.append(_read_scalars(item))
 
-    for key in keys:
-        values = []
-        for reading in readings:
-            values.append(reading.get(key))
-
-        if _agree(key, readings):
-            loaded = loaded.gs.write_stac_property(key, values[0])
-        elif stepped is not None:
-            loaded = loaded.gs.write_stac_property(key, _build_values(values))
+    for key, value in readings[0].items():
+        if _agree(key, value, readings):
+            loaded = loaded.gs.write_stac_property(key, value)
     return loaded
 
 
+# Properties the loaded raster states in its own structure: `time` and its
+# period state the dates, the grid states `proj:*`, each variable's attrs its
+# band; `created` and `updated` describe the source Item's record, not the data.
+_STATED_BY_RASTER = (
+    "datetime",
+    "start_datetime",
+    "end_datetime",
+    "created",
+    "updated",
+    "bands",
+    "eo:bands",
+    "raster:bands",
+)
+
+
 def _read_scalars(item: pystac.Item) -> dict[str, Any]:
-    """Read the acquisition properties of an Item that a coordinate can hold."""
+    """Read the acquisition properties of an Item that a scalar coordinate can hold."""
     scalars = {}
-    for key, value in select_item_properties(item.properties).items():
+    for key, value in item.properties.items():
+        if key in _STATED_BY_RASTER or key.startswith("proj:"):
+            continue
         if value is None or isinstance(value, (str, int, float, bool)):
             scalars[key] = value
     return scalars
 
 
-def _agree(key: str, readings: list[dict[str, Any]]) -> bool:
-    """Check that every reading states `key` with one value of one type.
+def _agree(key: str, value: Any, readings: list[dict[str, Any]]) -> bool:
+    """Check that every reading states `key` as `value`, of the same type.
 
     The type check keeps `1`, `1.0` and `True`, which compare equal, apart.
     """
-    first = readings[0].get(key)
     for reading in readings:
         if key not in reading:
             return False
-        value = reading[key]
-        if type(value) is not type(first) or value != first:
+        if type(reading[key]) is not type(value) or reading[key] != value:
             return False
     return True
-
-
-def _build_values(values: list[Any]) -> np.ndarray:
-    """Build one value per step, None where an Item lacks the property.
-
-    Numbers keep a numeric dtype, with NaN for a missing value; anything else
-    is an object array, so strings are neither truncated nor coerced.
-    """
-    numeric = True
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            numeric = False
-
-    if numeric and None not in values:
-        return np.array(values)
-    if numeric:
-        filled = []
-        for value in values:
-            filled.append(np.nan if value is None else value)
-        return np.array(filled, dtype=float)
-
-    stored = np.empty(len(values), dtype=object)
-    for index, value in enumerate(values):
-        stored[index] = value
-    return stored

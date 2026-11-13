@@ -159,14 +159,13 @@ def _write(
         encode_spatial_axes,
         encode_time_bounds,
     )
-    from geosave.geodata.stac.raster import encode_properties
 
     if isinstance(raster, xr.DataTree):
         # Cells are stored as CF bounds; coordinates carry no fill (CF §5, §7.1).
         nodes = {}
         for node in raster.subtree:
             dataset = node.to_dataset(inherit=False)
-            dataset = encode_properties(encode_time_bounds(dataset))
+            dataset = encode_time_bounds(dataset)
             nodes[node.path] = encode_spatial_axes(dataset)
         raster = xr.DataTree.from_dict(nodes)
         shared = dict(options.pop("encoding", None) or {})
@@ -180,7 +179,7 @@ def _write(
         # A group's grid mapping must sit in that group for its CF decoding.
         options["write_inherited_coords"] = True
     else:
-        raster = encode_spatial_axes(encode_properties(encode_time_bounds(raster)))
+        raster = encode_spatial_axes(encode_time_bounds(raster))
 
     with storage.stage_file(store) as local:
         raster.to_netcdf(local, mode="w", engine="h5netcdf", compute=True, **options)
@@ -213,7 +212,6 @@ def open_netcdf(
         ['s2/r10m', 's2/r20m']
     """
     from geosave.geodata.io.formats.cf import decode_time_bounds
-    from geosave.geodata.stac.raster import decode_properties
 
     path = storage.create_upath(source, storage_options)
     with ExitStack() as opened:
@@ -233,12 +231,10 @@ def open_netcdf(
         if stored.children:
             nodes = {}
             for node in stored.subtree:
-                dataset = decode_time_bounds(node.to_dataset(inherit=False))
-                nodes[node.path] = decode_properties(dataset)
+                nodes[node.path] = decode_time_bounds(node.to_dataset(inherit=False))
             result = xr.DataTree.from_dict(nodes)
         else:
             result = decode_time_bounds(stored.to_dataset().copy(deep=False))
-            result = decode_properties(result)
             result.encoding["source"] = str(path.absolute())
         result.set_close(opened.pop_all().close)
         return cast("Dataset | DataTree", result)

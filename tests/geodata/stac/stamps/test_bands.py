@@ -11,6 +11,7 @@ from geosave.geodata import attrs
 from geosave.geodata.attrs import EOBand
 from geosave.geodata.stac.stamps import LoadSource
 from geosave.geodata.stac.stamps.bands import (
+    read_band,
     stamp_classification,
     stamp_eo,
     stamp_raster,
@@ -20,6 +21,73 @@ from geosave.geodata.stac.stamps.bands import (
 )
 from tests.geodata.conftest import build_raster, raster_item
 from tests.geodata.stac.stamps.conftest import pixels, scene, with_asset
+
+
+# reading a band
+
+
+def item_with_asset(key, fields):
+    return with_asset(scene(), key, **fields)
+
+
+def test_asset_level_raster_fields_apply_to_its_band():
+    item = item_with_asset(
+        "B04_10m",
+        {
+            "raster:scale": 0.0001,
+            "raster:offset": -0.1,
+            "nodata": 0,
+            "bands": [{"name": "B04", "eo:common_name": "red"}],
+        },
+    )
+    fields = read_band(item, "B04_10m")
+    assert fields["raster:scale"] == 0.0001
+    assert fields["raster:offset"] == -0.1
+    assert fields["nodata"] == 0
+    assert fields["eo:common_name"] == "red"
+    assert "bands" not in fields
+
+
+def test_a_band_entry_overrides_the_asset():
+    item = item_with_asset(
+        "B04", {"raster:scale": 1, "bands": [{"name": "B04", "raster:scale": 2}]}
+    )
+    assert read_band(item, "B04")["raster:scale"] == 2
+
+
+def test_raster_v1_list_is_read_by_index():
+    item = item_with_asset(
+        "visual",
+        {
+            "raster:bands": [{"scale": 1.0}, {"scale": 2.0}, {"scale": 3.0}],
+            "eo:bands": [{"name": "B04"}, {"name": "B03"}, {"name": "B02"}],
+        },
+    )
+    fields = read_band(item, "visual.2")
+    assert fields["scale"] == 2.0
+    assert fields["name"] == "B03"
+
+
+def test_common_name_alias_finds_the_asset():
+    item = item_with_asset(
+        "B04",
+        {
+            "eo:bands": [{"name": "B04", "common_name": "red"}],
+            "raster:scale": 0.5,
+        },
+    )
+    # ODC reads aliases only from Items that declare the EO extension.
+    item.stac_extensions.append(
+        "https://stac-extensions.github.io/eo/v1.1.0/schema.json"
+    )
+    fields = read_band(item, "red")
+    assert fields["raster:scale"] == 0.5
+    assert fields["common_name"] == "red"
+
+
+def test_unknown_band_returns_empty():
+    item = item_with_asset("B04", {"raster:scale": 0.5})
+    assert read_band(item, "missing") == {}
 
 
 def test_band_attrs_keep_what_items_agree_on_and_the_loaded_ones() -> None:

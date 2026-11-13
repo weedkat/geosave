@@ -124,7 +124,7 @@ def test_catalog_region_ignores_published_timeless_bounds():
     from datetime import datetime, UTC
     import pystac
     from geosave.geodata.stac import create_catalog
-    from geosave.geodata.stac.item import TIMELESS
+    from geosave.geodata.core.vector.utils.time import TIMELESS
 
     geometry = GeoRegion.from_bbox((0, 0, 1, 1)).extent.json
     timeless = pystac.Item(

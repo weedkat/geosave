@@ -69,7 +69,8 @@ Who writes the cells::
 
 STAC metadata keeps its own shape beside it::
 
-    scene.coords["stac_properties"] (time)  Item properties per label, a dict
+    scene.coords["eo:cloud_cover"]          one coordinate per Item property, scalar
+                                            when shared, attr stac_property = its key
     scene.attrs["stac_collection"]          JSON Collection
     scene.attrs["stac_extensions"]          JSON extension schema URIs
 
@@ -81,7 +82,7 @@ inherits its ancestors' coordinates; attrs are not inherited::
     └── /sentinel-2-l2a        collection   attrs   stac_collection, stac_extensions
         ├── /20250601T...      Item         attrs   the Dataset's other attrs (title, ...)
         │   │                               coords  time, start_datetime, end_datetime,
-        │   │                                       stac_properties (all scalar)
+        │   │                                       one scalar coord per property
         │   ├── /B04           asset        vars    B04 (y, x)  attrs: CF packing, flags
         │   │                               coords  y, x, spatial_ref: its own grid
         │   └── /SCL           asset        vars    SCL (y, x) on another grid
@@ -132,8 +133,3 @@ DEFAULT_COLLECTION = "default"
 # Items of one collection over many regions and dates stay unique and sort by
 # time. Fields are those of `GeoRegion.format`.
 ITEM_ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{mgrs}_{lat:.4f}_{lon:.4f}"
-
-
-# Coordinate along `time` holding each date's STAC Item properties: one dict
-# per date in memory, JSON text in netCDF and Zarr.
-STAC_PROPERTIES = "stac_properties"

@@ -15,7 +15,7 @@ from geosave.geodata import open_vector
 from tests.conftest import build_dataset
 from geosave.geodata.stac.catalog import concat_catalogs
 from geosave.geodata.stac.catalog import create_catalog
-from geosave.geodata.stac.item import TIMELESS
+from geosave.geodata.core.vector.utils.time import TIMELESS
 from tests.geodata.conftest import item_table, write_collection_cogs
 from tests.geodata.conftest import create_file_items, create_test_collection
 

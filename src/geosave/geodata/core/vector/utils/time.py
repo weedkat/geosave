@@ -1,9 +1,54 @@
 """Read and validate temporal coverage on native spatial records."""
 
+from datetime import UTC
+from datetime import datetime as DateTime
+
 import pandas as pd
 
 from geosave.geodata.errors import VectorValidationError
-from geosave.geodata.stac.item import read_timespan
+
+
+# The time of an Item whose rasters state none. STAC dates every Item, so a
+# timeless one, as an elevation model, spans all of time and so overlaps every
+# window; `read_timespan` reads it back as None.
+TIMELESS = (
+    DateTime(1, 1, 1, tzinfo=UTC),
+    DateTime(9999, 12, 31, 23, 59, 59, tzinfo=UTC),
+)
+
+
+def read_timespan(
+    instant: DateTime | str | None,
+    start: DateTime | str | None = None,
+    end: DateTime | str | None = None,
+) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    """Return the first and last instant an Item covers.
+
+    Args:
+        instant: Nominal observation timestamp, or None.
+        start: Explicit coverage start, or None to use the instant.
+        end: Explicit coverage end, or None to use the instant.
+
+    Returns:
+        (start, end), naive UTC: its `start_datetime` and `end_datetime`,
+        else its `datetime` twice. None for a timeless Item, which spans
+        `TIMELESS` or states no time.
+
+    Examples:
+        >>> read_timespan("2025-06-01T00:00:00Z")
+        (Timestamp('2025-06-01 00:00:00'), Timestamp('2025-06-01 00:00:00'))
+    """
+    start = start if start is not None else instant
+    end = end if end is not None else instant
+    if start is None or end is None:
+        return None
+    # Compared as Timestamps first, since TIMELESS lies past pandas' nanosecond range.
+    if (pd.Timestamp(start), pd.Timestamp(end)) == TIMELESS:
+        return None
+    return (
+        pd.to_datetime(start, utc=True).tz_convert(None),
+        pd.to_datetime(end, utc=True).tz_convert(None),
+    )
 
 
 def read_times(rows: pd.DataFrame) -> pd.DataFrame:

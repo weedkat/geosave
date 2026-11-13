@@ -125,7 +125,6 @@ class GeoDataArray(
         *,
         dim: str = "time",
         interpolation: Interpolation | None = None,
-        properties: Literal["intersect", "stack"] = "intersect",
         closed: Literal["left", "right"] | None = None,
         label: Literal["left", "right"] | None = None,
         origin: str | datetime = "start_day",
@@ -139,8 +138,8 @@ class GeoDataArray(
             dim: Datetime dimension to resample, default "time".
             interpolation: Fill interior pixel gaps with linear or nearest
                 interpolation after reduction. None keeps gaps. Lazy output is
-                rechunked along dim; properties remain observed.
-            properties: Intersect scene properties or stack them in source order.
+                rechunked along dim. A per-scene STAC property no
+                longer describes a bin and drops out; shared ones stay.
             closed: Inclusive bin edge, following native resample defaults.
             label: Bin label edge, following native resample defaults.
             origin: Native resample origin.
@@ -168,7 +167,6 @@ class GeoDataArray(
             method,
             dim=dim,
             interpolation=interpolation,
-            properties=properties,
             closed=closed,
             label=label,
             origin=origin,

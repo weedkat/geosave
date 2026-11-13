@@ -15,8 +15,7 @@ class StacCollection(AttrsGroup):
 
     It lives on a Dataset's root attrs, written by `stac.load_dataset` and read
     by `to_catalog`. Each field is JSON text, which NetCDF, Zarr and GeoTIFF
-    tags all hold. Observation properties live on the
-    `stac_properties` coordinate instead.
+    tags all hold. Item properties are coordinates marked `stac_property`.
 
     Attributes:
         collection: The Collection as its STAC JSON, with no links.

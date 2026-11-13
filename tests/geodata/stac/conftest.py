@@ -6,6 +6,7 @@ import numpy as np
 import pystac
 import pytest
 import rasterio
+from pystac.extensions.eo import EOExtension
 from pystac.extensions.projection import ProjectionExtension
 
 
@@ -77,6 +78,7 @@ def local_catalog(tmp_path):
         properties={},
         collection="local",
     )
+    EOExtension.add_to(item)
     ProjectionExtension.ext(item, add_if_missing=True).apply(
         code="EPSG:32633", shape=list(grid.shape), transform=list(grid.transform)
     )
@@ -113,7 +115,11 @@ def local_catalog(tmp_path):
                         "offset": -0.1,
                         "unit": "1",
                     },
-                ]
+                ],
+                "eo:bands": [
+                    {"name": "red", "common_name": "red"},
+                    {"name": "nir", "common_name": "nir"},
+                ],
             },
         ),
     )
@@ -121,11 +127,5 @@ def local_catalog(tmp_path):
         tmp_path / "local.parquet", collections=[collection]
     )
     client = stac.StacClient.open(path)
-    options = dict(
-        bands=["red", "nir"],
-        groupby="time",
-        stac_cfg={
-            "local": {"aliases": {"red": ("reflectance", 1), "nir": ("reflectance", 2)}}
-        },
-    )
+    options = dict(bands=["red", "nir"], groupby="time")
     return client, region, grid, options

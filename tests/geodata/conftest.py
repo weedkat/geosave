@@ -42,19 +42,14 @@ def raster_item(rasters, *, id, input_datetime, properties=None, collection=None
     from shapely.ops import unary_union
 
     from geosave.geodata.stac.extensions import classification, eo, projection, raster
-    from geosave.geodata.stac.item import create_item, normalize_time
 
     footprints = []
     for _, source in rasters.values():
         footprints.append(source.gs.geobox.geographic_extent.geom)
     footprint = unary_union(footprints)
-    fields = dict(properties or {})
-    period = normalize_time(
-        input_datetime,
-        fields.pop("start_datetime", None),
-        fields.pop("end_datetime", None),
+    entry = pystac.Item(
+        id, None, None, input_datetime, dict(properties or {}), collection=collection
     )
-    entry = create_item(id=id, time=period, properties=fields, collection=collection)
     entry.geometry = mapping(footprint)
     entry.bbox = list(footprint.bounds)
     for key, (path, source) in rasters.items():

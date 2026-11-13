@@ -19,7 +19,6 @@ from datetime import timezone
 import pystac
 import geosave.geodata  # noqa: F401  — registers the .gs accessor
 from geosave.geodata import open_raster
-from geosave.geodata.attrs import CFPacking, EOBand
 from geosave.geodata.features import ndvi
 from geosave.geodata.stac.load import load_dataset
 from geosave.geodata.stac import StacQuery
@@ -53,10 +52,14 @@ def test_properties_follow_fused_time_and_keep_common_attrs(observation):
         groupby="time",
         with_properties=["eo:cloud_cover"],
     )
-    (properties,) = loaded.stac_properties.values
-    assert properties["eo:cloud_cover"] == 30.0
-    assert properties["platform"] == "test"
+    # ODC fuses a requested property; the shared one is a scalar coordinate.
+    assert loaded["eo:cloud_cover"].values.tolist() == [30.0]
+    assert loaded["platform"].item() == "test"
     assert "eo:cloud_cover" not in loaded.data_vars
+    assert loaded.gs.stac_properties == {
+        "eo:cloud_cover": "eo:cloud_cover",
+        "platform": "platform",
+    }
 
 
 def test_loader_rejects_mixed_collections_before_reading(observation):
@@ -107,7 +110,8 @@ def test_the_item_node_states_its_time_once_and_leaves_inherit_it(
 
     own = tree[f"local/{item.id}"].to_dataset(inherit=False)
     assert own.time.values == np.datetime64("2025-01-15")
-    assert "stac_properties" in own.coords
+    assert own["eo:cloud_cover"].item() == 20.0
+    assert "eo:cloud_cover" in own.gs.stac_properties
     for leaf in tree[f"local/{item.id}"].leaves:
         assert "time" not in leaf.to_dataset(inherit=False).coords
         inherited = leaf.to_dataset(inherit="all_coords")
@@ -338,7 +342,7 @@ def test_items_sharing_a_grid_load_together_and_keep_their_own_facts(observation
     covers = {}
     for entry in (item, later, tile):
         node = tree[f"local/{entry.id}"].to_dataset(inherit=False)
-        covers[entry.id] = node.stac_properties.item()["eo:cloud_cover"]
+        covers[entry.id] = node["eo:cloud_cover"].item()
         leaf = tree[f"local/{entry.id}/red"].to_dataset(inherit="all_coords")
         assert leaf.time.values == np.datetime64(
             entry.datetime.replace(tzinfo=None), "ns"
@@ -441,14 +445,10 @@ def test_a_load_carries_its_collection_and_the_properties_every_item_shares(
 
     assert loaded.gs.stac_collection.id == collection.id
     assert loaded.gs.stac_collection.license == collection.license
-    assert loaded.stac_properties.item()["constellation"] == "sentinel-2"
+    # One fused step: only what both Items state alike is a property.
+    assert loaded["constellation"].item() == "sentinel-2"
+    assert "platform" not in loaded.coords
     assert "title" not in loaded.attrs
-
-
-def _apply_metadata(items, collection, loaded):
-    from geosave.geodata.stac.load import stamp_band_attrs
-
-    return stamp_band_attrs(items, loaded)
 
 
 def _item(id: str, timestamp: dt, fields: dict[str, object]) -> pystac.Item:
@@ -509,82 +509,6 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
         **{**options, "bands": "nir", "chunks": None},
     ).gs.mask_and_scale()
     np.testing.assert_allclose(loaded.nir.values[:, 1, 1], [1.1, 1.1])
-
-
-def test_reader_uses_the_selected_band_without_mutating_the_item() -> None:
-    item = _item("multi", dt(2025, 1, 1), {})
-    item.assets["red"].extra_fields = {
-        "raster:bands": [{"unit": "1", "scale": 0.1}, {"unit": "K", "offset": 0}],
-        "eo:bands": [{"description": "Reflectance"}, {"description": "Temperature"}],
-    }
-    before = item.to_dict()
-
-    loaded = _apply_metadata(
-        [item],
-        _collection(),
-        xr.Dataset({"red.1": (("y", "x"), [[1]]), "red.2": (("y", "x"), [[2]])}),
-    )
-
-    assert loaded["red.1"].attrs == {
-        "units": "1",
-        "long_name": "Reflectance",
-        "scale_factor": 0.1,
-    }
-    assert loaded["red.1"].gs.packing == CFPacking(scale_factor=0.1)
-    assert loaded["red.2"].attrs == {"units": "K", "long_name": "Temperature"}
-    assert item.to_dict() == before
-
-
-def test_spectral_facts_reach_the_variable() -> None:
-    item = _item("scene", dt(2025, 1, 1), {})
-    item.assets["red"].extra_fields = {
-        "eo:bands": [{"name": "B04", "common_name": "red", "center_wavelength": 0.665}]
-    }
-
-    loaded = _apply_metadata(
-        [item], _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
-    )
-
-    assert loaded.red.gs.spectral == EOBand(common_name="red", center_wavelength=0.665)
-
-
-def _coloured_item(colours: list[str | None]) -> pystac.Item:
-    """One Item with an asset per colour; None states no colour."""
-    item = _item("scene", dt(2025, 1, 1), {})
-    del item.assets["red"]
-    for index, colour in enumerate(colours):
-        bands = [] if colour is None else [{"name": f"b{index}", "common_name": colour}]
-        item.add_asset(
-            f"b{index}",
-            pystac.Asset(
-                href=f"https://example.com/b{index}.tif",
-                media_type=pystac.MediaType.GEOTIFF,
-                extra_fields={"eo:bands": bands},
-            ),
-        )
-    return item
-
-
-def test_loading_states_the_rgb_composite_the_band_colours_name() -> None:
-    item = _coloured_item(["blue", "red", "green"])
-    pixels = {}
-    for name in item.assets:
-        pixels[name] = (("y", "x"), [[1]])
-
-    loaded = _apply_metadata([item], _collection(), xr.Dataset(pixels))
-
-    assert loaded.gs.rgb == ("b1", "b2", "b0")
-
-
-def test_loading_states_no_composite_without_a_blue_band() -> None:
-    item = _coloured_item([None, "red", "green"])
-    pixels = {}
-    for name in item.assets:
-        pixels[name] = (("y", "x"), [[1]])
-
-    loaded = _apply_metadata([item], _collection(), xr.Dataset(pixels))
-
-    assert loaded.gs.rgb is None
 
 
 def test_observations_to_prepared_index_to_reusable_dataset(local_catalog, tmp_path):

@@ -93,35 +93,16 @@ def test_a_composite_cell_is_its_resample_bin(freq, options) -> None:
 
 
 def _scenes_with_properties() -> xr.Dataset:
-    properties = [
-        {"platform": "s2a", "eo:cloud_cover": 10.0, "constellation": "s2"},
-        {"platform": "s2b", "eo:cloud_cover": 20.0, "constellation": "s2"},
-        {"platform": "s2a", "constellation": "s2"},
-    ]
-    return series(100, 900, 500).assign_coords(stac_properties=("time", properties))
+    scenes = series(100, 900, 500)
+    scenes = scenes.gs.write_stac_property("eo:cloud_cover", [10.0, 20.0, 30.0])
+    return scenes.gs.write_stac_property("constellation", "s2")
 
 
-def test_composite_properties_keep_what_every_scene_states() -> None:
+def test_composite_keeps_shared_properties_and_drops_per_scene_ones() -> None:
     monthly = _scenes_with_properties().gs.mask_and_scale().gs.composite("MS", "median")
 
-    assert monthly.stac_properties.values[0] == {"constellation": "s2"}
-    # February observed nothing, so it states nothing.
-    assert monthly.stac_properties.values[1] == {}
-
-
-def test_composite_properties_stack_one_entry_per_scene() -> None:
-    monthly = (
-        _scenes_with_properties()
-        .gs.mask_and_scale()
-        .gs.composite("MS", "median", properties="stack")
-    )
-
-    january = monthly.stac_properties.values[0]
-    assert january == {
-        "platform": ["s2a", "s2b"],
-        "eo:cloud_cover": [10.0, 20.0],
-        "constellation": ["s2", "s2"],
-    }
+    assert monthly.gs.stac_properties == {"constellation": "constellation"}
+    assert monthly["constellation"].item() == "s2"
 
 
 def test_flag_values_refuse_a_reducer_that_ranks_them() -> None:
@@ -213,10 +194,7 @@ def test_composite_band_roundtrips_observation_coordinates(tmp_path):
     with open_netcdf(path) as stored:
         restored = stored.red
         xr.testing.assert_allclose(restored, band)
-        assert (
-            restored.stac_properties.values.tolist()
-            == band.stac_properties.values.tolist()
-        )
+        assert restored.gs.stac_properties == band.gs.stac_properties
         assert restored.gs.timespan == band.gs.timespan
         assert restored.gs.crs == band.gs.crs
 

@@ -234,10 +234,9 @@ def _write_dataset(
 ) -> None:
     """Write one Dataset at the store's root."""
     from geosave.geodata.io.formats.cf import encode_spatial_axes
-    from geosave.geodata.stac.raster import encode_properties
 
     # Time cells stay start/end coordinates; Zarr stores datetimes as they are.
-    raster = _recording_order(encode_spatial_axes(encode_properties(raster)))
+    raster = _recording_order(encode_spatial_axes(raster))
     options["encoding"] = {
         **fill_encoding(raster),
         **dict(options.get("encoding") or {}),
@@ -256,13 +255,12 @@ def _write_tree(
 ) -> None:
     """Write a tree with one group per node."""
     from geosave.geodata.io.formats.cf import encode_spatial_axes
-    from geosave.geodata.stac.raster import encode_properties
 
     shared = dict(options.pop("encoding", None) or {})
     nodes = {}
     encoding = {}
     for node in tree.subtree:
-        dataset = encode_spatial_axes(encode_properties(node.to_dataset(inherit=False)))
+        dataset = encode_spatial_axes(node.to_dataset(inherit=False))
         recorded = _recording_order(dataset)
         if node.children:
             # A Zarr group lists its subgroups in no order either.
@@ -349,9 +347,7 @@ def open_zarr(
 
 def _read_in_written_order(node: xr.DataTree, nodes: dict[str, xr.Dataset]) -> None:
     """Add `node` and its descendants to `nodes`, groups and variables as written."""
-    from geosave.geodata.stac.raster import decode_properties
-
-    dataset = decode_properties(_in_written_order(node.to_dataset(inherit=False)))
+    dataset = _in_written_order(node.to_dataset(inherit=False))
     order = dataset.attrs.pop(_GROUP_ORDER_ATTR, [])
     nodes[node.path] = dataset
     names = [name for name in order if name in node.children]

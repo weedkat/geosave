@@ -65,7 +65,7 @@ class GeoCatalogItem:
         select a one-row GeoDataFrame to retain its CRS and use its gs.region.
         """
         from geosave.geodata.core.region import GeoRegion
-        from geosave.geodata.stac import item as stac_item
+        from geosave.geodata.core.vector.utils.time import read_timespan
         from geosave.geodata.stac.catalog import to_item
 
         from geosave.geodata.core.vector.catalog import valid_geometry
@@ -74,7 +74,7 @@ class GeoCatalogItem:
         item = to_item(self._row)
         return GeoRegion.from_geometry(
             cast("dict[str, Any]", item.geometry),
-            timespan=stac_item.read_timespan(
+            timespan=read_timespan(
                 item.datetime,
                 item.properties.get("start_datetime"),
                 item.properties.get("end_datetime"),
