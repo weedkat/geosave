@@ -120,6 +120,26 @@ _COMMON_FIELDS = ("nodata", "data_type", "unit", "statistics")
 _BAND_LISTS = ("raster:bands", "eo:bands", "bands")
 
 
+def find_asset(item: pystac.Item, name: str) -> tuple[str, int] | None:
+    """Find the asset and band position ODC loads as `name`.
+
+    Args:
+        item: Item holding the band's asset.
+        name: Band name or alias, resolved as `odc.stac` resolves it.
+
+    Returns:
+        The asset key and zero-based band index; None if `name` does not resolve.
+    """
+    parsed = odc.stac.parse_item(item)
+    try:
+        key, position = parsed.collection.band_key(name)
+    except ValueError:
+        return None
+    if key not in item.assets or (key, position) not in parsed.bands:
+        return None
+    return key, position - 1
+
+
 def read_band(item: pystac.Item, name: str) -> dict[str, Any]:
     """Read the STAC fields of the band ODC loads as `name`.
 
@@ -133,13 +153,10 @@ def read_band(item: pystac.Item, name: str) -> dict[str, Any]:
     Returns:
         Fields with their STAC spelling; empty if `name` does not resolve.
     """
-    parsed = odc.stac.parse_item(item)
-    try:
-        key, position = parsed.collection.band_key(name)
-    except ValueError:
+    found = find_asset(item, name)
+    if found is None:
         return {}
-    if key not in item.assets or (key, position) not in parsed.bands:
-        return {}
+    key, index = found
 
     extra = item.assets[key].extra_fields
     fields: dict[str, Any] = {}
@@ -151,7 +168,6 @@ def read_band(item: pystac.Item, name: str) -> dict[str, Any]:
         ):
             fields[field] = value
 
-    index = position - 1
     for listing in _BAND_LISTS:
         entries = extra.get(listing, [])
         if index < len(entries):

@@ -8,10 +8,12 @@ import re
 from typing import TypedDict, cast
 
 import pystac
+import xarray as xr
 from pystac.extensions.classification import Classification, ClassificationExtension
 from pystac.extensions.raster import RasterBand
 
 import geosave.geodata.attrs as attrs
+from geosave.geodata.stac.stamps import LoadSource, register_stamp
 
 # What the schema lets a class be named.
 _CLASS_NAME = re.compile(r"[0-9A-Za-z_-]+")
@@ -92,3 +94,35 @@ def write_band(
     if classes := build_classes(flags):
         ClassificationExtension.ext(band).apply(classes=classes)
         ClassificationExtension.ext(asset, add_if_missing=True)
+
+
+def read_item_attrs(item: pystac.Item, name: str) -> ClassificationAttrs:
+    """Translate the classes of the band ODC loads as `name` into CF attrs."""
+    from geosave.geodata.stac.band import read_band  # band imports this module
+
+    return read_attrs(RasterBand(dict(read_band(item, name))))
+
+
+@register_stamp("classification")
+def stamp_classification(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+    """Write each loaded band's class enumeration and colour hints.
+
+    The variable's own attrs win over STAC's. Attrs are kept only when every
+    Item that states them agrees.
+
+    Args:
+        loaded: Dataset returned by the ODC load.
+        source: Items that were loaded.
+
+    Returns:
+        `loaded` with `flag_values`, `flag_meanings` and `color_hints` stated.
+    """
+    stamped = {}
+    for name, variable in loaded.data_vars.items():
+        observations = []
+        for item in source.items:
+            observations.append(xr.Dataset(attrs=read_item_attrs(item, str(name))))
+        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
+
+        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
+    return loaded.assign(stamped)

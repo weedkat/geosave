@@ -2,6 +2,9 @@
 
 from collections.abc import Iterator
 
+from datetime import UTC, datetime
+
+import pystac
 import pytest
 import xarray as xr
 
@@ -12,6 +15,7 @@ from geosave.geodata.stac.stamps import (
     check_stamps,
     register_stamp,
     run_stamps,
+    stamp_title,
 )
 
 
@@ -101,3 +105,67 @@ def test_default_stamps_order():
         "properties",
         "collection",
     )
+
+
+def _titled_item(id: str = "scene", **asset_fields) -> pystac.Item:
+    item = pystac.Item(
+        id=id,
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2025, 1, 1, tzinfo=UTC),
+        properties={},
+    )
+    item.add_asset(
+        "red",
+        pystac.Asset(
+            href=f"https://example.com/{id}.tif",
+            title="Red reflectance",
+            extra_fields=asset_fields,
+        ),
+    )
+    return item
+
+
+def _pixels(*names: str) -> xr.Dataset:
+    variables = {}
+    for name in names:
+        variables[name] = (("y", "x"), [[1]])
+    return xr.Dataset(variables)
+
+
+def test_title_stamp_is_registered():
+    assert STAMPS["title"] is stamp_title
+
+
+def test_title_names_a_one_band_asset():
+    item = _titled_item(**{"eo:bands": [{"common_name": "red"}]})
+
+    stamped = stamp_title(_pixels("red"), LoadSource([item], None, "id"))
+
+    assert stamped.red.attrs["long_name"] == "Red reflectance"
+
+
+def test_title_skips_multi_band_assets():
+    item = _titled_item(**{"raster:bands": [{}, {}]})
+
+    stamped = stamp_title(_pixels("red.1", "red.2"), LoadSource([item], None, "id"))
+
+    assert "long_name" not in stamped["red.1"].attrs
+    assert "long_name" not in stamped["red.2"].attrs
+
+
+def test_title_yields_to_the_band_description():
+    item = _titled_item(**{"eo:bands": [{"description": "Reflectance"}]})
+
+    stamped = stamp_title(_pixels("red"), LoadSource([item], None, "id"))
+
+    assert "long_name" not in stamped.red.attrs
+
+
+def test_title_keeps_the_loaded_name():
+    loaded = _pixels("red")
+    loaded["red"].attrs["long_name"] = "Mine"
+
+    stamped = stamp_title(loaded, LoadSource([_titled_item()], None, "id"))
+
+    assert stamped.red.attrs["long_name"] == "Mine"

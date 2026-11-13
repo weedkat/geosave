@@ -103,6 +103,55 @@ def run_stamps(
     return loaded
 
 
+def read_title(item: pystac.Item, name: str) -> str | None:
+    """Read the title naming the band ODC loads as `name`.
+
+    Only a one-band asset's title names its band, and only when the band has no
+    description of its own.
+    """
+    from geosave.geodata.stac.band import find_asset, read_band  # cycle
+
+    found = find_asset(item, name)
+    if found is None:
+        return None
+    asset = item.assets[found[0]]
+
+    count = 0
+    for listing in ("bands", "eo:bands", "raster:bands"):
+        count = max(count, len(asset.extra_fields.get(listing, [])))
+    if count > 1 or "description" in read_band(item, name):
+        return None
+    return asset.title
+
+
+@register_stamp("title")
+def stamp_title(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+    """Name a band after its asset's title, where the asset holds only that band.
+
+    The variable's own attrs win over STAC's. The name is kept only when every
+    Item that states one agrees.
+
+    Args:
+        loaded: Dataset returned by the ODC load.
+        source: Items that were loaded.
+
+    Returns:
+        `loaded` with `long_name` stated.
+    """
+    stamped = {}
+    for name, variable in loaded.data_vars.items():
+        observations = []
+        for item in source.items:
+            title = read_title(item, str(name))
+            observations.append(
+                xr.Dataset(attrs={} if title is None else {"long_name": title})
+            )
+        stated = xr.merge(observations, combine_attrs="drop_conflicts").attrs
+
+        stamped[name] = variable.assign_attrs({**stated, **variable.attrs})
+    return loaded.assign(stamped)
+
+
 # Importing the extension modules registers their stamps. This stays at the end
 # because those modules import register_stamp and LoadSource from here.
-from geosave.geodata.stac.extensions import raster  # noqa: E402,F401
+from geosave.geodata.stac.extensions import classification, eo, raster  # noqa: E402,F401
