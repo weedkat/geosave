@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, TypedDict, cast
 
+import odc.stac
 import pystac
 import xarray as xr
 
@@ -113,3 +114,46 @@ def read_shared_attrs(
         observations.append(xr.Dataset(attrs=stated))
     combined = xr.merge(observations, combine_attrs="drop_conflicts")
     return cast("BandAttrs", combined.attrs)
+
+
+_COMMON_FIELDS = ("nodata", "data_type", "unit", "statistics")
+_BAND_LISTS = ("raster:bands", "eo:bands", "bands")
+
+
+def read_band(item: pystac.Item, name: str) -> dict[str, Any]:
+    """Read the STAC fields of the band ODC loads as `name`.
+
+    Asset-level fields apply to every band of the asset; the band's own entry
+    in `raster:bands`, `eo:bands` or `bands` overrides them.
+
+    Args:
+        item: Item holding the band's asset.
+        name: Band name or alias, resolved as `odc.stac` resolves it.
+
+    Returns:
+        Fields with their STAC spelling; empty if `name` does not resolve.
+    """
+    parsed = odc.stac.parse_item(item)
+    try:
+        key, position = parsed.collection.band_key(name)
+    except ValueError:
+        return {}
+    if key not in item.assets or (key, position) not in parsed.bands:
+        return {}
+
+    extra = item.assets[key].extra_fields
+    fields: dict[str, Any] = {}
+    for field, value in extra.items():
+        if field in _BAND_LISTS:
+            continue
+        if field in _COMMON_FIELDS or field.startswith(
+            ("raster:", "eo:", "classification:")
+        ):
+            fields[field] = value
+
+    index = position - 1
+    for listing in _BAND_LISTS:
+        entries = extra.get(listing, [])
+        if index < len(entries):
+            fields.update(entries[index])
+    return fields
