@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 
 import numpy as np
 import pystac
 import xarray as xr
 
-import geosave.geodata.attrs as attrs
 from geosave.geodata.core.conventions import (
     END_DATETIME,
     START_DATETIME,
@@ -109,32 +107,3 @@ def stamp_item_properties(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
         return raster.assign_coords({STAC_PROPERTIES: ((), properties)})
     mappings = [properties] * coordinate.size
     return raster.assign_coords({STAC_PROPERTIES: (coordinate.dims, mappings)})
-
-
-def build_stac_metadata(
-    items: Sequence[pystac.Item], collection: pystac.Collection | None
-) -> attrs.StacCollection:
-    """Read Collection metadata and the schemas declared by Items.
-
-    Args:
-        items: Nonempty sequence of source Items.
-        collection: Collection to retain without its catalog links, or None.
-
-    Returns:
-        Metadata for a Dataset root or a DataTree's collection node.
-        Observation properties are stored separately on their coordinate.
-    """
-    if not items:
-        raise ValueError("source metadata needs at least one Item")
-
-    fields = None
-    if collection is not None:
-        fields = collection.to_dict(include_self_link=False, transform_hrefs=False)
-        fields["links"] = []
-    extensions = []
-    for entry in items:
-        extensions.extend(entry.stac_extensions)
-    return attrs.StacCollection(
-        collection=fields,
-        extensions=list(dict.fromkeys(extensions)),
-    )

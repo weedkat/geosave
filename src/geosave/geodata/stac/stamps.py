@@ -4,9 +4,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import pystac
 import xarray as xr
 from odc.stac.model import ParsedItem
+
+import geosave.geodata.attrs as attrs
+from geosave.geodata.stac.item import read_instant, select_item_properties
 
 
 @dataclass(frozen=True)
@@ -172,6 +177,149 @@ def stamp_title(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
         return {} if title is None else {"long_name": title}
 
     return write_band_attrs(loaded, source, read)
+
+
+def read_scalar_properties(entry: pystac.Item) -> dict[str, Any]:
+    """Read the acquisition properties of an Item that a coordinate can hold."""
+    scalars = {}
+    for key, value in select_item_properties(entry.properties).items():
+        if value is None or isinstance(value, (str, int, float, bool)):
+            scalars[key] = value
+    return scalars
+
+
+def order_items_by_step(
+    loaded: xr.Dataset, items: Sequence[pystac.Item]
+) -> list[pystac.Item] | None:
+    """Return the Items in `time` order, or None unless each step is one Item.
+
+    ODC labels each Item at its instant, so a label maps to one Item only when
+    the Items' instants are distinct and the labels are exactly those instants.
+    """
+    if "time" not in loaded.dims or loaded.sizes["time"] != len(items):
+        return None
+
+    by_instant = {}
+    for entry in items:
+        instant = read_instant(entry)
+        if instant is None or instant in by_instant:
+            return None
+        by_instant[instant] = entry
+
+    ordered = []
+    for label in pd.DatetimeIndex(loaded.time.values):
+        if label not in by_instant:
+            return None
+        ordered.append(by_instant[label])
+    return ordered
+
+
+def fill_missing(values: list[Any]) -> np.ndarray:
+    """Build an array from per-Item values, marking missing ones.
+
+    Missing values (None) become NaN in a numeric array and None otherwise.
+    """
+    if None not in values:
+        return np.array(values)
+
+    present = [value for value in values if value is not None]
+    numeric = bool(present)
+    for value in present:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            numeric = False
+    if numeric:
+        return np.array([np.nan if v is None else v for v in values], dtype=float)
+
+    filled = np.empty(len(values), dtype=object)
+    for index, value in enumerate(values):
+        filled[index] = value
+    return filled
+
+
+@register_stamp("properties")
+def stamp_properties(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+    """Write each scalar Item property as a coordinate marked `stac_property`.
+
+    When every `time` step is exactly one Item, a property the Items disagree on
+    follows `time`, missing where an Item lacks it. Otherwise only properties
+    every Item states alike are written, as scalars. Lists and dicts are skipped.
+
+    Args:
+        loaded: Dataset returned by the ODC load.
+        source: Items that were loaded.
+
+    Returns:
+        `loaded` with one coordinate per property; pixels are not read.
+    """
+    stepped = order_items_by_step(loaded, source.items)
+    entries = source.items if stepped is None else stepped
+
+    readings = []
+    keys = {}
+    for entry in entries:
+        reading = read_scalar_properties(entry)
+        readings.append(reading)
+        for key in reading:
+            keys[key] = None
+
+    for key in keys:
+        values = []
+        for reading in readings:
+            values.append(reading.get(key))
+        shared = all(key in reading for reading in readings) and all(
+            value == values[0] for value in values
+        )
+
+        if shared:
+            loaded = loaded.gs.write_stac_property(key, values[0])
+        elif stepped is not None:
+            loaded = loaded.gs.write_stac_property(key, fill_missing(values))
+    return loaded
+
+
+def build_stac_collection(
+    items: Sequence[pystac.Item], collection: pystac.Collection | None
+) -> attrs.StacCollection:
+    """Read Collection metadata and the schemas declared by Items.
+
+    Args:
+        items: Nonempty sequence of source Items.
+        collection: Collection to retain without its catalog links, or None.
+
+    Returns:
+        Metadata for a Dataset root or a DataTree's collection node.
+        Observation properties are stored separately on their coordinates.
+    """
+    if not items:
+        raise ValueError("source metadata needs at least one Item")
+
+    fields = None
+    if collection is not None:
+        fields = collection.to_dict(include_self_link=False, transform_hrefs=False)
+        fields["links"] = []
+    extensions = []
+    for entry in items:
+        extensions.extend(entry.stac_extensions)
+    return attrs.StacCollection(
+        collection=fields,
+        extensions=list(dict.fromkeys(extensions)),
+    )
+
+
+@register_stamp("collection")
+def stamp_collection(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+    """State the Collection and the STAC extensions the Items declare.
+
+    Args:
+        loaded: Dataset returned by the ODC load.
+        source: Items and Collection that were loaded.
+
+    Returns:
+        `loaded` with the collection stated on its attrs.
+    """
+    return attrs.stamp_attrs(
+        loaded, build_stac_collection(source.items, source.collection)
+    )
 
 
 # Importing the extension modules registers their stamps. This stays at the end

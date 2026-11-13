@@ -25,7 +25,7 @@ from geosave.geodata.core.conventions import (
     TIME_COORDINATE,
 )
 from geosave.geodata.errors import RegionFetchError
-from geosave.geodata.stac import band, item, raster as stac_raster
+from geosave.geodata.stac import band, item, stamps
 from geosave.geodata.utils.mapping import intersect_mappings
 
 
@@ -114,9 +114,7 @@ def load_dataset(
     loaded = stamp_band_attrs(matched, loaded, cfg=settings.get("stac_cfg"))
     if mask_and_scale:
         loaded = xr.decode_cf(loaded, decode_coords="all")
-    return attrs.stamp_attrs(
-        loaded, stac_raster.build_stac_metadata(matched, collection)
-    )
+    return attrs.stamp_attrs(loaded, stamps.build_stac_collection(matched, collection))
 
 
 def load_datatree(
@@ -172,7 +170,7 @@ def load_datatree(
         for stated in collections:
             if stated.id == identity:
                 collection = stated
-        metadata = stac_raster.build_stac_metadata(entries, collection)
+        metadata = stamps.build_stac_collection(entries, collection)
         nodes[identity] = xr.Dataset(attrs=metadata.to_attrs())
 
         # Items stating one asset grid load in one ODC call. Distinct instants
