@@ -1,11 +1,9 @@
-"""Explore and sample spatial catalog records on native GeoDataFrames."""
+"""Explore and persist spatial catalog records on native GeoDataFrames."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from copy import deepcopy
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, cast
 
 import geopandas as gpd
 import pandas as pd
@@ -18,10 +16,8 @@ from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 
 if TYPE_CHECKING:
-    from odc.geo.geobox import GeoBox
     import holoviews as hv
     import pystac
-    from numpy.typing import DTypeLike
     from typing_extensions import Unpack
     from upath import UPath
     from geosave.geodata import DataTree, Dataset
@@ -30,11 +26,112 @@ if TYPE_CHECKING:
     from geosave.geodata.io.formats.geopackage import GeoPackageWriteOptions
     from geosave.geodata.io.formats.geoparquet import GeoParquetWriteOptions
 
-    from geosave.geodata import GeoDataFrame
     from geosave.geodata.core.region import GeoRegion
     from geosave.geodata.viz.explore import Explorer
 
     from .samples import GeoSamples
+
+# A rule raises VectorValidationError when the table breaks it.
+type Rule = Callable[[gpd.GeoDataFrame], None]
+
+
+# Rules a table can be asked to meet; `rows.gs.validate(stac_items)` runs one.
+
+
+def valid_geometry(rows: gpd.GeoDataFrame) -> None:
+    """Require a present, nonempty, valid geometry in every row.
+
+    Raises:
+        VectorValidationError: A geometry is broken; the error names its row.
+    """
+    from geosave.geodata.core.vector.utils.geometry import validate_geometry
+
+    for position, shape in enumerate(rows.geometry):
+        try:
+            validate_geometry(shape)
+        except VectorValidationError as error:
+            identity = rows.iloc[position].get("id", position)
+            raise VectorValidationError(
+                f"Row at position {position} (Item {identity!r}): {error}"
+            ) from error
+
+
+def stac_items(rows: gpd.GeoDataFrame) -> None:
+    """Require STAC Item rows, as stac-geoparquet states them.
+
+    Every Item column is present, each asset has an href, and an id is unique
+    within its collection.
+
+    Raises:
+        VectorValidationError: A column is missing, an asset has no href, or
+            two Items of one collection share an id.
+    """
+    missing = set(ITEM_COLUMNS) - set(rows.columns)
+    if missing:
+        raise VectorValidationError(
+            f"STAC Items need columns {sorted(missing)}; item tables come from "
+            "create_catalog, StacClient.search, or reading a stac-geoparquet file"
+        )
+
+    for position, assets in enumerate(rows["assets"]):
+        # The assets column holds every key any row has; a row lacking one holds None.
+        for key, asset in (assets or {}).items():
+            if asset is not None and not asset.get("href"):
+                raise VectorValidationError(
+                    f"Row at position {position}: asset {key!r} has no href"
+                )
+
+    collection = rows["collection"] if "collection" in rows else None
+    identities = pd.DataFrame({"collection": collection, "id": rows["id"]})
+    repeated = identities[identities.duplicated(keep=False)]
+    if not repeated.empty:
+        raise VectorValidationError(
+            f"Items share an id within their collection: {sorted(set(repeated['id']))}"
+        )
+
+
+def stac_collections(rows: gpd.GeoDataFrame) -> None:
+    """Require a definition, in the table's footer, of every collection a row names.
+
+    Raises:
+        VectorValidationError: A row names a collection the footer lacks.
+    """
+    if "collection" not in rows:
+        return
+    named = set(rows["collection"].dropna())
+    missing = named - set(rows.gs.collections)
+    if missing:
+        raise VectorValidationError(
+            f"Rows name collections {sorted(missing)} without their definition; "
+            "pass them to create_catalog(collections=...)"
+        )
+
+
+def one_collection(rows: gpd.GeoDataFrame) -> None:
+    """Require every row to name the same collection.
+
+    Raises:
+        VectorValidationError: The rows name several collections.
+    """
+    if "collection" not in rows:
+        return
+    named = list(rows["collection"].dropna().unique())
+    if len(named) > 1:
+        raise VectorValidationError(
+            f"Rows name the collections {named}; select one with "
+            "rows[rows['collection'] == '<id>']"
+        )
+
+
+def dated(rows: gpd.GeoDataFrame) -> None:
+    """Require each row's time stated whole: a datetime, or an ordered start/end pair.
+
+    Raises:
+        VectorValidationError: A row's time is incomplete or out of order.
+    """
+    from geosave.geodata.core.vector.utils.time import validate_time
+
+    validate_time(rows)
 
 
 class GeoCatalog:
@@ -73,80 +170,34 @@ class GeoCatalog:
             raise AttributeError("gs needs an active geometry column")
         self._data = data
 
-    def validate(
-        self,
-        *,
-        geometry: bool = True,
-        crs: bool = False,
-        stac_item: bool | None = None,
-        area: bool = False,
-        temporal: bool = False,
-    ) -> None:
-        """Check requested table structure without changing rows or opening assets.
+    def validate(self, *rules: Rule) -> None:
+        """Require every rule, without changing rows or opening assets.
 
         Args:
-            geometry: Require present, nonempty, valid geometries in every row.
-                Empty tables pass; operations needing rows check that separately.
-            crs: Require a declared coordinate reference system.
-            stac_item: True requires STAC Item columns. False rejects STAC
-                columns or metadata to require ordinary features. None skips
-                this check. Does not validate full schemas or asset access.
-            area: Require valid geometries with positive area, even when
-                geometry=False. Points and lines cannot found spatial samples.
-            temporal: Require paired, ordered temporal bounds and a nominal
-                datetime within coverage. Undated rows remain valid.
+            *rules: Table rules the operation needs, such as `stac_items` or
+                `valid_geometry`.
 
         Raises:
-            VectorValidationError: A requested check fails. Geometry errors
-                identify the row position, independent of index labels or IDs.
+            VectorValidationError: A rule is broken; the error names the row.
 
         Examples:
-            >>> features.gs.validate(crs=True)
-            >>> items.gs.validate(geometry=False, crs=True, stac_item=True)
+            >>> rows.gs.validate(stac_items, stac_collections)
         """
-        from geosave.geodata.core.vector.utils.geometry import validate_geometry
-        from geosave.geodata.core.vector.utils.time import validate_time
+        for rule in rules:
+            rule(self._data)
 
-        if geometry or area:
-            for position, shape in enumerate(self._data.geometry):
-                try:
-                    validate_geometry(shape, area=area)
-                except VectorValidationError as error:
-                    identity = self._data.iloc[position].get("id", position)
-                    raise VectorValidationError(
-                        f"Row at position {position} (Item {identity!r}): {error}"
-                    ) from error
+    @property
+    def crs(self) -> OdcCRS:
+        """Return the coordinate reference system every geometry shares.
 
-        if crs and self._data.crs is None:
+        Raises:
+            VectorValidationError: The frame declares no CRS.
+        """
+        if self._data.crs is None:
             raise VectorValidationError(
                 "The vector has no CRS. Assign the known coordinate reference "
                 "system with frame.set_crs(...); this does not reproject geometries."
             )
-
-        if stac_item is True:
-            missing = set(ITEM_COLUMNS) - set(self._data.columns)
-            if missing:
-                raise VectorValidationError(
-                    f"STAC Item operations need columns {sorted(missing)}; item tables come "
-                    "from to_catalog, StacClient.search, or reading a stac-geoparquet file"
-                )
-
-        if stac_item is False:
-            if FOOTER_KEY in self._data.attrs or all(
-                column in self._data.columns for column in ITEM_COLUMNS
-            ):
-                raise VectorValidationError(
-                    "ordinary features required; write catalog rows with "
-                    "to_geoparquet to preserve STAC metadata"
-                )
-
-        if temporal:
-            validate_time(self._data)
-
-    @property
-    def crs(self) -> OdcCRS:
-        """Return the coordinate reference system every geometry shares."""
-        self.validate(geometry=False, crs=True)
         return OdcCRS(self._data.crs)
 
     @property
@@ -163,7 +214,7 @@ class GeoCatalog:
             raise VectorValidationError(
                 "An empty vector has no footprint. Select at least one row."
             )
-        self.validate()
+        self.validate(valid_geometry)
         return Geometry(self._data.geometry.union_all(), crs=self.crs)
 
     @property
@@ -177,90 +228,15 @@ class GeoCatalog:
         from geosave.geodata.core.vector.utils.time import read_times
 
         region = GeoRegion.from_geometry(self.footprint)
-        self.validate(geometry=False, temporal=True)
+        self.validate(dated)
         times = read_times(self._data)
-        dated = times.loc[times["start"].notna()]
-        if dated.empty:
+        dated_times = times.loc[times["start"].notna()]
+        if dated_times.empty:
             return region
 
-        return region.replace(timespan=(dated["start"].min(), dated["end"].max()))
-
-    @classmethod
-    def concat(cls, vectors: Iterable[gpd.GeoDataFrame]) -> GeoDataFrame:
-        """Concatenate spatial records without interpreting their identity.
-
-        Args:
-            vectors: Frames already expressed on one CRS plane.
-
-        Returns:
-            New frame with unioned property columns, a fresh RangeIndex, and
-            its geometry column named `geometry`.
-
-        Raises:
-            ValueError: No frames are supplied, their CRSs differ, or a frame
-                holds a second column named `geometry` beside its active one,
-                or STAC Item tables are mixed with ordinary features.
-        """
-        items = list(vectors)
-        if not items:
-            raise ValueError("concat needs at least one GeoDataFrame")
-        stac_frames = []
-        for item in items:
-            stac_frames.append(
-                FOOTER_KEY in item.attrs
-                or all(column in item for column in ITEM_COLUMNS)
-            )
-
-        if any(stac_frames) and not all(stac_frames):
-            raise ValueError(
-                "cannot concatenate STAC Item tables with ordinary features"
-            )
-
-        for item in items:
-            item.gs.validate(geometry=False, crs=True, stac_item=all(stac_frames))
-
-        crs = OdcCRS(items[0].crs)
-        mismatches = [str(item.crs) for item in items if OdcCRS(item.crs) != crs]
-        if mismatches:
-            raise ValueError(
-                f"the vectors' CRSs differ from {crs}: {mismatches}; "
-                "call to_crs explicitly"
-            )
-
-        # Normalize the active geometry name without overwriting a property.
-        frames: list[gpd.GeoDataFrame] = []
-        for item in items:
-            frame = item.copy()
-            if frame.active_geometry_name != "geometry":
-                if "geometry" in frame.columns:
-                    raise ValueError(
-                        "cannot concatenate an active geometry with another "
-                        "column named 'geometry'"
-                    )
-                frame = frame.rename_geometry("geometry")
-            frames.append(frame)
-        result = gpd.GeoDataFrame(
-            pd.concat(frames, ignore_index=True), geometry="geometry", crs=crs
+        return region.replace(
+            timespan=(dated_times["start"].min(), dated_times["end"].max())
         )
-
-        from geosave.geodata.stac.catalog import merge_collections
-
-        definitions = []
-        footer = {}
-        for frame in items:
-            definitions.extend(frame.gs.collections.values())
-            for key, value in frame.attrs.get(FOOTER_KEY, {}).items():
-                if key == "collections":
-                    continue
-                if key in footer and footer[key] != value:
-                    raise ValueError(f"catalog footer metadata disagrees on {key!r}")
-                footer[key] = deepcopy(value)
-        if any(FOOTER_KEY in frame.attrs for frame in items):
-            footer["collections"] = {}
-            for key, collection in merge_collections(definitions).items():
-                footer["collections"][key] = collection.to_dict(transform_hrefs=False)
-            result.attrs[FOOTER_KEY] = footer
-        return cast("GeoDataFrame", result)
 
     def plot(self, *, color: str = "tab:blue", alpha: float = 0.3) -> hv.Overlay:
         """Draw this vector's geometry in its own coordinates.
@@ -329,69 +305,15 @@ class GeoCatalog:
         layer.alpha = alpha
         return viewer
 
-    def rasterize(
-        self,
-        like: GeoBox | xr.DataArray | xr.Dataset,
-        *,
-        column: str | None = None,
-        fill: int | float | bool = 0,
-        dtype: DTypeLike | None = None,
-        all_touched: bool = False,
-    ) -> xr.DataArray:
-        """Burn geometries or one property onto an existing exact grid.
-
-        Args:
-            like: GeoBox or geolocated xarray object supplying the target grid.
-            column: Property to burn. None returns a boolean presence mask.
-            fill: Value outside geometries. A presence mask takes only 0 or
-                False, since it is False outside them.
-            dtype: Output dtype for property values.
-            all_touched: Burn every touched pixel instead of pixel centres.
-
-        Returns:
-            Eager geolocated array on the exact target grid.
+    def rasterize(self, *args: Any, **kwargs: Any) -> xr.DataArray:
+        """Burn geometries or one property onto an exact grid.
 
         Raises:
-            KeyError: The selected property is absent.
-            ValueError: A geometry is null, empty, or invalid, values or fill
-                cannot be represented by the dtype, or `column` is None with a
-                truthy `fill`.
+            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
         """
-        from odc.geo.geobox import GeoBox
-
-        from geosave.geodata.core.vector.utils.rasterize import (
-            burn_column,
-            burn_presence,
+        raise NotImplementedError(
+            f"{type(self).__name__}.rasterize is being rebuilt with catalog-tree loading and publication"
         )
-
-        if isinstance(like, GeoBox):
-            if like.crs is None:
-                raise ValueError("rasterize target grid carries no CRS")
-            geobox = like
-            dims = geobox.dimensions
-        else:
-            like.gs.validate()
-            geobox = cast("GeoBox", like.gs.geobox)
-            dims = cast("tuple[str, str]", like.gs.spatial_dims)
-
-        self.validate(crs=True)
-        frame = self._data.to_crs(cast("OdcCRS", geobox.crs))
-        if column is None:
-            pixels = burn_presence(frame, geobox, fill, all_touched)
-        else:
-            pixels = burn_column(frame, geobox, column, fill, dtype, all_touched)
-
-        from odc.geo.xr import wrap_xr
-
-        raster = wrap_xr(pixels, geobox, dims=dims).rename(column or "mask")
-        if isinstance(like, GeoBox):
-            return raster
-
-        # Sliced coordinates can drift from regenerated affine coordinates.
-        coords = {}
-        for dim in dims:
-            coords[dim] = like.coords[dim]
-        return raster.assign_coords(coords)
 
     @property
     def collections(self) -> dict[str, pystac.Collection]:
@@ -516,177 +438,18 @@ class GeoCatalog:
             self._data, path, collections=collections, overwrite=overwrite, **options
         )
 
-    def sample(
-        self,
-        *,
-        collections: Sequence[str] | None = None,
-        match: Literal["exact", "overlap"] = "overlap",
-        overlap: float = 0.9,
-        date_range: tuple[str | datetime | None, str | datetime | None] | None = None,
-        freq: str | pd.offsets.BaseOffset | None = None,
-        window: int = 1,
-        step: int = 1,
-        interval: Literal["raise", "first", "last", "overlap", "drop"] = "raise",
-        missing: Literal["drop", "keep"] = "drop",
-    ) -> GeoSamples:
-        """Plan spatial samples and consecutive temporal windows without reading pixels.
-
-        Collections populate slots independently. No collection supplies reference
-        dates for another. With ``freq``, calendar slots are left-closed and
-        labelled by their start. Otherwise exact observation timestamps define
-        the timeline. Empty calendar slots remain between observations.
-
-        With all temporal options at their defaults, return one raw sample per
-        spatial group. Indexing returns source rows. Open them with
-        ``samples[i].gs.to_datatree()``; loading retains their original dates.
-        Slot labels describe membership, not rewritten observation timestamps.
-
-        Args:
-            collections: Required collection names. None selects all. Unselected
-                static collections are not implicitly included.
-            match: Equal footprints, or smallest-first overlap grouping.
-            overlap: Required area fraction for overlap grouping.
-            date_range: Inclusive lower and exclusive upper selection bounds;
-                None means unbounded. The lower bound anchors relative frequencies.
-                Anchored frequencies such as "MS" retain their calendar boundaries.
-            freq: Pandas frequency string or offset. Relative DateOffset values
-                require a lower date_range bound. None uses exact instants;
-                interval-only Items then require an explicit frequency.
-            window: Positive count of consecutive slots in each sample.
-            step: Positive count of slots between window starts.
-            interval: Assignment for interval-only Items crossing slots: raise,
-                first, last, overlap (reuse in every intersected slot), or drop.
-                Item endpoints are inclusive. An existing datetime takes priority
-                for assignment; its full coverage is still preserved.
-            missing: Drop windows lacking required observations, or retain them
-                with empty slot membership. This never fills pixels or creates
-                placeholder catalog rows.
-
-        Returns:
-            Samples retaining original catalog positions, slot membership and
-            spatial footprints. No valid windows produces an empty result.
+    def sample(self, *args: Any, **kwargs: Any) -> GeoSamples:
+        """Plan samples of the Items for training.
 
         Raises:
-            ValueError: Options or temporal coverage are invalid, or an interval
-                crosses slots with interval='raise'. Errors identify the Item.
-            KeyError: A requested collection is absent.
-            VectorValidationError: Geometry is missing, invalid, empty or has no area.
-
-        Examples:
-            >>> samples = items.gs.sample(
-            ...     collections=["optical", "radar"], match="exact",
-            ...     freq="MS", window=6, interval="raise",
-            ... )
-            >>> samples[0]  # original Item rows, without opening assets
-            <GeoDataFrame ...>
-            >>> with samples[0].gs.to_datatree() as tree:
-            ...     print(tree.gs.groups)
-            ('optical', 'radar')
+            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
         """
-        from .samples import GeoSamples
-        from .utils.time import read_times
-        from .utils.sampling import (
-            assign_slots,
-            build_timeline,
-            clip_observations,
-            group_footprints,
-            read_frequency,
-            read_range,
-            select_collections,
-            select_range,
-            select_windows,
-            validate_options,
-        )
-
-        validate_options(
-            collections=collections,
-            match=match,
-            overlap=overlap,
-            window=window,
-            step=step,
-            interval=interval,
-            missing=missing,
-        )
-        bounds = read_range(date_range)
-        offset = read_frequency(freq, bounds[0])
-        temporal = (
-            collections is not None
-            or freq is not None
-            or window != 1
-            or step != 1
-            or interval != "raise"
-            or missing != "drop"
-        )
-
-        # The working index is source position, independent of duplicate user
-        # labels. Filtering and slot assignment retain it until construction.
-        rows = self._data.copy()
-        rows.index = pd.RangeIndex(len(rows))
-        rows = select_collections(rows, collections)
-        times = None
-        if temporal or bounds != (None, None):
-            rows.gs.validate(geometry=False, temporal=True)
-            times = select_range(read_times(rows), bounds)
-            rows = rows.loc[times.index]
-
-        footprints, groups = group_footprints(rows, match, overlap)
-        if not temporal:
-            return GeoSamples(self._data, groups, footprints=footprints)
-
-        names = list(collections) if collections is not None else []
-        if len(rows):
-            if "collection" not in rows:
-                raise ValueError("Temporal sampling requires a collection column")
-            if not names:
-                names = list(rows["collection"].drop_duplicates())
-            if any(not isinstance(name, str) or not name for name in names):
-                raise ValueError("Temporal sampling requires nonempty collection names")
-
-        # Date filtering can use plain features; only calendar membership needs
-        # collection names and row identity alongside the temporal values.
-        assert times is not None
-        observations = times.assign(
-            row=rows.index,
-            id=rows.get("id", pd.Series(rows.index, index=rows.index)),
-            collection=rows.get("collection", pd.Series(index=rows.index, dtype=str)),
-        )
-        observations = clip_observations(observations, bounds)
-
-        indices = []
-        windows = []
-        shapes = []
-        for shape, members in zip(footprints, groups, strict=True):
-            group = observations.loc[observations.index.isin(members)]
-            timeline = build_timeline(group, offset, bounds)
-            slots = assign_slots(group, timeline, interval)
-            frames = select_windows(
-                slots,
-                timeline,
-                names,
-                window,
-                step,
-                missing,
-                trim=bounds == (None, None),
-            )
-            for frame in frames:
-                positions = []
-                for membership in frame["indices"]:
-                    for position in membership:
-                        if position not in positions:
-                            positions.append(position)
-                indices.append(positions)
-                windows.append(frame)
-                shapes.append(shape)
-
-        return GeoSamples(
-            self._data,
-            indices,
-            slots=windows,
-            footprints=gpd.GeoSeries(shapes, crs=rows.crs),
+        raise NotImplementedError(
+            f"{type(self).__name__}.sample is being rebuilt with catalog-tree loading and publication"
         )
 
     def to_datatree(self, **options: Any) -> DataTree:
-        """Load the Items lazily as ``{collection}/{item}/{asset}`` nodes, as stated.
+        """Load the Items lazily as a STAC tree: collection, Item, asset.
 
         Args:
             **options: Forwarded to `stac.load_datatree`, such as `chunks` or `bands`.
@@ -695,13 +458,9 @@ class GeoCatalog:
             DataTree as `stac.load_datatree` builds it, with the table's
             Collections on their collection nodes.
 
-        Raises:
-            ValueError: A band states no grid in `proj:*`.
-
         Examples:
-            >>> tree = items.gs.to_datatree()
-            >>> list(tree.gs.datasets)
-            ['s2/S2B_33UUP_20250115/B04', 's2/S2B_33UUP_20250115/B11', 'dem/cop-dem/elevation']
+            >>> [leaf.path for leaf in rows.gs.to_datatree().leaves][:1]
+            ['/s2/20250601T103000_33UUU_52.5200_13.4050/B04']
         """
         from geosave.geodata.stac.load import load_datatree
 
@@ -710,50 +469,27 @@ class GeoCatalog:
         )
         return cast("DataTree", tree)
 
-    def to_dataset(self, geobox: GeoBox, **options: Any) -> Dataset:
-        """Load one collection's Items lazily onto one grid.
-
-        Args:
-            geobox: Grid every band lands on.
-            **options: Forwarded to `stac.load_dataset`, such as `groupby`,
-                `bands` or `chunks`.
-
-        Returns:
-            Dataset on `geobox`, carrying its Collection as `StacMetadata` attrs.
+    def to_dataset(self, *args: Any, **kwargs: Any) -> Dataset:
+        """Load one collection's Items onto one grid.
 
         Raises:
-            ValueError: The rows hold more than one collection; load each with
-                its own `to_dataset`, or all of them with `to_datatree`.
-
-        Examples:
-            >>> scene = items.gs.to_dataset(grid)
-            >>> scene.gs.geobox == grid
-            True
+            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
         """
-        from geosave.geodata.stac.load import load_dataset
-
-        entries = self.to_items()
-        identities = list(dict.fromkeys(entry.collection_id for entry in entries))
-        if len(identities) > 1:
-            raise ValueError(
-                f"to_dataset loads one collection, the rows hold {identities}"
-            )
-        collection = self.collections.get(identities[0]) if identities else None
-        return cast(
-            "Dataset", load_dataset(entries, geobox, collection=collection, **options)
+        raise NotImplementedError(
+            f"{type(self).__name__}.to_dataset is being rebuilt with catalog-tree loading and publication"
         )
 
     def to_items(self) -> list[pystac.Item]:
         """Build the pystac Item each row states, in row order.
 
         Returns:
-            One new Item per row, holding only the assets its row has.
+            One new Item per row, holding only the assets its row has, their
+            hrefs absolute.
 
         Examples:
             >>> [item.id for item in rows.iloc[[0]].gs.to_items()]
-            ['s0']
+            ['20250601T103000_33UUU_52.5200_13.4050']
         """
-        self.validate(geometry=False, crs=True, stac_item=True)
         from geosave.geodata.stac.catalog import to_items
 
         return to_items(self._data)

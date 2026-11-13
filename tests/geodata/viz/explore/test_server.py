@@ -6,7 +6,6 @@ from geosave.geodata.viz.explore import create_layer
 
 import os
 import json
-import signal
 import socket
 import subprocess
 import sys
@@ -233,76 +232,6 @@ def test_stop_releases_the_port(scene, port):
             assert sock.connect_ex(("localhost", port)) != 0
     finally:
         viewer.close()
-
-
-def test_a_port_another_program_holds_is_refused_in_the_calling_thread(scene):
-    viewer = Explorer(layers=[create_layer(scene)], basemap="None")
-    with socket.socket() as blocker:
-        blocker.bind(("localhost", 0))
-        blocker.listen()
-        port = blocker.getsockname()[1]
-        try:
-            with pytest.raises(OSError, match=f"port {port} is in use"):
-                viewer.serve(port=port, threaded=True, open=False, verbose=False)
-            assert viewer.server is None
-        finally:
-            viewer.close()
-
-
-def test_script_serve_accepts_both_local_browser_origins(tmp_path, rgb_catalog):
-    playwright = pytest.importorskip("playwright.sync_api")
-    root = Path(__file__).resolve().parents[4]
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    app = tmp_path / "launch.py"
-    app.write_text(
-        "import geosave as gs\n"
-        f"viewer = gs.open_vector({str(rgb_catalog)!r}).gs.explore(basemap='None')\n"
-        "viewer.table.raster_rows = [0]\n"
-        f"viewer.serve(port={port}, open=False)\n"
-        "viewer.close()\n"
-        "print('SERVER_STOPPED', flush=True)\n"
-    )
-    log_path = tmp_path / "launch.log"
-    with log_path.open("w") as log:
-        server = subprocess.Popen(
-            [sys.executable, str(app)], cwd=root, stdout=log, stderr=log
-        )
-        try:
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                assert server.poll() is None, log_path.read_text()
-                with socket.socket() as sock:
-                    if sock.connect_ex(("127.0.0.1", port)) == 0:
-                        break
-                time.sleep(0.1)
-            with playwright.sync_playwright() as runtime:
-                browser = runtime.chromium.launch(
-                    executable_path=os.environ.get("GEOSAVE_BROWSER"),
-                    args=["--no-sandbox"],
-                )
-                for host in ["localhost", "127.0.0.1"]:
-                    page = browser.new_page()
-                    page.goto(f"http://{host}:{port}/")
-                    page.wait_for_function(
-                        "window.Bokeh && Bokeh.documents.length > 0 && "
-                        "Bokeh.documents.every(doc => doc.is_idle)",
-                        timeout=30000,
-                    )
-                    wait_for_raster(page)
-                    page.close()
-                browser.close()
-            assert "SERVER_STOPPED" not in log_path.read_text()
-            server.send_signal(signal.SIGINT)
-            server.wait(timeout=15)
-            assert server.returncode == 0, log_path.read_text()
-            assert "SERVER_STOPPED" in log_path.read_text()
-        finally:
-            if server.poll() is None:
-                server.terminate()
-                server.wait(timeout=15)
-    assert "Refusing websocket" not in log_path.read_text()
 
 
 def test_native_catalog_selection_renders_and_removes_raster(

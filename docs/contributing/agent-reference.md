@@ -1,6 +1,6 @@
 # Task-specific contributor guidance
 
-Read the sections linked from [AGENTS.md](../../AGENTS.md) when working on
+Read the sections linked from [AGENTS.md](https://github.com/weedkat/geosave/blob/main/AGENTS.md) when working on
 those areas. These project constraints supplement the root workflow. Check
 paths and implementation details against the current source.
 
@@ -10,7 +10,7 @@ paths and implementation details against the current source.
 src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
-├── model/        # what a release contains: chain, registry, spec, release; stages/ holds encoder/decoder/head/monolith
+├── model/        # what a release contains: chain, spec, release; stages/ owns the registry; stages/ holds encoder/decoder/head/monolith
 └── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
@@ -47,8 +47,8 @@ STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
 `stac.load_dataset` and `stac.load_datatree` load selected Items through ODC. Format
-readers/writers live in `io/formats/`. The legacy asset reader currently lives
-in `stac/publish.py`; consult the active plan before changing that ownership.
+readers/writers live in `io/formats/`. `stac/publish.py` owns `StacItem` and `create_stac_collection`;
+DataTree publication writes its collection/Item/asset hierarchy.
 `GeoRegion` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Machine Learning
@@ -75,9 +75,9 @@ declares the samples its Datasets return. Semi-supervised methods carry a local
 supervised base; editing one method must not change another method's files.
 Generated configs and scripts use separate method paths.
 
-ModelSpec redesign is on hold until preprocessing/postprocessing code publication
-and execution trust are settled. Preserve its current behavior during the
-training-template migration. Generated workspaces compose GeoSave and Lightning
+ModelSpec is disabled pending redesign; its old graph executor, ingestion and
+raster-processing helpers are removed. Recipe-based template data workflows are
+paused. Stage construction and chain/weight releases remain supported. Generated workspaces compose GeoSave and Lightning
 APIs and own their experiment-specific training implementations.
 
 ## Public API and Docstrings

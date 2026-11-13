@@ -38,11 +38,6 @@ def reproject(
     resampling: Resampling = "nearest",
 ) -> xr.DataArray:
     """Reproject one array through ODC, returning spatial axes last."""
-    variable.gs.validate()
-    if variable.gs.is_categorical and resampling not in {"nearest", "mode"}:
-        raise ValueError(
-            "class codes require a value-preserving kernel: nearest or mode"
-        )
     source = cast("GeoBox", variable.gs.geobox)
     if isinstance(how, GeoBox):
         geobox = how

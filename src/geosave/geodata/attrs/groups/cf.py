@@ -5,8 +5,17 @@ from __future__ import annotations
 from typing import Any, Self
 
 import numpy as np
-from pydantic import AliasChoices, Field, field_validator, model_validator
+import orjson
+from pydantic import (
+    AliasChoices,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from xarray.core.utils import equivalent
+
+from geosave.geodata.utils.color import CATEGORY_PALETTE, parse_color
 
 from .base import AttrsGroup, Decoded, decode
 
@@ -101,12 +110,19 @@ class CFFlags(AttrsGroup):
     CF lists classes two ways: `flag_values` enumerates the values a pixel
     takes and `flag_masks` the bits a value packs flags into; `flag_meanings`
     names them in order. `classes` reads an enumeration back keyed by value.
+    `color_hints` colours each enumerated class, as the STAC classification
+    extension's `color_hint` does; CF itself states no colours.
+
+        flag_values    [0, 1, 2]
+        flag_meanings  "water forest crop"
+        color_hints    ["0000FF", "00FF00", "FFFF00"]
 
     Attributes:
         flag_values: Enumeration codes, ascending and unique without masks;
             masked codes may repeat when their masks differ.
         flag_masks: Bit masks, for values packing several flags at once.
         flag_meanings: Space-separated class names, in listing order.
+        color_hints: One ``RRGGBB`` colour per flag value, in listing order.
 
     Raises:
         ValueError: Names and codes differ in number or only one is set,
@@ -121,6 +137,27 @@ class CFFlags(AttrsGroup):
     flag_values: Decoded[list[int]] | None = None
     flag_masks: Decoded[list[int]] | None = None
     flag_meanings: str | None = None
+    color_hints: Decoded[list[str]] | None = None
+
+    @field_validator("color_hints", mode="before")
+    @classmethod
+    def _spell_color_hints(cls, hints: Any) -> Any:
+        """Spell every colour ``RRGGBB``, as STAC does, from hex or RGB channels."""
+        hints = decode(hints)
+        if not isinstance(hints, list):
+            return hints
+        spelled = []
+        for hint in hints:
+            red, green, blue = parse_color(hint)
+            spelled.append(f"{red:02X}{green:02X}{blue:02X}")
+        return spelled
+
+    @field_serializer("color_hints")
+    def _serialize_as_json(self, hints: list[str] | None) -> str | None:
+        """Write the hints as JSON text, since NetCDF attrs cannot hold a list of strings."""
+        if hints is None:
+            return None
+        return orjson.dumps(hints).decode()
 
     @property
     def classes(self) -> dict[int, str] | None:
@@ -155,14 +192,45 @@ class CFFlags(AttrsGroup):
                 f"values the band can hold, or convert the band to a wider dtype first."
             )
 
+    @property
+    def colors(self) -> dict[int, str] | None:
+        """Return each class's ``#RRGGBB`` colour, or None without classes.
+
+        A class without a stated hint takes the `CATEGORY_PALETTE` colour at its
+        position, so it keeps that colour whichever classes are listed.
+
+        Examples:
+            >>> CFFlags(classes={0: "water", 1: "trees"}, colors={0: "#0000ff"}).colors
+            {0: '#0000FF', 1: '#...'}
+        """
+        classes = self.classes
+        if classes is None:
+            return None
+
+        colors = {}
+        for position, value in enumerate(classes):
+            if self.color_hints is not None:
+                colors[value] = f"#{self.color_hints[position]}"
+            else:
+                red, green, blue = parse_color(
+                    CATEGORY_PALETTE[position % len(CATEGORY_PALETTE)]
+                )
+                colors[value] = f"#{red:02X}{green:02X}{blue:02X}"
+        return colors
+
     @model_validator(mode="before")
     @classmethod
     def _expand_classes(cls, data: Any) -> Any:
-        """Turn the `classes` argument into the `flag_values` and `flag_meanings` CF stores."""
+        """Turn `classes` and `colors` into the `flag_values`, `flag_meanings` and `color_hints` stored.
+
+        A class `colors` leaves out takes the `CATEGORY_PALETTE` colour at its
+        position, so every class carries a hint once any does.
+        """
         if not isinstance(data, dict) or data.get("classes") is None:
             return data
         given = dict(data)
         classes = given.pop("classes")
+        colors = given.pop("colors", None)
         split = sorted(name for name in classes.values() if name.split() != [name])
         if split:
             raise ValueError(
@@ -173,6 +241,21 @@ class CFFlags(AttrsGroup):
         values = sorted(classes)
         given["flag_values"] = values
         given["flag_meanings"] = " ".join(classes[value] for value in values)
+        if not colors:
+            return given
+
+        uncolored = sorted(set(colors) - set(classes))
+        if uncolored:
+            raise ValueError(
+                f"The colours name pixel values {uncolored}, but no class has "
+                f"those values (the classes are {values}). Add the missing "
+                "classes or remove their colours."
+            )
+        hints = []
+        for position, value in enumerate(values):
+            default = CATEGORY_PALETTE[position % len(CATEGORY_PALETTE)]
+            hints.append(colors.get(value, default))
+        given["color_hints"] = hints
         return given
 
     @model_validator(mode="after")
@@ -198,6 +281,23 @@ class CFFlags(AttrsGroup):
                     f"The flags lists {len(listed)} {label} but {len(names)} class "
                     f"names. Each class needs exactly one name and one of the {label}."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_one_hint_per_value(self) -> Self:
+        """Require one colour hint for each enumerated pixel value."""
+        if self.color_hints is None:
+            return self
+        if self.flag_values is None or self.flag_masks is not None:
+            raise ValueError(
+                "Colour hints colour enumerated classes; these flags list no "
+                "flag_values, or list bit masks."
+            )
+        if len(self.color_hints) != len(self.flag_values):
+            raise ValueError(
+                f"The flags lists {len(self.flag_values)} pixel values but "
+                f"{len(self.color_hints)} colour hints. Give each class one colour."
+            )
         return self
 
     @model_validator(mode="after")

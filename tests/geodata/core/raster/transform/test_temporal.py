@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from geosave.geodata.io import open_netcdf
+
 from tests.conftest import build_dataset as build_raster
 from tests.geodata.conftest import geobox
 
@@ -58,18 +60,6 @@ def test_a_composite_cell_is_its_month_end_bin() -> None:
     ]
 
 
-def test_a_left_label_starts_its_cell() -> None:
-    # "ME" with label="left" names January's bin by December 31.
-    monthly = (
-        series(100, 900, 500)
-        .gs.mask_and_scale()
-        .gs.composite("ME", "median", label="left")
-    )
-
-    assert str(monthly.time.values[0])[:10] == "2023-12-31"
-    assert _cells(monthly)[0] == ("2023-12-31", "2024-01-31")
-
-
 def test_a_composite_of_composites_states_the_outer_bin() -> None:
     quarterly = (
         series(100, 900, 500)
@@ -82,23 +72,16 @@ def test_a_composite_of_composites_states_the_outer_bin() -> None:
     assert _cells(quarterly) == [("2024-01-01", "2024-04-01")]
 
 
-@pytest.mark.parametrize("as_array", [False, True])
 @pytest.mark.parametrize(
     "freq, options",
     [
         ("MS", {}),
-        ("ME", {}),
-        ("QE", {}),
         ("W", {}),
         ("10D", {"closed": "right", "label": "right"}),
-        ("10D", {"offset": "2D"}),
-        ("7D", {"origin": "end"}),
-        ("36h", {"offset": "6h"}),
     ],
 )
-def test_a_composite_cell_is_its_resample_bin(freq, options, as_array) -> None:
+def test_a_composite_cell_is_its_resample_bin(freq, options) -> None:
     data = series(100, 900, 500).gs.mask_and_scale()
-    data = data.red if as_array else data
 
     result = data.gs.composite(freq, "mean", **options)
 
@@ -109,46 +92,31 @@ def test_a_composite_cell_is_its_resample_bin(freq, options, as_array) -> None:
     assert actual == expected
 
 
-def test_one_variable_keeps_its_period() -> None:
-    monthly = series(100, 900, 500).gs.mask_and_scale().gs.composite("MS", "median")
-
-    assert "start_datetime" in monthly.red.coords
-    assert monthly.isel(time=0).red.gs.timespan is not None
-
-
 def _scenes_with_properties() -> xr.Dataset:
-    from geosave.geodata.stac.raster import stamp_properties_coordinate
-
-    return stamp_properties_coordinate(
-        series(100, 900, 500),
-        [
-            {"platform": "s2a", "eo:cloud_cover": 10.0, "constellation": "s2"},
-            {"platform": "s2b", "eo:cloud_cover": 20.0, "constellation": "s2"},
-            {"platform": "s2a", "constellation": "s2"},
-        ],
-    )
+    properties = [
+        {"platform": "s2a", "eo:cloud_cover": 10.0, "constellation": "s2"},
+        {"platform": "s2b", "eo:cloud_cover": 20.0, "constellation": "s2"},
+        {"platform": "s2a", "constellation": "s2"},
+    ]
+    return series(100, 900, 500).assign_coords(stac_properties=("time", properties))
 
 
 def test_composite_properties_keep_what_every_scene_states() -> None:
-    import json
-
     monthly = _scenes_with_properties().gs.mask_and_scale().gs.composite("MS", "median")
 
-    assert json.loads(str(monthly.stac_properties.values[0])) == {"constellation": "s2"}
+    assert monthly.stac_properties.values[0] == {"constellation": "s2"}
     # February observed nothing, so it states nothing.
-    assert monthly.stac_properties.values[1] == "{}"
+    assert monthly.stac_properties.values[1] == {}
 
 
 def test_composite_properties_stack_one_entry_per_scene() -> None:
-    import json
-
     monthly = (
         _scenes_with_properties()
         .gs.mask_and_scale()
         .gs.composite("MS", "median", properties="stack")
     )
 
-    january = json.loads(str(monthly.stac_properties.values[0]))
+    january = monthly.stac_properties.values[0]
     assert january == {
         "platform": ["s2a", "s2b"],
         "eo:cloud_cover": [10.0, 20.0],
@@ -206,29 +174,7 @@ def test_a_bucket_observing_nothing_keeps_its_cell_and_absence() -> None:
     assert bool(buckets.red.isel(time=1).isnull().all())
 
 
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_reduction_preserves_metadata_under_xarray_drop_attrs_option(kind):
-    from dask.callbacks import Callback
-
-    source = series(100, 900, 500).chunk({"time": 1})
-    source.red.attrs["units"] = "m"
-    data = source.red if kind == "array" else source
-    with (
-        xr.set_options(keep_attrs=False),
-        Callback(pretask=lambda *_: pytest.fail("reduction computed lazy pixels")),
-    ):
-        result = data.gs.mask_and_scale().gs.composite("MS", "mean")
-
-    variable = result if kind == "array" else result.red
-    assert variable.attrs["units"] == "m"
-    assert variable.attrs["cell_methods"] == "time: mean"
-    assert "start_datetime" in result.coords
-    assert variable.chunks is not None
-    np.testing.assert_allclose(variable.compute()[:, 0, 0], [500, np.nan, 500])
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_composite_requires_explicit_decode_and_reduces_physical_values(kind):
+def test_composite_requires_explicit_decode_and_reduces_physical_values():
     from dask.callbacks import Callback
 
     source = series(1, 3, 5).chunk(time=1)
@@ -239,7 +185,7 @@ def test_composite_requires_explicit_decode_and_reduces_physical_values(kind):
         standard_name="height",
         cell_methods="area: mean",
     )
-    data = source.red if kind == "array" else source
+    data = source
     with Callback(pretask=lambda *_: pytest.fail("read pixels during validation")):
         with pytest.raises(ValueError, match="mask_and_scale"):
             data.gs.composite("MS", "sum")
@@ -248,7 +194,7 @@ def test_composite_requires_explicit_decode_and_reduces_physical_values(kind):
     for method, expected in (("sum", 28.0), ("std", 2.0), ("var", 4.0)):
         with Callback(pretask=lambda *_: pytest.fail("read pixels during reduction")):
             result = decoded.gs.composite("MS", method)
-        variable = result if kind == "array" else result.red
+        variable = result.red
         assert variable.isel(time=0).compute().values[0, 0] == expected
         assert variable.encoding == {}
         assert variable.attrs["cell_methods"].startswith("area: mean time: ")
@@ -259,172 +205,57 @@ def test_composite_requires_explicit_decode_and_reduces_physical_values(kind):
             assert variable.attrs["units"] == "m"
 
 
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_an_empty_bin_keeps_its_cell_in_selection_and_timespan(kind):
-    data = series(1, 3, 5)
-    if kind == "array":
-        data = data.red
-    monthly = data.gs.composite("MS", "mean")
-
-    # Cells are half-open like resample bins: each ends where the next starts.
-    assert monthly.sel(time="2024-02").sizes["time"] == 1
-    assert monthly.end_datetime.values[0] == monthly.start_datetime.values[1]
-    start, end = monthly.gs.timespan
-    assert start.isoformat() == "2024-01-01T00:00:00"
-    assert end.isoformat() == "2024-04-01T00:00:00"
-
-
-def test_static_variables_do_not_claim_temporal_reduction():
-    source = series(1, 3, 5)
-    source["elevation"] = source.red.isel(time=0, drop=True).assign_attrs(
-        units="m", cell_methods="area: mean"
-    )
-    result = source.gs.composite("MS", "mean")
-    native = source.resample(time="MS").mean(keep_attrs=True)
-
-    xr.testing.assert_identical(
-        result.elevation.drop_vars(["start_datetime", "end_datetime"]), native.elevation
-    )
-    assert result.elevation.attrs["cell_methods"] == "area: mean"
-
-
-def test_interpolated_pixels_contribute_without_inventing_observations():
-    monthly = _scenes_with_properties().gs.composite("MS", "mean")
-    filled = monthly.interpolate_na(dim="time", method="linear")
-    result = filled.gs.composite("QS", "mean", properties="stack")
-    native = filled.red.resample(time="QS").mean()
-
-    np.testing.assert_allclose(result.red, native)
-    assert _cells(result) == [("2024-01-01", "2024-04-01")]
-    import json
-
-    # The empty February states no properties, so it adds no stacked entry.
-    assert len(json.loads(str(result.stac_properties.values[0]))["constellation"]) == 2
-
-
-def test_native_sum_distinguishes_all_missing_from_empty_bins():
-    source = series(1, 3, 5).astype(float)
-    source.red.values[:2] = np.nan
-    result = source.gs.composite("MS", "sum")
-
-    np.testing.assert_allclose(result.red[:, 0, 0], [0, np.nan, 5])
-
-
 def test_composite_band_roundtrips_observation_coordinates(tmp_path):
     source = _scenes_with_properties().gs.composite("MS", "mean")
     band = source.red
     path = tmp_path / "monthly.nc"
-    band.to_netcdf(path)
-    with xr.open_dataarray(path) as restored:
+    band.gs.to_netcdf(path)
+    with open_netcdf(path) as stored:
+        restored = stored.red
         xr.testing.assert_allclose(restored, band)
+        assert (
+            restored.stac_properties.values.tolist()
+            == band.stac_properties.values.tolist()
+        )
         assert restored.gs.timespan == band.gs.timespan
         assert restored.gs.crs == band.gs.crs
 
 
-def test_node_composite_uses_inherited_periods_and_scene_properties():
-    monthly = _scenes_with_properties().gs.composite("MS", "mean")
-    tree = xr.DataTree.from_dict(
-        {
-            "/": monthly.drop_vars(list(monthly.data_vars)),
-            "/optical": monthly.drop_vars(list(monthly.coords)),
-        }
-    )
-    observations = tree["optical"].to_dataset(inherit="all_coords")
-
-    quarterly = observations.gs.composite("QS", "mean", properties="stack")
-    expected = monthly.gs.composite("QS", "mean", properties="stack")
-    xr.testing.assert_identical(quarterly, expected)
-
-
-@pytest.mark.parametrize("as_array", [False, True])
-def test_composite_interpolates_pixel_gaps_on_named_dimension_lazily(as_array):
+def test_composite_interpolates_pixel_gaps_lazily():
     from dask.callbacks import Callback
 
-    data = series(1, 3, 9, dtype="float32").rename(time="acquired")
+    data = series(1, 3, 9, dtype="float32")
     data.red.values[0, 0, 0] = np.nan
     data.red.values[1, 0, 0] = np.nan
-    data = data.chunk({"acquired": 1})
-    if as_array:
-        data = data.red
+    data = data.chunk({"time": 1})
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args)):
-        result = data.gs.composite("MS", "mean", dim="acquired", interpolation="linear")
+        result = data.gs.composite("MS", "mean", interpolation="linear")
     assert not tasks
-    native = data.resample(acquired="MS").mean(keep_attrs=True)
-    expected = native.chunk(acquired=-1).interpolate_na(dim="acquired", method="linear")
-    actual = result if as_array else result.red
-    expected = expected if as_array else expected.red
-    np.testing.assert_allclose(actual.compute(), expected.compute(), equal_nan=True)
-    assert np.isnan(actual.isel(acquired=0, y=0, x=0).compute())
-    assert np.isfinite(actual.isel(acquired=1, y=1, x=1).compute())
-    assert result.start_datetime.dims == ("acquired",)
+    native = data.resample(time="MS").mean(keep_attrs=True)
+    expected = native.chunk(time=-1).interpolate_na(dim="time", method="linear")
+    actual = result.red
+    np.testing.assert_allclose(actual.compute(), expected.red.compute(), equal_nan=True)
+    assert np.isnan(actual.isel(time=0, y=0, x=0).compute())
+    assert np.isfinite(actual.isel(time=1, y=1, x=1).compute())
     assert result.start_datetime.values[1] == np.datetime64("2024-02-01", "ns")
-    assert actual.attrs["cell_methods"] == "acquired: mean"
+    assert actual.attrs["cell_methods"] == "time: mean"
 
 
-def test_composite_interpolation_preserves_observed_properties():
-    import json
-
-    data = _scenes_with_properties().gs.mask_and_scale().rename(time="acquired")
-    result = data.gs.composite("MS", "mean", dim="acquired", interpolation="nearest")
-    assert result.stac_properties.dims == ("acquired",)
-    assert json.loads(str(result.stac_properties.values[1])) == {}
-    assert result.end_datetime.values[1] == np.datetime64("2024-03-01", "ns")
-    assert np.isfinite(result.red.isel(acquired=1)).all()
-
-
-def test_composite_rejects_properties_on_another_dimension():
-    data = series(1, 3, 9, dtype="float32").rename(time="acquired")
-    data = data.assign_coords(stac_properties=("y", ["{}", "{}"]))
-    with pytest.raises(ValueError, match="acquired"):
-        data.gs.composite("MS", "mean", dim="acquired")
-
-
-@pytest.mark.parametrize("as_array", [False, True])
-def test_composite_refuses_interpolation_of_class_codes(as_array):
+def test_composite_refuses_interpolation_of_class_codes():
     data = series(1, 3, 9).gs.write_flags(
         {1: "water", 3: "trees", 9: "cloud"}, target=["red"]
     )
-    if as_array:
-        data = data.red
     with pytest.raises(ValueError, match="class codes"):
         data.gs.composite("MS", "first", interpolation="linear")
 
 
-def test_named_dimension_composite_round_trips_coverage(tmp_path):
-    data = series(1, 3, 9, dtype="float32").rename(time="acquired")
-    result = data.gs.composite("MS", "mean", dim="acquired", interpolation="linear")
-    path = tmp_path / "composite.nc"
-    result.to_netcdf(path)
-    with xr.open_dataset(path) as restored:
-        xr.testing.assert_allclose(restored.red, result.red)
-        np.testing.assert_array_equal(restored.start_datetime, result.start_datetime)
-        assert restored.end_datetime.dims == ("acquired",)
-
-
-def test_interpolation_does_not_replace_native_sum_zeros_or_extrapolate():
-    data = series(1, 3, 9, dtype="float32")
-    data.red.values[:2] = np.nan
-    summed = data.gs.composite("MS", "sum", interpolation="linear")
-    assert (summed.red.isel(time=0) == 0).all()
-    assert np.isfinite(summed.red.isel(time=1)).all()
-
-    data.red.values[:] = np.nan
-    data.red.values[1] = 3
-    # A missing trailing month stays missing even with interpolation selected.
-    result = data.gs.composite("MS", "mean", interpolation="linear")
-    assert result.red.isel(time=-1).isnull().all()
-
-
-@pytest.mark.parametrize("as_array", [False, True])
-def test_input_cells_are_replaced_not_reduced(as_array):
+def test_input_cells_are_replaced_not_reduced():
     data = series(1, 3, 9, dtype="float32")
     data = data.assign_coords(
         start_datetime=("time", OBSERVED - np.timedelta64(1, "D")),
         end_datetime=("time", OBSERVED + np.timedelta64(1, "D")),
     )
-    data = data.red if as_array else data
-
     result = data.gs.composite("MS", "mean")
 
     assert _cells(result) == [
@@ -432,15 +263,3 @@ def test_input_cells_are_replaced_not_reduced(as_array):
         ("2024-02-01", "2024-03-01"),
         ("2024-03-01", "2024-04-01"),
     ]
-
-
-def test_composite_uses_native_offset_groups_for_pixels_and_cells():
-    data = series(1, 3, 9, dtype="float32")
-    options = dict(closed="right", label="right", origin="epoch", offset="5D")
-    result = data.gs.composite("30D", "mean", **options)
-    grouped = data.resample(time="30D", **options)
-    np.testing.assert_allclose(result.red, grouped.mean().red, equal_nan=True)
-    actual = list(
-        zip(result.start_datetime.values, result.end_datetime.values, strict=True)
-    )
-    assert actual == _pandas_bins(OBSERVED, "30D", **options)

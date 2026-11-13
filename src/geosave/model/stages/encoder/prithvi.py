@@ -8,7 +8,7 @@ import xarray as xr
 from terratorch.models.backbones.prithvi_mae import PrithviViT
 from terratorch.registry import BACKBONE_REGISTRY
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 from geosave.model.chain import Published, chain_step
 
 

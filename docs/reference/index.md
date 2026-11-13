@@ -1,54 +1,53 @@
 # API reference
 
-Look up a public function, class, or accessor method here. Entries are generated
-from the implementation's docstrings and include signatures, parameters,
-returns, and examples where available.
+Find a call by what you want to do, then open its signature for parameters,
+defaults, return values and errors. GeoSave operates on native xarray and
+GeoPandas objects; their own methods retain upstream behavior.
 
-The [complete public API index](public-api.md) also includes module helpers,
-configuration fields, and inherited GeoSave methods. Its contracts are refreshed
-from the current source with `uv run python scripts/api_reference.py`.
+## Find an operation
+
+| I want to… | Call and reference |
+| --- | --- |
+| Open raster or vector files | `gs.open_raster`, `gs.open_vector`. [Readers and format options](io.md) |
+| Inspect a pixel grid | `raster.gs.geobox`. [Dataset accessor](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.geobox) |
+| Crop by geometry or exact grid | `.gs.crop`, `.gs.crop_to_grid`. [Crop and grid operations](transforms.md#grid-masks-and-values) |
+| Match another image's grid | `.gs.reproject(...)`. [Reprojection](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.reproject) |
+| Decode nodata, scale and offset | `.gs.mask_and_scale()`. [Value metadata](../basics/attrs.md#decode-stored-measurements) |
+| Calculate NDVI or another index | `gs.features.ndvi(...)`. [Features and masks](features.md) |
+| Convert selected bands to arrays or tensors | `.gs.to_numpy`, `.gs.to_tensor`. [Dataset conversion](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.to_numpy) |
+| Read chips or merge predictions | `gs.Chips`, `chips.merge`. [Chips](chips.md) |
+| Reduce observations into calendar bins | `.gs.composite`. [Composites](rasters.md#composites-and-time-selection) |
+| Save rasters and schedule writes | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf`. [Writer returns](io.md#saved-raster-files) |
+| Search observations or load STAC Items | `gs.StacClient`, `stac.load_dataset`, `stac.load_datatree`. [STAC](stac.md) |
+| Publish a dated Dataset | `.gs.expand()` then tree `.gs.to_catalog(...)`. [Catalog operations](catalog.md) |
+| Build a model from stages | `geosave.model.build_model`. [Chains and registry](model-chain.md) |
+| Save and load model weights | `GeoSaveModel`. [Releases](model-release.md) |
+
+## Look up methods for your object
+
+For `scene.gs.reproject(...)`, use the [Dataset accessor](dataset-accessor.md).
+For a band, use the [DataArray accessor](dataarray-accessor.md); for a hierarchy,
+use the [DataTree accessor](datatree-accessor.md). [GeoDataFrame methods](vectors.md)
+are separate. Inherited GeoSave methods are included on each accessor page.
 
 | Area | APIs |
 | --- | --- |
-| [Data](geodata.md) | Raster and vector accessors, I/O, transforms, features, metadata, STAC, and windows. |
-| [Models](model.md) | Chains, registry, stages, input specifications, and releases. |
-| [Training](ml.md) | Lightning tasks, data modules, metrics, and training tools. |
-| [Workflows](workflow.md) | `geosave_flows`: validated job inputs, Prefect flows, and reusable tasks. |
-| [CLI](cli.md) | Workspace commands, options, and generated files. |
+| [Data](geodata.md) | Accessors, readers, writers, features, metadata and STAC. |
+| [Models](model.md) | Chains, stages and native releases. |
+| [Training](ml.md) | Losses, metrics, transforms, callbacks and Lightning tools. |
+| [CLI](cli.md) | Workspace commands and generated files. |
+| [Optional flows](workflow.md) | Prefect helpers and current availability. |
 
-## Inputs and outputs
+## Read a signature
 
-Each entry shows its signature with parameter names, annotated types, and
-defaults. Read the parameter and return descriptions for accepted values,
-units, array axes, band order, and whether the operation changes or computes
-its input. A tensor annotation alone does not describe its shape.
+Parameters show types and defaults. Descriptions explain accepted values,
+units, array axes, variable order, mutation and pixel execution. TypedDicts
+list optional backend keywords; Pydantic fields are constructor keyword inputs.
+Follow [format options](io.md) when a call forwards `**options`.
 
-For validated Pydantic models, the listed fields are keyword inputs.
-TypedDict fields describe dictionary keys. Field entries show their types and
-declared defaults; a required field has no default. `Field(...)` expressions
-also show validation constraints and default factories.
+The [symbol inventory](public-api.md) also lists low-level module definitions,
+configuration fields and protocols. Use it when you know a symbol's name;
+start with the operations above for everyday calls.
 
-Readers and writers can forward `**options` to their format backend. Follow
-the corresponding [format options](io.md) for the supported keys and their
-defaults. An output annotated `None` has no returned value; read its description
-for file writes or changes made to the input.
-
-The complete contracts are grouped by [data](generated/data.md),
-[models](generated/models.md), [training](generated/training.md), and
-[flows](generated/flows.md). A missing type or description is a source
-documentation gap. [Documentation maintenance](../contributing/documentation.md)
-explains how to refresh the reference and audit those gaps.
-
-Start with the [practical guides](../activities.md) when you want a
-complete example. Read [Concepts](../concepts/index.md) for behavior shared
-by several operations.
-
-## Accessors and native objects
-
-For `scene.gs.reproject(...)`, look under the [Dataset accessor](dataset-accessor.md).
-For a single band, use the [DataArray accessor](dataarray-accessor.md); for a group
-of rasters, use the [DataTree accessor](datatree-accessor.md). Their inherited
-GeoSave methods are included. [GeoDataFrame methods](vectors.md) are separate.
-
-The reference documents GeoSave's own APIs. Native xarray, GeoPandas, PyTorch,
-Lightning, and Transformers methods keep their upstream contracts.
+For complete workflows, use [Find a task](../activities.md). For behavior shared
+across methods, use [Concepts](../concepts/index.md).

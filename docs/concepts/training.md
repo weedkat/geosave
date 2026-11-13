@@ -1,8 +1,9 @@
 # Training contracts
 
-Geospatial recipes use ModelSpec version 1 and project-owned Datasets. See
-[training setup](../guides/workspaces.md#geospatial-recipes) for the explicit
-DataModule size and the migration required by existing generated workspaces.
+Geospatial workspace recipes are paused while ModelSpec is redesigned.
+The working [Lightning boilerplate](../guides/workspaces.md) and caller-owned
+Datasets do not require it. The method contracts below describe template code;
+they are not a claim that each generated geospatial workflow currently runs.
 
 Start with [a complete offline segmentation run](../guides/training.md). This
 page explains what changes when you connect real rasters, add transforms, or
@@ -14,8 +15,8 @@ The Dataset reads one sample from your source. Its DataModule batches samples
 and prepares tensors on the device; the Module owns loss and metrics. Lightning
 runs the training loop. The generated DataModules do not discover files, split
 geographic regions, run raster preprocessing, or construct chips. Use
-[catalogs and cuts](../guides/catalogs-and-cuts.md) for raster windows and
-[ModelSpec](../guides/model-spec.md) for raster requirements and preprocessing.
+[Chips](../guides/chips.md) for raster windows and
+[explicit preparation functions](../guides/model-inputs.md) for model inputs.
 
 Each generated method owns its Module, DataModule, sample dictionary type and
 Dataset protocol under `modules.<task>.<method>`. Generate it with
@@ -74,70 +75,10 @@ repairs NaN/Inf inputs or filters evaluation using an input mask.
 
 ## Apply augmentation and normalization
 
-```python
-# Add these options when constructing a segmentation DataModule.
-data = DataModule(
-    spec="model_spec.yaml",
-    train=train_dataset,
-    val=val_dataset,
-    augmentations=[
-        {"name": "RandomHorizontalFlip", "init_args": {"p": 0.5}},
-    ],
-    cutmix=0.2,
-    ignore_index=255,
-    batch_size=8,
-)
-```
-
-This fragment assumes the segmentation `DataModule` import and your two
-Datasets. Training augmentation moves the pixel inputs and segmentation labels
-together. `cutmix` optionally pastes a rectangular region from another sample
-into both the image and target. Regression also moves pixel inputs and targets
-together; classification augments the image and keeps the chip label.
-
-Declare normalization in the model spec so it runs during evaluation too:
-
-```yaml
-# Example normalization for a two-band input; choose statistics from your training data.
-normalized:
-  call: geosave.model.processing.normalize
-  kwargs:
-    value: !ref entry
-    mean: [0.5, 0.5]
-    std: [0.25, 0.25]
-    dim: -3
-```
-
-In `on_after_batch_transfer`, the DataModule applies training augmentation,
-optional CutMix, then the spec's input transforms in every split. `ImageAugmenter`
-owns synchronized tensor geometry; `spec.run` applies the named recipe
-calls; `CutMix` pastes the same region into images and targets. Context
-inputs pass through. Input values are not repaired automatically.
-
-For temporal inputs, geometry is shared across all instants of each chip and
-normalization applies the same per-band statistics to every instant. Recipe calls are explicit and are not classified automatically. Shared
-input transforms should preserve geometry; place spatial transforms in the joint
-training augmentation. Choose statistics in the input's band order.
-
-For direct use outside a DataModule, `ImageAugmenter` constructs a Kornia
-pipeline. Supply `data_keys` when moving several tensors together:
-
-```python
-import torch
-from geosave.ml.transforms import ImageAugmenter
-
-augment = ImageAugmenter(
-    [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}], size=16
-)
-image = torch.rand(1, 2, 16, 16)
-mask = torch.zeros(1, 1, 16, 16)
-image, mask = augment(image, mask, data_keys=["input", "mask"])
-tuple(image.shape), tuple(mask.shape)
-```
-
-```text
-((1, 2, 16, 16), (1, 1, 16, 16))
-```
+Recipe-based DataModules are paused while ModelSpec is rebuilt. Use caller-owned
+DataLoaders and explicit preparation with the same band order and normalization
+at training and inference. `ImageAugmenter` remains available for synchronized
+tensor geometry. See [ModelSpec status](../guides/model-spec.md).
 
 ## Change loss, optimizer, and metrics
 
@@ -198,31 +139,8 @@ See the [task API](../reference/training.md) when experimenting with this method
 
 ## Calibrate segmentation confidence
 
-```python
-from lightning import Trainer
-from geosave.ml.callbacks.calibrate import ThresholdCalibrator
+Prediction decoding is paused: `softmax_argmax` raises `NotImplementedError`,
+so `ThresholdCalibrator` cannot collect predictions pending redesign.
 
-trainer = Trainer(
-    max_epochs=20,
-    callbacks=[ThresholdCalibrator(num_classes=2, ignore_index=255)],
-)
-```
-
-The callback collects the segmentation Module's validation logits and labels
-on the last scheduled epoch. It sweeps per-class confidence thresholds to
-maximize F1 or IoU and updates `module.class_thresholds`, a buffer saved in
-checkpoints. Match its class count and ignore value to the Module. It requires
-a finite `max_epochs` and validation on that final epoch; sanity validation
-is skipped.
-
-The Module's forward call still returns raw logits. Its validation metrics
-and a plain `argmax` prediction do not apply these thresholds automatically.
-If your application needs low-confidence pixels to be unclassified, apply the
-thresholds explicitly after softmax and document that output convention.
-Calibration also retains final-epoch validation predictions on CPU, so its
-memory use grows with the evaluated pixels.
-
-`DensePredictionLogger` can log label and argmax panels to TensorBoard or
-MLflow. It uses the segmentation validation/test output dictionaries and
-requires a compatible logger. Both callbacks are optional; see
-[training tools](../reference/training-tools.md).
+`DensePredictionLogger` remains available for label and argmax panels to
+TensorBoard or MLflow. See [training tools](../reference/training-tools.md).

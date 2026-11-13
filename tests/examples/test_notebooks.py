@@ -141,7 +141,7 @@ def test_inputs_runs(tmp_path: Path, data: Path) -> None:
 @pytest.mark.xfail(
     raises=NotImplementedError,
     strict=True,
-    reason="STAC publication is being rebuilt on expand_stac and tree.gs.to_cog",
+    reason="STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)",
 )
 def test_catalog_examples_load_chips_and_restore_pixels(tmp_path):
     """Execute the lessons' data functions with small real local STAC assets."""
@@ -298,7 +298,9 @@ def test_training_dataset_scales_images_and_preserves_label_ids(name, tmp_path):
     for index, band in enumerate(["B02", "B03", "B04", "B08"]):
         bands[band] = (("y", "x"), np.full((2, 2), 1000 * (index + 1), dtype="uint16"))
 
-    image = build_dataset(bands, grid).gs.write_packing(attrs.CFPacking(scale_factor=1e-4, fill_value=0))
+    image = build_dataset(bands, grid).gs.write_packing(
+        attrs.CFPacking(scale_factor=1e-4, fill_value=0)
+    )
     image = image[["B08", "B04", "B03", "B02"]]
     labels = build_dataset(
         {"label": (("y", "x"), np.array([[1, 255], [2, 3]], dtype="uint8"))},
@@ -342,7 +344,9 @@ def test_prediction_uses_image_grid_without_reference_labels(name, tmp_path):
     for band in ["B02", "B03", "B04", "B08"]:
         pixels = np.arange(16, dtype="uint16").reshape(4, 4) + 2000
         bands[band] = (("y", "x"), pixels)
-    image = build_dataset(bands, grid).gs.write_packing(attrs.CFPacking(scale_factor=1e-4, fill_value=0))
+    image = build_dataset(bands, grid).gs.write_packing(
+        attrs.CFPacking(scale_factor=1e-4, fill_value=0)
+    )
     image = image.gs.write_rgb(red="B04", green="B03", blue="B02")
     image_path = write_cog(image, tmp_path / "image.tif")
     classes = {

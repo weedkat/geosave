@@ -20,8 +20,10 @@ With the [sample scene](first-raster.md#open-the-sample), a vegetation map is:
 import geosave as gs
 
 scene = gs.open_raster("sample-scene.tif")
-ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
-ndvi.gs.to_cog("output", format_paths="ndvi.tif")
+ndvi = gs.features.ndvi(
+    scene, nir="nir", red="red"
+).rename("ndvi")
+ndvi.gs.to_cog("output/ndvi.tif")
 ```
 
 `scene` is an xarray Dataset. Select bands with `scene[["red", "nir"]]`, use
@@ -71,9 +73,10 @@ Copernicus Sentinel data (2025). [Run this example](first-raster.md).*
 
 -   **Train with Lightning**
 
-    Train on real imagery and labels, then export predictions as maps.
+    Run a complete CPU training example, then adapt its Dataset to your own
+    imagery and labels. Export predictions as maps.
 
-    [Train on real imagery →](examples.md#real-land-cover-project)
+    [Train and map predictions →](guides/training.md)
 
 </div>
 

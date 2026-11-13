@@ -1,8 +1,6 @@
 # Build from pretrained weights
 
-```bash
-pip install 'geosave[ml]'
-```
+Install the [ML extra](../install.md#install-to-follow-these-docs) before running this guide.
 
 Reuse a published encoder, add a decoder and a head for your labels, then train
 the resulting model. This guide uses
@@ -65,7 +63,7 @@ before calling `build_model`; every stage will then start with random weights.
 ```python
 import torch
 
-from geosave.model.registry import build_model
+from geosave.model import build_model
 
 stages = {
     "encoder": {
@@ -142,21 +140,19 @@ which resizes logits to that configured size. Keep chip size, encoder
 Use a project function when preparing pixels and a context mapping together:
 
 ```python
-from geosave.model.processing import normalize, to_tensor, validate_raster
 from geosave.model.stages.encoder.prithvi import model_context
 
 
 def prepare_inputs(scene):
     selected = scene[["B02", "B03", "B04", "B8A", "B11", "B12"]]
-    validate_raster(selected)
+    selected.gs.validate()
     reflectance = selected.gs.mask_and_scale()
-    image = to_tensor(reflectance, dims=["time", "band", "y", "x"])
-    image = normalize(
-        image,
-        mean=[0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363],
-        std=[0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049],
-        dim=-3,
-    )
+    spatial = reflectance.gs.spatial_dims
+    array = reflectance.to_array(dim="band").transpose("time", "band", *spatial)
+    image = torch.tensor(array.to_numpy(), dtype=torch.float32)
+    mean = image.new_tensor([0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363])
+    std = image.new_tensor([0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049])
+    image = (image - mean.reshape(1, 6, 1, 1)) / std.reshape(1, 6, 1, 1)
     inputs = {"image": image, **model_context(reflectance)}
     return {name: value.unsqueeze(0) for name, value in inputs.items()}
 
@@ -176,6 +172,5 @@ sets their order. B8A is `NIR_NARROW`, whereas B08 is `NIR_BROAD`. All selected
 variables must already share a grid. Reprojection and resampling are explicit.
 Derive context from each actual chip, after spatial and temporal selection.
 
-A [ModelSpec recipe](model-spec.md) can call this installed project function
-and pass its entire returned dictionary to another function. Dictionary indexing
-does not need to become a reference language feature.
+ModelSpec is disabled pending redesign. Call the preparation function explicitly
+and pass its returned named tensors to the chain.

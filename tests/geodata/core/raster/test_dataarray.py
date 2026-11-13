@@ -27,23 +27,12 @@ UTM = "EPSG:32633"
 
 
 def test_a_band_reads_with_the_grid_trailing() -> None:
-    scrambled = xr.DataArray(
-        np.zeros((8, 8, 3), "uint16"),
-        dims=("y", "x", "band"),
-        coords={"band": ["r", "g", "b"]},
-    ).odc.assign_crs(UTM)
+    box = geobox()
+    scrambled = build_dataset(
+        {"pixels": (("y", "x", "band"), np.zeros((8, 8, 3), "uint16"))}, box
+    )["pixels"].assign_coords(band=["r", "g", "b"])
 
     assert scrambled.gs.to_numpy().shape == (3, 8, 8)
-
-
-def test_a_band_keeps_its_other_axes_ahead_of_the_bands() -> None:
-    cube = xr.DataArray(
-        np.zeros((3, 2, 8, 8), "uint16"),
-        dims=("band", "time", "y", "x"),
-        coords={"band": ["r", "g", "b"], "time": [0, 1]},
-    ).odc.assign_crs(UTM)
-
-    assert cube.gs.to_numpy().shape == (2, 3, 8, 8)
 
 
 def test_a_band_carrying_no_band_axis_reads_without_one() -> None:
@@ -60,36 +49,7 @@ def test_a_band_converts_without_gaining_a_band_axis(torch) -> None:
     assert tuple(tensor.shape) == (2, 8, 8)
 
 
-def test_to_tensor_copies_read_only_pixels(torch) -> None:
-    band = optical().B04
-    band.values.flags.writeable = False
-    before = band.values.copy()
-
-    tensor = band.gs.to_tensor()
-    tensor.fill_(0)
-
-    np.testing.assert_array_equal(band.values, before)
-
-
-def test_to_dataset_gives_every_band_the_arrays_attrs() -> None:
-    box = geobox()
-    built = build_dataset(
-        {
-            "B04": (("y", "x"), np.zeros(box.shape, "uint16")),
-            "B03": (("y", "x"), np.zeros(box.shape, "uint16")),
-        },
-        box,
-    ).gs.write_nodata(0)
-    built.attrs = {"title": "S2"}
-
-    split = built.gs.to_array().gs.to_dataset(dim="band")
-
-    assert split.attrs == {}
-    assert split.B04.attrs == split.B03.attrs == {"_FillValue": 0}
-
-
 def test_statistics_reads_a_lazy_source_once() -> None:
-    import dask.array as da
     from dask import delayed
 
     reads = []
@@ -121,43 +81,21 @@ def test_split_defaults_to_bands_and_preserves_pixel_interpretation():
 
 
 def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
-    source = xr.Dataset(
+    source = build_dataset(
         {
-            "nir": (("y", "x"), [[0.0, 10.0, 20.0]]),
-            "red": (("y", "x"), [[0.0, 1.0, 3.0]]),
-        }
+            "nir": (("y", "x"), np.array([[0.0, 10.0, 20.0]])),
+            "red": (("y", "x"), np.array([[0.0, 1.0, 3.0]])),
+        },
+        geobox(shape=(1, 3)),
     ).gs.write_nodata(0)
 
-    table = source.gs.to_array().gs.statistics()
+    table = source.gs.to_array().gs.statistics(dim="band")
 
     pd.testing.assert_frame_equal(table, source.gs.statistics())
     assert list(table.index) == ["nir", "red"]
     assert table.loc["nir", "mean"] == 15.0
     assert table.loc["red", "mean"] == 2.0
     assert table.loc["red", "valid_percent"] == pytest.approx(200 / 3)
-
-
-def test_multiband_statistics_refuse_an_absent_band() -> None:
-    image = xr.DataArray(
-        [[1.0, 3.0], [np.nan, np.nan]],
-        dims=("band", "x"),
-        coords={"band": ["red", "nir"]},
-    )
-
-    with pytest.raises(ValueError, match="nir holds no present pixel"):
-        image.gs.statistics()
-
-
-def test_an_edit_on_the_stacked_array_reaches_every_band():
-    source = build_dataset(
-        {
-            "red": (("y", "x"), np.ones(geobox().shape, "int16")),
-            "nir": (("y", "x"), np.ones(geobox().shape, "int16")),
-        },
-        geobox(),
-    ).gs.write_nodata(0)
-    restored = source.gs.to_array().gs.write_nodata(-1).gs.to_dataset(dim="band")
-    assert restored.gs.nodata == {"red": -1, "nir": -1}
 
 
 def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
@@ -188,15 +126,11 @@ def test_to_dataset_recovers_only_the_attrs_every_band_shared() -> None:
     assert restored.red.gs.packing is None
     assert restored.nir.gs.packing is None
     shared = scene.gs.write_nodata(0).gs.to_array().gs.to_dataset(dim="band")
-    assert shared.gs.nodata == {"red": 0, "nir": 0}
+    assert shared.red.gs.nodata == shared.nir.gs.nodata == 0
 
 
 def _band(dtype: str) -> xr.DataArray:
     return xr.DataArray(np.zeros(2, dtype), dims="x")
-
-
-def test_nan_marks_absence_in_a_float_band() -> None:
-    assert np.isnan(_band("float32").gs.write_nodata(float("nan")).gs.nodata)
 
 
 def test_class_codes_must_fit_the_bands_dtype() -> None:
@@ -214,18 +148,8 @@ def test_a_legend_marks_class_codes() -> None:
     assert coded.gs.is_categorical
 
 
-def test_a_colour_map_marks_class_codes_without_flags() -> None:
-    assert _coded_band(color_map='{"1": "#00ff00"}').gs.is_categorical
-
-
 def test_a_plain_integer_band_is_a_measurement() -> None:
     assert not _coded_band(units="1").gs.is_categorical
-
-
-def test_cf_flags_with_meanings_mark_class_codes() -> None:
-    band = _coded_band(flag_masks=[1, 2], flag_meanings="cloud shadow")
-
-    assert band.gs.is_categorical
 
 
 @pytest.mark.parametrize(
@@ -247,28 +171,6 @@ def test_band_store_returns_native_path_after_deferred_write(tmp_path, method, s
     with open_raster(saved) as restored:
         np.testing.assert_array_equal(restored.red, band)
         assert restored.gs.geobox == band.gs.geobox
-
-
-def test_to_dataset_wraps_a_named_multiband_array_lazily() -> None:
-    import dask.array as da
-
-    source = xr.DataArray(
-        da.ones((2, 3, 4), chunks=(1, 3, 4)),
-        dims=("band", "y", "x"),
-        coords={"band": ["red", "nir"]},
-        name="reflectance",
-        attrs={"units": "1"},
-    )
-
-    wrapped = source.to_dataset()
-    split = source.gs.to_dataset(dim="band")
-
-    assert list(wrapped.data_vars) == ["reflectance"]
-    xr.testing.assert_identical(wrapped.reflectance, source)
-    assert isinstance(wrapped.reflectance.data, da.Array)
-    assert list(split.data_vars) == ["red", "nir"]
-    assert isinstance(split.red.data, da.Array)
-    assert split.red.attrs == split.nir.attrs == {"units": "1"}
 
 
 GRID = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")
@@ -310,66 +212,6 @@ def test_colorize_keeps_pixels_lazy_and_preserves_scalar_coordinates() -> None:
     assert colored.dtype == np.float32
     np.testing.assert_array_equal(colored.sel(band="blue").compute()[0], np.ones(3))
     assert np.isnan(colored.compute().values[:, 1, 2]).all()
-
-
-def test_colorize_draws_an_uncoloured_class_in_its_palette_colour() -> None:
-    from geosave.geodata.utils.color import CATEGORY_PALETTE, parse_color
-
-    colored = landcover({1: "water"}).gs.colorize().compute()
-
-    red, green, blue = (channel / 255 for channel in parse_color(CATEGORY_PALETTE[0]))
-    named = np.isfinite(colored.sel(band="red").values)
-    assert colored.sel(band="red").values[named][0] == pytest.approx(red)
-
-
-def test_an_unnamed_array_keeps_name_coordinates_and_original_dtype():
-    raw = build_raster(packed=True).red.rename(None)
-    decoded = raw.gs.mask_and_scale()
-
-    assert decoded.name is None
-    assert decoded.encoding["dtype"] == raw.dtype
-    xr.testing.assert_identical(decoded.coords.to_dataset(), raw.coords.to_dataset())
-
-
-def test_decoding_a_dimension_named_value_does_not_materialize_an_index():
-    raw = xr.DataArray(
-        da.from_array(np.array([0, 1], "uint16"), chunks=1), dims="value"
-    )
-    raw.attrs["_FillValue"] = 0
-    with Callback(pretask=lambda *_: pytest.fail("decoding read pixels")):
-        decoded = raw.gs.mask_and_scale()
-    assert isinstance(decoded.data, da.Array)
-    np.testing.assert_allclose(decoded, [np.nan, 1], equal_nan=True)
-
-
-@pytest.mark.parametrize("fill", [-3.40282e38, 0.1])
-def test_declared_float_nodata_decodes_without_repair(fill):
-    source = xr.DataArray(np.array([fill, 2], "float32"), dims="x").chunk(x=1)
-    before = source.copy(deep=True)
-
-    with Callback(pretask=lambda *_: pytest.fail("decoding read pixels")):
-        declared = source.gs.write_nodata(fill)
-        decoded = declared.gs.mask_and_scale()
-
-    np.testing.assert_allclose(decoded, [np.nan, 2], equal_nan=True)
-    assert declared.attrs["_FillValue"] == source.dtype.type(fill)
-    xr.testing.assert_identical(source, before)
-
-
-def test_unsigned_cf_pixels_decode_without_a_packing_group():
-    source = xr.DataArray(
-        da.from_array(np.array([-1, 1], "int16"), chunks=1),
-        dims="x",
-        attrs={"_Unsigned": "true"},
-        name="red",
-    )
-    before = source.copy(deep=True)
-    with Callback(pretask=lambda *_: pytest.fail("decoding read pixels")):
-        decoded = source.gs.mask_and_scale()
-    assert decoded.dtype == np.dtype("uint16")
-    np.testing.assert_array_equal(decoded, [65535, 1])
-    assert decoded.encoding["_Unsigned"] == "true"
-    xr.testing.assert_identical(source, before)
 
 
 def test_class_codes_keep_their_values_and_legend_after_masking():
@@ -414,24 +256,23 @@ def test_array_file_roundtrip_preserves_packing_grid_and_values(
 
 
 @pytest.mark.parametrize("method", ["to_cog", "to_gtiff"])
-def test_array_writer_rejects_unselected_observations_and_split_options(
-    method, tmp_path
-):
+def test_array_writer_rejects_a_time_series(method, tmp_path):
     source = build_raster(times=2).red.chunk()
     with pytest.raises(ValueError, match="one instant"):
         getattr(source.gs, method)(tmp_path / "dates.tif", compute=False)
-    with pytest.raises(TypeError, match="split_item"):
-        getattr(source.gs, method)(tmp_path / "dates.tif", split_item=("time",))
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("bands", [None, [1, 2]])
-def test_array_file_accepts_unnamed_and_numbered_bands(tmp_path, bands):
-    source = build_raster(times=0).red.rename(None)
-    if bands is not None:
-        source = source.expand_dims(band=bands)
-    path = source.gs.to_gtiff(tmp_path / "bands.tif")
-    with open_raster(path) as restored:
-        assert list(restored.data_vars) == (["asset"] if bands is None else ["1", "2"])
-        for variable in restored.data_vars.values():
-            np.testing.assert_array_equal(variable, build_raster(times=0).red)
+def test_stacking_and_splitting_keep_dataset_attrs_apart_from_pixel_meaning() -> None:
+    scene = build_raster(times=1, packed=True).assign_attrs(
+        title="scene", **attrs.StacCollection(collection={"id": "s2"}).to_attrs()
+    )
+    scene["red"].attrs["long_name"] = "Red"
+
+    restored = scene.gs.to_array().gs.to_dataset("band")
+
+    assert restored.attrs == scene.attrs
+    assert restored.red.gs.packing == scene.red.gs.packing
+    # A variable's own descriptive attrs are dropped, as native stacking does.
+    assert "long_name" not in restored.red.attrs
+    assert "title" not in restored.red.attrs

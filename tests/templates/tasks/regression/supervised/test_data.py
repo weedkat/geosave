@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch.utils.data import Dataset
 
 from modules.regression import supervised
 from tests.templates.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
+
+pytestmark = pytest.mark.skip(
+    reason="Template processing awaits the ModelSpec redesign."
+)
 
 
 class Chips(Dataset[supervised.Sample]):

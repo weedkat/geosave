@@ -165,10 +165,10 @@ native Dask Delayed; its computed value has the same shape as an eager result.
 
 ## Read one model input at a time
 
-[Catalogs and samples](catalogs-and-cuts.md) shows how to group file metadata
-with `items.gs.sample()`, open sample trees with `rows.gs.to_datatree()`, and
-cut those trees with `gs.Chips`. Sampling and chip layout read no pixels;
-selecting a chip builds lazy raster work for its grid.
+[Chip reading and merging](chips.md) shows `gs.Chips([scene], size=256)`
+on a prepared raster. Construction reads no pixels; indexing builds lazy work
+on the chip grid. Catalog sampling is currently unavailable and is not needed
+for this workflow.
 
 The logical window may be smaller than the storage chunks or TIFF blocks the
 backend must read. Choose on-disk blocks, Dask chunks, and model chip sizes with

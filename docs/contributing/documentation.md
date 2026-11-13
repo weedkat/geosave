@@ -126,15 +126,17 @@ catch a broken cross-package workflow.
 Review plans and specs against the implementation before presenting them as
 current directions. Preserve unresolved decisions and useful rationale, but
 retire completed task lists once their remaining constraints are recorded in
-the architecture or open-decisions page. The
-[2026-11-04 review](review-2026-11-04.md) records the current audit and validation limits.
+the architecture or open-decisions page. Record current limitations in [open decisions](open-decisions.md).
 
 ## Protect the first successful workflow
 
 `python scripts/check_doc_examples.py` executes the plain Python fences in the
-first-raster, file-ingestion, chip, and training tutorials in a temporary
+landing page, raster/value/vector/I/O basics, file ingestion, chip reading,
+catalog publication, input preparation, and training tutorials in a temporary
 directory. It checks lazy arrays, saved pixel values and grids, tensor shapes,
-and predictions before/after checkpoint loading. Titled Python fences are
+and predictions before/after checkpoint loading. It also checks catalog
+publication/loading and metadata-decoding examples; a build alone does not
+exercise those calls. Titled Python fences are
 explicit adaptation snippets requiring user data; they are not executed.
 
 Use `--figures` to refresh the static tutorial figures from actual outputs,

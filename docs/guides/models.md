@@ -1,8 +1,6 @@
 # Build and use a model
 
-```bash
-pip install 'geosave[ml]'
-```
+Install the [ML extra](../install.md#install-to-follow-these-docs) before running this guide.
 
 Start with an ordinary PyTorch module, then add named stages when you need to
 reuse an encoder or swap a decoder or head. This guide uses random weights and
@@ -124,7 +122,7 @@ configuration. Start with a built-in head to see this without downloading an
 encoder checkpoint.
 
 ```python
-from geosave.model.registry import build_model
+from geosave.model import build_model
 
 head = build_model({
     "head": {
@@ -222,7 +220,7 @@ constructed modules for exploration.
 To select your stage by a short `name`, as the built-ins are, register it:
 
 ```python
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 
 
 @register_model("encoder", "sized")

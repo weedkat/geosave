@@ -11,7 +11,7 @@ from pystac.utils import datetime_to_str
 
 from geosave.geodata.errors import CollectionNotFoundError
 from geosave.geodata.io.formats import stac_geoparquet
-from geosave.geodata.io.storage import absolute_location
+from geosave.geodata.io.storage import create_upath
 
 from .query import SearchParams, StacQuery
 
@@ -50,7 +50,8 @@ class StacTable:
             path: Parquet file, as a path, URL, or UPath.
             duckdb: Caller-configured rustac session, or None to create one.
         """
-        self._location = absolute_location(path)
+        # DuckDB reads the file itself, so it takes the absolute URL or path.
+        self._location = str(create_upath(path).absolute())
         self._patch_url = None
         self._duckdb = duckdb if duckdb is not None else rustac.DuckdbClient()
 

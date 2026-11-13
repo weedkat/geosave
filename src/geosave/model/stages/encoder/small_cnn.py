@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from geosave.model.chain import Published, chain_step
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 
 
 def _block(in_channels: int, out_channels: int) -> nn.Sequential:

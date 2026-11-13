@@ -36,7 +36,9 @@ def test_geodata_loads_no_torch():
 
 @pytest.mark.slow
 def test_model_core_loads_no_lightning():
-    imports = "geosave.model.chain, geosave.model.registry, geosave.model.stages.head"
+    imports = (
+        "geosave.model.chain, geosave.model.stages.registry, geosave.model.stages.head"
+    )
     assert not _loads(imports, "lightning")
 
 

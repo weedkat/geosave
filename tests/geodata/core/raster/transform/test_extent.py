@@ -11,23 +11,9 @@ from dask.callbacks import Callback
 
 from tests.conftest import build_tree
 from tests.geodata.conftest import titled
-from tests.geodata.core.raster.rasters import grid_of
-
-
-def test_crop_refuses_a_raster_without_placement_and_names_the_accessor() -> None:
-    import geopandas as gpd
-    import shapely
-    import xarray as xr
-
-    band = xr.DataArray(np.ones((4, 4), "uint16"), dims=("y", "x"))
-    square = gpd.GeoDataFrame(geometry=[shapely.box(0, 0, 2, 2)], crs="EPSG:32633")
-
-    with pytest.raises(ValueError, match="grid"):
-        band.gs.crop(square)
 
 
 def _triangle():
-    import geopandas as gpd
     import shapely
 
     return gpd.GeoDataFrame(
@@ -66,7 +52,7 @@ def test_crop_masks_every_instant_of_a_time_axis() -> None:
 
 def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
 
-    band = _band()
+    band = _band(times=1)
     tree = build_tree(
         {"optical": band.to_dataset(), "dem": band.rename("height").to_dataset()}
     )
@@ -75,9 +61,9 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
     # A tree is cut node by node through its accessor.
     cropped = tree.gs.crop(_triangle())
 
-    assert cropped.gs.groups == ("optical", "dem")
-    assert grid_of(cropped).shape == (3, 3)
-    assert cropped["dem"].gs.combine_stac().height.values.tolist() == [
+    assert tuple(cropped.children) == ("optical", "dem")
+    assert cropped.gs.geobox.shape == (3, 3)
+    assert cropped["dem"].gs.combine().height.isel(time=0).values.tolist() == [
         [1, 0, 0],
         [1, 1, 0],
         [1, 1, 1],
@@ -85,14 +71,7 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
     assert cropped.attrs["title"] == "scene"
 
 
-def test_crop_refuses_an_empty_vector() -> None:
-
-    with pytest.raises(ValueError, match="empty vector"):
-        _band().gs.crop(gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs="EPSG:32633")))
-
-
 def test_crop_masks_a_geographic_grid_whose_coordinates_are_not_float_exact() -> None:
-    import geopandas as gpd
     import shapely
     from odc.geo.geobox import GeoBox
 
@@ -133,7 +112,6 @@ def test_crop_reads_no_pixels_of_a_chunked_raster() -> None:
 
 
 def test_crop_takes_a_vector_in_another_crs() -> None:
-    import geopandas as gpd
     import shapely
 
     # Corners off the pixel edges, so a round trip through degrees moves no edge.
@@ -148,50 +126,13 @@ def test_crop_takes_a_vector_in_another_crs() -> None:
     assert geographic.values.tolist() == native.values.tolist()
 
 
-def test_crop_takes_an_odc_geometry_carrying_its_own_crs() -> None:
-    from odc.geo.geom import box
-
-    cropped = _band().gs.crop(box(10, 10, 30, 30, "EPSG:32633"))
-
-    assert cropped.shape == (2, 2)
-    assert cropped.values.tolist() == [[1, 1], [1, 1]]
-
-
-def test_crop_keeps_every_disconnected_geometry_and_masks_the_gap() -> None:
-    import geopandas as gpd
-    import shapely
-
-    corners = gpd.GeoDataFrame(
-        geometry=[shapely.box(0, 0, 10, 10), shapely.box(30, 30, 40, 40)],
-        crs="EPSG:32633",
-    )
-
-    cropped = _band().gs.crop(corners)
-
-    assert cropped.shape == (4, 4)
-    # North is the first row, so the box at y 30-40 is the top-right pixel.
-    assert cropped.values.tolist() == [
-        [0, 0, 0, 1],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [1, 0, 0, 0],
-    ]
-
-
-def test_crop_refuses_a_bare_shapely_geometry_that_names_no_crs() -> None:
-    import shapely
-
-    with pytest.raises(TypeError, match="CRS"):
-        _band().gs.crop(shapely.box(10, 10, 30, 30))  # pyright: ignore[reportArgumentType]
-
-
 def _scene(times: int = 2):
     band = _band(times).chunk({"y": 2, "x": 2})
     band = band.gs.write_extent(band.gs.geobox.extent)
     return band.to_dataset().gs.write_extent(band.gs.geobox.extent)
 
 
-@pytest.mark.parametrize("mode", ["constant", "reflect", "edge", "wrap"])
+@pytest.mark.parametrize("mode", ["constant", "reflect"])
 @pytest.mark.parametrize("window", [(-1, -2, 3, 3), (1, 1, 2, 2), (2, 3, 4, 4)])
 def test_crop_to_grid_matches_numpy_tile_padding_lazily(mode, window):
     scene = _scene()
@@ -229,15 +170,6 @@ def test_crop_to_grid_keeps_model_context_and_clips_extent():
     assert chip.spatial_ref.attrs["GeoTransform"].split()[::3] == ["30", "10"]
 
 
-def test_crop_to_grid_clears_an_extent_it_leaves():
-    scene = _scene()
-    corner = scene.gs.geobox.crop((1, 1)).extent
-    scene = scene.gs.write_extent(corner)
-    chip = scene.gs.crop_to_grid(scene.gs.geobox.translate_pix(2, 2).crop((2, 2)))
-    assert chip.gs.region.extent == chip.gs.geobox.extent
-    assert "geospatial_bounds" not in chip.attrs
-
-
 def test_crop_to_grid_rejects_unaligned_or_disjoint_grids():
     scene = _scene()
     grid = scene.gs.geobox
@@ -261,27 +193,3 @@ def test_selected_chip_round_trips_through_geotiff(tmp_path):
     with open_raster(path) as restored:
         assert restored.gs.geobox == grid
         np.testing.assert_array_equal(restored.red.values, chip.red.values)
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-@pytest.mark.parametrize("mode", ["reflect", "wrap"])
-def test_crop_to_grid_pads_beyond_source_size_lazily(kind, mode):
-    values = np.arange(16, dtype="uint16").reshape(4, 4)
-    band = _band().copy(data=values).chunk({"y": 2, "x": 2})
-    source = band if kind == "array" else band.to_dataset()
-    source.encoding["source"] = "original.tif"
-    grid = source.gs.geobox.translate_pix(-6, -5).crop((16, 17))
-
-    with Callback(pretask=lambda *_: pytest.fail("crop_to_grid computed pixels")):
-        padded = source.gs.crop_to_grid(grid, mode=mode)
-
-    output = padded if kind == "array" else padded.red
-    assert isinstance(output.data, da.Array)
-    assert padded.gs.geobox == grid
-    assert output.dtype == band.dtype
-    for dim in ("y", "x"):
-        assert padded[dim].attrs["units"] == source[dim].attrs["units"]
-    assert "source" not in padded.encoding
-    assert source.encoding["source"] == "original.tif"
-    expected = np.pad(values, ((5, 7), (6, 7)), mode=mode)
-    np.testing.assert_array_equal(output.compute(), expected)

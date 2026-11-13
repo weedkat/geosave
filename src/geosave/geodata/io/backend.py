@@ -20,7 +20,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
     Examples:
         >>> xr.open_dataset("scene.zarr", engine="geosave").gs.variables
         ('red', 'nir')
-        >>> xr.open_datatree("prepared/s1.zarr", engine="geosave").gs.groups
+        >>> tuple(xr.open_datatree("prepared/s1.zarr", engine="geosave").children)
         ('label', 'sentinel_2_l2a')
     """
 

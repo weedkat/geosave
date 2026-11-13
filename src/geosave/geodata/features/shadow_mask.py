@@ -9,7 +9,7 @@ import xarray as xr
 from odc.geo.crs import CRS
 from odc.geo.geobox import GeoBox
 
-from geosave.geodata.conventions import TIME_COORDINATE
+from geosave.geodata.core.conventions import TIME_COORDINATE
 
 from geosave.geodata.features.dask_mapping import map_spatial_overlap
 

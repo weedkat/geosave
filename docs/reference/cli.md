@@ -14,7 +14,7 @@ These commands show the installed version's accepted inputs. Use the
 ## Create a project
 
 ```bash
-geosave create demo --task segmentation --method supervised
+geosave create demo --task lightning --method boilerplate
 ```
 
 | Input | Default | Meaning |
@@ -26,7 +26,8 @@ geosave create demo --task segmentation --method supervised
 
 The output is an editable project with local training implementations, config,
 and method-specific scripts. It does not train or download data. Task/method
-validation happens before writing files. See [available methods](training.md).
+validation happens before writing files. Geospatial recipes remain paused;
+see [method availability](training.md).
 
 ## Add a task and method
 
@@ -45,8 +46,9 @@ not copied again. Existing incidental files trigger overwrite/skip prompts.
 ## Publish a model
 
 `geosave publish [CHECKPOINT] --repo ORG/NAME` is a placeholder: it prints that
-it is not implemented yet and exits with status 1. Release a checkpoint with
-`scripts/segmentation/supervised/publish.py` from the segmentation starter in the meantime.
+it is not implemented yet and exits with status 1. Use
+[the model release API](../guides/release.md) for trained registered chains.
+The geospatial starter publication scripts depend on paused workflows.
 
 ## Shared options
 

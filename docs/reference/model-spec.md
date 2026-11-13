@@ -1,6 +1,7 @@
 # ModelSpec
 
-Version 1 declares inputs and named Python calls. See [recipes](../guides/model-spec.md)
-for entry/output defaults and overrides, references, and trust boundaries.
+Unavailable pending redesign. Construction and `load` raise
+`NotImplementedError`; the previous recipe schema is no longer supported.
+See [status and affected workflows](../guides/model-spec.md).
 
 ::: geosave.model.spec.ModelSpec

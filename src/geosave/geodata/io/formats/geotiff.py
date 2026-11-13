@@ -10,8 +10,6 @@ from geosave.geodata.io import rasterio as raster_reader
 from geosave.geodata.io.rasterio import RasterioOpenOptions
 
 from functools import partial
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import numpy as np
@@ -31,13 +29,17 @@ from xarray.core.utils import equivalent
 from xarray.conventions import encode_cf_variable
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
+from geosave.geodata.core.conventions import (
+    END_DATETIME,
+    START_DATETIME,
+    TIME_COORDINATE,
+)
 from geosave.geodata.io import storage
 from geosave.geodata.io.storage import Location, StorageOptions
 from geosave.geodata.utils.color import parse_color
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from dask.delayed import Delayed
     from rasterio.io import DatasetWriter
@@ -159,19 +161,16 @@ class GTiffWriteOptions(GeoTIFFWriteOptions, total=False):
     nbits: int
 
 
-def validate(ds: xr.Dataset, path: Location) -> None:
-    """Check that one raster selection can be written as a GeoTIFF.
+def validate(ds: xr.Dataset) -> None:
+    """Check that one raster can be written as a GeoTIFF.
 
     Args:
         ds: Raster whose pixel dimensions, time and fill values are checked.
-        path: Destination ending in `.tif` or `.tiff`.
 
     Raises:
-        ValueError: The suffix, grid, dimensions, dates or band fill values
-            cannot be represented by one GeoTIFF. No pixels are computed.
+        ValueError: The grid, dimensions, dates or band fill values cannot be
+            represented by one GeoTIFF. No pixels are computed.
     """
-    if storage.location(path).suffix.lower() not in FILE_SUFFIXES:
-        raise ValueError(f"{path} is not a GeoTIFF destination; use .tif or .tiff")
     ds.gs.validate()
     spatial = ds.gs.spatial_dims
     dimensions = set()
@@ -185,7 +184,7 @@ def validate(ds: xr.Dataset, path: Location) -> None:
     count = ds.sizes.get(TIME_COORDINATE, 1)
     if count != 1:
         raise ValueError(
-            f"one GeoTIFF holds one instant; {count} dates would share {path}; "
+            f"one GeoTIFF holds one instant, but the raster spans {count} dates; "
             "select one observation before writing"
         )
     cube = ds.squeeze(TIME_COORDINATE) if TIME_COORDINATE in ds.dims else ds
@@ -212,8 +211,8 @@ def validate(ds: xr.Dataset, path: Location) -> None:
 
 def write_files(
     files: Mapping[UPath, xr.Dataset],
-    writer: Callable[..., UPath] | None = None,
     *,
+    driver: Literal["COG", "GTiff"] = "COG",
     compute: bool = True,
     overwrite: bool = False,
     **options: Any,
@@ -223,80 +222,65 @@ def write_files(
     Args:
         files: Destinations, each ending in `.tif` or `.tiff`, mapped to the
             raster one GeoTIFF holds there.
-        writer: `write_cog`, the default, or `write_geotiff`.
-        compute: False returns one native `dask.Delayed`; computing it checks
-            the destinations again and writes every file in turn.
+        driver: `"COG"` for Cloud Optimized GeoTIFFs, `"GTiff"` for plain ones.
+        compute: False returns one native `dask.Delayed` writing every file.
         overwrite: Replace existing destinations.
-        **options: Creation options for the writer.
+        **options: Creation options for the driver.
 
     Returns:
         Written paths in destination order, or one delayed result.
 
     Raises:
-        ValueError: Two destinations resolve to one file, or a raster cannot be
-            one GeoTIFF: more than one instant, band fill values that differ,
-            no grid.
+        TypeError: An option is not one the driver takes.
+        ValueError: Two destinations resolve to one file, a suffix is wrong,
+            or a raster cannot be one GeoTIFF: more than one instant, band
+            fill values that differ, no grid.
         FileExistsError: A destination exists and overwrite is false.
 
     Examples:
         >>> write_files({root / "red.tif": scene[["red"]], root / "nir.tif": scene[["nir"]]})
-        [UPath('/abs/red.tif'), UPath('/abs/nir.tif')]
+        [PosixUPath('/abs/red.tif'), PosixUPath('/abs/nir.tif')]
     """
-    writer = cast("Callable[..., UPath]", write_cog) if writer is None else writer
-    if writer in (write_cog, write_geotiff):
-        declared = GTiffWriteOptions if writer is write_geotiff else COGWriteOptions
-        unknown = options.keys() - declared.__annotations__.keys()
-        if unknown:
-            raise TypeError(f"unsupported raster write options: {sorted(unknown)}")
+    declared = COGWriteOptions if driver == "COG" else GTiffWriteOptions
+    unknown = options.keys() - declared.__annotations__.keys()
+    if unknown:
+        raise TypeError(f"unsupported raster write options: {sorted(unknown)}")
 
-    _check_files(files, overwrite)
-    if compute:
-        return [
-            writer(raster, path, overwrite=overwrite, **options)
-            for path, raster in files.items()
-        ]
-    from dask.delayed import delayed
-
-    # One task writes every file in turn, checked again when it runs.
-    return delayed(partial(_write_checked, files, writer, overwrite, options))()
-
-
-def _check_files(files: Mapping[UPath, xr.Dataset], overwrite: bool) -> None:
-    """Refuse a batch where two destinations collide, one exists, or a raster cannot be a GeoTIFF."""
     addresses = set()
     for path, raster in files.items():
-        address = storage.absolute_location(path)
+        address = str(path.absolute())
         if address in addresses:
             raise ValueError(f"path selections collide at {path}")
         addresses.add(address)
-        if not overwrite and path.exists():
-            raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
-        validate(raster, path)
+        storage.check_destination(path, FILE_SUFFIXES, overwrite=overwrite)
+        validate(raster)
+
+    if compute:
+        return _write_files(files, driver, options)
+    from dask.delayed import delayed
+
+    # A partial keeps the rasters' lazy arrays out of the graph's dependencies.
+    return delayed(partial(_write_files, files, driver, options))()
 
 
-def _write_checked(
-    files: Mapping[UPath, xr.Dataset],
-    writer: Callable[..., UPath],
-    overwrite: bool,
-    options: dict[str, Any],
+def _write_files(
+    files: Mapping[UPath, xr.Dataset], driver: str, options: Mapping[str, Any]
 ) -> list[UPath]:
-    """Check a batch again, since a destination may have appeared since it was planned."""
-    _check_files(files, overwrite)
-    return [
-        writer(raster, path, overwrite=overwrite, **options)
-        for path, raster in files.items()
-    ]
+    """Write checked rasters, one GeoTIFF each."""
+    written = []
+    for path, raster in files.items():
+        written.append(_write_file(raster, path, driver, options))
+    return written
 
 
 def write_cog(
-    ds: xr.DataArray | xr.Dataset,
+    ds: xr.Dataset,
     path: Location,
     *,
     overwrite: bool = False,
-    compute: bool = True,
     storage_options: StorageOptions | None = None,
     **options: Unpack[COGWriteOptions],
-) -> UPath | Delayed:
+) -> UPath:
     """Write one Dataset as a Cloud Optimized GeoTIFF, a band per variable.
 
     Each variable names itself in its band's metadata. A scalar `time`
@@ -304,19 +288,15 @@ def write_cog(
     becomes ACDD ``time_coverage_start`` and ``time_coverage_end`` attrs.
 
     Args:
-        ds: Array or Dataset on one grid, optionally with one time step.
-            An array may have a band axis; each entry becomes one file band.
-        path: Output path, fsspec URL, or UPath carrying its
-            `storage_options`, ending in ``.tif`` or ``.tiff``.
+        ds: Dataset on one grid, optionally with one time step.
+        path: Output path, fsspec URL, or UPath, ending in ``.tif`` or ``.tiff``.
         overwrite: Replace an existing file when true.
-        compute: False returns a delayed path without reading pixels.
-        storage_options: Filesystem credentials and connection options, merged
-            with any options already carried by the destination UPath.
+        storage_options: Options for the filesystem a URL names.
         **options: COG creation options, and `tiff_tags=True` to write ACDD
             attrs as baseline TIFF tags (see `GeoTIFFWriteOptions`).
 
     Returns:
-        Path of the artifact actually written, or a delayed path.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -325,48 +305,38 @@ def write_cog(
 
     Examples:
         >>> write_cog(ds, "scene.tif", compress="DEFLATE")
-        UPath('/abs/scene.tif')
+        PosixUPath('scene.tif')
         >>> write_cog(ds.assign_attrs(title="Forest"), "scene.tif", tiff_tags=True)
-        UPath('/abs/scene.tif')
+        PosixUPath('scene.tif')
     """
-    return _write(
-        ds,
-        storage.location(path, storage_options),
-        "COG",
-        overwrite=overwrite,
-        compute=compute,
-        options=options,
-    )
+    destination = storage.create_upath(path, storage_options)
+    written = write_files({destination: ds}, overwrite=overwrite, **options)
+    return cast("list[UPath]", written)[0]
 
 
 def write_geotiff(
-    ds: xr.DataArray | xr.Dataset,
+    ds: xr.Dataset,
     path: Location,
     *,
     overwrite: bool = False,
-    compute: bool = True,
     storage_options: StorageOptions | None = None,
     **options: Unpack[GTiffWriteOptions],
-) -> UPath | Delayed:
+) -> UPath:
     """Write one Dataset as a plain GeoTIFF, a band per variable.
 
     Reach for `write_cog` unless a consumer needs a striped or otherwise
     non-COG file. Coordinates map to tags exactly as `write_cog` maps them.
 
     Args:
-        ds: Array or Dataset on one grid, optionally with one time step.
-            An array may have a band axis; each entry becomes one file band.
-        path: Output path, fsspec URL, or UPath carrying its
-            `storage_options`, ending in ``.tif`` or ``.tiff``.
+        ds: Dataset on one grid, optionally with one time step.
+        path: Output path, fsspec URL, or UPath, ending in ``.tif`` or ``.tiff``.
         overwrite: Replace an existing file when true.
-        compute: False returns a delayed path without reading pixels.
-        storage_options: Filesystem credentials and connection options, merged
-            with any options already carried by the destination UPath.
+        storage_options: Options for the filesystem a URL names.
         **options: GTiff creation options, and `tiff_tags=True` to write ACDD
             attrs as baseline TIFF tags (see `GeoTIFFWriteOptions`).
 
     Returns:
-        Path of the artifact actually written, or a delayed path.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -375,74 +345,25 @@ def write_geotiff(
 
     Examples:
         >>> write_geotiff(ds, "scene.tif", tiled=True, blockxsize=512)
-        UPath('/abs/scene.tif')
+        PosixUPath('scene.tif')
     """
-    return _write(
-        ds,
-        storage.location(path, storage_options),
-        "GTiff",
-        overwrite=overwrite,
-        compute=compute,
-        options=options,
+    destination = storage.create_upath(path, storage_options)
+    written = write_files(
+        {destination: ds}, driver="GTiff", overwrite=overwrite, **options
     )
+    return cast("list[UPath]", written)[0]
 
 
-def _write(
-    ds: xr.DataArray | xr.Dataset,
-    path: Location,
-    driver: Literal["COG", "GTiff"],
-    *,
-    overwrite: bool,
-    compute: bool = True,
-    options: Mapping[str, Any],
-) -> UPath | Delayed:
-    """Encode one cube through the GDAL driver `driver` names.
+def _write_file(
+    ds: xr.Dataset, path: UPath, driver: str, options: Mapping[str, Any]
+) -> UPath:
+    """Encode one checked Dataset through GDAL, then put the file at `path`.
 
-    Args:
-        ds: Cube of `(y, x)` variables sharing one grid.
-        path: Output path, fsspec URL, or UPath ending in ``.tif`` or ``.tiff``.
-        driver: GDAL driver creating the file.
-        overwrite: Replace an existing file when true.
-        options: Creation options the driver supports.
-
-    Returns:
-        Path of the artifact actually written.
-
-    Raises:
-        FileExistsError: The path exists and `overwrite` is false.
-        ValueError: The suffix or the `time` axis is invalid, or the variables
-            declare more than one fill value.
+    GDAL's COG driver only copies from a finished raster, so the file is built
+    locally: pixels as a tiled GTiff, the header onto it, then the COG copy.
     """
-    declared = COGWriteOptions if driver == "COG" else GTiffWriteOptions
-    unknown = options.keys() - declared.__annotations__.keys()
-    if unknown:
-        raise TypeError(f"unsupported raster write options: {sorted(unknown)}")
     options = dict(options)
     tiff_tags = bool(options.pop("tiff_tags", False))
-
-    if isinstance(ds, xr.DataArray):
-        array = ds
-        if "band" in array.dims:
-            ds = array.to_dataset(dim="band")
-            ds = ds.rename_vars({name: str(name) for name in ds.data_vars})
-            for variable in ds.data_vars.values():
-                variable.attrs = dict(array.attrs)
-                variable.encoding = dict(array.encoding)
-        else:
-            ds = array.to_dataset(
-                name=array.name if array.name is not None else "asset"
-            )
-        ds = ds.assign_attrs(array.attrs)
-
-    validate(ds, path)
-    destination = storage.location(path)
-    if not overwrite and destination.exists():
-        raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
-    if not compute:
-        from dask.delayed import delayed
-
-        write = partial(_write, ds, path, driver, overwrite=overwrite, options=options)
-        return delayed(write)()
 
     # Dataset.rio.to_raster stacks bands and loses per-variable CF encoding.
     variables = {}
@@ -498,33 +419,23 @@ def _write(
     for name in names:
         cube[name].attrs = {}
 
-    def save(target: Path) -> None:
-        with TemporaryDirectory(dir=target.parent) as workspace:
-            # A COG is copied from a source raster, which its own options create.
-            if driver == "COG":
-                source = Path(workspace) / target.name
-                source_options: Mapping[str, Any] = {"tiled": True}
-            else:
-                source = target
-                source_options = options
-
-            cube.rio.to_raster(
-                source,
-                driver="GTiff",
-                # rioxarray computes a chunked cube whole unless told to walk its windows.
-                windowed=bool(cube.chunks),
-                **source_options,
-            )
-            # GDAL honours metadata on an open dataset, not as creation options.
-            with rasterio.open(source, "r+") as dst:
-                write_header(dst, root, bands)
-
-            if driver == "COG":
-                copy(source, target, driver="COG", **options)
-
-    return storage.write_file(
-        path, save, suffixes=FILE_SUFFIXES, overwrite=overwrite
-    ).absolute()
+    with storage.stage_file(path) as built:
+        # A COG is copied from a source raster, which its own options create.
+        source = built.with_name(f"source{path.suffix}") if driver == "COG" else built
+        source_options = {"tiled": True} if driver == "COG" else options
+        cube.rio.to_raster(
+            source,
+            driver="GTiff",
+            # rioxarray computes a chunked cube whole unless told to walk its windows.
+            windowed=bool(cube.chunks),
+            **source_options,
+        )
+        # GDAL honours metadata on an open dataset, not as creation options.
+        with rasterio.open(source, "r+") as dst:
+            write_header(dst, root, bands)
+        if driver == "COG":
+            copy(source, built, driver="COG", **options)
+    return path
 
 
 def write_header(
@@ -536,7 +447,7 @@ def write_header(
     and palette as band properties of its own, where `gdalinfo` and QGIS look;
     every other attr is a plain metadata item, and none is stated twice. The
     `Display` maps to GDAL: `rgb` to red/green/blue interpretations, a
-    `color_map` to a colour table. Each band names its variable in a
+    `CFFlags.color_hints` to a colour table. Each band names its variable in a
     `variable_name` item.
 
     Args:
@@ -557,8 +468,9 @@ def write_header(
             f"name them; pass one variable per band, in band order"
         )
 
-    # GDAL stores these as band properties, never as dataset JSON tags.
-    owned = {*attrs.CFPacking.KEYS, *attrs.Display.KEYS}
+    # GDAL stores these as band properties, never as dataset JSON tags; class
+    # colours become each band's colour table.
+    owned = {*attrs.CFPacking.KEYS, *attrs.Display.KEYS, "color_hints"}
     root_tags = {key: value for key, value in root.items() if key not in owned}
     dst.update_tags(**_as_text(root_tags))
     display = attrs.Display.from_attrs(root)
@@ -569,7 +481,7 @@ def write_header(
     interpretations: list[ColorInterp] = []
     for index, band in enumerate(bands, start=1):
         packing = band.gs.packing
-        band_display = band.gs.display
+        flags = band.gs.flags
         tags = {key: value for key, value in band.attrs.items() if key not in owned}
         tags["variable_name"] = str(band.name)
 
@@ -585,7 +497,9 @@ def write_header(
 
         scales.append(1.0 if packing is None else packing.scale_factor)
         offsets.append(0.0 if packing is None else packing.add_offset)
-        palette = None if band_display is None else band_display.color_map
+        palette = None
+        if flags is not None and flags.color_hints is not None:
+            palette = flags.colors
         if palette is not None:
             interpretations.append(ColorInterp.palette)
         elif str(band.name) in rgb:

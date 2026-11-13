@@ -9,7 +9,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 
-from geosave.geodata.conventions import TIME_COORDINATE
+from geosave.geodata.core.conventions import TIME_COORDINATE
 
 
 def map_spatial_overlap(

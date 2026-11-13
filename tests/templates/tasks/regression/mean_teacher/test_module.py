@@ -139,6 +139,7 @@ def test_teacher_ema_runs_once_per_optimizer_step_with_accumulation(tmp_path):
     )
 
 
+@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = mean_teacher.DataModule(
         _spec(),

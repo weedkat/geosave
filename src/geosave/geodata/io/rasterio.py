@@ -14,7 +14,8 @@ import warnings
 from contextlib import ExitStack
 from datetime import datetime
 from enum import Enum, auto
-from pathlib import PurePath
+from pathlib import Path, PurePath
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import numpy as np
@@ -26,15 +27,12 @@ from rasterio.enums import ColorInterp, MaskFlags
 
 import geosave.geodata.attrs as attrs
 from geosave import __path__ as _package_paths
-from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
-from geosave.geodata.io.storage import (
-    Location,
-    StorageOptions,
-    absolute_location,
-    location,
-    localize,
-    is_local,
+from geosave.geodata.core.conventions import (
+    END_DATETIME,
+    START_DATETIME,
+    TIME_COORDINATE,
 )
+from geosave.geodata.io.storage import Location, StorageOptions, create_upath
 from geosave.geodata.utils.datetime import parse_stem_dates
 from geosave.geodata.warnings import UnreadMaskWarning
 
@@ -50,7 +48,13 @@ TIFF_TAGS = {
     "institution": "TIFFTAG_ARTIST",
 }
 
+# Protocols GDAL reaches by itself, with the credentials `configure_gdal` sets;
+# a Hugging Face bucket through its S3 gateway.
+GDAL_PROTOCOLS = ("", "s3", "gs", "gcs", "az", "abfs", "http", "https", "hf")
+
 if TYPE_CHECKING:
+    from upath import UPath
+
     from geosave.geodata import Dataset
 
 
@@ -84,6 +88,30 @@ class RasterioOpenOptions(TypedDict, total=False):
     overview_level: int
 
 
+def read_gdal_address(path: UPath) -> str | None:
+    """Return the address GDAL reads a UPath by itself, or None where it cannot.
+
+    GDAL reads local files and s3, gs, az, http and Hugging Face bucket URLs
+    itself, lazily, with the credentials `configure_gdal` sets. It cannot see
+    a UPath's `storage_options`, nor reach filesystems such as `memory://`.
+
+    Args:
+        path: The raster file.
+
+    Returns:
+        The path or URL to hand GDAL, or None.
+
+    Examples:
+        >>> read_gdal_address(create_upath("s3://bucket/scene.tif"))
+        's3://bucket/scene.tif'
+        >>> read_gdal_address(create_upath("s3://bucket/scene.tif", {"anon": True})) is None
+        True
+    """
+    if path.storage_options or path.protocol not in GDAL_PROTOCOLS:
+        return None
+    return hf_to_s3(path)
+
+
 def open_raster(
     source: Location,
     *,
@@ -107,10 +135,10 @@ def open_raster(
             which read on the first computation and keep the pixels.
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
-        storage_options: Filesystem credentials and connection options, merged
-            with a UPath's options. Supplied options download a temporary file
-            retained until the Dataset closes. Without options, GDAL handles remote URLs
-            using its configured environment; memory URLs use fsspec.
+        storage_options: Options for the filesystem a URL names. GDAL cannot
+            see them, so the file is downloaded for the Dataset's lifetime;
+            without them, GDAL reads remote URLs lazily itself with its
+            configured environment (see `read_gdal_address`).
         **open_options: Supported rioxarray and rasterio open options.
 
     Returns:
@@ -132,15 +160,17 @@ def open_raster(
         >>> open_raster("20190507_red.tif").time.item()
         datetime.datetime(2019, 5, 7, 0, 0)
     """
-    path = location(source, storage_options)
-    options = dict(path.storage_options)
-    raster_options: dict[str, Any] = dict(open_options)
+    path = create_upath(source, storage_options)
     with ExitStack() as handles:
-        if not is_local(path) and (options or path.protocol == "memory"):
-            address = str(handles.enter_context(localize(path)))
-        else:
-            address = hf_to_s3(source)
-        src = handles.enter_context(rasterio.open(address, **raster_options))
+        address = read_gdal_address(path)
+        if address is None:
+            # rioxarray reopens bands by name, which a read through fsspec
+            # (`opener=`) does not survive; the file is read locally instead.
+            folder = handles.enter_context(TemporaryDirectory())
+            local = Path(folder) / path.name
+            path.fs.get_file(path.path, str(local))
+            address = str(local)
+        src = handles.enter_context(rasterio.open(address, **open_options))
         # `{}` asks for the backend's preferred chunks, as Zarr's are its own;
         # a tiled file's are its tiles, so a window reads only what it overlaps.
         block_y, block_x = src.block_shapes[0]
@@ -234,7 +264,7 @@ def open_raster(
         if cube is not opened:
             cube.set_close(handles.pop_all().close)
 
-        cube.encoding["source"] = absolute_location(source)
+        cube.encoding["source"] = str(path.absolute())
         return cast("Dataset", cube)
 
 
@@ -405,23 +435,25 @@ def read_class_attrs(src: rasterio.DatasetReader, index: int) -> dict[str, Any]:
         index: One-based band index.
 
     Returns:
-        `CFFlags` and `Display` attrs, empty where the band's tags list no
-        `flag_values`. A palette band takes its listed values' colours from
-        its table.
+        `CFFlags` attrs, empty where the band's tags list no `flag_values`.
+        A palette band takes its classes' colour hints from its table.
     """
     tags = src.tags(index)
     if "flag_values" not in tags:
         return {}
     flags = attrs.CFFlags.model_validate(tags)
-    read = flags.to_attrs()
-    if src.colorinterp[index - 1] is not ColorInterp.palette or not flags.flag_values:
-        return read
+    if src.colorinterp[index - 1] is not ColorInterp.palette or flags.classes is None:
+        return flags.to_attrs()
+
     colours = src.colormap(index)
     palette = {}
-    for value in flags.flag_values:
+    for value in flags.classes:
         if value in colours:
             palette[value] = colours[value][:3]
-    return {**read, **attrs.Display(color_map=palette).to_attrs()}
+    painted = attrs.CFFlags.model_validate(
+        {"classes": flags.classes, "colors": palette}
+    )
+    return painted.to_attrs()
 
 
 def _attrs(

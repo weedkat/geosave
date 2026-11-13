@@ -4,17 +4,15 @@ from datetime import UTC, datetime
 
 import dask.array as da
 import pystac
-import pytest
-import xarray as xr
 
-from geosave.geodata.stac import raster as stac_raster
-
-from geosave.geodata.stac.raster import (
-    read_properties_coordinate,
-    stamp_item_properties,
-    stamp_item_time,
-)
+from geosave.geodata.io import open_netcdf, open_zarr
+from geosave.geodata.stac.raster import stamp_item_properties, stamp_item_time
 from tests.geodata.conftest import build_raster
+
+PROPERTIES = [
+    {"eo:cloud_cover": 20.0, "instruments": ["msi"]},
+    {"platform": "s2b"},
+]
 
 
 def test_dating_and_properties_are_independent_lazy_operations():
@@ -27,76 +25,52 @@ def test_dating_and_properties_are_independent_lazy_operations():
         {"platform": "sentinel-2a"},
     )
     dated = stamp_item_time(raster, entry)
-    assert read_properties_coordinate(dated) == []
+    assert "stac_properties" not in dated.coords
 
     described = stamp_item_properties(dated, entry)
-    assert read_properties_coordinate(described) == [{"platform": "sentinel-2a"}]
+    assert described.stac_properties.values.tolist() == [{"platform": "sentinel-2a"}]
     assert isinstance(described.red.data, da.Array)
     assert described.red.data is raster.red.data
     assert described.time.variable.identical(dated.time.variable)
 
 
-def test_the_properties_coordinate_round_trips_each_date(tmp_path):
-    ds = build_raster(times=2)
-    mappings = [{"eo:cloud_cover": 20.0, "instruments": ["msi"]}, {"platform": "s2b"}]
-
-    recorded = stac_raster.stamp_properties_coordinate(ds, mappings)
-    recorded.to_zarr(tmp_path / "scene.zarr")
-    restored = xr.open_zarr(tmp_path / "scene.zarr")
-
-    assert recorded.stac_properties.dims == ("time",)
-    assert stac_raster.read_properties_coordinate(restored) == mappings
-    assert stac_raster.read_properties_coordinate(restored.isel(time=1)) == [
-        {"platform": "s2b"}
-    ]
-    with pytest.raises(ValueError, match="properties mappings"):
-        stac_raster.stamp_properties_coordinate(ds, [{}])
-
-
-def test_item_supplied_time_has_cf_semantics_without_computing_pixels():
-    from dask.callbacks import Callback
-
-    raster = build_raster().chunk()
-    entry = pystac.Item("dated", None, None, datetime(2025, 6, 1, tzinfo=UTC), {})
-    with Callback(pretask=lambda *_: pytest.fail("stamping computed pixels")):
-        dated = stamp_item_time(raster, entry)
-        assert dated.cf.coordinates["time"] == ["time"]
-        assert dated.cf.axes["T"] == ["time"]
-    assert dated.red.data is raster.red.data
-    assert "time" not in raster.coords
-
-
-def test_common_properties_follow_selection_and_roundtrip(tmp_path):
-    from dask.callbacks import Callback
-
+def test_properties_are_dicts_that_follow_selection():
     ds = build_raster(times=2).chunk()
-    properties = [
-        {"platform": "s2a", "eo:cloud_cover": 10.0, "instruments": ["msi"]},
-        {"platform": "s2a", "eo:cloud_cover": 40.0},
-    ]
-    with Callback(pretask=lambda *_: pytest.fail("metadata computed pixels")):
-        recorded = stac_raster.stamp_properties_coordinate(ds, properties, dim="time")
-        assert recorded.gs.stac_common_properties == {"platform": "s2a"}
-        assert recorded.isel(time=0).gs.stac_common_properties == properties[0]
-        assert recorded.isel(time=slice(0, 0)).gs.stac_common_properties == {}
-        reversed_dates = recorded.isel(time=[1, 0])
-        assert reversed_dates.gs.stac_properties["eo:cloud_cover"].tolist() == [
-            40.0,
-            10.0,
-        ]
-        assert reversed_dates.gs.stac_properties.index.name == "time"
-        assert recorded.red.data is ds.red.data
 
-    path = tmp_path / "properties.nc"
-    recorded.compute(scheduler="synchronous").to_netcdf(path, engine="scipy")
-    with xr.open_dataset(path, engine="scipy") as restored:
-        assert restored.gs.stac_common_properties == {"platform": "s2a"}
-        assert restored.isel(time=0).gs.stac_common_properties == properties[0]
+    recorded = ds.assign_coords(stac_properties=("time", PROPERTIES))
+
+    assert (
+        recorded.isel(time=[1, 0]).stac_properties.values.tolist() == PROPERTIES[::-1]
+    )
+    assert recorded.isel(time=1).stac_properties.item() == {"platform": "s2b"}
+    assert recorded.red.data is ds.red.data
 
 
-def test_timeless_properties_use_one_scalar_record():
-    ds = build_raster()
-    recorded = stac_raster.stamp_properties_coordinate(ds, [{"platform": "static"}])
-    assert recorded.stac_properties.ndim == 0
-    assert recorded.gs.stac_common_properties == {"platform": "static"}
-    assert recorded.gs.stac_properties["platform"].tolist() == ["static"]
+def test_properties_round_trip_through_zarr(tmp_path):
+    recorded = build_raster(times=2).assign_coords(stac_properties=("time", PROPERTIES))
+
+    recorded.gs.to_zarr(tmp_path / "scene.zarr")
+    restored = open_zarr(tmp_path / "scene.zarr")
+
+    assert restored.stac_properties.values.tolist() == PROPERTIES
+    assert recorded.stac_properties.values.tolist() == PROPERTIES
+
+
+def test_properties_round_trip_through_netcdf(tmp_path):
+    recorded = build_raster(times=2).assign_coords(stac_properties=("time", PROPERTIES))
+
+    recorded.gs.to_netcdf(tmp_path / "scene.nc")
+    with open_netcdf(tmp_path / "scene.nc") as restored:
+        assert restored.stac_properties.values.tolist() == PROPERTIES
+
+
+def test_a_tree_round_trips_each_items_properties(tmp_path):
+    scene = build_raster(times=2).assign_coords(stac_properties=("time", PROPERTIES))
+    tree = scene.gs.expand()
+
+    tree.gs.to_zarr(tmp_path / "tree.zarr")
+    restored = open_zarr(tmp_path / "tree.zarr")
+
+    items = restored["default"].children.values()
+    for item, expected in zip(items, PROPERTIES, strict=True):
+        assert item.stac_properties.item() == expected

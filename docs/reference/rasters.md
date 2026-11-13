@@ -12,7 +12,7 @@ wrapped = array.to_dataset(name="image")  # Native wrapping keeps all dimensions
 bands = array.gs.to_dataset()  # Split the labelled "band" dimension.
 
 tree = rows.gs.to_datatree()
-scene = tree.gs.reproject(grid)["optical"].gs.combine_stac()  # Items along time.
+scene = tree.gs.reproject(grid)["optical"].gs.combine()  # Items along time.
 ```
 
 Raster conversion preserves pixels and does not choose an output grid; align
@@ -22,8 +22,7 @@ attrs on the Datasets supplied at each explicit path. Catalog-row
 
 Stacking requires matching CF pixel meaning: units (including whether stated),
 packing, unsigned interpretation, flags, validity ranges, calendars and cell
-methods. `combine_attrs` controls descriptive metadata only; it cannot erase
-or override these declarations. The stack has no original storage encoding;
+methods. The remaining attrs follow xarray's `drop_conflicts`. The stack has no original storage encoding;
 choose output encoding explicitly when saving packed analysis results.
 Splitting preserves shared attrs on each band, but cannot recover per-band
 metadata lost during stacking. Use native `to_dataset(name=...)` for wrapping.
@@ -55,9 +54,10 @@ periods their source records, such as each loaded Item's own period.
 `timespan` reduces cells, falling back to time labels, and returns `None` for
 an empty time axis.
 
-NetCDF and Zarr store cells as a CF boundary variable, `time_bounds(time,
+NetCDF stores cells as a CF boundary variable, `time_bounds(time,
 bounds)` named by `time`'s `bounds` attr, with `time`'s units and calendar.
-GeoSave's readers turn it back into `start_datetime` and `end_datetime`, so
+Zarr stores the start/end coordinates directly. GeoSave's NetCDF reader
+turns bounds back into `start_datetime` and `end_datetime`, so
 in memory cells are always those two coordinates; a foreign CF file's bounds,
 under any name, open the same way.
 A monthly bin label is not necessarily the first contributing observation.
@@ -66,7 +66,6 @@ declarations, falling back to the conventional `time` name. A declared `date`
 coordinate keeps its name through time selection and STAC stamping.
 
 ```text
-scene.gs.variables          every data variable
 scene.gs.variables          data variable names
 scene.gs.grid_mapping_coords  the scalar coordinates carrying the CRS (spatial_ref)
 ```
@@ -123,55 +122,53 @@ with explicit gap limits or extrapolation.
 Use xarray directly for concatenation:
 
 ```python
-from geosave.geodata import attrs
-
 series = xr.concat(
-    decoded_rasters, dim="time", join="exact", combine_attrs=attrs.combine_attrs,
+    decoded_rasters, dim="time", join="exact", combine_attrs="drop_conflicts",
 )
 ```
 
 `join="exact"` checks indexes, not CRS, units, class meanings or dtype. Prepare
-compatible rasters before combining them. The callback follows native
-`drop_conflicts` and warns about omitted keys; native concat's default without
-it is `override`.
+compatible rasters before combining them. Native concat's default attrs policy
+is `override`.
 
-For trees, retrieve each node's Dataset with its inherited coordinates and
-apply these methods there. Nodes may have different grids and time axes.
-Explicit inheritance includes non-index observation bounds and scene properties:
+For trees, combine a collection on compatible grids before applying temporal
+operations. Individual assets expose inherited Item coordinates with
+`.to_dataset(inherit="all_coords")`:
 
 ```python
-observations = tree["optical"].to_dataset(inherit="all_coords")
+observations = tree["optical"].gs.combine()
 monthly = observations.gs.mask_and_scale().gs.composite("MS", "mean")
 january = monthly.sel(time="2025-01")
 ```
 
 ## Validation
 
-Basic validation checks nonempty spatial structure, coordinate consistency and
-any placement ODC discovers. Unreferenced pixel arrays are valid; pixels are
-never computed or repaired by validation.
+`validate(*rules)` always requires a grid ODC recognizes, with a CRS, then runs
+each rule the operation needs, without reading pixels. A rule takes the object
+it checks and raises `RasterValidationError` when it is broken; it lives with
+the accessor of that object.
 
 ```python
-image.gs.validate()
-image.gs.validate(georeferenced=True)
-scene.gs.validate(same_dims=True, same_grid=True)
-tree.gs.validate(georeferenced=True, same_grid=True)
+from geosave.geodata.core.raster.dataarray import compatible_resampling, decoded
+from geosave.geodata.core.raster.dataset import same_pixel_meaning
+from geosave.geodata.core.raster.datatree import same_grid, stac_catalog
+
+band.gs.validate()                       # a georeferenced grid
+band.gs.validate(decoded)                # and no active CF packing
+scene.gs.validate(same_pixel_meaning)    # one packing, flags and units across variables
+tree.gs.validate(same_grid, stac_catalog)   # every node georeferenced, one grid, STAC layout
+band.gs.validate(compatible_resampling("mean"))  # class codes need nearest, mode, first or last
 ```
 
-DataArray accepts only `georeferenced`. Dataset and DataTree additionally accept
-`same_dims` and `same_grid`, comparing variables and data-bearing nodes
-respectively. Different grids are allowed unless requested otherwise.
-`same_grid=True` requires known equal grids; absent grids are not evidence of
-shared placement. `same_dims=True` compares spatial axis names.
+| Rule | Checks | Used by |
+| --- | --- | --- |
+| `dataarray.decoded` | no active CF packing | `composite` |
+| `dataarray.compatible_resampling(method)` | class codes resampled only by nearest, mode, first or last | `reproject`, `composite` |
+| `dataset.same_pixel_meaning` | one packing, flags and units across variables | `to_array`, `to_numpy` |
+| `datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | `combine` |
+| `datatree.stac_catalog` | collection/Item/asset layout, with data only on assets | tree `to_cog` |
 
-ODC owns spatial metadata interpretation. GeoSave checks regular coordinate
-spacing because ODC's affine inference assumes it, and checks that returned
-transforms are finite and nonsingular. GCP placement remains valid; operations
-that need a regular GeoBox reject it at their own boundary. There is no
-`affine`, `spatial` or `allow_missing_grid` validation flag.
-
-Spatial transforms, TIFF writing, STAC Item construction, model restoration and
-map placement invoke this validator before interpreting pixel placement. Each
-operation keeps its own additional requirements, such as a CRS for reprojection
-or a single date for an Item asset. Path planning only resolves selections and
-destinations; writers perform validation before I/O.
+A rule that needs an operation's argument is built from it:
+`compatible_resampling(method)` returns the rule that the band's values allow
+`method`, which `reproject` and `composite` pass to `validate`. Argument checks, such as a
+mask spanning foreign axes, stay inside their operation.

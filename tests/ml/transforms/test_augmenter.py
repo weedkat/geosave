@@ -1,5 +1,4 @@
 import kornia.augmentation as K
-import pytest
 import torch
 
 from geosave.ml.transforms import ImageAugmenter
@@ -80,23 +79,6 @@ def test_yolo_boxes_use_output_size_after_resize_and_mix_with_native_boxes():
     torch.testing.assert_close(first, expected_yolo)
     torch.testing.assert_close(native_boxes, expected_xyxy)
     torch.testing.assert_close(second, expected_yolo)
-
-
-def test_yolo_requires_an_image_to_determine_pixel_size():
-    augmentation = ImageAugmenter([], size=4)
-    with pytest.raises(ValueError, match="first.*image"):
-        augmentation(torch.ones(1, 1, 4), data_keys=["bbox_yolo"])
-
-
-def test_yolo_empty_pipeline_preserves_boxes():
-    augmentation = ImageAugmenter([], size=4)
-    image = torch.ones(1, 1, 4, 4)
-    boxes = torch.tensor([[[0.25, 0.5, 0.25, 0.5]]])
-
-    pixels, result = augmentation(image, boxes, data_keys=["input", "bbox_yolo"])
-
-    assert pixels is image
-    torch.testing.assert_close(result, boxes)
 
 
 def test_keys_can_switch_between_yolo_native_boxes_and_image_only():

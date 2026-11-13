@@ -9,7 +9,7 @@ See [Build a model](../guides/models.md) for examples before writing custom stag
 
 ## Construction
 
-::: geosave.model.registry
+::: geosave.model.stages.registry
     options:
       members:
         - build_model

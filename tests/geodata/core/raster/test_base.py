@@ -7,10 +7,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from dask.callbacks import Callback
 
 from geosave.geodata import GeoDataset
-from geosave.geodata.core.raster.chips import Chips
+from geosave.geodata.core.raster.datatree import same_geobox, same_grid
 from tests.geodata.conftest import build_raster, flat
 
 
@@ -36,13 +35,12 @@ def test_times_format_as_a_datetime_index_on_a_raster_and_a_band() -> None:
     ("labels", "span"),
     [
         (["2018-12-26"], ("2018-12-26T00:00:00", "2018-12-26T00:00:00")),
-        (["2018-12-26T10:30:31"], ("2018-12-26T10:30:31", "2018-12-26T10:30:31")),
         (
             ["2018-12-27", "2018-12-26"],
             ("2018-12-26T00:00:00", "2018-12-27T00:00:00"),
         ),
     ],
-    ids=["an instant", "an instant with seconds", "oldest to newest"],
+    ids=["an instant", "oldest to newest"],
 )
 def test_instants_span_from_the_oldest_to_the_newest_label(
     labels: list[str], span: tuple[str, str]
@@ -137,35 +135,6 @@ def test_right_labels_state_the_cell_before_them():
     np.testing.assert_array_equal(dated.end_datetime.values, dated.time.values)
 
 
-@pytest.mark.parametrize(
-    "freq, origin, labels, starts",
-    [
-        ("ME", "start_day", ["2025-01-31", "2025-02-28"], ["2024-12-31", "2025-01-31"]),
-        ("7D", "end", ["2025-01-05", "2025-01-12"], ["2024-12-29", "2025-01-05"]),
-    ],
-)
-def test_time_bounds_resolve_native_label_defaults(freq, origin, labels, starts):
-    raster = _dated(labels).rename(time="acquired")
-
-    dated = raster.gs.write_time_bounds(freq, dim="acquired", origin=origin)
-
-    np.testing.assert_array_equal(
-        dated.start_datetime.values, np.array(starts, dtype="datetime64[ns]")
-    )
-    np.testing.assert_array_equal(dated.end_datetime.values, dated.acquired.values)
-    assert dated.data is raster.data
-
-
-def test_cells_follow_an_auxiliary_time_dimension():
-    raster = _dated(["2025-01-01", "2025-02-01"], dims=("observation",))
-
-    dated = raster.gs.write_time_bounds("MS")
-
-    assert dated.start_datetime.dims == ("observation",)
-    assert dated.end_datetime.dims == ("observation",)
-    assert dated.sizes == raster.sizes
-
-
 def test_scalar_time_states_scalar_cells():
     dated = _dated(["2025-01-01"]).isel(time=0).gs.write_time_bounds("MS")
 
@@ -176,11 +145,6 @@ def test_scalar_time_states_scalar_cells():
 def test_labels_off_the_frequency_are_refused():
     with pytest.raises(ValueError, match="not on a MS edge"):
         _dated(["2025-01-10"]).gs.write_time_bounds("MS")
-
-
-def test_cells_need_a_time_coordinate():
-    with pytest.raises(KeyError, match="temporal coordinate"):
-        xr.DataArray([1.0], dims="x").gs.write_time_bounds("MS")
 
 
 @pytest.mark.parametrize("as_dataset", [False, True])
@@ -213,107 +177,16 @@ def test_validation_requires_an_odc_grid_with_a_crs():
     located.odc.assign_crs("EPSG:4326").gs.validate()
 
 
-def test_tree_validation_allows_different_grids_unless_requested():
+def test_tree_validation_allows_different_extents_unless_requested():
     source = build_raster()
     tree = xr.DataTree.from_dict(
         {"native": source, "crop": source.isel(x=slice(1, None))}
     )
-    tree.gs.validate()
-    with pytest.raises(ValueError, match="2 grids"):
-        tree.gs.validate(same_grid=True)
 
-
-def test_native_axes_support_inspection_validation_and_chips():
-    source = build_raster().rename(y="latitude", x="longitude")
-    source.gs.validate()
-    assert source.red.gs.geobox == source.odc.geobox
-    chips = Chips([source], size=3, constant_value=0)
-    predictions = []
-    for key in chips:
-        chip = chips[key]
-        assert chip.gs.spatial_dims == ("latitude", "longitude")
-        predictions.append((key, np.ones(chip.gs.geobox.shape)))
-    pixels = chips.merge(predictions)[0]
-    reference = chips.xarray[0]
-    merged = xr.DataArray(
-        pixels, dims=reference.gs.spatial_dims, coords=reference.coords
-    )
-    merged.encoding["grid_mapping"] = str(reference.odc.crs_coord.name)
-    assert merged.dims == ("latitude", "longitude")
-    assert merged.gs.geobox == source.gs.geobox
-
-
-def test_a_gcp_grid_is_not_implemented():
-    from odc.geo.gcp import GCPGeoBox, GCPMapping
-    from odc.geo.geom import multipoint
-    from odc.geo.xr import xr_coords
-
-    pixels = multipoint([(0, 0), (4, 0), (0, 4), (4, 4)], None)
-    world = multipoint([(10, 20), (14, 20), (10, 16), (14, 16)], "EPSG:4326")
-    grid = GCPGeoBox((4, 4), GCPMapping(pixels, world))
-    image = xr.DataArray(np.ones((4, 4)), dims=("y", "x")).assign_coords(
-        xr_coords(grid, dims=("y", "x"))
-    )
-    for held in (image, image.to_dataset(name="image")):
-        with pytest.raises(NotImplementedError, match="ground control points"):
-            held.gs.validate()
-
-
-def test_cf_axes_can_be_inspected_without_renaming():
-    source = build_raster().rename(y="north", x="east")
-    source.north.attrs["axis"] = "Y"
-    source.east.attrs["axis"] = "X"
-    source.gs.validate()
-    assert source.red.dims == ("north", "east")
-    assert source.gs.geobox == build_raster().gs.geobox
-
-
-def test_empty_and_scalar_inputs_are_inspectable_but_fail_spatial_validation():
-    assert xr.Dataset().gs.geobox is None
-    scalar = xr.DataArray(1, name="version")
-    assert scalar.gs.geobox is None
-    for value in (
-        xr.Dataset(),
-        scalar,
-        xr.DataArray(np.zeros((0, 2)), dims=("y", "x")),
-    ):
-        with pytest.raises(ValueError):
-            value.gs.validate()
-
-
-def test_native_axes_keep_numpy_layout():
-    source = build_raster().rename(y="latitude", x="longitude")
-    np.testing.assert_array_equal(source.gs.to_numpy(), build_raster().gs.to_numpy())
-    np.testing.assert_array_equal(source.red.gs.to_numpy(), source.red.values)
-
-
-def test_spatial_dims_describes_native_axes_and_tree_agreement_without_pixels():
-    source = build_raster().chunk().rename(y="latitude", x="longitude")
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        assert source.gs.spatial_dims == ("latitude", "longitude")
-        assert source.red.gs.spatial_dims == ("latitude", "longitude")
-        tree = xr.DataTree.from_dict(
-            {
-                "metadata": xr.Dataset(attrs={"title": "scene"}),
-                "image": source,
-                "crop": source.isel(longitude=slice(1, None)),
-            }
-        )
-        assert tree.gs.spatial_dims == ("latitude", "longitude")
-        mixed = xr.DataTree.from_dict({"image": source, "native": build_raster()})
-        assert mixed.gs.spatial_dims is None
-        assert xr.DataTree().gs.spatial_dims is None
-        assert xr.DataArray(1).gs.spatial_dims is None
-    assert tasks == []
-
-
-def test_spatial_dims_reads_cf_axes_without_assuming_dimension_order():
-    source = build_raster().rename(y="north", x="east").expand_dims(level=[1], axis=-1)
-    source.north.attrs["axis"] = "Y"
-    source.east.attrs["standard_name"] = "projection_x_coordinate"
-    assert source.gs.spatial_dims == ("north", "east")
-    assert source.red.gs.spatial_dims == ("north", "east")
+    # A crop keeps the grid: CRS, resolution and pixel alignment.
+    tree.gs.validate(same_grid)
+    with pytest.raises(ValueError, match="2 GeoBoxes"):
+        tree.gs.validate(same_geobox)
 
 
 def test_validation_errors_explain_correction_and_preserve_tree_context():

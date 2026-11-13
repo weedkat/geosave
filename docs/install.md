@@ -4,22 +4,26 @@ GeoSave requires Python 3.12 or newer. Run installation commands in your
 project's virtual environment; in a notebook, select that environment as the
 kernel. Start with the base package for raster and vector processing.
 
-## Choose an installation source
+## Install to follow these docs
 
-GeoSave is in Alpha. These docs follow the repository's `main` branch.
-Choose **TestPyPI** for a packaged preview or **GitHub** for the latest source.
-
-### Stable release · PyPI
-
-The release command is:
+These Alpha docs follow the repository's `main` branch. Use the source install
+for the closest match to the examples. It requires Git as well as Python:
 
 ```bash
-python -m pip install geosave
+python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosave.git@main"
 ```
 
-A public PyPI release was not available when this guide was checked on
-6 November 2026. Until one is published, use one of the preview paths below.
-See [PyPI](https://pypi.org/project/geosave/) for release availability.
+For tensors, model stages and the CPU training tutorial, use the complete ML command:
+
+```bash
+python -m pip install --upgrade "geosave[ml] @ git+https://github.com/weedkat/geosave.git@main"
+```
+
+Choose `geosave[hub]` for native model releases or `geosave[all]` for every
+optional dependency. To reproduce a project, replace `main` with its commit
+SHA and record the environment. An earlier packaged preview may have different APIs.
+
+## Other installation sources
 
 ### Test build · TestPyPI
 
@@ -41,23 +45,16 @@ For the real-image training examples, install the same wheel with extras:
 python -m pip install --upgrade "./wheels/geosave-0.3.0.dev38-py3-none-any.whl[all]"
 ```
 
-### Latest source · GitHub
+### Published releases · PyPI
 
-Requires Git in addition to Python:
-
-```bash
-python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosave.git@main"
-```
-
-For training, replace `geosave @` with `geosave[ml] @`; for all notebook
-dependencies, use `geosave[all] @`. To reproduce an experiment, replace `main`
-with the commit SHA you used. Test builds and `main` may have different APIs;
-use GitHub when following a newly updated example.
+When a release is available on [PyPI](https://pypi.org/project/geosave/), install
+it with `python -m pip install geosave`. Check its version against the example
+you are following; these docs describe source on `main`.
 
 ## Choose what you need
 
 The base package covers opening, inspecting, plotting, STAC search and
-loading, writing, model specs, and the `geosave` CLI. Add extras for the rest:
+loading, writing, and the `geosave` CLI. ModelSpec is currently disabled. Add extras for the rest:
 
 | Extra | Adds | Needed for |
 | --- | --- | --- |
@@ -76,9 +73,8 @@ Importing GeoSave never imports torch.
 
 ## Model releases
 
-Save and load native Transformers releases with the `hub` extra, which includes `ml`:
-
-Use `[hub]` on your chosen wheel or GitHub install command.
+Save and load native Transformers releases with the `hub` extra, which includes
+`ml`. Use `geosave[hub]` on the source install command or `[hub]` on the wheel.
 
 Individual pretrained encoders may download weights on first use. The
 [first raster](first-raster.md) works offline after downloading its small sample;

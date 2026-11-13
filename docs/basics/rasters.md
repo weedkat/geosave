@@ -1,262 +1,108 @@
 # Work with rasters
 
-Build a small image with two named bands:
+Open the [sample scene](../first-raster.md#open-the-sample) and select two bands:
 
 ```python
-import numpy as np
-import xarray as xr
-from odc.geo.xr import xr_coords
-
 import geosave as gs
 
-from odc.geo.geobox import GeoBox
-
-grid = GeoBox.from_bbox(
-    (500000, 5000000, 500040, 5000040),
-    crs='EPSG:32633', resolution=10,
-)
-red = np.arange(1, 17, dtype="uint16").reshape(4, 4)
-scene = (
-    xr.Dataset({"red": (("y", "x"), red), "nir": (("y", "x"), red + 4)})
-    .assign_coords(xr_coords(grid))
-    .gs.write_nodata(0)
-)
-scene
+scene = gs.open_raster("sample-scene.tif")
+image = scene[["red", "nir"]]
+list(image.data_vars), (image.sizes["y"], image.sizes["x"])
 ```
-
-Output:
 
 ```text
-<xarray.Dataset> Size: 132B
-Dimensions:      (y: 4, x: 4)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
-    nir          (y, x) uint16 32B 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+(['red', 'nir'], (337, 267))
 ```
 
-A raster stores values in a grid of pixels. Here each pixel covers 10 metres
-by 10 metres. `red` and `nir` are two measurements of those same locations.
+A raster stores measurements in pixels with geographic locations. `scene` is
+an xarray **Dataset**; each named variable holds a band. Its `x` and `y`
+coordinates locate pixel centres, and `.gs.geobox` describes its CRS, pixel
+size, shape and placement. GeoSave adds geospatial operations through `.gs`.
 
-`scene` is an xarray `Dataset`. Its data variables are the bands, its `y` and
-`x` coordinates locate pixel centres, and `spatial_ref` carries the coordinate
-reference system (CRS). GeoSave adds geospatial operations through `.gs`.
-You can still use normal xarray selection and arithmetic.
+**You need:** the base installation and the sample TIFF. These examples run
+offline after downloading it.
 
-| Object | Stores | Use when |
-| --- | --- | --- |
-| `DataArray` | One named or unnamed array with coordinates and attrs | Working with one band or a model output. |
-| `Dataset` | Named arrays on shared coordinates | Working with several bands or derived features. |
-| `DataTree` | Named Dataset groups | Keeping inputs with different variables, dates, or grids together. |
-
-The constructors attach coordinates and metadata to NumPy or lazy arrays; they
-do not resample or compute pixels. For time series and other options, see
-[raster grids](../concepts/raster-grids.md).
-
-## Select bands and pixels
+## Select one band or several
 
 ```python
-scene["red"]
+red = scene["red"]
+image = scene[["red", "nir"]]
+type(red).__name__, type(image).__name__
 ```
-
-Output:
 
 ```text
-<xarray.DataArray 'red' (y: 4, x: 4)> Size: 32B
-array([[ 1,  2,  3,  4],
-       [ 5,  6,  7,  8],
-       [ 9, 10, 11, 12],
-       [13, 14, 15, 16]], dtype=uint16)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Attributes:
-    _FillValue:  0
+('DataArray', 'Dataset')
 ```
 
-One band is an xarray `DataArray`. Select several bands with
-`scene[["red", "nir"]]` to keep a `Dataset`. Use `isel` for pixel positions:
+A **DataArray** holds one array with named axes. A Dataset holds named arrays
+on shared coordinates. Use a list when you want to keep a Dataset, even for
+one band: `scene[["red"]]`.
+
+## Select pixels
 
 ```python
-patch = scene.isel(y=slice(0, 2), x=slice(0, 2))
-patch
+patch = scene.isel(y=slice(0, 128), x=slice(0, 128))
+patch.sizes["y"], patch.sizes["x"]
 ```
-
-Output:
 
 ```text
-<xarray.Dataset> Size: 52B
-Dimensions:      (y: 2, x: 2)
-Coordinates:
-  * y            (y) float64 16B 5e+06 5e+06
-  * x            (x) float64 16B 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 8B 1 2 5 6
-    nir          (y, x) uint16 8B 5 6 9 10
+(128, 128)
 ```
 
-The patch keeps the coordinates of the selected pixels. Selecting fewer pixels
-changes the extent; it does not resample them.
+`isel` selects pixel positions and keeps their coordinates. It changes the
+covered area without resampling. For a polygon in ground coordinates, use
+[`.gs.crop(...)`](../reference/transforms.md#grid-masks-and-values).
 
-For a file you already have, start with `gs.open_raster("scene.tif")`.
-The [read and write guide](io.md) gives a complete local round trip.
-
-## Calculate an index
+## Calculate and plot an index
 
 ```python
-ndvi = gs.features.ndvi(scene, nir="nir", red="red")
-scene = scene.assign(ndvi=ndvi)
-scene
+ndvi = gs.features.ndvi(patch, nir="nir", red="red").rename("ndvi")
+ndvi.gs.plot(cmap="YlGn", clim=(-0.2, 0.9), xlabel="")
 ```
 
-Output:
+![Natural color and vegetation index from the sample scene](../assets/vegetation.jpg)
+
+NDVI compares near-infrared and red reflectance. The feature function decodes
+declared missing values and scaling before calculation. See
+[describe raster values](attrs.md) before writing your own arithmetic.
+`xlabel=""` avoids a place-name lookup, keeping this plot offline.
+
+Plotting reads pixels. Selection and the index calculation can remain lazy.
+For interactive inspection, use [the map explorer](../guides/explore.md).
+
+## Save the result
+
+```python
+path = ndvi.gs.to_cog("output/ndvi.tif", overwrite=True)
+result = gs.open_raster(path)
+list(result.data_vars), result.gs.geobox == patch.gs.geobox
+```
 
 ```text
-<xarray.Dataset> Size: 196B
-Dimensions:      (y: 4, x: 4)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
-    nir          (y, x) uint16 32B 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-    ndvi         (y, x) float32 64B 0.6667 0.5 0.4 ... 0.125 0.1176 0.1111
+(['ndvi'], True)
 ```
 
-NDVI compares near-infrared and red reflectance. This synthetic example only
-shows the calculation. The feature function returns an unnamed `DataArray`;
-assignment gives it the name `ndvi`.
-
-Indices decode nodata and scale/offset first. See
-[describe raster values](attrs.md).
-
-## Plot a band
+A Cloud Optimized GeoTIFF preserves this result's grid and variable name.
+Writing computes the result; `overwrite=True` lets you rerun the example.
+For several compatible bands in one TIFF, convert the selected Dataset to a
+band array first: `image.gs.to_array().gs.to_cog("output/image.tif")`.
+[Read and save data](io.md) explains other formats and return values.
 
 ```python
-scene.gs.plot("ndvi", cmap="YlGn", xlabel="")
+result.close()
+scene.close()
 ```
 
-![NDVI values on the synthetic raster grid](../assets/raster-ndvi.png)
+Keep file-backed sources open until all work depending on them finishes.
 
-The color scale shows the band's values. `xlabel=""` leaves out a location
-caption and avoids its reverse-geocoding lookup. Name three variables to draw a
-composite: `scene.gs.plot(rgb=("B08", "B04", "B03"))`.
+## When you need more than one raster
 
-## Explore on a map
+An xarray **DataTree** holds Datasets in a hierarchy. It can keep different
+grids or observations separate. GeoSave's STAC operations use a specific
+collection → Item → asset layout; you do not need it for this example.
+See [catalog creation and loading](../guides/catalogs-and-cuts.md) when you
+need to organize dated files.
 
-```python
-scene.gs.explore("ndvi", basemap="Imagery")
-```
-
-`explore` returns an interactive map with a layer sidebar. It needs a live
-notebook kernel or `panel serve`. See [the interactive explorer](../concepts/explorer.md)
-for layers, catalogs, performance and serving.
-
-## Put new pixels on an existing grid
-
-```python
-prediction = np.ones((4, 4), dtype="uint8")
-labels = (
-    xr.Dataset({"label": (("y", "x"), prediction)})
-    .assign_coords(xr_coords(scene.gs.geobox))
-    .gs.write_nodata(255)
-)
-labels
-```
-
-Output:
-
-```text
-<xarray.Dataset> Size: 84B
-Dimensions:      (y: 4, x: 4)
-Coordinates:
-  * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-  * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-```
-
-`assign_coords(xr_coords(scene.gs.geobox))` places the prediction on the same grid. Dimensions
-must be named and end in `y, x`, and the pixels must be as large as the grid. A
-`DataArray` takes the same step: `xr.DataArray(prediction, dims=("y", "x")).assign_coords(xr_coords(scene.gs.geobox))`.
-
-## Prepare an image tensor
-
-```python
-image = scene[["red", "nir"]].gs.to_tensor(dtype="float32")
-image.shape, image.dtype
-```
-
-Output:
-
-```text
-(torch.Size([2, 4, 4]), torch.float32)
-```
-
-The tensor has channels first, in the selected variable order. Converting
-reads the pixels and does not mask nodata or scale values; keep the raster to
-place model outputs later. Time series, mixed dtypes and masking are covered in
-[metadata and pixel values](../concepts/metadata.md).
-
-## Put rasters together
-
-Use named groups when inputs have different variables or time coordinates:
-
-```python
-sample = xr.DataTree.from_dict({
-    "/optical": xr.Dataset(attrs=scene.attrs),
-    "/optical/r10m": scene,
-    "/label": xr.Dataset(attrs=labels.attrs),
-    "/label/r10m": labels,
-})
-sample
-```
-
-Output:
-
-```text
-<xarray.DataTree>
-Group: /
-├── Group: /optical
-│   └── Group: /optical/r10m
-│           Dimensions:      (y: 4, x: 4)
-│           Coordinates:
-│             * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-│             * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-│               spatial_ref  int32 4B 32633
-│           Data variables:
-│               red          (y, x) uint16 32B 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
-│               nir          (y, x) uint16 32B 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-│               ndvi         (y, x) float32 64B 0.6667 0.5 0.4 ... 0.125 0.1176 0.1111
-└── Group: /label
-    └── Group: /label/r10m
-            Dimensions:      (y: 4, x: 4)
-            Coordinates:
-              * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-              * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-                spatial_ref  int32 4B 32633
-            Data variables:
-                label        (y, x) uint8 16B 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-```
-
-A tree is an xarray `DataTree` of collections, each holding one `Dataset` per
-grid, named after its pixel size as ESA's EOPF products name theirs (`r10m`,
-`r20m`). Native `xr.DataTree.from_dict` assigns explicit paths; parent Datasets
-preserve collection attrs. Paths describe organization, not grid identity.
-A STAC tree read from a catalog combines one collection at a time:
-`sample.gs.reproject(grid)["optical"].gs.combine_stac()` stacks its Items along
-`time` on one grid. `sample.gs.to_tensor()`
-returns a dictionary of tensors keyed by grid node path (`"optical/r10m"`).
-
-Continue with [raster grids](../concepts/raster-grids.md) for CRS, alignment,
-and resampling, or [large rasters](../guides/large-data.md) for lazy processing.
-For a task starting with files, follow [file ingestion](../guides/ingest-files.md).
-The full API is in [rasters](../reference/rasters.md) and
-[features](../reference/features.md).
+**Next:** [describe pixel values](attrs.md), [save other formats](io.md), or
+[make training chips](../quickstart.md). For constructing a raster from new
+pixels, see [raster grids](../concepts/raster-grids.md).

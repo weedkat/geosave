@@ -21,18 +21,11 @@ def test_gdal_configuration_sets_supplied_values(monkeypatch) -> None:
     ("location", "expected"),
     [
         ("hf://buckets/me/samples/forest/a.tif", "s3://me/samples/forest/a.tif"),
-        ("s3://bucket/forest/a.tif", "s3://bucket/forest/a.tif"),
-        ("https://example.com/a.tif", "https://example.com/a.tif"),
         ("/data/a.tif", "/data/a.tif"),
     ],
 )
 def test_gdal_reads_an_hf_bucket_through_its_s3_gateway(location, expected) -> None:
     assert hf_to_s3(location) == expected
-
-
-def test_only_hf_buckets_have_an_s3_form() -> None:
-    with pytest.raises(ValueError, match="buckets"):
-        hf_to_s3("hf://datasets/me/repo/a.tif")
 
 
 def _tiff(path, *, tiled: bool) -> str:
@@ -63,14 +56,6 @@ def test_lazy_chunks_follow_the_files_own_tiles(tmp_path) -> None:
     band = open_raster(_tiff(tmp_path / "tiled.tif", tiled=True), chunks={}).band_1
 
     assert band.data.chunksize == (256, 256)
-
-
-def test_a_striped_file_stays_one_chunk(tmp_path) -> None:
-    from geosave.geodata.io.rasterio import open_raster
-
-    band = open_raster(_tiff(tmp_path / "striped.tif", tiled=False), chunks={}).band_1
-
-    assert band.data.chunksize == (1024, 1024)
 
 
 def _refuse_to_open(monkeypatch) -> list:

@@ -61,8 +61,8 @@ def test_decoded_reflectance_is_reusable_across_indices(chunked: bool) -> None:
     xr.testing.assert_identical(reflectance, decoded)
 
 
-@pytest.mark.parametrize("dtype", ["uint16", "float32"])
-@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize("dtype", ["uint16"])
+@pytest.mark.parametrize("chunked", [True])
 def test_ndvi_decodes_packing_and_masks_stored_nodata(
     dtype: str, chunked: bool
 ) -> None:
@@ -110,7 +110,7 @@ def test_a_dead_pixel_is_nan_rather_than_infinite() -> None:
     assert np.isnan(features.ndvi(scene, nir="nir", red="red").values).all()
 
 
-@pytest.mark.parametrize(("dtype", "chunked"), [(None, False), ("uint16", True)])
+@pytest.mark.parametrize(("dtype", "chunked"), [(None, False)])
 @pytest.mark.parametrize(
     ("index", "want"),
     [

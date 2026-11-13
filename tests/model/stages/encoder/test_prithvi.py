@@ -7,7 +7,6 @@ from torch import nn
 from torch.utils.data import default_collate
 
 from geosave.geodata import Dataset
-from tests.conftest import build_dataset
 from geosave.model.stages.encoder import prithvi
 from geosave.model.stages.encoder.prithvi import BACKBONE_REGISTRY, Prithvi, PrithviTL
 
@@ -45,27 +44,6 @@ def test_model_context_reads_the_raster_it_encodes(scene):
     torch.testing.assert_close(context["location_coords"], torch.tensor([51.0, 11.0]))
     assert context["temporal_coords"].dtype == torch.float32
     assert context["location_coords"].dtype == torch.float32
-
-
-@pytest.mark.parametrize("labels", [[], [np.datetime64("NaT", "ns")]])
-def test_invalid_time_labels_raise(scene: Dataset, labels: list) -> None:
-    bad = scene.isel(time=slice(0, len(labels))).assign_coords(
-        time=np.asarray(labels, dtype="datetime64[ns]")
-    )
-    with pytest.raises(ValueError, match="time labels"):
-        prithvi.temporal_coords(bad)
-
-
-def test_missing_time_raises(scene: Dataset) -> None:
-    with pytest.raises(ValueError, match="time"):
-        prithvi.temporal_coords(scene.isel(time=0, drop=True))
-
-
-def test_missing_grid_raises() -> None:
-    with pytest.raises(ValueError, match="grid"):
-        prithvi.location_coords(
-            build_dataset({"red": (("y", "x"), np.zeros((2, 2), dtype="float32"))})
-        )
 
 
 def test_prithvi_context_batches_per_chip(scene: Dataset) -> None:

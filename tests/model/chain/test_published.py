@@ -53,14 +53,6 @@ def test_an_optional_parameter_is_still_wired():
     }
 
 
-def test_an_unmarked_attribute_is_not_wired_even_when_the_name_matches():
-    class Consumer(nn.Module):
-        def __init__(self, unmarked: int) -> None:
-            super().__init__()
-
-    assert published_kwargs(Consumer, {"encoder": Encoder()}) == {}
-
-
 def test_the_same_name_at_a_different_type_is_refused():
     class Consumer(nn.Module):
         def __init__(self, feature_channels: list[int]) -> None:
@@ -96,13 +88,3 @@ def test_explicit_argument_bypasses_ambiguous_publications():
         {"a": Decoder(), "b": Decoder()},
         {"feature_channels": 64},
     ) == {"feature_channels": 64}
-
-
-def test_explicit_argument_bypasses_incompatible_publication():
-    class Consumer(nn.Module):
-        def __init__(self, feature_channels: list[int]) -> None:
-            super().__init__()
-
-    assert published_kwargs(
-        Consumer, {"decoder": Decoder()}, {"feature_channels": [64, 128]}
-    ) == {"feature_channels": [64, 128]}

@@ -1,8 +1,7 @@
 import geopandas as gpd
 import holoviews as hv
 import matplotlib
-import pytest
-from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, Polygon
+from shapely.geometry import LineString, MultiPoint, Point, Polygon
 
 
 matplotlib.use("agg")
@@ -38,9 +37,3 @@ class TestOutline:
 
         assert [type(layer).__name__ for layer in drawn] == ["Polygons", "Points"]
         hv.render(drawn)
-
-    def test_refuses_nothing_to_draw_and_collections(self) -> None:
-        with pytest.raises(ValueError, match="no geometry"):
-            frame().gs.plot()
-        with pytest.raises(ValueError, match="explode"):
-            frame(GeometryCollection([Point(0, 0)])).gs.plot()

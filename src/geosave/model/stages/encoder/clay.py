@@ -6,7 +6,7 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from terratorch.models.backbones.clay_v15.model import Encoder
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 from geosave.model.chain import Published, chain_step
 
 

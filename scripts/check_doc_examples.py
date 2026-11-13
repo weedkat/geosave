@@ -16,8 +16,16 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = (
+    "index.md",
     "first-raster.md",
+    "basics/rasters.md",
+    "basics/attrs.md",
+    "basics/io.md",
+    "basics/vectors.md",
     "guides/ingest-files.md",
+    "guides/chips.md",
+    "guides/catalogs-and-cuts.md",
+    "guides/model-inputs.md",
     "quickstart.md",
     "guides/training.md",
 )
@@ -38,7 +46,12 @@ def check_result(page: str, values: dict) -> None:
     import torch
     import geosave as gs
 
-    if page == "first-raster.md":
+    if page == "index.md":
+        with gs.open_raster("output/ndvi.tif") as saved:
+            assert list(saved.data_vars) == ["ndvi"]
+            assert saved.gs.geobox == values["scene"].gs.geobox
+        values["scene"].close()
+    elif page == "first-raster.md":
         scene = values["scene"]
         ndvi = values["ndvi"]
         assert scene.red.chunks is not None
@@ -51,6 +64,54 @@ def check_result(page: str, values: dict) -> None:
             np.testing.assert_allclose(
                 saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
             )
+    elif page == "basics/rasters.md":
+        with gs.open_raster("output/ndvi.tif") as saved:
+            assert saved.ndvi.shape == (128, 128)
+            assert saved.gs.geobox == values["patch"].gs.geobox
+    elif page == "basics/attrs.md":
+        assert values["labels"].label.gs.flags.classes == {
+            0: "background",
+            1: "forest",
+            2: "water",
+        }
+        np.testing.assert_allclose(
+            values["reflectance"].values,
+            [[np.nan, 0.1], [0.2, 0.3]],
+            equal_nan=True,
+        )
+        assert values["stored"].dtype == np.uint16
+    elif page == "basics/io.md":
+        for name in ("scene.tif", "scene.zarr", "scene.nc"):
+            with gs.open_raster(values["root"] / name) as saved:
+                np.testing.assert_array_equal(saved.red.values, values["pixels"])
+                assert saved.gs.geobox == values["grid"]
+                assert saved.red.dtype == np.uint8
+                assert saved.red.gs.nodata == 0
+    elif page == "basics/vectors.md":
+        from geopandas.testing import assert_geodataframe_equal
+
+        assert_geodataframe_equal(values["reopened"], values["selected"])
+    elif page == "guides/chips.md":
+        assert values["pixels"].shape == (2, 128, 128)
+        with gs.open_raster("output/red-copy.tif") as saved:
+            with gs.open_raster("sample-scene.tif") as source:
+                assert saved.gs.geobox == source.gs.geobox
+                # Weighted merging accumulates float32 scores, so allow rounding.
+                np.testing.assert_allclose(
+                    saved.red_copy.values, source.red.values, rtol=1e-6, atol=1e-3
+                )
+    elif page == "guides/catalogs-and-cuts.md":
+        assert values["items"]["id"].tolist() == ["20250101", "20250201", "20250301"]
+        np.testing.assert_allclose(values["means"].values, [1, 1])
+        assert values["observations"].gs.geobox == values["grid"]
+    elif page == "guides/model-inputs.md":
+        image = values["inputs"]["image"]
+        assert image.shape == (2, 128, 128)
+        assert image.dtype == torch.float32
+        with gs.open_raster("sample-scene.tif") as source:
+            selected = source[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
+            expected = selected.gs.mask_and_scale().gs.to_numpy(dtype="float32")
+        np.testing.assert_allclose(image.numpy(), expected)
     elif page == "guides/ingest-files.md":
         with gs.open_raster("prepared/ndvi.tif") as saved:
             assert saved.gs.geobox == values["patch"].gs.geobox

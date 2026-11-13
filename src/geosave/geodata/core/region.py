@@ -56,6 +56,18 @@ class GeoRegion:
         longitude, latitude = self.extent.centroid.to_crs("EPSG:4326").coords[0]
         return float(longitude), float(latitude)
 
+    @property
+    def mgrs(self) -> str:
+        """Return the 100 km MGRS square holding the centroid, as `33UUU`.
+
+        Sentinel-2 names its tiles by these squares, but its tiles overlap, so
+        a product's tile need not be the square of its centroid.
+        """
+        import mgrs
+
+        longitude, latitude = self.lonlat
+        return mgrs.MGRS().toMGRS(latitude, longitude, MGRSPrecision=0)
+
     def locate(self) -> Place | None:
         """Reverse geocode the centroid through Nominatim.
 
@@ -93,6 +105,7 @@ class GeoRegion:
         Args:
             template: Text containing named replacement fields:
                 `lon` and `lat` are centroid coordinates in WGS84 degrees;
+                `mgrs` is the 100 km MGRS square of the centroid;
                 `epsg` is the integer CRS code, or None if unavailable;
                 `width` and `height` are geometry bounds spans in the geometry's
                 CRS units, not pixel counts. `start` and `end` are inclusive
@@ -123,6 +136,7 @@ class GeoRegion:
         fields: dict[str, object] = {
             "lon": longitude,
             "lat": latitude,
+            "mgrs": self.mgrs,
             "epsg": self.crs.epsg,
             "width": bounds.span_x,
             "height": bounds.span_y,

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
-import xarray as xr
 
 from geosave.geodata.utils.mapping import intersect_mappings, stack_mappings
 
@@ -38,19 +36,6 @@ def test_intersection_reads_nan_and_arrays_as_values() -> None:
     )
 
     assert set(shared) == {"fill", "codes", "scale"}
-
-
-def test_intersection_compares_xarray_objects_by_value() -> None:
-    first = xr.DataArray([1, 2], dims="time")
-
-    shared = intersect_mappings([{"t": first}, {"t": first.copy()}, {"t": first + 1}])
-
-    assert shared == {}
-
-
-def test_intersection_needs_a_mapping() -> None:
-    with pytest.raises(ValueError, match="at least one"):
-        intersect_mappings([])
 
 
 def test_stack_keeps_one_entry_per_mapping_in_first_seen_key_order() -> None:

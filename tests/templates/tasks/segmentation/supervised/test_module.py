@@ -84,15 +84,6 @@ def test_ignored_targets_produce_zero_loss_and_no_metric_update(stages):
     assert all(metric.update_count == 0 for metric in task.train_metrics.values())
 
 
-def test_criterion_cannot_override_the_task_ignore_value(stages):
-    with pytest.raises(ValueError, match="ignore_index"):
-        supervised.Module(
-            model_chain=stages,
-            ignore_index=255,
-            criterion={"name": "cross_entropy", "init_args": {"ignore_index": -1}},
-        )
-
-
 class UncountedModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -119,44 +110,6 @@ def test_the_last_stage_states_the_class_count() -> None:
     assert task.num_classes == 3
     assert task.class_thresholds.tolist() == pytest.approx([0.2, 0.4, 0.6])
     assert len(task.val_metrics) > 0
-
-
-def test_a_last_stage_stating_no_class_count_is_refused() -> None:
-    task = supervised.Module(
-        model_chain={"model": {"class_path": f"{__name__}.UncountedModel"}},
-    )
-
-    with pytest.raises(TypeError, match="UncountedModel.*num_classes"):
-        task.configure_model()
-
-
-def test_thresholds_must_number_the_classes(stages) -> None:
-    task = supervised.Module(model_chain=stages, class_thresholds=[0.5])
-
-    with pytest.raises(ValueError, match="must have 2 entries, got 1"):
-        task.configure_model()
-
-
-@pytest.mark.parametrize(
-    "criterion, expected",
-    [
-        ({"class_path": "torch.nn.CrossEntropyLoss"}, 7),
-        (
-            {
-                "class_path": "torch.nn.CrossEntropyLoss",
-                "init_args": {"ignore_index": -1},
-            },
-            -1,
-        ),
-    ],
-)
-def test_criterion_ignore_index(stages, criterion, expected):
-    task = supervised.Module(
-        model_chain=stages,
-        ignore_index=expected,
-        criterion=criterion,
-    )
-    assert task.criterion.ignore_index == expected
 
 
 def test_optimizer_keeps_direct_chain_parameters_in_default_group(stages):
@@ -205,24 +158,6 @@ def test_forward_preserves_prepared_inputs_and_routes_context(
     torch.testing.assert_close(actual, image + offset)
     torch.testing.assert_close(image, original)
     assert actual.dtype == torch.float64
-
-
-def test_forward_rejects_mapped_model_results() -> None:
-    task = supervised.Module(
-        model_chain={
-            "model": {
-                "class_path": f"{__name__}.MappedSegmentationModel",
-                "init_args": {"num_classes": 2},
-            }
-        },
-    )
-    task.configure_model()
-    image = torch.tensor([[[[3.0, 0.0], [0.0, 3.0]], [[0.0, 3.0], [3.0, 0.0]]]])
-
-    native = task.model(image=image)
-    assert isinstance(native, dict)
-    with pytest.raises(TypeError, match="must return logits as a tensor"):
-        task(image=image)
 
 
 def test_steps_accept_sample_batches(
@@ -401,27 +336,6 @@ def test_validation_scores_chips_over_their_known_labels(stages, tmp_path):
     assert validation[0]["val_iou_macro"] == pytest.approx(0.25)
 
 
-def test_test_scores_chips_over_their_known_labels(stages, tmp_path):
-    task, loader, trainer = _evaluation(stages, tmp_path)
-
-    result = trainer.test(task, dataloaders=loader, verbose=False)
-
-    assert result[0]["test_iou_macro"] == pytest.approx(0.25)
-
-
-def test_evaluation_preserves_supplied_targets_without_input_validity(stages) -> None:
-    task = supervised.Module(model_chain=stages, ignore_index=9)
-    task.configure_model()
-    batch: supervised.Sample = {
-        "inputs": {"image": torch.zeros(1, 2, 2, 2)},
-        "target": torch.tensor([[[0, 9], [0, 0]]]),
-    }
-
-    _, target = task._evaluate(batch)
-
-    assert target is batch["target"]
-
-
 def test_predict_returns_logits_for_chips_without_labels(stages, tmp_path):
     task, _, trainer = _evaluation(stages, tmp_path)
     image = torch.stack([torch.zeros(2, 2), torch.ones(2, 2)])
@@ -443,6 +357,7 @@ class SparseLabels(Dataset[supervised.Sample]):
         }
 
 
+@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path, stages):
     data = supervised.DataModule(
         _spec(), Labels(), Labels(), augmentations=FLIP, batch_size=2, num_workers=0

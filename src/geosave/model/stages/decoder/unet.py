@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 from geosave.model.chain import Published, chain_step
 
 

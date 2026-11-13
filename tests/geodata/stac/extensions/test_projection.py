@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pystac
-import pytest
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata.stac.extensions import projection
@@ -20,11 +19,6 @@ def test_a_grid_without_an_epsg_code_states_its_wkt() -> None:
 
     assert "proj:code" not in stated
     assert "Sinusoidal" in stated["proj:wkt2"]
-
-
-def test_a_missing_grid_refuses() -> None:
-    with pytest.raises(ValueError, match="no locatable grid"):
-        projection.build_fields(None)
 
 
 def test_a_grid_round_trips_through_an_asset(scene) -> None:

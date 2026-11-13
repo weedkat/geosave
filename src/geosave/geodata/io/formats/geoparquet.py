@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import geopandas as gpd
@@ -35,8 +34,6 @@ class GeoParquetOpenOptions(TypedDict, total=False):
             retained. None reads all columns; [] reads only geometry.
         bbox: Feature filter `(minx, miny, maxx, maxy)` in the stored CRS;
             requires covering-bbox metadata written with `write_covering_bbox`.
-        storage_options: Credentials and connection options merged into the
-            source UPath and used by its filesystem.
         to_pandas_kwargs: Options for converting non-geometry Arrow columns to
             pandas, such as dtype-conversion settings.
         parquet_options: Extra `pyarrow.parquet.read_table` keywords. Do not
@@ -45,34 +42,39 @@ class GeoParquetOpenOptions(TypedDict, total=False):
 
     columns: Sequence[str] | None
     bbox: tuple[float, float, float, float] | None
-    storage_options: StorageOptions | None
     to_pandas_kwargs: Mapping[str, object] | None
     parquet_options: dict[str, object]
 
 
 def open_geoparquet(
     source: Location,
+    *,
+    storage_options: StorageOptions | None = None,
     **open_options: Unpack[GeoParquetOpenOptions],
 ) -> GeoDataFrame:
     """Open one local or fsspec-backed GeoParquet file.
 
     Args:
         source: Local path, fsspec URL, or UPath to GeoParquet.
+        storage_options: Options for the filesystem a URL names.
         **open_options: Supported GeoPandas and Parquet read options.
 
     Returns:
         Native GeoDataFrame with its stable `GeoCatalog` accessor. Item
-        tables restore absolute asset hrefs, and mirror the file's
-        `stac-geoparquet` footer metadata in `attrs`.
+        tables keep asset hrefs relative to the file, as stored, and mirror
+        the file's `stac-geoparquet` footer metadata in `attrs`, with the
+        file's location as `attrs["source"]`.
 
     Raises:
         TypeError: An option is unsupported, or repeated in `parquet_options`.
     """
-    from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
+    from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS, SOURCE_KEY
 
-    storage_options = open_options.pop("storage_options", None)
-    parquet_options = dict(open_options.pop("parquet_options", {}))
-    parquet = storage.location(source, storage_options)
+    # PyArrow accepts engine-specific keywords that GeoPandas cannot type.
+    parquet_options = cast(
+        "dict[str, Any]", dict(open_options.pop("parquet_options", {}))
+    )
+    parquet = storage.create_upath(source, storage_options)
     with parquet.open("rb") as handle:
         footer = pq.read_metadata(handle)
         metadata = footer.metadata or {}
@@ -103,10 +105,9 @@ def open_geoparquet(
     )
     if b"stac-geoparquet" in metadata:
         frame.attrs[FOOTER_KEY] = orjson.loads(metadata[b"stac-geoparquet"])
-        if all(key in frame for key in ITEM_COLUMNS):
-            from geosave.geodata.io.formats import stac_geoparquet
-
-            frame = stac_geoparquet.resolve_asset_hrefs(frame, parquet)
+        # Asset hrefs are stored relative to the file; Items resolve them
+        # against it.
+        frame.attrs[SOURCE_KEY] = str(parquet.absolute())
     return frame
 
 
@@ -131,8 +132,6 @@ class GeoParquetWriteOptions(typing_extensions.TypedDict, total=False, closed=Tr
         schema_version: GeoParquet specification version to write. None delegates
             to the selected encoder; encoding features must be supported by
             that version. Catalogs support 1.0.0 and 1.1.0.
-        storage_options: Credentials and connection options for the destination
-            filesystem, including uploads after local file creation.
         parquet_options: Extra `pyarrow.parquet.write_table` keywords. Do not
             repeat options already supplied directly. Disabling store_schema
             is refused because GeoParquet requires its geometry metadata.
@@ -143,7 +142,6 @@ class GeoParquetWriteOptions(typing_extensions.TypedDict, total=False, closed=Tr
     geometry_encoding: Literal["WKB", "geoarrow"]
     write_covering_bbox: bool
     schema_version: Literal["0.1.0", "0.4.0", "1.0.0-beta.1", "1.0.0", "1.1.0"] | None
-    storage_options: StorageOptions | None
     parquet_options: dict[str, object]
 
 
@@ -153,6 +151,7 @@ def write_geoparquet(
     *,
     collections: Iterable[pystac.Collection] | None = None,
     overwrite: bool = False,
+    storage_options: StorageOptions | None = None,
     **write_options: Unpack[GeoParquetWriteOptions],
 ) -> UPath:
     """Write one GeoDataFrame to local or fsspec-backed GeoParquet.
@@ -163,11 +162,11 @@ def write_geoparquet(
             Ordinary features take none.
         path: Output path or URL ending in `.parquet` or `.geoparquet`.
         overwrite: Replace an existing file when true.
+        storage_options: Options for the filesystem a URL names.
         **write_options: Supported GeoPandas and Parquet write options.
 
     Returns:
-        Local writes return a PosixUPath; URL writes return a UPath carrying
-        its storage options.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -177,16 +176,15 @@ def write_geoparquet(
     """
     from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
-    storage_options = write_options.pop("storage_options", None)
+    destination = storage.create_upath(path, storage_options)
     if FOOTER_KEY in gdf.attrs:
         from geosave.geodata.io.formats import stac_geoparquet
 
         return stac_geoparquet.write_stac_geoparquet(
             gdf,
-            path,
+            destination,
             collections=collections,
             overwrite=overwrite,
-            storage_options=storage_options,
             **cast("dict[str, Any]", write_options),
         )
     if all(key in gdf for key in ITEM_COLUMNS):
@@ -205,13 +203,12 @@ def write_geoparquet(
             "GeoParquet requires store_schema=True to retain geometry metadata"
         )
 
-    def save(target: Path) -> None:
-        gdf.to_parquet(target, **write_options, **parquet_options)
-
-    return storage.write_file(
-        path,
-        save,
-        suffixes=FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
+    storage.check_destination(destination, FILE_SUFFIXES, overwrite=overwrite)
+    storage.create_parent(destination)
+    gdf.to_parquet(
+        destination.path,
+        filesystem=destination.fs,
+        **write_options,
+        **parquet_options,
     )
+    return destination

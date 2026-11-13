@@ -175,7 +175,7 @@ coverage; it does not claim the behavior belongs to a removed source module.
 | `geodata/stac/test_load_metadata.py` | 18 | Rehome 17, Remove 1 |
 | `geodata/stac/test_publish.py` | 15 | Keep 12, Remove 3 |
 | `geodata/stac/test_raster.py` | 5 | Keep 5 |
-| `geodata/test_conventions.py` | 6 | Keep 6 |
+| `geodata/core/test_conventions.py` | 6 | Keep 6 |
 | `geodata/utils/test_color.py` | 2 | Keep 2 |
 | `geodata/utils/test_geocode.py` | 2 | Keep 2 |
 | `geodata/utils/test_mapping.py` | 5 | Keep 5 |
@@ -215,7 +215,7 @@ coverage; it does not claim the behavior belongs to a removed source module.
 | `model/stages/monolith/test_ibm_granite_biomass.py` | 1 | Keep 1 |
 | `model/test_ingestion.py` | 4 | Keep 4 |
 | `model/test_processing.py` | 9 | Keep 9 |
-| `model/test_registry.py` | 16 | Keep 16 |
+| `model/stages/test_registry.py` | 16 | Keep 16 |
 | `templates/tasks/classification/supervised/test_data.py` | 1 | Keep 1 |
 | `templates/tasks/classification/supervised/test_module.py` | 3 | Keep 3 |
 | `templates/tasks/pretraining/mim/test_data.py` | 2 | Keep 2 |
@@ -278,7 +278,7 @@ was left intact.
 
 ## Second pass: fixture behavior and coverage map
 
-The maintained [coverage map](../../tests/README.md) now describes suite hierarchy,
+The maintained [coverage map](https://github.com/weedkat/geosave/blob/main/tests/README.md) now describes suite hierarchy,
 caller workflows and protected outcomes without listing individual tests. The
 inventory above remains a record of the first pass, not a live coverage index.
 
@@ -324,3 +324,29 @@ Second-pass verification:
 The sandboxed focused run stalled during storage checks and was interrupted;
 rerunning the same scope outside the sandbox completed with the result above.
 The full suite, slow checks and external-service integration were not rerun.
+
+## Slimming pass — 2026-11-12
+
+The suite went from **1,541 to 896 collected tests** (22.3k to 17.1k lines). Each
+retained test emulates a caller workflow. The pass removed tests that only pinned
+an edge case:
+
+| Removed | Example |
+| --- | --- |
+| Tests of a paused stub | `to_item`/`to_catalog` refusing with "being rebuilt" |
+| Dependency behaviour retested | xarray attr policies, pandas resample bins, odc-stac property loading, rustac session config |
+| Input-shape matrices | every dtype, every padding mode, every CRS × kernel × laziness |
+| Unlikely-misuse rejections | empty vectors, bare shapely geometry, complex dtypes, malformed option tuples |
+| Exotic spellings | `north`/`east` CF axes, GCP grids, sub-microsecond instants, timezone offsets in ranges |
+| Duplicates across owners | remote upload tests repeated per format, deferred-write tests repeated per store |
+
+Rejections that guard a real constraint stay: one fill value per GeoTIFF, class
+codes refusing blending kernels, one collection per dataset load, pixel-aligned
+`crop_to_grid`, no partial batch writes and no catalog metadata loss.
+
+## Model workflow redesign
+
+ModelSpec execution and its ingestion/processing helpers are retired. Recipe-based
+template data/Trainer tests are explicitly skipped pending redesign; stage, chain
+and weight-release tests remain active. STAC loaders use independently constructed
+fixture Items while publication is paused.

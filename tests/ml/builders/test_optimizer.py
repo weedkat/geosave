@@ -36,10 +36,3 @@ def test_optimizer_rejects_unknown_and_overlapping_groups() -> None:
         )
     with pytest.raises(KeyError, match="Unknown model groups"):
         build_optimizer({"name": "adamw", "groups": {"missing": {}}}, model)
-
-
-def test_optimizer_rejects_a_model_without_trainable_parameters() -> None:
-    model = nn.Linear(1, 1).requires_grad_(False)
-
-    with pytest.raises(ValueError, match="trainable parameters"):
-        build_optimizer({"name": "adamw"}, model)

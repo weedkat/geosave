@@ -35,13 +35,8 @@ def test_local_checkpoint_needs_no_published_model_source(tmp_path, monkeypatch)
         torch.testing.assert_close(loaded.state_dict()[name], value)
 
 
-def test_unpublished_variant_without_local_checkpoint_is_rejected():
-    with pytest.raises(ValueError, match="no published checkpoint"):
-        clay.build_clay("clay_v15_tiny", pretrained=True)
-
-
 def test_the_head_resizes_logits_to_the_chip_the_encoder_reads():
-    from geosave.model.registry import build_model
+    from geosave.model.stages.registry import build_model
 
     chain = build_model(
         {

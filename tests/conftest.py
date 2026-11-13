@@ -57,10 +57,10 @@ def write_cogs(raster, root, format_paths, **options):
     variable of a date shares one file.
     """
     from geosave.geodata.io import storage
-    from geosave.geodata.io.formats.geotiff import write_cog, write_files
+    from geosave.geodata.io.formats.geotiff import write_files
     from geosave.geodata.io.paths import read_scalar_coords
 
-    folder = storage.location(root, options.pop("storage_options", None))
+    folder = storage.create_upath(root, options.pop("storage_options", None))
     observations = [raster]
     if "time" in raster.dims:
         observations = []
@@ -75,36 +75,26 @@ def write_cogs(raster, root, format_paths, **options):
         for name in observation.data_vars:
             path = format_paths.format_map({**labels, "variable": name})
             files[folder / path] = observation[[name]]
-    return write_files(files, write_cog, **options)
+    return write_files(files, **options)
 
 
 def combine_item(tree):
     """Combine the only Item of a tree loaded from one STAC Item."""
+    import xarray as xr
+
     (path,) = {leaf.parent.path for leaf in tree.leaves}
-    return tree[path].gs.combine_stac()
+    assets = []
+    for leaf in tree[path].leaves:
+        assets.append(leaf.to_dataset(inherit="all_coords"))
+    return xr.merge(assets, join="exact")
 
 
 def build_tree(rasters):
-    """Merge rasters keyed by collection, or by `collection/res` path, into one tree."""
-    from geosave.geodata.io.paths import format_resolution
-
+    """Build a STAC catalog tree: one collection per raster, an Item per time label."""
     nodes = {}
-    for key, raster in rasters.items():
-        dataset = (
-            raster.to_dataset(name=raster.name or key.rsplit("/", 1)[-1])
-            if isinstance(raster, xr.DataArray)
-            else raster
-        )
-        if "/" in key:
-            collection = key.split("/", 1)[0]
-            if collection not in nodes:
-                nodes[collection] = xr.Dataset()
-            nodes[key] = dataset
-        else:
-            nodes[key] = xr.Dataset(attrs=dict(dataset.attrs))
-            node = dataset.copy()
-            node.attrs = {}
-            nodes[f"{key}/{format_resolution(dataset.gs.geobox)}"] = node
+    for name, raster in rasters.items():
+        (collection,) = raster.gs.expand().children.values()
+        nodes[name] = collection
     return xr.DataTree.from_dict(nodes)
 
 

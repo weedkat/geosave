@@ -3,11 +3,10 @@
 xarray's attrs stay plain mappings, kept through operations by xarray. A
 group validates the keys GeoSave decides on or translates at a format
 boundary; `gs` reads each one as a property and writes it with `write_*`.
-Joins pass `combine_attrs=attrs.combine_attrs`.
+Joins use xarray's own `combine_attrs` policies.
 """
 
 from .groups.base import AttrsGroup, Decoded, decode
-from .combine import combine_attrs
 from .stamp import AttrsObject, clear_attrs, stamp_attrs
 from .groups.acdd import ACDD, ACDDExtent
 from .groups.cf import CFDescription, CFFlags, CFPacking
@@ -28,7 +27,6 @@ __all__ = [
     "EOBand",
     "StacCollection",
     "clear_attrs",
-    "combine_attrs",
     "decode",
     "stamp_attrs",
 ]

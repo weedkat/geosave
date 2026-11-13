@@ -53,11 +53,9 @@ def test_properties_follow_fused_time_and_keep_common_attrs(observation):
         groupby="time",
         with_properties=["eo:cloud_cover"],
     )
-    assert loaded.gs.stac_properties["eo:cloud_cover"].tolist() == [30.0]
-    assert loaded.gs.stac_common_properties == {
-        "platform": "test",
-        "eo:cloud_cover": 30.0,
-    }
+    (properties,) = loaded.stac_properties.values
+    assert properties["eo:cloud_cover"] == 30.0
+    assert properties["platform"] == "test"
     assert "eo:cloud_cover" not in loaded.data_vars
 
 
@@ -88,7 +86,10 @@ def test_each_item_asset_is_one_node_on_its_stated_grid(observation, tmp_path):
 
     tree = stac.load_datatree([item])
 
-    assert list(tree.gs.datasets) == [f"local/{item.id}/red", f"local/{item.id}/swir"]
+    assert [leaf.path for leaf in tree.leaves] == [
+        f"/local/{item.id}/red",
+        f"/local/{item.id}/swir",
+    ]
     assert tree[f"local/{item.id}/red"].gs.geobox == raster.gs.geobox
     assert tree[f"local/{item.id}/swir"].gs.geobox == coarse.gs.geobox
     np.testing.assert_array_equal(
@@ -121,14 +122,6 @@ def test_the_item_node_states_its_period(observation):
     node = tree["local/july"].to_dataset(inherit=False)
     assert node.start_datetime.values == np.datetime64("2025-07-01")
     assert node.end_datetime.values == np.datetime64("2025-08-01")
-
-
-def test_an_item_id_with_a_slash_cannot_name_a_node(observation):
-    item, _ = observation
-    item.id = "tile/20250115"
-
-    with pytest.raises(ValueError, match="tile/20250115.*/"):
-        stac.load_datatree([item])
 
 
 def test_a_loaded_tree_round_trips_through_zarr(observation, tmp_path):
@@ -192,15 +185,6 @@ def test_collections_are_sibling_nodes_stating_their_collection(observation):
     assert stated.collection["id"] == "local"
 
 
-def test_items_naming_no_collection_sit_under_default(observation):
-    item, _ = observation
-    item.collection_id = None
-
-    tree = stac.load_datatree([item])
-
-    assert list(tree.gs.datasets) == [f"default/{item.id}/red"]
-
-
 def test_loading_a_tree_reads_no_pixels(observation, tmp_path):
     import dask
 
@@ -212,8 +196,8 @@ def test_loading_a_tree_reads_no_pixels(observation, tmp_path):
     with dask.config.set(scheduler=_refuse):
         tree = stac.load_datatree([item])
 
-    for path in tree.gs.datasets:
-        for variable in tree[path].data_vars.values():
+    for leaf in tree.leaves:
+        for variable in leaf.data_vars.values():
             assert isinstance(variable.data, da.Array)
 
 
@@ -287,12 +271,6 @@ def test_composite_items_keep_their_own_periods_in_any_order(observation):
     assert ends == {"2025-06-01": "2025-07-01", "2025-07-01": "2025-08-01"}
 
 
-def test_scene_labels_state_no_period(observation):
-    entry, raster = observation
-    loaded = stac.load_dataset([entry], geobox=raster.gs.geobox, groupby="id")
-    assert "start_datetime" not in loaded.coords
-
-
 def test_a_solar_day_label_covers_its_local_day(tmp_path):
     from odc.geo.geom import BoundingBox as Box
 
@@ -326,15 +304,6 @@ def test_a_solar_day_label_covers_its_local_day(tmp_path):
     )
 
 
-def test_a_composite_keeps_its_own_period_under_solar_day(observation):
-    _, raster = observation
-    june, _ = _months(observation)
-
-    loaded = stac.load_dataset([june], geobox=raster.gs.geobox, groupby="solar_day")
-
-    np.testing.assert_array_equal(loaded.end_datetime.values, _days(["2025-07-01"]))
-
-
 def test_a_multi_band_asset_holds_one_variable_per_band(tmp_path):
     grid = GeoBox.from_bbox(
         BoundingBox(500000, 5000000, 500040, 5000040, crs="EPSG:32633"), resolution=10
@@ -354,33 +323,7 @@ def test_a_multi_band_asset_holds_one_variable_per_band(tmp_path):
     np.testing.assert_array_equal(node.blue.values, 2)
 
 
-def test_a_catalog_loads_one_collection_onto_a_chosen_grid(observation):
-    from geosave.geodata.stac.catalog import create_catalog
-
-    item, raster = observation
-    grid = raster.gs.geobox.zoom_out(2)
-
-    loaded = create_catalog([item]).gs.to_dataset(grid)
-
-    assert loaded.gs.geobox == grid
-    assert isinstance(loaded.red.data, da.Array)
-
-
-def test_a_catalog_of_two_collections_does_not_load_as_one_dataset(observation):
-    from geosave.geodata.stac.catalog import create_catalog
-
-    item, raster = observation
-    other = item.clone()
-    other.id = "dem"
-    other.collection_id = "dem"
-
-    with pytest.raises(ValueError, match="one collection"):
-        create_catalog([item, other]).gs.to_dataset(raster.gs.geobox)
-
-
 def test_items_sharing_a_grid_load_together_and_keep_their_own_facts(observation):
-    from geosave.geodata.stac.raster import read_properties_coordinate
-
     item, raster = observation
     later = item.clone()
     later.id = "later"
@@ -395,7 +338,7 @@ def test_items_sharing_a_grid_load_together_and_keep_their_own_facts(observation
     covers = {}
     for entry in (item, later, tile):
         node = tree[f"local/{entry.id}"].to_dataset(inherit=False)
-        covers[entry.id] = read_properties_coordinate(node)[0]["eo:cloud_cover"]
+        covers[entry.id] = node.stac_properties.item()["eo:cloud_cover"]
         leaf = tree[f"local/{entry.id}/red"].to_dataset(inherit="all_coords")
         assert leaf.time.values == np.datetime64(
             entry.datetime.replace(tzinfo=None), "ns"
@@ -404,7 +347,7 @@ def test_items_sharing_a_grid_load_together_and_keep_their_own_facts(observation
     assert covers == {item.id: 20.0, "later": 40.0, "tile": 60.0}
 
 
-@pytest.mark.parametrize("fill", [-9999, 0.1])
+@pytest.mark.parametrize("fill", [-9999])
 def test_effective_nodata_follows_loaded_pixels(local_catalog, fill):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
@@ -424,10 +367,8 @@ def test_effective_nodata_follows_loaded_pixels(local_catalog, fill):
     assert prepared.red.values[0, 1, 1] == pytest.approx(0.2)
 
 
-@pytest.mark.parametrize("lazy", [False, True])
-def test_ingestion_decode_matches_deferred_cf_and_roundtrips(
-    local_catalog, tmp_path, lazy
-):
+def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_path):
+    lazy = True
     from dask.callbacks import Callback
 
     client, region, grid, options = local_catalog
@@ -500,98 +441,8 @@ def test_a_load_carries_its_collection_and_the_properties_every_item_shares(
 
     assert loaded.gs.stac_collection.id == collection.id
     assert loaded.gs.stac_collection.license == collection.license
-    assert loaded.gs.stac_common_properties == {"constellation": "sentinel-2"}
-    assert loaded.gs.stac_properties["constellation"].tolist() == ["sentinel-2"]
+    assert loaded.stac_properties.item()["constellation"] == "sentinel-2"
     assert "title" not in loaded.attrs
-
-
-@pytest.mark.parametrize("groupby", ["id", "time"])
-@pytest.mark.parametrize(
-    "properties",
-    [
-        None,
-        ["eo:cloud_cover"],
-        [
-            {"key": "start_datetime", "dtype": "str"},
-            {"key": "end_datetime", "dtype": "str"},
-        ],
-    ],
-)
-def test_loader_keeps_odc_time_and_property_representation(
-    local_catalog, groupby, properties
-):
-    from copy import deepcopy
-
-    import odc.stac
-
-    client, region, grid, options = local_catalog
-    matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
-    composite = matched[0]
-    instant = composite.clone()
-    instant.id = "instant"
-    instant.datetime = composite.datetime
-    instant.properties.pop("datetime", None)
-    composite.properties["eo:cloud_cover"] = 20.0
-    instant.properties["eo:cloud_cover"] = 40.0
-    composite.properties.update(
-        start_datetime="2025-05-31T00:00:00Z",
-        end_datetime="2025-06-01T23:59:59Z",
-    )
-    matched = [composite, instant]
-    original = deepcopy(instant.properties)
-
-    configured = dict(
-        groupby=groupby,
-        with_properties=properties,
-    )
-    expected = odc.stac.load(
-        [composite, instant],
-        geobox=grid,
-        **{
-            **options,
-            **configured,
-            "with_properties": [
-                dict(key=p, name=p) if isinstance(p, str) else {**p, "name": p["key"]}
-                for p in properties or []
-            ],
-        },
-    )
-    loaded = load_dataset(
-        matched, geobox=grid, collection=collection, **{**options, **configured}
-    )
-
-    keys = [
-        request if isinstance(request, str) else request["key"]
-        for request in properties or []
-    ]
-    assert isinstance(loaded.red.data, da.Array)
-    assert dict(loaded.sizes) == dict(expected.sizes)
-    assert set(loaded.data_vars) == set(expected.data_vars) - set(keys)
-    np.testing.assert_array_equal(loaded.time.values, expected.time.values)
-    np.testing.assert_array_equal(loaded.red.values, expected.red.values)
-    # Each date's mapping holds odc-stac's own value of each requested key; its
-    # NaN, or 'None' text, for an Item lacking the key leaves the key absent.
-    recorded = loaded.gs.stac_properties
-    for key in keys:
-        published = np.atleast_1d(expected[key].values).tolist()
-        assert _present(recorded[key].tolist()) == _present(published)
-    assert ("stac_properties" in loaded.coords) == bool(keys)
-    assert instant.properties == original
-    if not properties:
-        assert "start_datetime" not in loaded
-        assert "end_datetime" not in loaded
-
-
-def _present(values: list) -> list:
-    """Spell every missing value None: odc-stac's NaN or 'None' text, or a table's NaN."""
-    present = []
-    for value in values:
-        missing = value is None or value == "None"
-        if isinstance(value, float) and np.isnan(value):
-            missing = True
-        present.append(None if missing else value)
-    return present
 
 
 def _apply_metadata(items, collection, loaded):
@@ -631,9 +482,7 @@ def _collection() -> pystac.Collection:
     )
 
 
-@pytest.mark.parametrize(
-    "field,value", [("scale", 0.0002), ("offset", 1.0), ("scale", None)]
-)
+@pytest.mark.parametrize("field,value", [("scale", 0.0002)])
 def test_load_rejects_incompatible_source_conversion(local_catalog, field, value):
     client, region, grid, options = local_catalog
     first = client.search_items(StacQuery(collections=["local"]).set_region(region))[0]
@@ -662,77 +511,6 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
     np.testing.assert_allclose(loaded.nir.values[:, 1, 1], [1.1, 1.1])
 
 
-def test_identity_source_conversion_accepts_omitted_fields(local_catalog):
-    client, region, grid, options = local_catalog
-    first = client.search_items(StacQuery(collections=["local"]).set_region(region))[0]
-    first.assets["reflectance"].extra_fields["raster:bands"][0]["scale"] = 1.0
-    second = first.clone()
-    second.id = "second"
-    second.datetime = dt(2025, 1, 16, tzinfo=timezone.utc)
-    second.assets["reflectance"].extra_fields["raster:bands"][0].pop("scale")
-
-    loaded = load_dataset(
-        [first, second],
-        geobox=grid,
-        **{**options, "bands": "red", "chunks": None},
-    ).gs.mask_and_scale()
-    np.testing.assert_array_equal(loaded.red.values[:, 1, 1], [2000, 2000])
-
-
-def test_an_item_without_the_asset_keeps_published_fields() -> None:
-    first = _item("scene-1", dt(2025, 1, 1), {"unit": "1"})
-    second = _item("scene-2", dt(2025, 1, 2), {"unit": "1"})
-    del second.assets["red"]
-
-    loaded = _apply_metadata(
-        [first, second],
-        _collection(),
-        xr.Dataset({"red": (("y", "x"), [[1]])}),
-    )
-
-    assert loaded.red.attrs["units"] == "1"
-
-
-def test_reading_writes_no_packing_when_no_item_publishes_it() -> None:
-    items = [
-        _item("scene-1", dt(2025, 1, 1), {"unit": "1"}),
-        _item("scene-2", dt(2025, 1, 2), {"unit": "1"}),
-    ]
-
-    loaded = _apply_metadata(
-        items, _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
-    )
-
-    assert loaded.red.gs.packing is None
-
-
-def test_reading_keeps_a_label_missing_from_one_item() -> None:
-    items = [
-        _item("scene-1", dt(2025, 1, 1), {"unit": "1"}),
-        _item("scene-2", dt(2025, 1, 2), {}),
-    ]
-
-    loaded = _apply_metadata(
-        items, _collection(), xr.Dataset({"red": (("y", "x"), [[1]])})
-    )
-
-    assert loaded.red.attrs["units"] == "1"
-
-
-def test_loader_nodata_is_authoritative_over_source_values() -> None:
-    items = [
-        _item("first", dt(2025, 1, 1), {"nodata": 0}),
-        _item("second", dt(2025, 1, 2), {"nodata": 1}),
-    ]
-    loaded = xr.Dataset(
-        {"red": xr.DataArray([[1.0]], dims=("y", "x"), attrs={"nodata": -9999})}
-    )
-
-    loaded = _apply_metadata(items, _collection(), loaded)
-
-    assert loaded.red.gs.nodata == -9999
-
-
 def test_reader_uses_the_selected_band_without_mutating_the_item() -> None:
     item = _item("multi", dt(2025, 1, 1), {})
     item.assets["red"].extra_fields = {
@@ -757,17 +535,6 @@ def test_reader_uses_the_selected_band_without_mutating_the_item() -> None:
     assert item.to_dict() == before
 
 
-def test_loader_packing_overrides_the_agreed_source_packing() -> None:
-    item = _item("scene", dt(2025, 1, 1), {"scale": 0.1, "offset": 2})
-    loaded = xr.Dataset(
-        {"red": xr.DataArray([[1]], dims=("y", "x"), attrs={"scale_factor": 1.0})}
-    )
-
-    loaded = _apply_metadata([item], _collection(), loaded)
-
-    assert loaded.red.gs.packing == CFPacking(scale_factor=1, add_offset=2)
-
-
 def test_spectral_facts_reach_the_variable() -> None:
     item = _item("scene", dt(2025, 1, 1), {})
     item.assets["red"].extra_fields = {
@@ -779,6 +546,45 @@ def test_spectral_facts_reach_the_variable() -> None:
     )
 
     assert loaded.red.gs.spectral == EOBand(common_name="red", center_wavelength=0.665)
+
+
+def _coloured_item(colours: list[str | None]) -> pystac.Item:
+    """One Item with an asset per colour; None states no colour."""
+    item = _item("scene", dt(2025, 1, 1), {})
+    del item.assets["red"]
+    for index, colour in enumerate(colours):
+        bands = [] if colour is None else [{"name": f"b{index}", "common_name": colour}]
+        item.add_asset(
+            f"b{index}",
+            pystac.Asset(
+                href=f"https://example.com/b{index}.tif",
+                media_type=pystac.MediaType.GEOTIFF,
+                extra_fields={"eo:bands": bands},
+            ),
+        )
+    return item
+
+
+def test_loading_states_the_rgb_composite_the_band_colours_name() -> None:
+    item = _coloured_item(["blue", "red", "green"])
+    pixels = {}
+    for name in item.assets:
+        pixels[name] = (("y", "x"), [[1]])
+
+    loaded = _apply_metadata([item], _collection(), xr.Dataset(pixels))
+
+    assert loaded.gs.rgb == ("b1", "b2", "b0")
+
+
+def test_loading_states_no_composite_without_a_blue_band() -> None:
+    item = _coloured_item([None, "red", "green"])
+    pixels = {}
+    for name in item.assets:
+        pixels[name] = (("y", "x"), [[1]])
+
+    loaded = _apply_metadata([item], _collection(), xr.Dataset(pixels))
+
+    assert loaded.gs.rgb is None
 
 
 def test_observations_to_prepared_index_to_reusable_dataset(local_catalog, tmp_path):

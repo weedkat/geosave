@@ -5,7 +5,7 @@ import torch.nn as nn
 from typing import cast
 from timm.models.eva import Eva
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 from geosave.model.chain import Published, chain_step
 
 # Sample each model's block depth at even quarters.

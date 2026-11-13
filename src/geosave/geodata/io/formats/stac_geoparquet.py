@@ -3,23 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import orjson
-import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pystac
-from pystac.utils import make_absolute_href
 from stac_geoparquet.arrow import parse_stac_items_to_arrow, to_parquet
 
 from geosave.geodata.io import storage
 from geosave.geodata.io.formats import geoparquet
-from geosave.geodata.io.storage import absolute_location
 from geosave.geodata.stac.catalog import (
     FOOTER_KEY,
-    ITEM_COLUMNS,
     merge_collections,
     to_items,
 )
@@ -27,44 +22,7 @@ from geosave.geodata.stac.catalog import (
 if TYPE_CHECKING:
     from upath import UPath
 
-    from geosave.geodata import GeoDataFrame
     from geosave.geodata.io.storage import Location, StorageOptions
-
-
-def resolve_asset_hrefs(rows: gpd.GeoDataFrame, path: Location) -> GeoDataFrame:
-    """Make the asset hrefs of rows read from an item table openable.
-
-    Args:
-        rows: Rows as stored, asset hrefs relative to their file.
-        path: The file they were read from, as a path, URL, or UPath.
-
-    Returns:
-        The rows with every asset href absolute, every other column as read.
-        Rows that are not an item table's are returned as given.
-    """
-    if not all(key in rows for key in ITEM_COLUMNS):
-        return cast("GeoDataFrame", rows)
-    location = absolute_location(path)
-    resolved_assets = []
-    for assets in rows["assets"]:
-        resolved = {}
-        for key, asset in assets.items():
-            # The assets column holds every key any row has; a row lacking one holds None.
-            if asset is None:
-                resolved[key] = None
-            else:
-                resolved[key] = {
-                    **asset,
-                    "href": make_absolute_href(asset["href"], location),
-                }
-        resolved_assets.append(resolved)
-    # Rebuilt with the column's own Arrow type, which plain dicts would lose.
-    assets_type = cast("pd.ArrowDtype", rows["assets"].dtype).pyarrow_dtype
-    resolved_column = pd.Series(
-        pd.arrays.ArrowExtensionArray(pa.array(resolved_assets, type=assets_type)),
-        index=rows.index,
-    )
-    return cast("GeoDataFrame", rows.assign(assets=resolved_column))
 
 
 def write_stac_geoparquet(
@@ -94,8 +52,7 @@ def write_stac_geoparquet(
             constraints checked before passing codec and Parquet options on.
 
     Returns:
-        Local writes return a PosixUPath; URL writes return a UPath carrying
-        its storage options.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
@@ -106,12 +63,30 @@ def write_stac_geoparquet(
         >>> write_stac_geoparquet(catalog, "data/forest.parquet")
         PosixUPath('data/forest.parquet')
     """
-    rows.gs.validate(geometry=False, stac_item=True)
+    from geosave.geodata.core.vector.catalog import stac_collections, stac_items
+
+    rows.gs.validate(stac_items)
     footer = rows.attrs.get(FOOTER_KEY)
     if not isinstance(footer, Mapping):
         raise ValueError("catalog stac-geoparquet metadata must be a mapping")
     if not isinstance(footer.get("collections", {}), Mapping):
         raise ValueError("catalog metadata collections must be a mapping")
+
+    # The Collections given here join the ones the table states; together
+    # they must define every collection a row names.
+    stated = list(rows.gs.collections.values())
+    stated.extend(collections or ())
+    collections_by_id = merge_collections(stated)
+    rows = rows.copy()
+    rows.attrs[FOOTER_KEY] = {
+        **footer,
+        "collections": {
+            key: collection.to_dict(transform_hrefs=False)
+            for key, collection in collections_by_id.items()
+        },
+    }
+    rows.gs.validate(stac_collections)
+
     if write_options.pop("index", None) not in (None, False):
         raise ValueError("STAC GeoParquet does not serialize a pandas index")
     if write_options.pop("geometry_encoding", "WKB") != "WKB":
@@ -146,13 +121,12 @@ def write_stac_geoparquet(
         )
     row_group_size = write_options.pop("row_group_size", None)
 
-    location = absolute_location(path)
+    destination = storage.create_upath(path, storage_options)
+    storage.check_destination(
+        destination, geoparquet.FILE_SUFFIXES, overwrite=overwrite
+    )
+    location = str(destination.absolute())
     items = to_items(rows)
-    definitions = []
-    for fields in footer.get("collections", {}).values():
-        definitions.append(pystac.Collection.from_dict(fields))
-    definitions.extend(collections or ())
-    collections_by_id = merge_collections(definitions)
     stored = {}
     prepared = prepare_collections(items, collections_by_id.values())
     for collection_id, collection in prepared.items():
@@ -176,15 +150,15 @@ def write_stac_geoparquet(
         else table.to_reader(max_chunksize=row_group_size)
     )
 
-    return storage.write_file(
-        path,
-        lambda target: to_parquet(
-            batches, target, collections=stored or None, **write_options
-        ),
-        suffixes=geoparquet.FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
+    storage.create_parent(destination)
+    to_parquet(
+        batches,
+        destination.path,
+        collections=stored or None,
+        filesystem=destination.fs,
+        **write_options,
     )
+    return destination
 
 
 def read_collections(
@@ -206,7 +180,7 @@ def read_collections(
         >>> read_collections("data/catalog.parquet")["forest"].license
         'CC-BY-4.0'
     """
-    with storage.location(path, storage_options).open("rb") as handle:
+    with storage.create_upath(path, storage_options).open("rb") as handle:
         metadata = pq.read_metadata(handle).metadata or {}
     return parse_collections(metadata.get(b"stac-geoparquet", b"{}"))
 

@@ -8,11 +8,10 @@ import pytest
 import rasterio
 from pystac.extensions.projection import ProjectionExtension
 
-from geosave.geodata.stac.publish import create_stac_item
 
 from geosave.geodata import GeoRegion, io, stac
 from geosave.geodata.stac.catalog import create_catalog
-from tests.geodata.conftest import build_raster
+from tests.geodata.conftest import build_raster, raster_item
 
 
 def entry(collection="optical"):
@@ -33,15 +32,11 @@ def entry(collection="optical"):
 def create_native_item(tmp_path, name="scene"):
     source = build_raster(times=1).isel(time=0)
     saved = io.formats.geotiff.write_cog(source, tmp_path / f"{name}.tif")
-    item = create_stac_item(
-        {"reflectance": saved},
+    item = raster_item(
+        {"reflectance": (saved, source)},
         id=name,
         input_datetime=datetime(2025, 6, 1, tzinfo=UTC),
         properties={"eo:cloud_cover": 12.5, "provider:quality": "good"},
-        asset_roles=["data"],
-        with_proj=True,
-        with_raster=True,
-        with_eo=True,
     )
     item.add_asset(
         "thumbnail",

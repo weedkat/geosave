@@ -13,7 +13,7 @@ python -c "from importlib.metadata import version; print(version('geosave'))"
 ```
 
 These docs follow `main`. Compare with the installed release, or use the
-[test build](install.md#test-build-testpypi) for current development features.
+[source install](install.md#install-to-follow-these-docs) for current development features.
 Restart a notebook kernel after changing its installed packages.
 
 **Importing torch or Lightning fails.** Install `geosave[ml]` in that environment.
@@ -53,7 +53,7 @@ plotting and saving can trigger network requests after search has completed.
 ## Grids, values, and memory
 
 **Imagery and labels appear shifted.** Compare their CRS and exact pixel grids,
-not just array sizes. [Align them explicitly](concepts/raster-grids.md), with
+not just array sizes. [Align them explicitly](guides/align-rasters.md), with
 nearest-neighbor resampling for categorical labels.
 
 **Values look unexpectedly large or contain nodata codes.** Opening does not
@@ -74,10 +74,15 @@ default port; select `basemap="None"` to rule out basemap network access.
 Remote notebook servers may need port forwarding. See
 [explorer serving](concepts/explorer.md).
 
-**A generated starter fails on the image shape.** Inspect one Dataset sample
-and one batch. DINOv3 expects `(batch, band, y, x)`; a retained time dimension
-needs a temporal model or an explicit observation selection. See
-[current starter checks](guides/workspaces.md#check-a-starter-before-a-long-run).
+**An operation raises `NotImplementedError`.** ModelSpec, geospatial
+workspace data recipes, catalog sampling, row pixel viewing and vector
+rasterization are currently paused. Use [explicit input preparation](guides/model-inputs.md),
+[the Lightning boilerplate](guides/workspaces.md), and
+[catalog-tree loading](guides/catalogs-and-cuts.md) for current workflows.
+
+**A model rejects the image shape.** Inspect one Dataset sample and one batch.
+DINOv3 expects `(batch, band, y, x)`; a retained time axis needs a temporal
+model or explicit observation selection. Match the [encoder's inputs](guides/pretrained.md).
 
 **Cross-entropy rejects the target.** A segmentation target should contain
 integer class IDs, normally shaped `(batch, y, x)`, with values in

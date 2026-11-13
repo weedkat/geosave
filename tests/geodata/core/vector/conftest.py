@@ -12,8 +12,8 @@ from shapely.geometry import box, mapping
 
 from tests.conftest import write_cogs
 from geosave.geodata import open_vector
-from tests.conftest import build_dataset, build_tree
-from geosave.geodata.core import GeoCatalog
+from tests.conftest import build_dataset
+from geosave.geodata.stac.catalog import concat_catalogs
 from geosave.geodata.stac.catalog import create_catalog
 from geosave.geodata.stac.item import TIMELESS
 from tests.geodata.conftest import item_table, write_collection_cogs
@@ -48,35 +48,25 @@ def create_series(variable: str, dates: list[str], grid: GeoBox):
 
 
 @pytest.fixture(scope="module")
-def optical_tree(grid):
-    """Optical on its dates, a DEM and a label, all on one 10 m grid."""
+def items(grid, wide_grid, tmp_path_factory):
+    """Optical, a DEM and a label on one 10 m grid, and radar at 20 m on its own
+    dates, saved as COGs, catalogued, written and opened back."""
     rng = np.random.default_rng(0)
     heights = rng.random(grid.shape).astype("float32")
     classes = rng.integers(0, 3, grid.shape).astype("uint8")
-    return build_tree(
-        {
-            "s2": create_series("red", OPTICAL_DATES, grid),
-            "dem": build_dataset({"height": (("y", "x"), heights)}, grid),
-            "label": build_dataset({"label": (("y", "x"), classes)}, grid),
-        }
-    )
+    optical = {
+        "s2": create_series("red", OPTICAL_DATES, grid),
+        "dem": build_dataset({"height": (("y", "x"), heights)}, grid),
+        "label": build_dataset({"label": (("y", "x"), classes)}, grid),
+    }
+    radar = {"s1": create_series("vv", RADAR_DATES, wide_grid)}
 
-
-@pytest.fixture(scope="module")
-def radar_tree(wide_grid):
-    """Radar on its own dates at 20 m."""
-    return build_tree({"s1": create_series("vv", RADAR_DATES, wide_grid)})
-
-
-@pytest.fixture(scope="module")
-def items(optical_tree, radar_tree, tmp_path_factory):
-    """Both trees saved as COGs, catalogued, written and opened back."""
     root = tmp_path_factory.mktemp("raw")
-    optical_files = write_collection_cogs(optical_tree, root)
-    radar_files = write_collection_cogs(radar_tree, root)
+    optical_files = write_collection_cogs(optical, root)
+    radar_files = write_collection_cogs(radar, root)
     optical_rows = item_table(optical_files, prefix="a")
     radar_rows = item_table(radar_files, prefix="b")
-    path = GeoCatalog.concat([optical_rows, radar_rows]).gs.to_geoparquet(
+    path = concat_catalogs([optical_rows, radar_rows]).gs.to_geoparquet(
         root / "items.parquet"
     )
     return open_vector(path)

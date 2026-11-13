@@ -76,9 +76,9 @@ for formats and [storage](../concepts/storage.md) for remote paths and credentia
 
 ## Prepare labels and larger collections
 
-- **Polygons to labels:** [rasterize vector features](../basics/vectors.md) on
-  the image's grid, choosing a class column and an explicit background code.
-- **Images with different grids:** [align before combining](../concepts/raster-grids.md).
+- **Vector features:** [select and save polygons](../basics/vectors.md).
+  GeoSave vector rasterization is currently unavailable; use existing label rasters for training.
+- **Images with different grids:** [align before combining](align-rasters.md).
   Use nearest-neighbor resampling for class labels.
 - **Many scenes:** [publish a catalog](catalogs-and-cuts.md) when you need to
   select observations by footprint, date, or collection.

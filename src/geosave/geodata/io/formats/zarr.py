@@ -15,8 +15,7 @@ from geosave.geodata.io.formats.utils.stores import check_store
 from geosave.geodata.io.storage import (
     Location,
     StorageOptions,
-    absolute_location,
-    location,
+    create_upath,
 )
 
 if TYPE_CHECKING:
@@ -51,8 +50,6 @@ class ZarrOpenOptions(TypedDict, total=False):
             encoding when opening with a different requested chunk layout.
         chunk_store: Separate store for chunk data where the backend supports
             it. The current Zarr 3 library warns that this is unimplemented.
-        storage_options: Filesystem credentials and connection options merged
-            into the source UPath. These are forwarded only for remote stores.
         decode_timedelta: Decode CF duration variables as timedeltas; False
             retains numbers, and None delegates the decoding policy.
         use_zarr_fill_value_as_mask: Use the Zarr fill value as missing-value
@@ -68,7 +65,6 @@ class ZarrOpenOptions(TypedDict, total=False):
     consolidated: bool | None
     overwrite_encoded_chunks: bool
     chunk_store: Any
-    storage_options: Mapping[str, Any]
     decode_timedelta: bool | None
     use_zarr_fill_value_as_mask: bool | None
     chunked_array_type: str | None
@@ -177,7 +173,7 @@ def write_zarr(
         compute: False returns one native `dask.Delayed`; computing it writes
             the store and returns its path.
         overwrite: Replace an existing destination when true.
-        storage_options: Filesystem options merged into the destination UPath.
+        storage_options: Options for the filesystem a URL names.
         **write_options: Supported xarray Zarr write options. `encoding` is
             keyed by variable name and reaches every group holding it.
 
@@ -198,7 +194,7 @@ def write_zarr(
         raise TypeError(
             f"raster must be an xarray Dataset or DataTree, got {type(raster).__name__}"
         )
-    store = location(destination, storage_options)
+    store = create_upath(destination, storage_options)
     check_store(
         raster,
         store,
@@ -223,9 +219,8 @@ def _write(
     """Write a checked raster, refusing a destination that appeared since the check."""
     if not overwrite and store.exists():
         raise FileExistsError(f"{store} exists; pass overwrite=True to replace it")
-    # zarr refuses storage_options for a local path, so only a URL passes them.
-    if store.storage_options:
-        options["storage_options"] = dict(store.storage_options)
+    # zarr refuses empty storage_options for a local path.
+    options["storage_options"] = dict(store.storage_options) or None
     options.setdefault("consolidated", False)
     if isinstance(raster, xr.DataTree):
         _write_tree(raster, store, overwrite, options)
@@ -238,16 +233,17 @@ def _write_dataset(
     raster: xr.Dataset, store: UPath, overwrite: bool, options: dict[str, Any]
 ) -> None:
     """Write one Dataset at the store's root."""
-    from geosave.geodata.core.raster.utils.cf import encode_spatial_axes
+    from geosave.geodata.io.formats.cf import encode_spatial_axes
+    from geosave.geodata.stac.raster import encode_properties
 
     # Time cells stay start/end coordinates; Zarr stores datetimes as they are.
-    raster = _recording_order(encode_spatial_axes(raster))
+    raster = _recording_order(encode_spatial_axes(encode_properties(raster)))
     options["encoding"] = {
         **fill_encoding(raster),
         **dict(options.get("encoding") or {}),
     }
     raster.to_zarr(
-        absolute_location(store),
+        str(store),
         mode="w" if overwrite else "w-",
         zarr_format=_STORE_ZARR_FORMAT,
         compute=True,
@@ -259,13 +255,14 @@ def _write_tree(
     tree: xr.DataTree, store: UPath, overwrite: bool, options: dict[str, Any]
 ) -> None:
     """Write a tree with one group per node."""
-    from geosave.geodata.core.raster.utils.cf import encode_spatial_axes
+    from geosave.geodata.io.formats.cf import encode_spatial_axes
+    from geosave.geodata.stac.raster import encode_properties
 
     shared = dict(options.pop("encoding", None) or {})
     nodes = {}
     encoding = {}
     for node in tree.subtree:
-        dataset = encode_spatial_axes(node.to_dataset(inherit=False))
+        dataset = encode_spatial_axes(encode_properties(node.to_dataset(inherit=False)))
         recorded = _recording_order(dataset)
         if node.children:
             # A Zarr group lists its subgroups in no order either.
@@ -277,7 +274,7 @@ def _write_tree(
                 selected[name] = settings
         encoding[node.path] = {**fill_encoding(dataset), **selected}
     xr.DataTree.from_dict(nodes).to_zarr(
-        absolute_location(store),
+        str(store),
         mode="w" if overwrite else "w-",
         encoding=encoding,
         zarr_format=_STORE_ZARR_FORMAT,
@@ -293,6 +290,7 @@ def open_zarr(
     *,
     chunks: ZarrChunkSpec = None,
     mask_and_scale: bool = False,
+    storage_options: StorageOptions | None = None,
     **open_options: Unpack[ZarrOpenOptions],
 ) -> Dataset | DataTree:
     """Open a Zarr store, preserving child groups when present.
@@ -301,6 +299,7 @@ def open_zarr(
         source: Local Zarr path, fsspec URL, or UPath.
         chunks: Chunk configuration for the opened arrays.
         mask_and_scale: Decode CF packing to physical values.
+        storage_options: Options for the filesystem a URL names.
         **open_options: Supported `xarray.open_datatree` options.
 
     Returns:
@@ -312,12 +311,13 @@ def open_zarr(
         ['s2/r10m', 's2/r20m']
     """
     options: dict[str, Any] = dict(open_options)
-    store = location(source, options.pop("storage_options", None))
+    store = create_upath(source, storage_options)
+    # zarr refuses empty storage_options for a local path.
     remote_options = dict(store.storage_options) or None
     options.setdefault("consolidated", False)
     options.setdefault("decode_coords", "all")
     opened = xr.open_datatree(
-        absolute_location(store),
+        str(store),
         engine="zarr",
         chunks=chunks,
         mask_and_scale=mask_and_scale,
@@ -332,14 +332,14 @@ def open_zarr(
         else:
             result = nodes["/"]
             group = zarr.open_group(
-                absolute_location(store), mode="r", storage_options=remote_options
+                str(store), mode="r", storage_options=remote_options
             )
             result.encoding["zarr"] = {
                 "zarr_format": group.metadata.zarr_format,
                 "node_type": group.metadata.node_type,
                 "consolidated": group.metadata.consolidated_metadata is not None,
             }
-            result.encoding["source"] = absolute_location(store)
+            result.encoding["source"] = str(store.absolute())
         result.set_close(opened.close)
         return cast("Dataset | DataTree", result)
     except BaseException:
@@ -349,7 +349,9 @@ def open_zarr(
 
 def _read_in_written_order(node: xr.DataTree, nodes: dict[str, xr.Dataset]) -> None:
     """Add `node` and its descendants to `nodes`, groups and variables as written."""
-    dataset = _in_written_order(node.to_dataset(inherit=False))
+    from geosave.geodata.stac.raster import decode_properties
+
+    dataset = decode_properties(_in_written_order(node.to_dataset(inherit=False)))
     order = dataset.attrs.pop(_GROUP_ORDER_ATTR, [])
     nodes[node.path] = dataset
     names = [name for name in order if name in node.children]

@@ -428,9 +428,6 @@ class RasterLayer(Layer):
             # Classes take their legend's colours, as `.gs.plot` draws them;
             # a pixel no class names is transparent.
             classes = stamp_attrs(sampled[self.band], legend)
-            display = self.data[self.band].gs.display
-            if display is not None:
-                classes = stamp_attrs(classes, display)
             red, green, blue = classes.gs.colorize().values
             shown = np.isfinite(red).astype("float32")
             red, green, blue = (

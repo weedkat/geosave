@@ -1,10 +1,7 @@
 # Save and load a release
 
-Install the Hub integration to use the Transformers release adapter:
-
-```bash
-pip install 'geosave[hub]'
-```
+Install the [Hub extra](../install.md#choose-what-you-need) on the source or
+wheel installation you chose. It adds the Transformers release adapter.
 
 The supported deployment workflow uses model implementations integrated into
 GeoSave. Prototype a custom architecture in ordinary PyTorch or a workspace,
@@ -17,9 +14,8 @@ recipes and weights; they do not upload executable model code.
 ```python
 import torch
 
-from geosave.model.registry import build_model
+from geosave.model import build_model
 from geosave.model.release import GeoSaveModel
-from geosave.model.spec import ModelSpec
 
 chain = build_model({
     "head": {
@@ -30,17 +26,7 @@ chain = build_model({
         },
     },
 })
-spec = ModelSpec.from_yaml("""schema_version: 1
-entry: encoded
-output: encoded
-inputs:
-  features: {}
-steps:
-  encoded:
-    call: geosave.model.processing.to_tensor
-    kwargs: {raster: !ref features, dims: [band, y, x]}
-""")
-release = GeoSaveModel.from_chain(chain, spec=spec).eval()
+release = GeoSaveModel.from_chain(chain).eval()
 release.save_pretrained("release")
 ```
 
@@ -48,12 +34,11 @@ This small example saves a randomly initialized built-in head without downloadin
 weights. For a trained model, pass its chain, such as `task.model`, instead.
 Wrapping shares the existing modules and weights; it does not rebuild them.
 
-For a project Module whose `model` is a registered chain and whose DataModule
-holds the matching spec, save their trained chain and actual input contract:
+For a project Module whose `model` is a registered chain, save its trained chain:
 
 ```python
 module.eval()
-trained = GeoSaveModel.from_chain(module.model, spec=data.spec)
+trained = GeoSaveModel.from_chain(module.model)
 trained.save_pretrained("trained-release")
 ```
 
@@ -61,9 +46,7 @@ The plain Lightning starter in [Training](training.md) uses a custom network,
 so it cannot use this registered-chain export. Use its Lightning checkpoint
 or build a registered architecture first.
 
-`data.spec` is the spec the DataModule loaded. Saving it preserves the declared
-inputs and executable recipe beside the weights. It does not bundle
-training data or your Dataset's Python implementation.
+ModelSpec is disabled pending redesign; releases contain no processing recipe.
 
 Every stage must have been constructed by `build_model` with a registered `name`
 specification. A directly composed `ModelChain`, a prebuilt module instance, or
@@ -75,14 +58,12 @@ The local folder contains:
 ```text
 release/
 ├── config.json
-├── model.safetensors
-└── model_spec.yaml
+└── model.safetensors
 ```
 
 `config.json` records stage order, registered names, resolved constructor
 arguments, and the exact GeoSave version. `model.safetensors` stores the weights.
-The optional `model_spec.yaml` stores the processing contract. Larger models
-can produce multiple weight shards through Transformers' saving options.
+Larger models can produce multiple weight shards through Transformers' saving options.
 
 If the chain started from pretrained encoder weights, the saved construction
 recipe records `pretrained=False`. Reloading constructs the architecture and
@@ -100,7 +81,6 @@ import geosave.model.release
 from transformers import AutoModel
 
 model = AutoModel.from_pretrained("release", local_files_only=True).eval()
-spec = ModelSpec.load("release/model_spec.yaml")
 
 with torch.inference_mode():
     logits = model(feature_map=torch.zeros(1, 2, 16, 16))
@@ -115,10 +95,8 @@ Importing `geosave.model.release` registers the GeoSave model type with
 Transformers. Loading reconstructs the chain from its configuration and restores
 the weights. `model.chain` is the native `ModelChain`.
 
-Load the spec separately: `AutoModel.from_pretrained` does not automatically
-load `model_spec.yaml` or execute input preparation. Prepare rasters, convert
-their pixels to tensors, and supply the chain's named inputs as shown in
-[model inputs](model-spec.md).
+Prepare inputs explicitly before calling the chain. Releases do not execute
+preparation or attach geographic metadata to predictions.
 
 ## Publish to Hugging Face
 
@@ -131,14 +109,10 @@ commit = release.push_to_hub("your-account/your-model")
 model = AutoModel.from_pretrained(
     "your-account/your-model", revision=commit.oid
 ).eval()
-spec = ModelSpec.load(
-    f"hf://your-account/your-model@{commit.oid}/model_spec.yaml"
-)
 ```
 
-The push saves the model files, optional spec, and model card in one commit.
-Pin the returned commit hash for reproducible deployment. Loading the spec
-through `hf://` reads the YAML without downloading model weights.
+The push saves model files and the model card in one commit.
+Pin the returned commit hash for reproducible deployment.
 
 For a trained release made above, publish `trained` instead of the randomly
 initialized demonstration `release`.

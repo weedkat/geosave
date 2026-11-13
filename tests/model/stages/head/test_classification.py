@@ -4,7 +4,7 @@ import torch
 
 from geosave.model.chain import ModelChain
 from geosave.model.stages.head.classification import ClassificationHead
-from geosave.model.registry import list_models
+from geosave.model.stages.registry import list_models
 
 
 def _pyramid() -> list[torch.Tensor]:

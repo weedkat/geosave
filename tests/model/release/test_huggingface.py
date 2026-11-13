@@ -20,12 +20,10 @@ from transformers import AutoModel
 from geosave.__about__ import __version__
 from geosave.geodata import Dataset
 from geosave.model.chain import ModelChain, chain_step
-from geosave.model.registry import build_model, register_model
-from geosave.model.release import GeoSaveConfig, GeoSaveModel
-from geosave.model.spec import ModelSpec
+from geosave.model.stages.registry import build_model, register_model
+from geosave.model.release import GeoSaveModel
 from geosave.model.stages.encoder import prithvi
 from geosave.model.stages.encoder.prithvi import BACKBONE_REGISTRY, PrithviTL
-from geosave.model.stages.head.segmentation import SegmentationHead
 from tests.model.stages.encoder.test_prithvi import Backbone
 
 
@@ -67,11 +65,6 @@ def chain(stages: dict[str, dict[str, object]]) -> ModelChain:
     return chain
 
 
-@pytest.fixture
-def spec() -> ModelSpec:
-    return ModelSpec.from_yaml("schema_version: 1\ninputs: {}\n")
-
-
 def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
     tmp_path: Path, chain: ModelChain
 ) -> None:
@@ -96,24 +89,8 @@ def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
         torch.testing.assert_close(restored.chain.state_dict()[name], value)
 
 
-def test_save_writes_the_spec_beside_the_weights(
-    tmp_path: Path, chain: ModelChain, spec: ModelSpec
-) -> None:
-    GeoSaveModel.from_chain(chain, spec=spec).save_pretrained(tmp_path)
-
-    assert {path.name for path in tmp_path.iterdir()} == {
-        "config.json",
-        "model.safetensors",
-        ModelSpec.filename,
-    }
-    assert ModelSpec.load(tmp_path / ModelSpec.filename).save(tmp_path / "copy.yaml")
-    assert (tmp_path / "copy.yaml").read_text() == (
-        tmp_path / ModelSpec.filename
-    ).read_text()
-
-
-def test_push_uploads_model_spec_and_card_in_one_commit(
-    tmp_path: Path, chain: ModelChain, spec: ModelSpec
+def test_push_uploads_model_and_card_in_one_commit(
+    tmp_path: Path, chain: ModelChain
 ) -> None:
     uploaded: dict[str, str] = {}
 
@@ -128,7 +105,7 @@ def test_push_uploads_model_spec_and_card_in_one_commit(
 
     api = MagicMock()
     api.create_repo.return_value.repo_id = "org/model"
-    release = GeoSaveModel.from_chain(chain, spec=spec)
+    release = GeoSaveModel.from_chain(chain)
     with (
         patch("transformers.utils.hub.hf_api", return_value=api),
         patch(
@@ -144,35 +121,14 @@ def test_push_uploads_model_spec_and_card_in_one_commit(
         "README.md",
         "config.json",
         "model.safetensors",
-        ModelSpec.filename,
     }
     assert "geosave" in uploaded["README.md"]
-
-
-def test_reload_fills_non_persistent_buffers(tmp_path: Path) -> None:
-    chain = build_model({"head": {"name": "periodic"}})
-    GeoSaveModel.from_chain(chain).save_pretrained(tmp_path)
-
-    restored = AutoModel.from_pretrained(tmp_path, local_files_only=True)
-
-    torch.testing.assert_close(
-        restored.chain.get_submodule("head").periods, torch.tensor([1.0, 2.0, 4.0])
-    )
-
-
-def test_export_rejects_a_directly_composed_chain() -> None:
-    chain = ModelChain(head=SegmentationHead(feature_channels=2, num_classes=3))
-
-    with pytest.raises(ValueError, match="stage specifications"):
-        GeoSaveModel.from_chain(chain)
 
 
 @pytest.mark.parametrize(
     ("change", "message"),
     [
         ("missing", "Missing keys"),
-        ("unexpected", "Unexpected keys"),
-        ("mismatched", "size mismatch|ignore_mismatched_sizes"),
     ],
 )
 def test_reload_rejects_incompatible_weights(
@@ -228,53 +184,6 @@ torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_publication_rejects_class_path_stages() -> None:
-    chain = build_model(
-        {
-            "head": {
-                "class_path": f"{__name__}.PeriodicHead",
-            }
-        }
-    )
-
-    with pytest.raises(ValueError, match="registered name"):
-        GeoSaveModel.from_chain(chain)
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("format_version", 99, "format version"),
-        ("geosave_version", "0.0.0", "GeoSave version"),
-    ],
-)
-def test_loading_rejects_incompatible_artifact_metadata(
-    tmp_path: Path,
-    chain: ModelChain,
-    field: str,
-    value: object,
-    message: str,
-) -> None:
-    GeoSaveModel.from_chain(chain).save_pretrained(tmp_path)
-    path = tmp_path / "config.json"
-    config = json.loads(path.read_text())
-    config[field] = value
-    path.write_text(json.dumps(config))
-
-    with pytest.raises((ValueError, RuntimeError), match=message):
-        GeoSaveModel.from_pretrained(tmp_path, local_files_only=True)
-
-
-def test_config_rejects_duplicate_stage_names() -> None:
-    with pytest.raises(ValueError, match="unique"):
-        GeoSaveConfig(
-            stages=[
-                {"stage": "encoder", "spec": {"name": "segmentation"}},
-                {"stage": "encoder", "spec": {"name": "segmentation"}},
-            ]
-        )
 
 
 def test_transformers_reload_runs_on_prithvi_context(

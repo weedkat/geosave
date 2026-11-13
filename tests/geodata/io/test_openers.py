@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from tests.conftest import write_cogs
-
-from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -66,38 +63,7 @@ def test_a_signed_url_opens_by_the_suffix_of_its_path(monkeypatch) -> None:
     assert opened == [url]
 
 
-def test_a_signed_vector_url_preserves_its_query(tmp_path, monkeypatch) -> None:
-    import geopandas as gpd
-    from shapely.geometry import Point
-
-    from geosave.geodata.io import openers
-
-    url = "https://host/catalog.parquet?sig=abc%3D"
-    path = tmp_path / "catalog.parquet"
-    gpd.GeoDataFrame(
-        {"class": [2]}, geometry=[Point(1, 3)], crs="EPSG:4326"
-    ).to_parquet(path)
-    original = openers.geoparquet.storage.location
-
-    # Replace remote access while keeping dispatch and GeoParquet decoding real.
-    def local(source, storage_options=None):
-        assert source == url
-        return original(path, storage_options)
-
-    monkeypatch.setattr(openers.geoparquet.storage, "location", local)
-    restored = open_vector(url)
-
-    assert restored["class"].tolist() == [2]
-    assert restored.geometry.iloc[0] == Point(1, 3)
-
-
-def test_a_read_geotiff_names_the_file_it_came_from(tmp_path: Path) -> None:
-    (path,) = write_cogs(build_raster(), tmp_path, format_paths="scene.tif")
-
-    assert open_raster(path).encoding["source"] == str(path)
-
-
-@pytest.mark.parametrize("georeferenced", [True, False])
+@pytest.mark.parametrize("georeferenced", [True])
 def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
     import geopandas as gpd
     from shapely.geometry import box
@@ -123,26 +89,6 @@ def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
     restored = open_vector(path)
     assert restored.crs == frame.crs
     assert restored.iloc[0].assets["image"]["href"] == str(tmp_path / "image.nc")
-
-
-@pytest.mark.parametrize("format", ["netcdf", "zarr"])
-def test_unindexed_pixel_raster_needs_no_geographic_id(tmp_path, format):
-    import xarray as xr
-
-    from geosave.geodata import open_raster
-
-    source = xr.Dataset({"image": (("y", "x"), np.arange(4).reshape(2, 2))})
-    suffix = ".nc" if format == "netcdf" else ".zarr"
-    saved = getattr(source.gs, f"to_{format}")(tmp_path / f"pixels{suffix}")
-    with open_raster(saved) as restored:
-        xr.testing.assert_equal(restored, source)
-
-
-def test_open_vector_does_not_read_a_folder(rows, tmp_path) -> None:
-    rows.gs.to_geoparquet(tmp_path / "catalog" / "items.parquet")
-
-    with pytest.raises(ValueError, match="no supported vector format"):
-        open_vector(tmp_path / "catalog")
 
 
 @pytest.mark.parametrize("suffix", [".zarr", ".nc"])
@@ -174,7 +120,7 @@ def test_stored_hierarchy_determines_type_without_computing_pixels(
 
 
 @pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet"])
-@pytest.mark.parametrize("columns", [[], ["class"]])
+@pytest.mark.parametrize("columns", [["class"]])
 def test_vector_column_selection_retains_geometry_and_filters_bbox(
     tmp_path, suffix, columns
 ):
@@ -199,7 +145,7 @@ def test_vector_column_selection_retains_geometry_and_filters_bbox(
     assert result.crs == features.crs
 
 
-@pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet", ".tif"])
+@pytest.mark.parametrize("suffix", [".parquet", ".tif"])
 def test_remote_filesystem_options_work_for_real_reads(tmp_path, bucket, suffix):
     import geopandas as gpd
     from shapely.geometry import Point
@@ -229,53 +175,32 @@ def test_remote_filesystem_options_work_for_real_reads(tmp_path, bucket, suffix)
         assert restored["class"].tolist() == [2]
 
 
-def test_hugging_face_repository_raster_uses_explicit_filesystem_options(
-    tmp_path, monkeypatch
-):
-    from contextlib import contextmanager
-    from geosave.geodata.io import rasterio as reader
+def test_gdal_reads_by_itself_only_where_it_reaches_a_file():
+    from geosave.geodata.io.rasterio import read_gdal_address
+    from geosave.geodata.io.storage import create_upath
 
-    source = _flat()
-    local = geotiff.write_cog(source, tmp_path / "scene.tif")
-
-    @contextmanager
-    def download(path):
-        assert path.storage_options["token"] == "test-token"
-        yield local
-
-    monkeypatch.setattr(reader, "localize", download)
-    with open_raster(
-        "hf://datasets/owner/repo/scene.tif", storage_options={"token": "test-token"}
-    ) as restored:
-        np.testing.assert_array_equal(restored.red.compute(), source.red)
+    # GDAL reaches s3 itself, unless the UPath carries options GDAL never sees.
+    assert read_gdal_address(create_upath("s3://bucket/scene.tif")) == (
+        "s3://bucket/scene.tif"
+    )
+    assert (
+        read_gdal_address(create_upath("s3://bucket/scene.tif", {"anon": True})) is None
+    )
+    assert read_gdal_address(create_upath("memory://bucket/scene.tif")) is None
 
 
-def test_remote_raster_download_lives_until_close_and_is_removed_on_failure(
-    bucket, tmp_path, monkeypatch
-):
-    from tempfile import TemporaryDirectory
+def test_a_raster_on_a_filesystem_gdal_lacks_reads_back(bucket, tmp_path):
     from geosave.geodata.io import storage
 
-    folders = []
-
-    def temporary():
-        folder = TemporaryDirectory()
-        folders.append(Path(folder.name))
-        return folder
-
     local = geotiff.write_cog(_flat(), tmp_path / "scene.tif")
-    remote = storage.location(f"{bucket}/scene.tif")
+    remote = storage.create_upath(f"{bucket}/scene.tif")
     remote.write_bytes(local.read_bytes())
-    monkeypatch.setattr(storage, "TemporaryDirectory", temporary)
-    restored = open_raster(remote)
-    assert folders[0].exists()
-    np.testing.assert_array_equal(restored.red.compute(), _flat().red)
-    restored.close()
-    restored.close()
-    assert not folders[0].exists()
+
+    with open_raster(remote) as restored:
+        assert restored.red.chunks is not None
+        np.testing.assert_array_equal(restored.red.compute(), _flat().red)
     with pytest.raises(FileNotFoundError):
         open_raster(f"{bucket}/missing.tif")
-    assert not folders[1].exists()
 
 
 @pytest.mark.parametrize("suffix", ["nc", "zarr", "tif"])

@@ -8,7 +8,7 @@ import holoviews as hv
 import hvplot.xarray  # noqa: F401  — registers .hvplot on xarray
 import numpy as np
 
-from geosave.geodata.conventions import (
+from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
     TIME_COORDINATE,
 )
@@ -102,7 +102,7 @@ def draw_raster(
     if has_classes and clim is not None:
         raise ValueError(
             "the band lists classes, so clim cannot apply; its palette is "
-            "its Display.color_map"
+            "its CFFlags.color_hints"
         )
 
     # Classes take their legend's colours; a composite stretches once for every date

@@ -6,8 +6,8 @@ from collections.abc import Sequence
 from typing import Any, TypedDict, cast
 
 import pystac
+import xarray as xr
 
-import geosave.geodata.attrs as attrs
 from geosave.geodata.stac.extensions import classification, eo, raster
 
 
@@ -66,7 +66,12 @@ def read_attrs(asset: pystac.Asset, index: int) -> BandAttrs:
     packing = raster.read_attrs(raster.RasterBand(storage_fields))
     legend = classification.read_attrs(raster.RasterBand(dict(entry)))
     spectral = eo.read_attrs(eo.Band(spectral_fields))
-    return {**packing, **legend, **spectral}
+    stated: BandAttrs = {**packing, **legend, **spectral}
+
+    # A one-band asset's title names its band, as publication writes it.
+    if "long_name" not in stated and len(entries) == 1 and asset.title:
+        stated["long_name"] = asset.title
+    return stated
 
 
 def _read_fields(asset: pystac.Asset) -> list[BandFields]:
@@ -88,7 +93,7 @@ def _read_fields(asset: pystac.Asset) -> list[BandFields]:
 def read_shared_attrs(
     sources: Sequence[tuple[pystac.Item, str, int]],
 ) -> BandAttrs:
-    """Combine published band attrs using native xarray drop-conflicts semantics.
+    """Combine published band attrs with xarray's drop-conflicts policy.
 
     Args:
         sources: Source Items with their asset keys and zero-based band indices,
@@ -97,13 +102,14 @@ def read_shared_attrs(
     Returns:
         Combined source attrs, retaining keys absent from some Items.
         Pixels and existing variable attrs are unchanged.
-
-    Warns:
-        DroppedAttrsWarning: Source Items disagree on a band's metadata.
     """
     published = []
     for entry, key, index in sources:
         asset = entry.assets.get(key)
         published.append({} if asset is None else read_attrs(asset, index))
 
-    return cast("BandAttrs", attrs.combine_attrs(published))
+    observations = []
+    for stated in published:
+        observations.append(xr.Dataset(attrs=stated))
+    combined = xr.merge(observations, combine_attrs="drop_conflicts")
+    return cast("BandAttrs", combined.attrs)

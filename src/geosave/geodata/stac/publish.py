@@ -1,259 +1,184 @@
-"""Publish rasters as STAC Items and assets."""
+"""Describe a STAC tree's Items and Collections as pystac objects."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from copy import deepcopy
-from datetime import datetime as DateTime
-from typing import TYPE_CHECKING, Any
+from typing import Any, Self
 
+import numpy as np
 import pystac
+import xarray as xr
+from shapely.geometry import mapping, shape
 
-from geosave.geodata import attrs
-from geosave.geodata.io.storage import Location, StorageOptions
-from geosave.geodata.stac import item
+import geosave.geodata.attrs as attrs
+
+from geosave.geodata.core.conventions import (
+    END_DATETIME,
+    START_DATETIME,
+    STAC_PROPERTIES,
+    TIME_COORDINATE,
+)
+from geosave.geodata.stac import item as stac_item
+from geosave.geodata.stac.extensions import eo, projection
+from geosave.geodata.stac.extensions import raster as raster_extension
 
 
-if TYPE_CHECKING:
-    from rasterio.io import DatasetReader
-    from shapely.geometry.base import BaseGeometry
-    from geosave.geodata.stac.extensions.eo import Band
-    from geosave.geodata.stac.extensions.raster import RasterBand
+class StacItem(pystac.Item):
+    """A pystac Item built from a STAC tree's Item node, with assets added from rasters.
 
+    It is a `pystac.Item` everywhere: `clone`, `from_dict`, extensions and
+    validation keep working, and `add_asset` adds any other asset.
 
-def _read_footprint(
-    source: DatasetReader, densify: int, precision: int
-) -> BaseGeometry:
-    """Transform the saved pixel-grid footprint to geographic coordinates."""
-    from odc.geo.geobox import GeoBox
-    from rasterio.warp import transform_geom
-    from shapely.geometry import shape
+    Examples:
+        >>> item = StacItem.from_datatree(tree["s2/20250601T000000_33UUU_..."], collection="s2")
+        >>> item.add_raster_asset("red", red, "s3://bucket/s2/.../red.tif")
+        <Asset href=s3://bucket/s2/.../red.tif>
+    """
 
-    grid = GeoBox((source.height, source.width), source.transform, str(source.crs))
-    footprint = grid.extent
-    if densify:
-        length = min(
-            abs(source.bounds.right - source.bounds.left),
-            abs(source.bounds.top - source.bounds.bottom),
+    @classmethod
+    def from_datatree(
+        cls,
+        item: xr.DataTree,
+        *,
+        id: str | None = None,
+        collection: str | None = None,
+        properties: dict[str, Any] | None = None,
+        geometry: dict[str, Any] | None = None,
+        stac_extensions: list[str] | None = None,
+    ) -> Self:
+        """Create the Item an Item node states, without assets.
+
+        Args:
+            item: Item node of a STAC tree.
+            id: Item id; None takes the node's name.
+            collection: Id of the Collection the Item belongs to.
+            properties: Item properties, over the node's `stac_properties`.
+            geometry: GeoJSON footprint in WGS84; None takes the union of the
+                node's assets' grids.
+            stac_extensions: Schema URIs to declare beside those its assets add.
+
+        Returns:
+            Item with the node's time, properties and footprint; add assets
+            with `add_raster_asset`.
+
+        Raises:
+            ValueError: The node states no time, or a period out of order.
+        """
+        coords = item.to_dataset(inherit=False).coords
+
+        # The Item's time coordinates are scalar on its node.
+        instants: dict[str, str | None] = {}
+        for name in (TIME_COORDINATE, START_DATETIME, END_DATETIME):
+            instants[name] = None
+            if name in coords:
+                instants[name] = str(np.datetime_as_string(coords[name].values))
+        time = stac_item.normalize_time(
+            instants[TIME_COORDINATE], instants[START_DATETIME], instants[END_DATETIME]
         )
-        footprint = footprint.segmented(length / (densify + 1))
 
-    return shape(
-        transform_geom(source.crs, "EPSG:4326", footprint.json, precision=precision)
-    )
+        stated = {}
+        if STAC_PROPERTIES in coords:
+            stated = dict(coords[STAC_PROPERTIES].item())
+        stated.update(properties or {})
+
+        if geometry is None:
+            # Four points a side keep a projected grid's edges close in WGS84
+            # without the hundreds of vertices `geographic_extent` adds.
+            footprints = []
+            for leaf in item.leaves:
+                geobox = leaf.to_dataset(inherit=False).odc.geobox
+                footprints.append(geobox.footprint("EPSG:4326", npoints=4))
+            footprint = footprints[0]
+            for other in footprints[1:]:
+                footprint = footprint.union(other)
+            geometry = mapping(footprint.geom)
+
+        return cls(
+            id if id is not None else str(item.name),
+            geometry,
+            list(shape(geometry).bounds),
+            time["datetime"],
+            stated,
+            start_datetime=time["start_datetime"],
+            end_datetime=time["end_datetime"],
+            stac_extensions=stac_extensions,
+            collection=collection,
+        )
+
+    def add_raster_asset(
+        self,
+        key: str,
+        raster: xr.Dataset,
+        href: str,
+        *,
+        roles: list[str] | None = None,
+        media_type: str | None = None,
+        title: str | None = None,
+        with_proj: bool = True,
+        with_raster: bool = True,
+        with_eo: bool = False,
+    ) -> pystac.Asset:
+        """Add the asset of one file holding `raster`'s variables, one band each.
+
+        Args:
+            key: Asset key.
+            raster: The file's Dataset, on its own grid.
+            href: Where the file is.
+            roles: Asset roles; None is `["data"]`.
+            media_type: Media type; None is a Cloud Optimized GeoTIFF.
+            title: Human-readable title; None takes the `long_name` of a
+                one-variable raster.
+            with_proj: State the grid as `proj:*`.
+            with_raster: State storage type, fill, packing and units as `raster:bands`.
+            with_eo: State each band's spectrum as `eo:bands`, from `EOBand` attrs.
+
+        Returns:
+            The asset; the Item declares each extension it uses.
+        """
+        if title is None and len(raster.data_vars) == 1:
+            title = next(iter(raster.data_vars.values())).attrs.get("long_name")
+        asset = pystac.Asset(
+            href,
+            title=title,
+            media_type=media_type or pystac.MediaType.COG,
+            roles=roles or ["data"],
+        )
+        # An extension declares its schema on the Item an asset belongs to.
+        self.add_asset(key, asset)
+
+        if with_proj:
+            projection.write_asset(asset, raster.odc.geobox)
+        if with_raster:
+            bands = []
+            for variable in raster.data_vars.values():
+                bands.append(raster_extension.build_band(variable))
+            raster_extension.write_asset(asset, bands)
+        if with_eo:
+            spectra = []
+            for variable in raster.data_vars.values():
+                spectra.append(eo.build_band(variable))
+            eo.write_asset(asset, spectra)
+        return asset
 
 
-def _read_media_type(source: DatasetReader) -> str | None:
-    """Identify GeoTIFF and COG from the saved driver's metadata."""
-    if source.driver != "GTiff":
-        return None
-    if source.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG":
-        return pystac.MediaType.COG
-    return pystac.MediaType.GEOTIFF
-
-
-def create_stac_item(
-    sources: dict[str, Location],
-    *,
-    id: str,
-    input_datetime: DateTime | None = None,
-    properties: dict[str, Any] | None = None,
-    geometry: dict[str, Any] | None = None,
-    collection: str | None = None,
-    collection_url: str | None = None,
-    asset_roles: Sequence[str] | None = None,
-    asset_media_type: str = "auto",
-    asset_hrefs: dict[str, str] | None = None,
-    with_proj: bool = False,
-    with_raster: bool = False,
-    with_eo: bool = False,
-    geom_densify_pts: int = 0,
-    geom_precision: int = -1,
-    storage_options: StorageOptions | None = None,
-) -> pystac.Item:
-    """Describe named existing raster files as one native STAC Item.
+def create_stac_collection(
+    collection: xr.DataTree, items: list[pystac.Item]
+) -> pystac.Collection:
+    """Create the Collection a collection node states, or a minimal one over its Items.
 
     Args:
-        sources: Asset keys mapped to readable local paths or filesystem URLs.
-        id: Nonempty Item identifier, unique within its Collection.
-        input_datetime: Observation instant. Otherwise properties must contain
-            both start_datetime and end_datetime as ISO timestamps.
-        properties: Additional STAC Item properties, copied without mutation.
-        geometry: Optional longitude/latitude GeoJSON footprint. Otherwise use
-            the union of file footprints; no pixels are inspected.
-        collection: Optional Collection ID.
-        collection_url: Optional URL of the Collection document.
-        asset_roles: Roles applied to every asset, e.g. ["data"]. Customize
-            individual assets on the returned Item.
-        asset_media_type: Media type, or "auto" to recognize GeoTIFF/COG.
-        asset_hrefs: Asset keys mapped to absolute advertised href overrides.
-        with_proj: Extract each file's grid onto its Asset.
-        with_raster: Extract saved dtype, nodata, packing, units and classes per
-            band.
-        with_eo: Extract known band identities and spectral metadata.
-        geom_densify_pts: Extra points per footprint edge before reprojection.
-        geom_precision: Decimal places in output geometry; -1 preserves precision.
-        storage_options: Filesystem options for reading sources.
+        collection: Collection node of a STAC tree; its name is the Collection id.
+        items: The Collection's Items, whose extents a minimal Collection spans.
 
     Returns:
-        Item with absolute asset hrefs. Additional assets and extensions can be
-        added using native PySTAC methods.
-
-    Raises:
-        ValueError: Sources, ID, temporal coverage, CRS or hrefs are invalid.
+        The stated Collection, as its `StacCollection` attrs hold it, else one
+        whose extent covers `items`.
     """
-    from contextlib import ExitStack
+    stated = attrs.StacCollection.from_attrs(collection.attrs)
+    if stated is not None and stated.collection is not None:
+        return pystac.Collection.from_dict(stated.collection)
 
-    import rasterio
-    from odc.geo.geobox import GeoBox
-    from pystac.utils import is_absolute_href
-    from shapely.geometry import mapping, shape
-    from shapely.ops import unary_union
-
-    from geosave.geodata.io import storage
-    from geosave.geodata.io.rasterio import read_class_attrs
-    from geosave.geodata.stac.extensions import (
-        classification,
-        eo,
-        projection,
-        raster,
+    return pystac.Collection(
+        id=str(collection.name),
+        description=f"Items of {collection.name}",
+        extent=pystac.Extent.from_items(items),
     )
-
-    if not id or not sources:
-        raise ValueError("create_stac_item needs a nonempty id and at least one source")
-    if geom_densify_pts < 0 or geom_precision < -1:
-        raise ValueError(
-            "geometry densification must be nonnegative and precision at least -1"
-        )
-    fields = deepcopy(properties or {})
-    stated_datetime = fields.pop("datetime", None)
-    if input_datetime is not None and stated_datetime is not None:
-        raise ValueError("supply input_datetime or properties datetime, not both")
-    time = item.normalize_time(
-        input_datetime if input_datetime is not None else stated_datetime,
-        fields.pop("start_datetime", None),
-        fields.pop("end_datetime", None),
-    )
-
-    overrides = dict(asset_hrefs or {})
-    if overrides.keys() - sources.keys():
-        raise ValueError("asset_hrefs contains keys absent from sources")
-    for href in overrides.values():
-        if not is_absolute_href(href):
-            raise ValueError(f"advertised asset href must be absolute: {href!r}")
-
-    entry = item.create_item(id=id, time=time, properties=fields, collection=collection)
-    if collection_url is not None:
-        entry.add_link(pystac.Link(pystac.RelType.COLLECTION, collection_url))
-
-    footprints = []
-    for key, path in sources.items():
-        if not key:
-            raise ValueError("asset keys must be nonempty")
-        path = storage.location(path, storage_options)
-        with ExitStack() as opened:
-            address = str(path)
-            if not storage.is_local(path):
-                address = opened.enter_context(path.open("rb"))
-            source = opened.enter_context(rasterio.open(address))
-            if source.crs is None:
-                raise ValueError(f"source {key!r} has no CRS")
-
-            grid = GeoBox(
-                (source.height, source.width), source.transform, str(source.crs)
-            )
-            footprints.append(_read_footprint(source, geom_densify_pts, geom_precision))
-            media_type = asset_media_type
-            if media_type == "auto":
-                media_type = _read_media_type(source)
-
-            asset = pystac.Asset(
-                overrides.get(key, storage.absolute_location(path)),
-                media_type=media_type,
-                roles=None if asset_roles is None else list(asset_roles),
-            )
-            entry.add_asset(key, asset)
-            if with_proj:
-                projection.write_asset(asset, grid)
-            if with_raster:
-                bands = _read_raster_bands(source)
-                for index, band in zip(source.indexes, bands, strict=True):
-                    found = read_class_attrs(source, index)
-                    classification.write_band(
-                        asset,
-                        band,
-                        attrs.CFFlags.from_attrs(found),
-                        attrs.Display.from_attrs(found),
-                    )
-                raster.write_asset(asset, bands)
-            if with_eo:
-                identities = _read_eo_bands(source)
-                if identities:
-                    eo.write_asset(asset, identities)
-
-    footprint = (
-        shape(dict(geometry)) if geometry is not None else unary_union(footprints)
-    )
-    if footprint.is_empty or not footprint.is_valid:
-        raise ValueError("Item footprint must be nonempty and valid")
-    entry.geometry = mapping(footprint)
-    entry.bbox = list(footprint.bounds)
-    return entry
-
-
-def _read_raster_bands(source: DatasetReader) -> list[RasterBand]:
-    """Read stored band metadata from an open rasterio dataset, without pixels."""
-    from math import isfinite
-    from geosave.geodata.stac.extensions.raster import (
-        DataType,
-        NoDataStrings,
-        RasterBand,
-    )
-
-    bands = []
-    for index in source.indexes:
-        position = index - 1
-        nodata = source.nodatavals[position]
-        if nodata is not None and not isfinite(nodata):
-            nodata = NoDataStrings(str(nodata))
-
-        bands.append(
-            RasterBand.create(
-                data_type=DataType(source.dtypes[position]),
-                nodata=nodata,
-                scale=source.scales[position],
-                offset=source.offsets[position],
-                unit=source.units[position],
-            )
-        )
-    return bands
-
-
-def _read_eo_bands(source: DatasetReader) -> list[Band]:
-    """Read known band identities and spectral tags without estimating them.
-
-    Returns:
-        One band per file band, or none when a band states no name, since a
-        loader then names it by its asset key and position.
-    """
-    from geosave.geodata.stac.extensions.eo import Band
-
-    bands = []
-    for index in source.indexes:
-        tags = source.tags(index)
-        facts = attrs.EOBand.from_attrs(tags)
-        name = tags.get("variable_name") or source.descriptions[index - 1]
-        if name is None:
-            return []
-        bands.append(
-            Band.create(
-                name=name,
-                description=source.descriptions[index - 1],
-                common_name=None if facts is None else facts.common_name,
-                center_wavelength=None if facts is None else facts.center_wavelength,
-                full_width_half_max=None
-                if facts is None
-                else facts.full_width_half_max,
-            )
-        )
-    return bands

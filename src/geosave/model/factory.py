@@ -1,4 +1,4 @@
-"""Select a stage factory by registered name or class path."""
+"""Select a constructor by registered name or class path."""
 
 from __future__ import annotations
 

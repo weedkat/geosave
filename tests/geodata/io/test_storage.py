@@ -1,216 +1,50 @@
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
 
-import fsspec
 import pytest
 from upath import UPath
+from upath.implementations.local import PosixUPath
 
-from geosave.geodata import io
-from geosave.geodata.io.storage import (
-    location,
-    write_file,
-)
-from tests.geodata.conftest import build_raster
+from geosave.geodata.io.storage import check_destination, create_upath
 
 
-def test_a_location_merges_options_into_a_upath_it_is_given() -> None:
+def test_a_upath_merges_options_into_one_it_is_given() -> None:
     given = UPath("memory://catalogs/catalog.parquet", skip_instance_cache=True)
 
-    url = location(given, {"auto_mkdir": False})
+    created = create_upath(given, {"auto_mkdir": False})
 
-    assert url.storage_options == {"skip_instance_cache": True, "auto_mkdir": False}
+    assert created.storage_options == {"skip_instance_cache": True, "auto_mkdir": False}
 
 
-@pytest.mark.parametrize(
-    ("name", "write"),
-    [
-        (
-            "forest.tif",
-            lambda cube, url: io.formats.geotiff.write_cog(cube.isel(time=0), url),
-        ),
-        ("forest.zarr", lambda cube, url: io.formats.zarr.write_zarr(cube, url)),
-        ("forest.nc", lambda cube, url: io.formats.netcdf.write_netcdf(cube, url)),
-    ],
-)
-def test_a_file_url_writes_to_the_local_path_it_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name, write
+def test_a_file_url_is_a_local_path(tmp_path: Path) -> None:
+    created = create_upath(f"file://{tmp_path}/scene.tif")
+
+    assert isinstance(created, PosixUPath)
+    assert created == tmp_path / "scene.tif"
+
+
+def test_options_cannot_choose_another_filesystem() -> None:
+    with pytest.raises(ValueError, match="protocol"):
+        create_upath("s3://bucket/scene.tif", {"protocol": "memory"})  # type: ignore[typeddict-unknown-key]
+
+
+@pytest.mark.parametrize("root", ["local", "memory"])
+def test_a_destination_of_another_format_is_refused(root, tmp_path, bucket) -> None:
+    folder = create_upath(tmp_path if root == "local" else bucket)
+
+    with pytest.raises(ValueError, match=r"\.tif"):
+        check_destination(folder / "scene.png", (".tif",), overwrite=False)
+
+
+@pytest.mark.parametrize("root", ["local", "memory"])
+def test_an_existing_destination_is_refused_unless_replaced(
+    root, tmp_path, bucket
 ) -> None:
-    elsewhere = tmp_path / "cwd"
-    elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)
-
-    written = write(build_raster(times=1), f"file://{tmp_path}/{name}")
-
-    assert written == tmp_path / name
-    assert isinstance(written, UPath)
-    assert (tmp_path / name).exists()
-    assert list(elsewhere.iterdir()) == []
-
-
-def test_a_local_write_is_staged_then_moved_whole(tmp_path: Path) -> None:
-    staged = []
-
-    def save(target: Path) -> None:
-        staged.append(target)
-        target.write_bytes(b"pixels")
-
-    written = write_file(tmp_path / "scene.tif", save, suffixes=(".tif",))
-
-    assert written == tmp_path / "scene.tif"
-    assert written.read_bytes() == b"pixels"
-    assert staged[0] != written
-    assert staged[0].suffix == ".tif"
-    assert list(tmp_path.iterdir()) == [written]
-
-
-def test_a_failed_local_write_leaves_the_destination_untouched(tmp_path: Path) -> None:
-    destination = tmp_path / "scene.tif"
-    destination.write_bytes(b"first")
-
-    def save(target: Path) -> None:
-        target.write_bytes(b"partial")
-        raise RuntimeError("writer failed")
-
-    with pytest.raises(RuntimeError, match="writer failed"):
-        write_file(destination, save, suffixes=(".tif",), overwrite=True)
-
-    assert destination.read_bytes() == b"first"
-    assert list(tmp_path.iterdir()) == [destination]
-
-
-def test_a_local_write_creates_missing_folders(tmp_path: Path) -> None:
-    written = write_file(
-        tmp_path / "new" / "scene.tif",
-        lambda target: target.write_bytes(b"pixels"),
-        suffixes=(".tif",),
-    )
-
-    assert written.read_bytes() == b"pixels"
-
-
-def test_an_existing_local_file_refuses_without_overwrite(tmp_path: Path) -> None:
-    destination = tmp_path / "scene.tif"
-    destination.write_bytes(b"first")
+    folder = create_upath(tmp_path if root == "local" else bucket)
+    existing = folder / "scene.tif"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    with existing.open("wb") as handle:
+        handle.write(b"pixels")
 
     with pytest.raises(FileExistsError, match="overwrite=True"):
-        write_file(
-            destination, lambda target: pytest.fail("must not run"), suffixes=(".tif",)
-        )
-
-
-@pytest.mark.parametrize("overwrite", [False, True])
-def test_a_destination_created_during_encoding_respects_overwrite(tmp_path, overwrite):
-    destination = tmp_path / "scene.tif"
-    unrelated = tmp_path / ".scene.staging.tif"
-    unrelated.write_bytes(b"another writer")
-
-    def save(target):
-        target.write_bytes(b"new pixels")
-        destination.write_bytes(b"winner")
-
-    if overwrite:
-        write_file(destination, save, suffixes=(".tif",), overwrite=True)
-        assert destination.read_bytes() == b"new pixels"
-    else:
-        with pytest.raises(FileExistsError):
-            write_file(destination, save, suffixes=(".tif",))
-        assert destination.read_bytes() == b"winner"
-    assert unrelated.read_bytes() == b"another writer"
-    assert set(tmp_path.iterdir()) == {destination, unrelated}
-
-
-def test_overlapping_local_writers_publish_exactly_one_complete_file(tmp_path):
-    destination = tmp_path / "scene.tif"
-    ready = Barrier(2)
-
-    def write(pixels):
-        staged = None
-
-        def save(target):
-            nonlocal staged
-            staged = target
-            target.write_bytes(pixels)
-            ready.wait(timeout=10)
-
-        try:
-            write_file(destination, save, suffixes=(".tif",))
-        except FileExistsError:
-            return False, pixels, staged
-        return True, pixels, staged
-
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        first = workers.submit(write, b"first complete file")
-        second = workers.submit(write, b"second complete file")
-        results = [first.result(timeout=15), second.result(timeout=15)]
-
-    assert sum(won for won, _, _ in results) == 1
-    assert results[0][2] != results[1][2]
-    for won, pixels, staged in results:
-        if won:
-            assert destination.read_bytes() == pixels
-        assert not staged.exists()
-    assert list(tmp_path.iterdir()) == [destination]
-
-
-def test_a_wrong_suffix_refuses_before_writing(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="must end in one of"):
-        write_file(
-            tmp_path / "scene.png",
-            lambda target: pytest.fail("must not run"),
-            suffixes=(".tif", ".tiff"),
-        )
-
-
-def test_a_remote_write_uploads_what_was_written(bucket: str) -> None:
-    written = write_file(
-        f"{bucket}/scene.tif",
-        lambda target: target.write_bytes(b"pixels"),
-        suffixes=(".tif",),
-    )
-
-    assert written == UPath(f"{bucket}/scene.tif")
-    assert fsspec.open(f"{bucket}/scene.tif").open().read() == b"pixels"
-
-
-def test_a_failed_remote_write_uploads_nothing(bucket: str) -> None:
-    def save(target: Path) -> None:
-        target.write_bytes(b"partial")
-        raise RuntimeError("writer failed")
-
-    with pytest.raises(RuntimeError, match="writer failed"):
-        write_file(f"{bucket}/scene.tif", save, suffixes=(".tif",))
-
-    assert not fsspec.filesystem("memory").exists(f"{bucket}/scene.tif")
-
-
-def test_an_existing_remote_object_refuses_without_overwrite(bucket: str) -> None:
-    url = f"{bucket}/scene.tif"
-    write_file(url, lambda target: target.write_bytes(b"first"), suffixes=(".tif",))
-
-    with pytest.raises(FileExistsError):
-        write_file(url, lambda target: pytest.fail("must not run"), suffixes=(".tif",))
-    write_file(
-        url,
-        lambda target: target.write_bytes(b"second"),
-        suffixes=(".tif",),
-        overwrite=True,
-    )
-
-    assert fsspec.open(url).open().read() == b"second"
-
-
-def test_a_remote_write_returns_a_upath_carrying_its_options(bucket: str) -> None:
-    written = write_file(
-        f"{bucket}/scene.tif",
-        lambda target: target.write_bytes(b"pixels"),
-        suffixes=(".tif",),
-        storage_options={"skip_instance_cache": True},
-    )
-
-    assert written.storage_options == {"skip_instance_cache": True}
-
-
-def test_storage_options_cannot_choose_the_filesystem() -> None:
-    with pytest.raises(ValueError, match="protocol"):
-        location("memory://catalogs/catalog.parquet", {"protocol": "s3"})  # type: ignore[typeddict-unknown-key]
+        check_destination(existing, (".tif",), overwrite=False)
+    check_destination(existing, (".tif",), overwrite=True)

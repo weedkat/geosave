@@ -1,106 +1,90 @@
-# Catalogs
+# Catalog operations
 
-A catalog is a native GeoDataFrame of spatial records, read through the
-`GeoCatalog` accessor. Records can describe boundaries or STAC Items with
-raster assets. A spatial record selected as a pandas Series uses
-`GeoCatalogItem`; an ordinary field column does not. Item operations check
-the STAC fields they need when called. Neither accessor's type certifies
-STAC GeoParquet compliance.
+A catalog is a GeoDataFrame of STAC Item records. The same `.gs` accessor also
+handles ordinary vector features. Item operations check the columns they need;
+an accessor's type alone does not certify STAC compliance.
+See [Create and reopen a raster catalog](../guides/catalogs-and-cuts.md) for
+an offline example.
 
-A selected Series does not inherit the GeoDataFrame's CRS. Item conversion
-expects WGS84 coordinates; use a frame selection when reprojection or CRS
-context is needed. A search matching nothing returns an empty item table with
-its schema and CRS, although the explorer currently requires geometry to draw.
+## Publish and load pixels
 
-Select rows using native GeoPandas masks. Spatial targets must use the frame's
-CRS; GeoSave does not infer a temporal filter from the target:
+```python title="Adaptation example — use your dated Dataset"
+rows = observations.gs.expand().gs.to_catalog("assets")
+path = rows.gs.to_geoparquet("catalog.parquet")
+with gs.open_vector(path).gs.to_datatree() as tree:
+    scene = tree["default"].gs.combine()
+    result = scene.gs.mask_and_scale().mean("time").compute()
+```
 
-```python
+`expand` needs an Item dimension, `time` by default. Tree publication writes
+one COG per asset at `folder/collection/Item/asset.tif` and returns one row per
+Item. Save the table separately. Dataset/DataArray `.gs.to_catalog()` and
+`.gs.to_item()` are unavailable.
+
+Loading returns the same collection/Item/asset layout on native asset grids.
+Combine a **collection node**; resample mixed grids onto an exact GeoBox first.
+Collection metadata and Item properties remain separate from band metadata.
+
+## Select and validate records
+
+Select rows with GeoPandas masks. Selection geometry must use the frame's CRS.
+A Series does not inherit that CRS; retain a one-row frame when it matters.
+
+```python title="Adaptation example — use your catalog and region"
+from geosave.geodata.core.vector.catalog import dated, stac_collections, stac_items, valid_geometry
+
 shape = region.extent.to_crs(catalog.crs).geom
 selected = catalog.loc[catalog.geometry.intersects(shape)]
-selected.gs.validate(crs=True, temporal=True)
+selected.gs.validate(valid_geometry, stac_items, stac_collections, dated)
 ```
 
-`temporal=True` requires paired, ordered bounds and a nominal `datetime` within
-coverage, while permitting timeless rows. `area=True` requires valid geometries
-with positive area. Geometry, CRS, temporal and Item-column checks can be
-requested independently; `geometry=False` skips the default geometry check.
+`validate(*rules)` applies only the rules passed, reads no assets, and returns
+None on success. It raises `VectorValidationError` on failure.
 
-## Raster persistence and publication
+| Rule | Checks |
+| --- | --- |
+| `valid_geometry` | Every geometry is present, nonempty and valid. |
+| `stac_items` | Required Item columns, asset hrefs and unique IDs within collections. |
+| `stac_collections` | A stored definition for every named Collection. |
+| `one_collection` | At most one named Collection. |
+| `dated` | Valid, complete observation time declarations. |
 
-Raster `to_item` and `to_catalog` currently raise `NotImplementedError` on
-DataArray, Dataset and DataTree while publication moves to the Item/asset tree.
+These checks do not validate the full remote STAC schema or scientific
+suitability of pixels.
 
-Write one selected array to an explicit file independently of STAC:
+## Table persistence
 
-```python
-path = ds["red"].isel(time=0).gs.to_cog("data/red.tif")
-pending = ds["red"].isel(time=0).gs.to_gtiff("data/red-copy.tif", compute=False)
-pending.compute()
-```
+`.gs.to_geoparquet` selects STAC encoding from the table's `stac-geoparquet`
+metadata; ordinary features use GeoPandas encoding. Invalid catalog metadata
+raises instead of silently falling back to features. Collection definitions
+are retained and asset hrefs are stored relative to the table.
 
-These array writers do not split observations or format paths. Existing native
-Items can still become a catalog with `gs.create_catalog(items)`. Save the
-catalog with `catalog.gs.to_geoparquet(...)`; ordinary feature tables use the
-same method, with format selection based on the table's STAC metadata.
+`concat_catalogs` preserves compatible Collection definitions and rejects
+conflicts. It currently refuses tables read from different source files,
+whose relative asset hrefs have different bases.
 
-## Group samples and open pixels
-
-```python
-samples = catalog.gs.sample(collections=["s2"], window=2)
-tree = samples[0].gs.to_datatree().gs.reproject(grid)
-scene = tree["s2"].gs.combine_stac()
-chips = gs.Chips([scene], size=128, constant_value=0)
-```
-
-Sampling groups Items without opening pixels and returns `GeoSamples`: the
-item table, slot membership and each sample's row positions. `samples[i]` returns
-one sample's native rows,
-whose `gs.to_datatree()` opens a lazy DataTree, `/{collection}/{item}/{asset}`:
-one node per STAC asset on the grid it states. `tree.gs.reproject(grid)` aligns
-every asset onto one grid. `tree["s2"].gs.combine_stac()` then merges each Item's
-assets and stacks the Items along `time`, with their IDs as an `id` coordinate;
-on an Item it merges that Item's assets. Collections keep independent timelines,
-so combine one at a time. To go straight from a catalog to one grid, use
-`catalog.gs.to_dataset(geobox)`, which also mosaics tiles of one date.
-Chips accepts prepared Datasets or DataArrays, each on one regular grid, and
-returns each chip as a lazy xarray object from `gs.crop_to_grid`. Select and align
-the scene before chipping; convert chips with `gs.to_numpy(dtype=...)`.
-`chips.xarray[i]` retains the original prepared source; `chips.merge(...)`
-returns NumPy arrays in the same source order.
-Construct output xarray objects explicitly with the coordinates and metadata
-appropriate for predictions.
-
-Persist the Item catalog and sample it again after opening. `GeoCatalog.concat`
-merges Collection metadata; for repeated Collection ids, the first definition
-wins.
+::: geosave.geodata.stac.catalog.concat_catalogs
 
 ::: geosave.geodata.core.vector.catalog.GeoCatalog
     options:
-      members: [collections, concat, sample, to_items, to_datatree, to_geoparquet]
-
-::: geosave.geodata.core.vector.samples.GeoSamples
-    options:
-      members: [indices, catalog, footprints, explore]
+      members: [validate, collections, to_items, to_datatree, to_geoparquet]
 
 ::: geosave.geodata.core.vector.item.GeoCatalogItem
+    options:
+      members: [validate, region, to_item, to_datatree]
+
+## Unavailable operations
+
+`sample`, `GeoSamples`, `to_dataset`, `read_pixels`, and vector `rasterize`
+raise `NotImplementedError` while sampling and catalog pixel access are rebuilt.
+Use GeoPandas selection and `.gs.to_datatree()` for current reads;
+[Chips](chips.md) works with prepared rasters independently.
 
 ## GeoParquet options
 
-Compression and Parquet options apply to both feature and catalog output:
-
-```python
-catalog.gs.to_geoparquet("data/catalog.parquet", compression="zstd")
-```
-
+Compression applies to feature and catalog output:
+`catalog.gs.to_geoparquet("catalog.parquet", compression="zstd")`.
 Catalog encoding requires WKB geometry, bbox information and no serialized
-pandas index. Options conflicting with those constraints raise before writing.
-`parquet_options={"row_group_size": 10000}` bounds catalog row groups through
-the dependency's Arrow-stream input. `store_schema=False` is rejected for all
-GeoParquet output because it would remove required geometry metadata.
-`collections=` overrides definitions by id and is valid only for catalogs.
-
-Catalog constructors and file readers attach the metadata marker. Selected
-columns retain it, so rewriting an incomplete catalog raises for missing fields.
-Item-shaped rows whose metadata was lost must be reconstructed explicitly with
-`stac.create_catalog(...)`; the writer does not guess a catalog from column names.
+pandas index. Conflicting options raise before writing.
+`parquet_options={"row_group_size": 10000}` controls catalog row groups.
+`store_schema=False` is rejected because it would remove geometry metadata.

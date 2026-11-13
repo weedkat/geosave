@@ -52,6 +52,9 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
 
 ## Threshold calibration
 
+Prediction decoding is paused: `softmax_argmax` raises `NotImplementedError`.
+Calibration that calls it is unavailable pending redesign.
+
 ::: geosave.ml.callbacks.calibrate
     options:
       members:

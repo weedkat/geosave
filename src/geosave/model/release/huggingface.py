@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any, TypedDict
 
 import torch
@@ -11,8 +10,7 @@ from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedMode
 
 from geosave.__about__ import __version__
 from geosave.model.chain import ModelChain
-from geosave.model.registry import build_model
-from geosave.model.spec import ModelSpec
+from geosave.model.stages.registry import build_model
 
 ARTIFACT_FORMAT_VERSION = 1
 
@@ -80,13 +78,12 @@ class GeoSaveModel(PreTrainedModel):
         config: Ordered construction specifications.
         chain: Existing chain to wrap without rebuilding or copying weights.
             Its specifications must match config. Omit when loading an artifact.
-        spec: Processing contract `save_pretrained` writes beside the weights.
 
     Raises:
         ValueError: The supplied chain does not match the configuration.
 
     Examples:
-        >>> release = GeoSaveModel.from_chain(task.model, spec=spec)
+        >>> release = GeoSaveModel.from_chain(task.model)
         >>> commit = release.push_to_hub("org/model")
         >>> model = AutoModel.from_pretrained("org/model", revision=commit.oid)
         >>> model.chain.encoder
@@ -101,26 +98,23 @@ class GeoSaveModel(PreTrainedModel):
         config: GeoSaveConfig,
         *,
         chain: ModelChain | None = None,
-        spec: ModelSpec | None = None,
     ) -> None:
         super().__init__(config)
         specs = {entry["stage"]: entry["spec"] for entry in config.stages}
         if chain is not None and list(chain.stage_specs.items()) != list(specs.items()):
             raise ValueError("Chain construction specifications do not match config")
         self.chain = chain if chain is not None else build_model(specs)
-        self.spec = spec
         self.add_model_tags("geosave")
         self.post_init()
 
     @classmethod
     def from_chain(
-        cls, chain: ModelChain, *, spec: ModelSpec | None = None
+        cls, chain: ModelChain
     ) -> GeoSaveModel:
         """Wrap a trained chain, sharing its modules and weights.
 
         Args:
             chain: Model built from registered stage specifications.
-            spec: Processing contract to release with the weights.
 
         Returns:
             Transformers model sharing the chain and its training mode.
@@ -140,28 +134,9 @@ class GeoSaveModel(PreTrainedModel):
                 StageConfig(stage=name, spec=value) for name, value in specs.items()
             ]
         )
-        model = cls(config, chain=chain, spec=spec)
+        model = cls(config, chain=chain)
         model.training = chain.training
         return model
-
-    def save_pretrained(
-        self,
-        save_directory: str | os.PathLike,
-        is_main_process: bool = True,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """Write the Transformers artifact and, when present, the spec beside it.
-
-        Args:
-            save_directory: Directory to write.
-            is_main_process: Whether this process writes; only it writes the spec.
-            *args: Further positional options of `PreTrainedModel.save_pretrained`.
-            **kwargs: Options forwarded to `PreTrainedModel.save_pretrained`.
-        """
-        super().save_pretrained(save_directory, is_main_process, *args, **kwargs)
-        if self.spec is not None and is_main_process:
-            self.spec.save(os.path.join(save_directory, ModelSpec.filename))
 
     @torch.no_grad()
     def _init_weights(self, module: nn.Module) -> None:

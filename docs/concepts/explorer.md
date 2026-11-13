@@ -23,7 +23,9 @@ contain the selected layer’s controls, legend and metadata.
 The map sits beside it; a collapsible catalog or attribute table sits below
 the map. Tables start with no selected rows and draw no footprints. Switching
 tabs preserves each table's selection. A row's checkbox draws its geometry; a catalog's **raster** column
-opens that row's raster with a click and removes it with another. Clicking the
+normally opens that row's raster. **Catalog pixel viewing is currently unavailable:**
+`read_pixels` raises while catalog access is rebuilt. Open and combine assets
+explicitly, then explore the resulting Dataset instead. Clicking the
 map picks features without opening rasters. Column filters and date ranges
 retain original row identity. Table guidance explains the two controls; checking
 Raster again retries a failed load. **Fit visible layers** frames the layers
@@ -62,11 +64,10 @@ network access. Choose `basemap="None"` before capture for a map without tile
 requests. Capturing uncached pixels computes them; output dimensions do not
 bound source reads.
 
-Each raster reads the pixels around the view at one web-map zoom level,
-through `.gs.read_pixels`: a catalog row reads each file's window from the
-overview its pixel size needs; any other Dataset crops and keeps every n-th
-pixel before computing, so a zoomed-out computed raster still computes the
-chunks under the view. Pans within the cached area at the same zoom level
+For a Dataset layer, the explorer masks missing values, casts the shown bands
+to float32 and reprojects them onto the viewport grid before computing.
+Catalog-backed layers depend on the paused `row.gs.read_pixels` operation.
+Pans within the cached area at the same zoom level
 and opacity changes neither read nor resend pixels; hidden rasters do no work.
 Recent viewport windows share a 128 MiB pixel-cache budget per raster layer,
 so returning to a retained zoom avoids another source read. Returning to a

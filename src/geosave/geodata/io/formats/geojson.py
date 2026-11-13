@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Any, TypedDict, Unpack, cast
 
 import geopandas as gpd
 from upath import UPath
@@ -49,17 +48,14 @@ class GeoJSONOpenOptions(TypedDict, total=False):
 def open_geojson(
     source: Location,
     *,
-    engine: Literal["fiona", "pyogrio"] = "pyogrio",
     storage_options: StorageOptions | None = None,
     **open_options: Unpack[GeoJSONOpenOptions],
 ) -> GeoDataFrame:
     """Open the features of one GeoJSON file.
 
     Args:
-        source: Local path, URL, or UPath. Remote files are downloaded
-            temporarily through the selected filesystem.
-        engine: Concrete GeoPandas file-reading engine.
-        storage_options: Credentials and connection options for the filesystem.
+        source: Local path, URL, or UPath, read through its filesystem.
+        storage_options: Options for the filesystem a URL names.
         **open_options: Supported GeoPandas and file-driver read options.
 
     Returns:
@@ -69,13 +65,10 @@ def open_geojson(
         TypeError: An option is unsupported or supplied twice.
         ValueError: A driver option selects an engine or disables geometry.
     """
-    with storage.localize(source, storage_options) as path:
-        options = unpack_engine_options(open_options)
+    options = unpack_engine_options(open_options)
+    with storage.create_upath(source, storage_options).open("rb") as handle:
         frame = gpd.read_file(
-            path,
-            engine=engine,
-            ignore_geometry=False,
-            **options,
+            handle, engine="pyogrio", ignore_geometry=False, **options
         )
     return cast("GeoDataFrame", frame)
 
@@ -97,8 +90,6 @@ class GeoJSONWriteOptions(TypedDict, total=False):
             does not provide GeoPandas' GeoPackage metadata support.
         engine_options: Extra write keywords for the selected engine or GDAL
             driver. Do not set `engine` or repeat direct options here.
-        storage_options: Filesystem credentials and connection options for
-            uploading the completed temporary file to a remote destination.
     """
 
     index: bool | None
@@ -106,15 +97,14 @@ class GeoJSONWriteOptions(TypedDict, total=False):
     nan_as_null: bool
     metadata: dict[str, str] | None
     engine_options: dict[str, Any]
-    storage_options: StorageOptions | None
 
 
 def write_geojson(
     gdf: gpd.GeoDataFrame,
     path: Location,
     *,
-    engine: Literal["fiona", "pyogrio"] = "pyogrio",
     overwrite: bool = False,
+    storage_options: StorageOptions | None = None,
     **write_options: Unpack[GeoJSONWriteOptions],
 ) -> UPath:
     """Write one GeoDataFrame as a GeoJSON file.
@@ -124,37 +114,33 @@ def write_geojson(
     Args:
         gdf: Frame to write.
         path: Output path or fsspec URL ending in `.geojson` or `.json`.
-        engine: Concrete GeoPandas file-writing engine.
         overwrite: Replace an existing file when true.
+        storage_options: Options for the filesystem a URL names.
         **write_options: Supported GeoPandas and file-driver write options.
 
     Returns:
-        Local writes return a PosixUPath; URL writes return a UPath carrying
-        its storage options.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
         TypeError: An option is unsupported or supplied twice.
         ValueError: The frame carries STAC Item metadata, the suffix is wrong,
-            or an option conflicts with `engine`.
+            or `engine_options` names an engine.
     """
-    gdf.gs.validate(geometry=False, stac_item=False)
 
-    storage_options = write_options.pop("storage_options", None)
     engine_options = dict(write_options.pop("engine_options", {}))
     if "engine" in engine_options:
-        raise ValueError("engine_options must not contain engine; use engine=")
+        raise ValueError("engine_options must not contain engine; pyogrio writes")
+    destination = storage.create_upath(path, storage_options)
+    storage.check_destination(destination, _FILE_SUFFIXES, overwrite=overwrite)
     features = gdf.to_crs("EPSG:4326")
 
-    def save(target: Path) -> None:
+    with storage.stage_file(destination) as local:
         features.to_file(
-            target, driver="GeoJSON", engine=engine, **write_options, **engine_options
+            local,
+            driver="GeoJSON",
+            engine="pyogrio",
+            **write_options,
+            **engine_options,
         )
-
-    return storage.write_file(
-        path,
-        save,
-        suffixes=_FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
-    )
+    return destination

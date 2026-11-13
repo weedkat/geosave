@@ -2,9 +2,7 @@
 
 from pathlib import Path, PurePosixPath
 
-from geosave.geodata import GeoDataFrame, open_raster, open_vector
-from geosave.geodata.stac.catalog import create_catalog
-from geosave.geodata.stac.publish import create_stac_item
+from geosave.geodata import GeoDataFrame, open_vector
 
 _TABLE_SUFFIXES = (".parquet", ".geoparquet")
 
@@ -48,6 +46,7 @@ def read_labels(source: str | Path, pattern: str = "**/*.tif") -> GeoDataFrame:
         beside any caller columns. A sample's time is its label raster's own.
 
     Raises:
+        NotImplementedError: Directory ingestion awaits STAC publication.
         ValueError: A directory holds no label, two labels share a sample
             path, or a label carries no time; or a table lacks `id` or
             `assets`, a row names no `label` asset, or an id is null, not
@@ -55,32 +54,7 @@ def read_labels(source: str | Path, pattern: str = "**/*.tif") -> GeoDataFrame:
     """
     path = Path(source)
     if path.suffix.lower() not in _TABLE_SUFFIXES:
-        items = []
-        for sample_id, label_path in find_labels(path, pattern).items():
-            with open_raster(label_path) as label:
-                if label.gs.timespan is None:
-                    raise ValueError(f"Label raster has no time: {label_path}")
-                start, end = label.gs.timespan
-                properties = {}
-                instant = start if start == end else None
-                if instant is None:
-                    properties = {
-                        "start_datetime": start.isoformat(),
-                        "end_datetime": end.isoformat(),
-                    }
-
-                items.append(
-                    create_stac_item(
-                        {"label": label_path},
-                        id=sample_id,
-                        input_datetime=instant,
-                        properties=properties,
-                        with_proj=True,
-                        with_raster=True,
-                        with_eo=True,
-                    )
-                )
-        return create_catalog(items)
+        raise NotImplementedError("Directory label ingestion awaits STAC publication.")
 
     labels = open_vector(path)
     absent = [name for name in ("id", "assets") if name not in labels]

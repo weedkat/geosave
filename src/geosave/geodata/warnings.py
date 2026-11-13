@@ -16,10 +16,6 @@ class AssumedFillWarning(GeoSaveWarning):
     """A warped variable carried no fill value, so one was chosen."""
 
 
-class DroppedAttrsWarning(GeoSaveWarning):
-    """Conflicting or incomplete source metadata was dropped."""
-
-
 class DroppedInstantsWarning(GeoSaveWarning):
     """Incomplete or trailing sampling positions were left out."""
 

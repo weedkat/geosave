@@ -46,14 +46,6 @@ def test_missing_collection_raises_a_lookup_error(monkeypatch, lookup):
         StacClient(native).collection("missing")
 
 
-def test_another_api_error_is_not_a_missing_collection(monkeypatch):
-    native = Client(id="local", description="Local catalog")
-    monkeypatch.setattr(native, "get_collection", _not_found(503))
-
-    with pytest.raises(APIError):
-        StacClient(native).collection("busy")
-
-
 def _offering(native: Client, collection: str) -> Client:
     found = pystac.Collection(
         collection,
@@ -125,19 +117,3 @@ def test_search_attaches_only_returned_collections(monkeypatch):
     assert list(found.gs.collections) == ["s2"]
     found.attrs["stac-geoparquet"]["collections"]["s2"]["description"] = "changed"
     assert client.collection("s2").description == "Rows"
-
-
-def test_empty_search_fetches_no_collections(monkeypatch):
-    native = Client(id="local", description="Local catalog")
-    client = StacClient(native)
-    monkeypatch.setattr(client, "search_items", lambda query: [])
-
-    def refuse(name):
-        raise AssertionError("empty search fetched a Collection")
-
-    monkeypatch.setattr(client, "collection", refuse)
-
-    found = client.search(StacQuery(collections=["s2"]))
-
-    assert found.empty
-    assert found.gs.collections == {}

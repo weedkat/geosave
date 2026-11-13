@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.conftest import combine_item, write_cogs
+from tests.conftest import write_cogs
 
 import os
 import uuid
@@ -35,6 +35,44 @@ def flat(paths):
     return result
 
 
+def raster_item(rasters, *, id, input_datetime, properties=None, collection=None):
+    """Declare fixture assets from known raster objects, without publication."""
+    import pystac
+    from shapely.geometry import mapping
+    from shapely.ops import unary_union
+
+    from geosave.geodata.stac.extensions import classification, eo, projection, raster
+    from geosave.geodata.stac.item import create_item, normalize_time
+
+    footprints = []
+    for _, source in rasters.values():
+        footprints.append(source.gs.geobox.geographic_extent.geom)
+    footprint = unary_union(footprints)
+    fields = dict(properties or {})
+    period = normalize_time(
+        input_datetime,
+        fields.pop("start_datetime", None),
+        fields.pop("end_datetime", None),
+    )
+    entry = create_item(id=id, time=period, properties=fields, collection=collection)
+    entry.geometry = mapping(footprint)
+    entry.bbox = list(footprint.bounds)
+    for key, (path, source) in rasters.items():
+        asset = pystac.Asset(str(path), media_type=pystac.MediaType.COG, roles=["data"])
+        entry.add_asset(key, asset)
+        projection.write_asset(asset, source.gs.geobox)
+        bands = []
+        identities = []
+        for variable in source.data_vars.values():
+            band = raster.build_band(variable)
+            classification.write_band(asset, band, variable.gs.flags)
+            bands.append(band)
+            identities.append(eo.build_band(variable))
+        raster.write_asset(asset, bands)
+        eo.write_asset(asset, identities)
+    return entry
+
+
 def create_file_items(
     files,
     *,
@@ -53,7 +91,6 @@ def create_file_items(
 
     import pystac
     from geosave.geodata import open_raster
-    from geosave.geodata.stac.publish import create_stac_item
 
     with ExitStack() as opened:
         groups = {}
@@ -94,17 +131,14 @@ def create_file_items(
                     "start_datetime": pd.Timestamp(start).isoformat(),
                     "end_datetime": pd.Timestamp(end).isoformat(),
                 }
-            entry = create_stac_item(
-                paths,
+            entry = raster_item(
+                {key: (path, raster) for key, (path, raster, _) in assets.items()},
                 id=id_format.format_map(values),
                 input_datetime=instant,
                 properties=properties,
                 collection=collection.id
                 if isinstance(collection, pystac.Collection)
                 else collection,
-                with_proj=True,
-                with_raster=True,
-                with_eo=True,
             )
             if isinstance(collection, pystac.Collection):
                 entry.set_collection(collection)
@@ -211,8 +245,9 @@ def raster() -> xr.Dataset:
 
 
 @pytest.fixture
-def tree(raster: xr.Dataset) -> xr.DataTree:
-    return build_tree({"optical": raster[["red"]], "infrared": raster[["nir"]]})
+def tree() -> xr.DataTree:
+    dated = build_raster(times=2)
+    return build_tree({"optical": dated[["red"]], "infrared": dated[["nir"]]})
 
 
 @pytest.fixture
@@ -256,43 +291,25 @@ def cog_template(name: str, *, dated: bool) -> str:
     return f"{name}.tif"
 
 
-def tree_templates(sample) -> dict[str, str]:
-    """Give every group of a tree its `cog_template` relative to the destination."""
+def tree_templates(rasters) -> dict[str, str]:
+    """Give every collection's raster its `cog_template` relative to the destination."""
     templates = {}
-    for name in sample.gs.groups:
-        raster = sample[name].gs.combine_stac()
+    for name, raster in rasters.items():
         templates[name] = cog_template(name, dated="time" in raster.dims)
     return templates
 
 
-def write_collection_cogs(tree, root, templates=None) -> dict[str, list]:
-    """Write each collection of a tree as COGs, keyed by collection, as `item_table` takes them.
+def write_collection_cogs(rasters, root, templates=None) -> dict[str, list]:
+    """Write each collection's raster as COGs, keyed by collection, as `item_table` takes them.
 
     A template naming `{variable}` writes a file per variable; otherwise every
     variable of a date shares one file, as one asset.
     """
-    templates = templates or tree_templates(tree)
+    templates = templates or tree_templates(rasters)
     files = {}
-    for name in tree.gs.groups:
-        raster = tree[name].gs.combine_stac()
-        template = templates[name]
-        files[name] = write_cogs(raster, root, template)
+    for name, raster in rasters.items():
+        files[name] = write_cogs(raster, root, templates[name])
     return files
-
-
-def read_items(rows):
-    """Read one collection's rows as one raster: each a scene, joined along time."""
-    from geosave.geodata.stac.load import load_datatree
-    from geosave.geodata import attrs
-
-    scenes = []
-    for entry in rows.gs.to_items():
-        scenes.append(combine_item(load_datatree([entry])))
-    if len(scenes) == 1:
-        return scenes[0]
-    return xr.concat(
-        scenes, dim="time", join="exact", combine_attrs=attrs.combine_attrs
-    )
 
 
 def titled(obj, title: str = "scene"):
@@ -323,8 +340,7 @@ def geobox(*, crs: str = "EPSG:32633", shape: tuple[int, int] = (8, 8)) -> GeoBo
 
 @pytest.fixture
 def rows(scene, label, tmp_path):
-    sample = build_tree({"optical": scene, "label": label})
-    saved = write_collection_cogs(sample, tmp_path / "s0")
+    saved = write_collection_cogs({"optical": scene, "label": label}, tmp_path / "s0")
     return item_table(saved, prefix="s0")
 
 
@@ -349,10 +365,6 @@ def _refuse(*args, **kwargs):
     raise AssertionError("pixels were computed")
 
 
-def _size(url: str, options: dict) -> int:
-    return storage.location(url, options).stat().st_size
-
-
 def _s3_service() -> tuple[str, dict, str]:
     """Return the prefix, storage options and GDAL endpoint of an S3 service."""
     endpoint = os.environ["GEOSAVE_S3_ENDPOINT"]
@@ -360,9 +372,16 @@ def _s3_service() -> tuple[str, dict, str]:
     options = {
         "key": os.environ.get("AWS_ACCESS_KEY_ID", "minioadmin"),
         "secret": os.environ.get("AWS_SECRET_ACCESS_KEY", "minioadmin"),
-        "client_kwargs": {"endpoint_url": endpoint},
+        "client_kwargs": {"endpoint_url": endpoint, "region_name": "us-east-1"},
+        # S3-compatible gateways, Hugging Face's among them, address buckets as
+        # path segments and do not parse the trailing checksums botocore sends.
+        "config_kwargs": {
+            "s3": {"addressing_style": "path"},
+            "request_checksum_calculation": "when_required",
+            "response_checksum_validation": "when_required",
+        },
     }
-    storage.location(f"s3://{bucket}", options).mkdir(exist_ok=True)
+    storage.create_upath(f"s3://{bucket}", options).mkdir(exist_ok=True)
     return f"s3://{bucket}", options, endpoint
 
 
@@ -400,28 +419,9 @@ def remote(request):
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-        folder = storage.location(prefix, options)
+        folder = storage.create_upath(prefix, options)
         if folder.exists():
             folder.fs.rm(folder.path, recursive=True)
-
-
-@pytest.fixture
-def nested_tree():
-    """Nested measurements with parent-node data and repeated grid labels."""
-    source = (
-        build_raster(times=2).chunk().assign_coords(cloud_fraction=("time", [0.1, 0.2]))
-    )
-    return xr.DataTree.from_dict(
-        {
-            "s2": xr.Dataset(attrs={"source": "sensor"}),
-            "s2/measurements": xr.Dataset(attrs={"description": "organization"}),
-            "s2/measurements/native": source,
-            "s2/measurements/native/qa": source[["red"]].rename(red="cloud"),
-            "s2/quality/native": source[["red"]].rename(red="confidence"),
-            "s2/empty": xr.Dataset(attrs={"description": "no raster"}),
-            "dem/native": build_raster()[["red"]].rename(red="height").chunk(),
-        }
-    )
 
 
 def assign_cells(raster, pairs):

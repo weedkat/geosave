@@ -92,17 +92,18 @@ reads finish. Storage chunks and upstream transforms may require more work than
 the requested window.
 
 Prediction merging still allocates full output accumulators. Lazy input reads
-do not make whole-scene output memory bounded. See [chip reading and merging](../guides/catalogs-and-cuts.md#cut-raster-chips)
+do not make whole-scene output memory bounded. See [chip reading and merging](../guides/chips.md)
 for batching and output rules.
 
 ## Schedule a write explicitly
 
-Every `to_cog`, `to_zarr` and `to_netcdf` takes `compute=False` and returns
-one native Dask Delayed:
+Array `to_cog` and raster `to_zarr` / `to_netcdf` accept `compute=False`.
+Each returns one native Dask Delayed. For example,
 `scene.gs.to_zarr("scene.zarr", compute=False).compute()` writes the store and
-returns its UPath, as `to_netcdf` does for its file and `to_cog` for its list of
-files; a tree's `to_zarr` and `to_netcdf` write one store with its groups. Nothing reaches the
-destination before the delayed job runs.
+returns its UPath. Array `to_cog` yields one UPath; tree `to_cog` yields a list.
+Tree Zarr and NetCDF writes yield one store path, retaining groups.
+No write reaches the destination before the delayed job runs.
+See [writer return values](../reference/io.md#saved-raster-files).
 
 Keep file-backed rasters and trees open until the work that depends on them
 finishes. Close them afterward to release handles. Select the region and

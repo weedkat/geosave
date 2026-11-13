@@ -1,4 +1,4 @@
-"""What a release contains: the chain, its stages, the registry and the spec.
+"""Model chains, stage construction and releases; ModelSpec is paused.
 
 The chain and its builder are reached from here; each loads on first use, so
 importing `geosave.model.spec` never pays for torch.
@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .chain import ModelChain, Published, chain_step
-    from .registry import build_model, list_models
+    from .stages.registry import build_model, list_models
 
 _LAZY = {
     "ModelChain": "chain",
     "Published": "chain",
     "chain_step": "chain",
-    "build_model": "registry",
-    "list_models": "registry",
+    "build_model": "stages.registry",
+    "list_models": "stages.registry",
 }
 
 __all__ = ["ModelChain", "Published", "build_model", "chain_step", "list_models"]

@@ -26,6 +26,14 @@ use GeoSave for imagery.
 
 ## Real land-cover project
 
+!!! warning "Notebook migration in progress"
+    This series is being migrated to the current raster and catalog APIs.
+    Notebooks 0 and 1 still call the removed `gs.write_grid`; later lessons
+    depend on catalog and recipe APIs under redesign. Use the
+    [offline training tutorial](guides/training.md) for a current runnable path.
+    The descriptions below record the teaching sequence, not verified runs
+    against today's `main`.
+
 ![Sentinel-2 image beside expert land-cover annotations](assets/land-cover-labels.png)
 
 *One paired training tile, not a prediction. Expert labels: Tait et al. (2021),
@@ -106,6 +114,6 @@ Each notebook ends with project extensions rather than quizzes.
 | Start with pretrained weights. | [Pretrained models](guides/pretrained.md) |
 | Run an editable Lightning starter. | [Workspaces](guides/workspaces.md) |
 | Save training settings in a project. | [Workspaces](guides/workspaces.md) |
-| Declare a model's data requirements. | [ModelSpec](guides/model-spec.md), an Alpha API |
-| Prepare spatial and temporal windows. | [Catalogs and cuts](guides/catalogs-and-cuts.md) |
+| Prepare a model's inputs consistently. | [Model input preparation](guides/model-inputs.md) |
+| Read spatial windows and merge predictions. | [Chips](guides/chips.md) |
 | Publish a model. | [Model releases](guides/release.md) |

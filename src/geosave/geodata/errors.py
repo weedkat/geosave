@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
+
 
 class RegionFetchError(RuntimeError):
     """A STAC search matched no items for a region."""
@@ -30,7 +32,7 @@ class RasterValidationError(ValueError):
         self,
         message: str,
         *,
-        variable: str | None = None,
+        variable: Hashable | None = None,
         path: str | None = None,
         operation: str | None = None,
     ) -> None:

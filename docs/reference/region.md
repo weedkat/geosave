@@ -13,13 +13,11 @@ raster.gs.geobox.extent       # Pixel-grid footprint
 raster.red.gs.region.extent   # Also retained by a selected band
 ```
 
-A raster carries two boundaries: its grid (`gs.geobox`, the pixel edges) and,
-optionally, a declared extent naming its area of interest, such as a city
-inside the grid. Loading with `region=` declares the region this way and loads
-the whole grid around it; nothing is masked. Publication writes the region as
-the Item `geometry` and the grid as each Asset's `proj:shape` and
-`proj:transform`; a catalog's `to_datatree()` reads the geometry back as the
-region. Clear it with `write_extent(None)` to publish the whole grid.
+A raster can carry both a grid footprint (`gs.geobox.extent`) and a declared
+area of interest (`gs.region.extent`), such as a city inside that grid.
+The declared extent does not mask pixels. Current tree publication constructs
+Item geometry from the union of asset grid footprints; it does not publish a
+custom declared extent as the Item geometry.
 
 `write_extent()` changes metadata only. Native spatial slicing, cropping and
 reprojection preserve the declared place; call `write_extent()` again when that

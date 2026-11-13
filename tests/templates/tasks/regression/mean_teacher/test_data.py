@@ -11,6 +11,10 @@ from modules.regression import mean_teacher
 from tests.templates.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
 from tests.templates.tasks.regression.supervised.test_data import Chips
 
+pytestmark = pytest.mark.skip(
+    reason="Template processing awaits the ModelSpec redesign."
+)
+
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
 

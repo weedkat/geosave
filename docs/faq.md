@@ -2,21 +2,21 @@
 
 ## Where do I start with geospatial AI research?
 
-Follow the [notebook learning path](examples.md). Start with real image/label
-pairs and a small model, then learn stage composition, feature preparation,
-prediction maps, and acquisition for your own labels. The
+Start with the [offline training tutorial](guides/training.md), then adapt it
+to your own image/label pairs. The [notebook learning path](examples.md) records
+a real land-cover project but still needs migration to current APIs. The
 [training guide](guides/training.md) continues the chip tutorial through a small segmentation model, checkpoint,
 and prediction map. For editable project recipes, see [workspaces](guides/workspaces.md).
 
 ## What can I use without training a model?
 
 Read and save rasters or vectors, calculate indices, preserve value metadata,
-search STAC, build catalogs, and select windows. Begin with
+search STAC, build catalogs, and read raster chips. Begin with
 [activities](activities.md).
 
 ## Which installation do I need?
 
-The base install covers geodata and model specifications. Add `ml` for tensors,
+The base install covers geodata. ModelSpec is currently disabled. Add `ml` for tensors,
 model stages, and training; `hub` for native releases; `flows` for Prefect jobs;
 and `cloud` for S3 or Google Cloud filesystems. `hub` includes `ml`.
 See [Installation](install.md) for the extras and commands.
@@ -80,15 +80,14 @@ See [value metadata](basics/attrs.md) and [training targets](concepts/training.m
 Match CRS, transform, and pixel shape. Equal array sizes can describe different
 locations. A tree retains separate native grids until explicitly aligned.
 Choose nearest resampling for categorical labels and a suitable method for
-continuous imagery. See [raster grids](concepts/raster-grids.md).
+continuous imagery. See [the alignment recipe](guides/align-rasters.md).
 
 ## Does a catalog contain the imagery? Can I move it?
 
 An Item table stores metadata and asset addresses; pixels stay in their
 source files. Item catalogs can use relative hrefs that resolve against the
-catalog's location. Move the catalog and its asset folders together. Grouped
-samples hold positions in that Item table; recreate them after reading the
-catalog. Moving files does not provide credentials for remote assets. See [catalog rules](concepts/catalog-windows.md).
+catalog's location. Move the catalog and its asset folders together. Catalog sampling is currently unavailable; select rows with GeoPandas and
+load their assets explicitly. Moving files does not provide credentials for remote assets. See [catalog rules](concepts/catalog-windows.md).
 
 ## Will GeoSave make my Dataset and train/validation split?
 
@@ -101,22 +100,19 @@ regions for validation to avoid overlap with training. See [Training](guides/tra
 
 Encoder weights initialize feature extraction; your new task head still needs
 training. Lightning checkpoints include training state for the task. A native
-release saves a reconstructable chain and optional model spec for reuse.
+release saves a reconstructable chain and its weights for reuse.
 Use [pretrained models](guides/pretrained.md) to choose the loading path and
 [releases](guides/release.md) for save/load examples.
 
 ## Does a saved model run all preprocessing automatically?
 
-A ModelSpec declares inputs and dependent Python calls. Select the source and
-result explicitly with `spec.run(...)`. A release's
-forward call does not automatically normalize tensors using the spec. Match
-the training input contract before calling the model. See
-[model inputs](concepts/model-inputs.md) and [data flow](concepts/data-flow.md).
+ModelSpec is disabled pending redesign. Prepare inputs explicitly; a release
+forwards named inputs to its chain and performs no automatic preprocessing.
 
 ## How do I find exact parameters, defaults, and return values?
 
-Use [API reference](reference/index.md) by topic, or search the
-[public API inventory](reference/public-api.md) by symbol. Check the format's
+Use the [task-based API reference](reference/index.md), or the
+[symbol inventory](reference/public-api.md) when you know a name. Check the format's
 options class when a reader or writer forwards `**options`. Constructors for
 validated specs use their documented fields as keyword inputs. The reference
 is generated from source; [documentation maintenance](contributing/documentation.md)

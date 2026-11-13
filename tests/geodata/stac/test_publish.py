@@ -16,92 +16,13 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from geosave.geodata import (
-    open_vector,
-)
 from geosave.geodata.stac.load import load_datatree
-from geosave.geodata.stac.publish import create_stac_item
-from geosave.geodata.stac.catalog import create_catalog
 from tests.conftest import build_dataset
 from tests.geodata.conftest import (
-    _refuse,
     build_raster,
     create_file_items,
-    create_test_collection,
     item_table,
-    read_items,
 )
-from tests.geodata.stac.conftest import create_native_item
-
-
-def test_a_catalog_loads_one_node_per_asset_whatever_the_asset_order(tmp_path):
-    from affine import Affine
-    from odc.geo.geobox import GeoBox
-
-    base = Affine(10, 0, 500000, 0, -10, 9000020)
-    grids = {
-        "red": GeoBox((4, 4), base, "EPSG:32749"),
-        "nir": GeoBox((4, 4), base, "EPSG:32749"),
-        "swir": GeoBox((2, 2), base * Affine.scale(2), "EPSG:32749"),
-    }
-    sources = {}
-    for value, (name, grid) in enumerate(grids.items(), start=1):
-        path = tmp_path / f"{name}.tif"
-        with rasterio.open(
-            path,
-            "w",
-            driver="GTiff",
-            width=grid.width,
-            height=grid.height,
-            count=1,
-            dtype="uint16",
-            crs=str(grid.crs),
-            transform=grid.transform,
-        ) as file:
-            file.write(np.full(tuple(grid.shape), value, dtype="uint16"), 1)
-        sources[name] = path
-    entry = create_stac_item(
-        sources,
-        id="first",
-        input_datetime=datetime(2025, 1, 1, tzinfo=UTC),
-        with_proj=True,
-        with_raster=True,
-        with_eo=True,
-    )
-    entry.set_collection(create_test_collection("s2", description="S2"))
-    second = entry.clone()
-    second.id = "second"
-    second.datetime = datetime(2025, 1, 2, tzinfo=UTC)
-    second.assets = dict(reversed(list(second.assets.items())))
-
-    tree = create_catalog([entry, second]).gs.to_datatree()
-    # Each Item lists its assets as its own leaves, whatever their order.
-    assert tree["s2/first"].isomorphic(tree["s2/second"])
-    for item in ("first", "second"):
-        for name, grid in grids.items():
-            leaf = tree[f"s2/{item}/{name}"]
-            assert leaf.gs.geobox == grid
-            np.testing.assert_array_equal(
-                leaf[name].values, np.full(grid.shape, list(grids).index(name) + 1)
-            )
-
-
-def test_native_paths_publish_actual_band_metadata(tmp_path):
-    from tests.geodata.conftest import build_raster
-
-    path = tmp_path / "image.tif"
-    source = build_raster(times=1, packed=True)
-    write_cogs(source, path.parent, format_paths=path.name)
-    items = list(create_file_items([path], collection="s2"))
-    assert len(items) == 1
-    assert items[0].collection_id == "s2"
-    assert set(items[0].assets) == {"image"}
-    with create_catalog(items).iloc[0].gs.to_datatree() as tree:
-        restored = combine_item(tree)
-        assert restored.red.dtype == source.red.dtype
-        assert (
-            restored.red.gs.packing.scale_factor == source.red.gs.packing.scale_factor
-        )
 
 
 @pytest.fixture
@@ -121,14 +42,16 @@ def item(tmp_path):
     ) as tiff:
         tiff.write(np.stack([np.full((2, 2), value, "uint8") for value in (1, 2, 3)]))
 
-    return create_stac_item(
-        {"visual": path},
-        id="scene",
-        input_datetime=datetime(2025, 1, 1, tzinfo=UTC),
-        with_proj=True,
-        with_raster=True,
-        with_eo=True,
+    entry = next(
+        create_file_items(
+            {"visual": path},
+            id_format="scene",
+            datetime=datetime(2025, 1, 1, tzinfo=UTC),
+        )
     )
+    # This fixture deliberately publishes no band identities.
+    entry.assets["visual"].extra_fields.pop("eo:bands", None)
+    return entry
 
 
 def test_unlisted_bands_use_the_asset_key_without_reading_pixels(item):
@@ -160,65 +83,15 @@ def test_native_composite_load_retains_bounds(tmp_path):
     assert rebuilt.properties["end_datetime"] == original.properties["end_datetime"]
 
 
-@pytest.mark.integration
-def test_an_item_table_of_cogs_loads_back(remote) -> None:
-    prefix, options = remote
-    source = build_raster(times=2)
-    paths = write_cogs(
-        source, prefix, format_paths="forest_{time:%Y%m%d}.tif", storage_options=options
-    )
-    # GDAL reads a remote TIFF with the keys in its environment, not fsspec options.
-    rows = item_table(paths)
-
-    saved = rows.gs.to_geoparquet(f"{prefix}/catalog.parquet", storage_options=options)
-
-    rows = open_vector(saved, storage_options=options)
-    assert rows.iloc[0]["assets"]["image"]["href"] == str(paths[0])
-    with dask.config.set(scheduler=_refuse):
-        restored = read_items(rows)
-    np.testing.assert_array_equal(restored.red.values, source.red.values)
-    restored.close()
-
-
-def test_only_data_assets_load(tmp_path):
-    entry, source = create_native_item(tmp_path)
-
-    loaded = read_items(create_catalog([entry]))
-
-    # The thumbnail is skipped; the data asset's bands keep the names it states.
-    assert list(loaded.data_vars) == list(source.data_vars)
-    loaded.close()
-
-
 @pytest.fixture
 def catalog(tmp_path):
     """A dated optical collection and a timeless DEM on one grid, catalogued."""
-    from tests.conftest import build_tree
     from tests.geodata.conftest import write_collection_cogs
 
-    tree = build_tree(
-        {"optical": build_raster(times=2), "dem": build_raster()[["red"]]}
+    files = write_collection_cogs(
+        {"optical": build_raster(times=2), "dem": build_raster()[["red"]]}, tmp_path
     )
-    files = write_collection_cogs(tree, tmp_path)
     return item_table(files, prefix="c")
-
-
-def test_collections_open_as_groups_in_first_appearance_order(catalog):
-    tree = catalog.gs.to_datatree()
-
-    assert tree.gs.groups == tuple(dict.fromkeys(catalog["collection"]))
-    assert [leaf.name for leaf in tree.leaves] == ["image", "image", "red"]
-    assert tree["optical"].gs.combine_stac().sizes["time"] == 2
-    # The DEM Item is dated, so it loads as one time step, as stac.load_dataset does.
-    assert tree["dem"].gs.combine_stac().sizes["time"] == 1
-    assert tree["optical"].gs.combine_stac().red.chunks is not None
-
-
-def test_an_item_without_a_collection_sits_under_default(catalog):
-    rows = catalog.copy()
-    rows["collection"] = None
-
-    assert rows.gs.to_datatree().gs.groups == ("default",)
 
 
 def write_mixed_scene(tmp_path, crs_by_name=None):
@@ -276,66 +149,124 @@ def write_png_item(tmp_path, stated_shape=(48, 64)):
     return entry, grid
 
 
-def test_an_asset_states_the_grid_a_png_lacks(tmp_path):
-    entry, grid = write_png_item(tmp_path)
-
-    scene = combine_item(load_datatree([entry]))
-
-    assert scene.odc.geobox == grid
+def build_item_node():
+    """The first Item node of an expanded two-date scene."""
+    tree = build_raster(times=2, packed=True).gs.expand()
+    return next(iter(tree["default"].children.values()))
 
 
-def test_create_stac_item_describes_saved_assets(tmp_path):
-    import rasterio
-    from geosave.geodata.io.formats.geotiff import write_cog
-    from geosave.geodata.stac.publish import create_stac_item
+def test_an_item_node_becomes_an_item_with_its_time_and_footprint():
+    from geosave.geodata.stac.publish import StacItem
 
-    dataset = build_raster(times=1)
-    paths = {}
-    for name in dataset.data_vars:
-        paths[name] = write_cog(dataset[[name]], tmp_path / f"{name}.tif")
+    node = build_item_node()
 
-    entry = create_stac_item(
-        paths,
+    item = StacItem.from_datatree(node, collection="default")
+
+    assert item.id == node.name
+    assert item.collection_id == "default"
+    assert item.datetime is not None
+    assert item.datetime.isoformat() == "2025-06-01T00:00:00+00:00"
+    assert item.geometry is not None
+    assert len(item.geometry["coordinates"][0]) == 17
+    assert item.assets == {}
+
+
+def test_an_item_takes_the_id_properties_and_geometry_it_is_given():
+    from shapely.geometry import box, mapping
+
+    from geosave.geodata.stac.publish import StacItem
+
+    footprint = mapping(box(111, -9.1, 111.1, -9))
+
+    item = StacItem.from_datatree(
+        build_item_node(),
         id="scene",
-        input_datetime=datetime(2025, 6, 1, tzinfo=UTC),
-        with_proj=True,
-        with_raster=True,
-        with_eo=True,
+        properties={"platform": "s2b"},
+        geometry=footprint,
     )
 
-    assert set(entry.assets) == {"red", "nir"}
-    assert entry.datetime == datetime(2025, 6, 1, tzinfo=UTC)
-    for name, asset in entry.assets.items():
-        with rasterio.open(paths[name]) as raster:
-            assert asset.extra_fields["proj:shape"] == [raster.height, raster.width]
-            assert (
-                asset.extra_fields["raster:bands"][0]["data_type"] == raster.dtypes[0]
-            )
-            assert asset.extra_fields["eo:bands"][0]["name"] == name
-    assert "proj:shape" not in entry.properties
+    assert item.id == "scene"
+    assert item.properties["platform"] == "s2b"
+    assert item.bbox == [111, -9.1, 111.1, -9]
 
 
-def test_saved_item_preserves_nominal_time_from_interval_properties(tmp_path):
-    from copy import deepcopy
-    from geosave.geodata.io.formats.geotiff import write_cog
-    from geosave.geodata.stac.publish import create_stac_item
+def test_a_raster_asset_declares_the_extensions_it_states():
+    from geosave.geodata.stac.publish import StacItem
 
-    path = write_cog(build_raster(times=1), tmp_path / "composite.tif")
-    properties = {
-        "datetime": "2025-06-15T00:00:00Z",
-        "start_datetime": "2025-06-01T00:00:00Z",
-        "end_datetime": "2025-07-01T00:00:00Z",
-        "platform": "s2a",
-    }
-    before = deepcopy(properties)
-    entry = create_stac_item({"image": path}, id="composite", properties=properties)
+    node = build_item_node()
+    item = StacItem.from_datatree(node)
+    red = node["red"].to_dataset(inherit="all_coords")
 
-    assert entry.datetime == datetime(2025, 6, 15, tzinfo=UTC)
-    assert entry.to_dict()["properties"]["datetime"] == "2025-06-15T00:00:00Z"
-    assert entry.properties["platform"] == "s2a"
-    assert properties == before
+    asset = item.add_raster_asset("red", red, "/data/red.tif")
+    bare = item.add_raster_asset(
+        "plain",
+        red,
+        "/data/plain.tif",
+        roles=["overview"],
+        with_proj=False,
+        with_raster=False,
+    )
+
+    assert asset.extra_fields["proj:code"] == "EPSG:32749"
+    assert asset.extra_fields["raster:bands"][0]["scale"] == 0.0001
+    assert asset.roles == ["data"]
+    assert "proj:code" not in bare.extra_fields
+    assert bare.roles == ["overview"]
+    assert any("projection" in uri for uri in item.stac_extensions)
+    assert any("raster" in uri for uri in item.stac_extensions)
 
 
-def _scene():
-    source = build_raster(times=2).chunk()
-    return source.assign(dem=source.red.isel(time=0, drop=True).astype("float32"))
+def test_a_cloned_item_stays_a_stac_item():
+    from geosave.geodata.stac.publish import StacItem
+
+    item = StacItem.from_datatree(build_item_node())
+
+    assert type(item.clone()) is StacItem
+    assert type(StacItem.from_dict(item.to_dict())) is StacItem
+
+
+def test_a_published_scene_loads_back_from_its_stored_table(tmp_path):
+    from geosave import open_vector
+    from tests.geodata.conftest import assign_cells
+
+    scene = build_raster(times=2, packed=True)
+    days = []
+    for value in scene.time.values:
+        days.append((value, value + np.timedelta64(1, "D")))
+    scene = assign_cells(scene, days)
+    scene["red"].attrs.update(long_name="Red", units="1")
+
+    rows = scene.gs.expand().gs.to_catalog(tmp_path / "out")
+    stored = open_vector(rows.gs.to_geoparquet(tmp_path / "catalog.parquet"))
+    restored = stored.gs.to_datatree()["default"].gs.combine()
+
+    # Hrefs are stored relative to the table and resolve against it.
+    assert stored.iloc[0]["assets"]["red"]["href"].startswith("./out/")
+    assert stored.attrs["source"] == str(tmp_path / "catalog.parquet")
+    for name in ("red", "nir"):
+        np.testing.assert_array_equal(restored[name].values, scene[name].values)
+    for name in ("time", "start_datetime", "end_datetime"):
+        assert restored[name].equals(scene[name])
+    assert restored.red.attrs["long_name"] == "Red"
+    assert restored.red.attrs["units"] == "1"
+    assert (
+        np.float32(restored.red.attrs["scale_factor"])
+        == scene.red.attrs["scale_factor"]
+    )
+
+
+def test_tables_read_from_different_files_do_not_concatenate(tmp_path):
+    from geosave import open_vector
+    from geosave.geodata.stac.catalog import concat_catalogs
+
+    tree = build_raster(times=1).gs.expand()
+    first = open_vector(
+        tree.gs.to_catalog(tmp_path / "a").gs.to_geoparquet(tmp_path / "a.parquet")
+    )
+    second = open_vector(
+        tree.gs.to_catalog(tmp_path / "b").gs.to_geoparquet(tmp_path / "b.parquet")
+    )
+
+    assert concat_catalogs([first, first]).attrs["source"] == first.attrs["source"]
+    with pytest.raises(ValueError, match="different files"):
+        concat_catalogs([first, second])

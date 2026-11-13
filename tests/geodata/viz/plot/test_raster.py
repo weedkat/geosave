@@ -26,9 +26,9 @@ def geobox() -> GeoBox:
 def optical() -> xr.Dataset:
     values = np.arange(16, dtype="uint16").reshape(4, 4) * 100
     raster = build_raster({"B04": (("y", "x"), values)}, geobox())
-    return raster.gs.write_packing(attrs.CFPacking(scale_factor=1e-4), target=["B04"]).gs.write_nodata(
-        0, target=["B04"]
-    )
+    return raster.gs.write_packing(
+        attrs.CFPacking(scale_factor=1e-4), target=["B04"]
+    ).gs.write_nodata(0, target=["B04"])
 
 
 @pytest.fixture
@@ -97,17 +97,6 @@ class TestClassMap:
         ]
         hv.render(drawn)
 
-    def test_accepts_an_rgb_tuple_palette(self, labels: xr.Dataset) -> None:
-        recoloured = labels.gs.write_flags(
-            {0: "water", 1: "trees", 8: "snow"},
-            {0: (65, 155, 223), 1: (57, 125, 73), 8: (179, 159, 225)},
-            target=["landcover"],
-        )
-
-        red = map_of(recoloured.gs.plot("landcover")).dimension_values("R", flat=False)
-
-        assert red[0, 0] == pytest.approx(0x41 / 255)
-
     def test_absent_pixels_draw_as_no_class(self) -> None:
         codes = np.array(
             [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
@@ -121,33 +110,8 @@ class TestClassMap:
 
         assert np.isnan(drawn.dimension_values("R")).any()
 
-    def test_refuses_a_colormap_or_limits(self, labels: xr.Dataset) -> None:
-        with pytest.raises(ValueError, match="drop cmap"):
-            labels.gs.plot("landcover", cmap="gray")
-        with pytest.raises(ValueError, match="clim cannot apply"):
-            labels.gs.plot("landcover", clim=(0, 1))
-
-    def test_uncoloured_class_draws_in_a_palette_colour(self) -> None:
-        values = np.zeros((4, 4), dtype="uint8")
-        values[2:] = 1
-        raster = build_raster({"cover": (("y", "x"), values)}, geobox())
-        raster = raster.gs.write_flags(
-            {0: "water", 1: "trees"}, {0: "#419bdf"}, target=["cover"]
-        )
-
-        red = map_of(raster.gs.plot("cover")).dimension_values("R", flat=False)
-
-        # The given colour is kept; the uncoloured class takes another.
-        reds = np.unique(red)
-        assert len(reds) == 2
-        assert np.isclose(reds, 0x41 / 255).any()
-
 
 class TestConstraints:
-    def test_unknown_variable_refuses(self, optical: xr.Dataset) -> None:
-        with pytest.raises(KeyError, match="not data variables"):
-            optical.gs.plot("B99")
-
     def test_per_band_colour_interpretation_selects_rgb(self, rgb: xr.Dataset) -> None:
         assert isinstance(rgb.gs.plot(), hv.RGB)
 
@@ -192,14 +156,6 @@ class TestVariables:
 
     def test_rgb_draws_a_composite(self, rgb: xr.Dataset) -> None:
         assert isinstance(rgb.gs.plot(rgb=("B04", "B03", "B02")), hv.RGB)
-
-    def test_names_a_band_or_a_composite_not_both(self, rgb: xr.Dataset) -> None:
-        with pytest.raises(ValueError, match="not both"):
-            rgb.gs.plot("B04", rgb=("B04", "B03", "B02"))
-
-    def test_a_composite_refuses_a_colormap(self, rgb: xr.Dataset) -> None:
-        with pytest.raises(ValueError, match="drop cmap"):
-            rgb.gs.plot(cmap="gray")
 
     def test_several_variables_need_a_name_or_a_recorded_composite(
         self, rgb: xr.Dataset

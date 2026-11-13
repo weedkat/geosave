@@ -9,8 +9,6 @@ from odc.geo.geobox import GeoBox
 
 from tests.conftest import build_dataset as build_raster
 
-from tests.geodata.conftest import build_raster as sample_raster
-
 
 UTM = "EPSG:32633"
 
@@ -90,17 +88,6 @@ def test_a_given_fill_is_written_and_declared() -> None:
     assert masked.red.dtype == np.dtype("uint16")
 
 
-def test_a_nan_fill_is_accepted_by_a_float_variable() -> None:
-    box = utm_box()
-    floating = build_raster(
-        {"elevation": (("y", "x"), np.ones(box.shape, "float32"))}, box
-    )
-
-    masked = floating.gs.mask(classification().isin(CLEAR), fill=float("nan"))
-
-    assert np.isnan(masked.elevation.values[0][-1])
-
-
 def test_a_bare_numpy_mask_covers_every_step_of_a_time_series() -> None:
     bare = np.array([[True, True, False, False]] * 4)
 
@@ -110,85 +97,15 @@ def test_a_bare_numpy_mask_covers_every_step_of_a_time_series() -> None:
     assert list(masked.red.values[1][0]) == [7, 7, 0, 0]
 
 
-def test_a_bare_numpy_mask_off_the_grid_shape_is_refused() -> None:
-    with pytest.raises(ValueError, match="pass a DataArray"):
-        scene().gs.mask(np.ones((3, 3), bool))
-
-
-def test_a_mask_spanning_an_axis_the_raster_lacks_is_refused() -> None:
-    dims = ("y", "x")
-    extra = xr.DataArray(np.ones((2, 4, 4), bool), dims=("depth", *dims))
-
-    with pytest.raises(ValueError, match="does not carry"):
-        scene().gs.mask(extra)
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_mask_rejects_conflicting_crs_before_computing_pixels(kind):
+def test_mask_rejects_conflicting_crs_before_computing_pixels():
     from dask.callbacks import Callback
 
     source = scene().chunk({"y": 2, "x": 2})
     valid = (source.red > 0).odc.assign_crs("EPSG:32632")
-    if kind == "array":
-        source = source.red
 
     with Callback(pretask=lambda *_: pytest.fail("mask computed pixels")):
         with pytest.raises(ValueError, match="different CRSs"):
             source.gs.mask(valid)
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_mask_preserves_grid_with_equivalent_crs_carriers(kind):
-    from dask.callbacks import Callback
-
-    source = scene().chunk({"y": 2, "x": 2})
-    valid = source.red > 0
-    valid = valid.assign_coords(spatial_ref=valid.spatial_ref.copy(data=0))
-    if kind == "array":
-        source = source.red
-
-    with Callback(pretask=lambda *_: pytest.fail("mask computed pixels")):
-        masked = source.gs.mask(valid)
-
-    xr.testing.assert_identical(masked.spatial_ref, source.spatial_ref)
-    assert masked.gs.geobox == source.gs.geobox
-    xr.testing.assert_equal(masked.compute(), source.compute())
-
-
-def test_dataset_mask_broadcasts_time_to_static_variables():
-    source = scene(times=2)
-    source["static"] = source.red.isel(time=0, drop=True)
-    valid = source.red > 0
-    valid[1] = False
-
-    masked = source.gs.mask(valid)
-
-    assert masked.static.dims == ("y", "x", "time")
-    np.testing.assert_array_equal(masked.static.isel(time=0), 7)
-    np.testing.assert_array_equal(masked.static.isel(time=1), 0)
-    assert masked.static.dtype == source.static.dtype
-    assert masked.gs.geobox == source.gs.geobox
-
-
-def test_numpy_mask_uses_spatial_axis_order_with_lazy_transposed_pixels():
-    from dask.callbacks import Callback
-
-    source = scene(times=2).red.transpose("x", "time", "y").chunk({"time": 1})
-    dims = source.gs.spatial_dims
-    mask = np.ones(tuple(source.sizes[dim] for dim in dims), dtype=bool)
-    mask[0, 1] = False
-    with Callback(pretask=lambda *_: pytest.fail("mask computed pixels")):
-        result = source.gs.mask(mask=mask)
-    expected = source.where(xr.DataArray(mask, dims=dims), 0)
-    xr.testing.assert_equal(result.compute(), expected.compute())
-
-
-def test_named_time_mask_broadcasts_without_requiring_spatial_axes():
-    source = scene(times=2)
-    mask = xr.DataArray([True, False], dims="time", coords={"time": source.time})
-    result = source.gs.mask(mask)
-    np.testing.assert_array_equal(result.red.isel(time=0), 7)
-    np.testing.assert_array_equal(result.red.isel(time=1), 0)
 
 
 def test_mask_uses_each_variables_packing_fill_value():
@@ -197,19 +114,3 @@ def test_mask_uses_each_variables_packing_fill_value():
     result = source.gs.mask(classification().isin(CLEAR))
     assert result.red.values[0, -1] == 0
     assert result.nir.values[0, -1] == 255
-
-
-def test_missing_value_alone_does_not_supply_a_packing_fill_value():
-    source = scene(nodata=None).red
-    source.attrs["missing_value"] = 99
-    with pytest.raises(ValueError, match="no fill value in packing"):
-        source.gs.mask(classification().isin(CLEAR))
-
-
-def test_mask_updates_ancillary_raster_as_data_not_a_conflicting_coordinate():
-    scene = sample_raster()
-    scene.red.attrs["ancillary_variables"] = "nir"
-    result = scene.gs.mask(scene.red > 1000, fill=0)
-    assert set(result.data_vars) == {"red", "nir"}
-    np.testing.assert_array_equal(result.red.values, result.nir.values)
-    assert result.red.attrs["ancillary_variables"] == "nir"

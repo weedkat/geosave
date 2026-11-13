@@ -54,15 +54,12 @@ def test_native_containers_dispatch_in_a_fresh_process():
                           properties={}, collection="image")
         item.add_asset("image", pystac.Asset(href="/data/image.tif"))
         catalog = create_catalog([item])
-        samples = catalog.gs.sample()
-        assert samples[0].gs.to_items()[0].id == item.id
         for value, accessor in [(band, gs.GeoDataArray), (dataset, gs.GeoDataset),
                                 (tree, gs.GeoDataTree), (vector, gs.GeoCatalog),
                                 (catalog, gs.GeoCatalog),
                                 (catalog.iloc[0], gs.GeoCatalogItem)]:
             assert type(value.gs) is accessor
         assert isinstance(catalog, gpd.GeoDataFrame)
-        assert isinstance(samples[0], gpd.GeoDataFrame)
         assert type(catalog.iloc[:0].gs) is gs.GeoCatalog
         assert type(vector.iloc[:0].gs) is gs.GeoCatalog
     """)

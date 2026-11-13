@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Any, TypedDict, Unpack, cast
 
 import geopandas as gpd
 from upath import UPath
@@ -49,18 +48,15 @@ def open_geopackage(
     source: Location,
     *,
     layer: str | None = None,
-    engine: Literal["fiona", "pyogrio"] = "pyogrio",
     storage_options: StorageOptions | None = None,
     **open_options: Unpack[GeoPackageOpenOptions],
 ) -> GeoDataFrame:
     """Open one GeoPackage layer as a GeoDataFrame.
 
     Args:
-        source: Local path, URL, or UPath. Remote files are downloaded
-            temporarily through the selected filesystem.
+        source: Local path, URL, or UPath, read through its filesystem.
         layer: Layer name. None selects the layer only when exactly one exists.
-        engine: Concrete GeoPandas file-reading engine.
-        storage_options: Credentials and connection options for the filesystem.
+        storage_options: Options for the filesystem a URL names.
         **open_options: Supported GeoPandas and file-driver read options.
 
     Returns:
@@ -71,22 +67,24 @@ def open_geopackage(
         ValueError: `layer` is ambiguous, or a driver option selects an engine
             or disables geometry.
     """
-    with storage.localize(source, storage_options) as path:
+    path = storage.create_upath(source, storage_options)
+    options = unpack_engine_options(open_options)
+    with path.open("rb") as handle:
         selected_layer = layer
         if selected_layer is None:
-            layer_names = [str(name) for name in gpd.list_layers(path)["name"]]
+            layer_names = [str(name) for name in gpd.list_layers(handle)["name"]]
             if len(layer_names) != 1:
                 raise ValueError(
-                    f"GeoPackage {Path(str(source)).name!r} contains layers "
-                    f"{layer_names}; select one with layer="
+                    f"GeoPackage {path.name!r} contains layers {layer_names}; "
+                    "select one with layer="
                 )
             selected_layer = layer_names[0]
+            handle.seek(0)
 
-        options = unpack_engine_options(open_options)
         frame = gpd.read_file(
-            path,
+            handle,
             layer=selected_layer,
-            engine=engine,
+            engine="pyogrio",
             ignore_geometry=False,
             **options,
         )
@@ -110,8 +108,6 @@ class GeoPackageWriteOptions(TypedDict, total=False):
             selected GeoPandas engine's GeoPackage writer.
         engine_options: Extra write keywords for the selected engine or GDAL
             driver. Do not set `engine` or repeat direct options here.
-        storage_options: Filesystem credentials and connection options for
-            uploading the completed temporary file to a remote destination.
     """
 
     index: bool | None
@@ -119,7 +115,6 @@ class GeoPackageWriteOptions(TypedDict, total=False):
     nan_as_null: bool
     metadata: dict[str, str] | None
     engine_options: dict[str, Any]
-    storage_options: StorageOptions | None
 
 
 def write_geopackage(
@@ -127,8 +122,8 @@ def write_geopackage(
     path: Location,
     *,
     layer: str | None = None,
-    engine: Literal["fiona", "pyogrio"] = "pyogrio",
     overwrite: bool = False,
+    storage_options: StorageOptions | None = None,
     **write_options: Unpack[GeoPackageWriteOptions],
 ) -> UPath:
     """Write one GeoDataFrame as a layer in a GeoPackage.
@@ -139,43 +134,33 @@ def write_geopackage(
         gdf: Frame to write.
         path: Output path or fsspec URL ending in `.gpkg`.
         layer: Layer name. None names the layer after the file stem.
-        engine: Concrete GeoPandas file-writing engine.
         overwrite: Replace an existing file when true.
+        storage_options: Options for the filesystem a URL names.
         **write_options: Supported GeoPandas and file-driver write options.
 
     Returns:
-        Local writes return a PosixUPath; URL writes return a UPath carrying
-        its storage options.
+        The written file, carrying its storage options.
 
     Raises:
         FileExistsError: The path exists and `overwrite` is false.
         TypeError: An option is unsupported or supplied twice.
         ValueError: The frame carries STAC Item metadata, the suffix is wrong,
-            or an option conflicts with `engine`.
+            or `engine_options` names an engine.
     """
-    gdf.gs.validate(geometry=False, stac_item=False)
 
-    storage_options = write_options.pop("storage_options", None)
     engine_options = dict(write_options.pop("engine_options", {}))
     if "engine" in engine_options:
-        raise ValueError("engine_options must not contain engine; use engine=")
-    # The layer is named after the file asked for, not the one being staged.
-    name = layer if layer is not None else storage.location(path).stem
+        raise ValueError("engine_options must not contain engine; pyogrio writes")
+    destination = storage.create_upath(path, storage_options)
+    storage.check_destination(destination, _FILE_SUFFIXES, overwrite=overwrite)
 
-    def save(target: Path) -> None:
+    with storage.stage_file(destination) as local:
         gdf.to_file(
-            target,
-            layer=name,
+            local,
+            layer=layer if layer is not None else destination.stem,
             driver="GPKG",
-            engine=engine,
+            engine="pyogrio",
             **write_options,
             **engine_options,
         )
-
-    return storage.write_file(
-        path,
-        save,
-        suffixes=_FILE_SUFFIXES,
-        overwrite=overwrite,
-        storage_options=storage_options,
-    )
+    return destination

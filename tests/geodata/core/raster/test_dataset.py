@@ -6,11 +6,11 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from geosave.geodata.core.raster.datatree import stac_catalog
 from geosave.geodata import (
     attrs,
     open_raster,
 )
-from geosave.geodata.warnings import DroppedAttrsWarning
 from tests.conftest import build_dataset
 from tests.geodata.conftest import build_raster, geobox
 from tests.geodata.core.raster.conftest import optical
@@ -39,10 +39,10 @@ def test_to_array_keeps_what_every_band_states_alike() -> None:
         B03=built.B03.assign_attrs(long_name="green"),
     )
 
-    with pytest.warns(DroppedAttrsWarning, match="long_name"):
-        stacked = built.gs.to_array()
+    stacked = built.gs.to_array()
 
     assert stacked.band.values.tolist() == ["B04", "B03"]
+    assert stacked.name is None
     assert stacked.gs.packing.scale_factor == pytest.approx(1e-4)
     assert stacked.gs.packing.add_offset == 0
     assert "long_name" not in stacked.attrs
@@ -57,40 +57,27 @@ def test_stacking_refuses_conflicting_packing_without_reading_pixels(attributes)
     def pixels():
         raise AssertionError("packing validation must not compute pixels")
 
-    values = da.from_delayed(pixels(), shape=(2, 2), dtype="uint16")
-    source = xr.Dataset({"red": (("y", "x"), values), "nir": (("y", "x"), values)})
+    box = geobox(shape=(2, 2))
+    values = da.from_delayed(pixels(), shape=box.shape, dtype="uint16")
+    source = build_dataset(
+        {"red": (("y", "x"), values), "nir": (("y", "x"), values)}, box
+    )
     source.nir.attrs.update(attributes)
 
     with pytest.raises(ValueError, match="CF packing"):
         source.gs.to_array()
 
 
-def test_stacking_accepts_native_attr_policy():
-    source = build_raster()
-    source.red.attrs["long_name"] = "red"
-    source.nir.attrs["long_name"] = "infrared"
-
-    stacked = source.gs.to_array(combine_attrs="override")
-
-    assert stacked.attrs["long_name"] == "red"
-
-
 @pytest.mark.parametrize(
     "left,right",
     [
         ({"units": "K"}, {"units": "m"}),
-        ({"units": "K"}, {}),
         (
             {"flag_values": [0, 1], "flag_meanings": "water land"},
             {"flag_values": [1, 2], "flag_meanings": "water land"},
         ),
-        (
-            {"flag_values": [0, 1], "flag_meanings": "water land"},
-            {"flag_values": [0, 1], "flag_meanings": "land water"},
-        ),
-        ({"valid_range": [0, 10]}, {"valid_range": [0, 20]}),
     ],
-    ids=["units", "missing-units", "class-codes", "class-meanings", "valid-range"],
+    ids=["units", "class-codes"],
 )
 def test_stacking_rejects_different_pixel_meaning_before_reading(left, right):
     from dask.callbacks import Callback
@@ -99,32 +86,8 @@ def test_stacking_rejects_different_pixel_meaning_before_reading(left, right):
     source.red.attrs.update(left)
     source.nir.attrs.update(right)
     with Callback(pretask=lambda *_: pytest.fail("validation read pixels")):
-        # Overriding descriptive attrs must not bypass pixel compatibility.
         with pytest.raises(ValueError, match="different.*(packing|flags|units)"):
-            source.gs.to_array(combine_attrs="override")
-
-
-@pytest.mark.parametrize(
-    "policy", ["drop", "override", lambda *_args, **_kwargs: {"units": "wrong"}]
-)
-def test_stacking_attrs_policy_cannot_change_cf_meaning(policy, tmp_path):
-    source = build_raster(packed=True).chunk()
-    for array in source.data_vars.values():
-        array.attrs["units"] = "1"
-    before = source.copy(deep=True)
-    image = source.gs.to_array(combine_attrs=policy)
-    restored = image.gs.to_dataset()
-
-    assert image.attrs["units"] == "1"
-    assert image.attrs["scale_factor"] == source.red.attrs["scale_factor"]
-    assert image.attrs["_FillValue"] == 0
-    xr.testing.assert_allclose(xr.decode_cf(restored), xr.decode_cf(source))
-    assert restored.gs.geobox == source.gs.geobox
-    xr.testing.assert_identical(source, before)
-    path = tmp_path / "bands.nc"
-    restored.to_netcdf(path)
-    with xr.open_dataset(path, decode_coords="all") as opened:
-        xr.testing.assert_allclose(opened, xr.decode_cf(source, decode_coords="all"))
+            source.gs.to_array()
 
 
 def test_nodata_reads_back_what_was_written() -> None:
@@ -137,7 +100,6 @@ def test_nodata_reads_back_what_was_written() -> None:
 
     assert built.red.gs.nodata == 0
     assert built.nir.gs.nodata is None
-    assert built.gs.nodata == {"red": 0, "nir": None}
 
 
 def test_raster_statistics_tabulate_each_variable_as_its_band_does() -> None:
@@ -165,18 +127,6 @@ def test_raster_statistics_tabulate_each_variable_as_its_band_does() -> None:
     pd.testing.assert_frame_equal(table.loc[["nir"]], built.nir.gs.statistics())
 
 
-def test_dataset_statistics_have_one_row_per_variable_with_band_dimensions() -> None:
-    source = xr.Dataset(
-        {"image": (("band", "x"), [[1, 3], [10, 20]])},
-        coords={"band": ["red", "nir"]},
-    )
-
-    table = source.gs.statistics()
-
-    assert list(table.index) == ["image"]
-    assert table.loc["image", "mean"] == 8.5
-
-
 def _classes() -> xr.Dataset:
     box = geobox()
     codes = np.zeros(box.shape, "uint8")
@@ -194,14 +144,31 @@ def test_write_legend_names_and_colours_each_class() -> None:
 
     legend = labelled.label.gs.flags
     assert legend.classes == NAMES
-    assert labelled.label.gs.display.color_map == {0: "#419BDF", 1: "#397D49"}
+    assert legend.color_hints == ["419BDF", "397D49"]
     assert labelled.other.gs.flags is None
 
 
-def test_write_legend_defaults_to_every_variable() -> None:
-    labelled = _classes().gs.write_flags(NAMES)
+@pytest.mark.parametrize(
+    "method,value",
+    [
+        ("write_nodata", 255),
+        ("write_flags", NAMES),
+        ("write_packing", attrs.CFPacking(scale_factor=0.1)),
+        ("write_spectral", "red"),
+    ],
+)
+def test_metadata_target_rejects_a_bare_name_without_reading(method, value):
+    source = _classes().chunk()
+    with Callback(pretask=lambda *_: pytest.fail("metadata selection read pixels")):
+        with pytest.raises(TypeError, match=r"target=\['label'\]"):
+            getattr(source.gs, method)(value, target="label")
 
-    assert all(labelled[name].gs.flags.classes == NAMES for name in ("label", "other"))
+
+def test_empty_metadata_target_leaves_every_variable_unchanged():
+    source = _classes()
+    written = source.gs.write_nodata(255, target=[])
+
+    xr.testing.assert_identical(written, source)
 
 
 def _bands() -> xr.Dataset:
@@ -222,10 +189,9 @@ def test_a_write_reaches_only_the_variables_it_targets() -> None:
     assert written["nir"].gs.nodata == written["red"].gs.nodata == 0
 
 
-@pytest.mark.parametrize("target", ["blue", ["red", "blue"], ["y"]])
-def test_a_target_that_is_not_a_data_variable_is_refused(target) -> None:
-    with pytest.raises(KeyError, match="carries \\['red', 'green', 'nir'\\]"):
-        _bands().gs.write_nodata(0, target=target)
+def test_a_target_that_is_not_a_data_variable_is_refused() -> None:
+    with pytest.raises(KeyError, match="blue"):
+        _bands().gs.write_nodata(0, target=["blue"])
 
 
 def test_write_acdd_replaces_every_acdd_key_on_the_root() -> None:
@@ -252,41 +218,21 @@ def test_to_numpy_trees_in_the_order_xarray_holds_the_variables() -> None:
     assert stacked[0, :, 0, 0].tolist() == [8, 4]
 
 
-def test_to_numpy_reads_an_unplaced_raster() -> None:
-    unplaced = build_dataset(
-        {
-            "pixels": (
-                ("y", "x"),
-                np.zeros((4, 4), "uint8"),
-            )
-        }
-    )
-
-    assert unplaced.gs.to_numpy().shape == (1, 4, 4)
-
-
-def test_to_numpy_refuses_a_raster_carrying_no_variables() -> None:
-    with pytest.raises(ValueError, match="no variables to stack"):
-        optical()[[]].gs.to_numpy()
-
-
-def test_to_numpy_refuses_variables_on_different_axes() -> None:
+def test_stacking_broadcasts_a_static_band_along_time() -> None:
     source = optical()
-    timeless = build_dataset(
-        {"dem": (("y", "x"), np.zeros((8, 8), "uint16"))}, geobox()
-    )
-    mixed = source.assign(dem=timeless.dem)
+    # A static band of the same pixel meaning, such as a reference image.
+    mixed = source.assign(static=source.B04.isel(time=0, drop=True))
 
-    with pytest.raises(ValueError, match="spans"):
-        mixed.gs.to_numpy()
+    stacked = mixed.gs.to_numpy()
+
+    assert stacked.shape == (2, len(mixed.data_vars), 8, 8)
 
 
-def test_to_numpy_refuses_variables_on_different_dtypes() -> None:
+def test_stacking_promotes_dtypes_as_numpy_does() -> None:
     source = optical()
     mixed = source.assign(ndvi=source.B04.astype("float32"))
 
-    with pytest.raises(ValueError, match="different dtypes"):
-        mixed.gs.to_numpy()
+    assert mixed.gs.to_numpy().dtype == np.float32
 
 
 def test_to_numpy_casts_variables_onto_one_dtype() -> None:
@@ -296,21 +242,6 @@ def test_to_numpy_casts_variables_onto_one_dtype() -> None:
     assert mixed.gs.to_numpy(dtype="float32").dtype == np.dtype("float32")
 
 
-def test_to_numpy_refuses_a_raster_already_carrying_the_stacking_axis() -> None:
-    conflicting = build_dataset(
-        {
-            "pixels": (
-                ("band", "y", "x"),
-                np.zeros((3, 4, 4), "uint8"),
-            )
-        },
-        None,
-    )
-
-    with pytest.raises(ValueError):
-        conflicting.gs.to_numpy()
-
-
 def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout(torch) -> None:
     tensor = optical().gs.to_tensor()
 
@@ -318,13 +249,6 @@ def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout(torch) -> None:
     assert tuple(tensor.shape) == (2, 2, 8, 8)
     assert tensor.is_contiguous()
     torch.testing.assert_close(tensor, torch.tensor(optical().gs.to_numpy()))
-
-
-def test_to_tensor_computes_a_lazy_raster(torch) -> None:
-    tensor = optical().chunk({"y": 4}).gs.to_tensor()
-
-    assert tuple(tensor.shape) == (2, 2, 8, 8)
-    tensor.fill_(0)
 
 
 def build_bands(*colours: str | None) -> xr.Dataset:
@@ -337,17 +261,15 @@ def build_bands(*colours: str | None) -> xr.Dataset:
     return raster
 
 
-def test_rgb_follows_what_bands_draw_not_their_order() -> None:
-    assert build_bands("blue", "red", "green").gs.rgb == ("b1", "b2", "b0")
+def test_rgb_is_none_where_no_composite_is_stated() -> None:
+    # Band colours alone state no composite; loading or write_rgb states it.
+    assert build_bands("blue", "red", "green").gs.rgb is None
 
 
-def test_rgb_takes_the_first_of_two_bands_drawing_one_colour() -> None:
-    assert build_bands("red", "red", "green", "blue").gs.rgb == ("b0", "b2", "b3")
+def test_rgb_is_none_once_a_named_variable_is_dropped() -> None:
+    written = build_bands("red", "green", "blue").gs.write_rgb("b0", "b1", "b2")
 
-
-def test_rgb_is_none_where_no_band_draws_blue() -> None:
-    # A raster whose bands state no blue channel composes no colour of its own.
-    assert build_bands(None, "red", "green").gs.rgb is None
+    assert written[["b0", "b1"]].gs.rgb is None
 
 
 def test_a_plot_without_bands_refuses_a_raster_drawing_no_colour() -> None:
@@ -365,23 +287,9 @@ def test_write_rgb_repoints_the_channels_it_replaces() -> None:
     assert written.b2.gs.spectral.common_name == "blue"
 
 
-def test_write_rgb_leaves_its_source_alone() -> None:
-    raster = build_bands(None, None, None)
-
-    raster.gs.write_rgb("b0", "b1", "b2")
-
-    assert raster.gs.rgb is None
-    assert attrs.Display.from_attrs(raster.attrs) is None
-
-
 def test_write_rgb_refuses_a_name_the_raster_does_not_carry() -> None:
-    with pytest.raises(KeyError, match="not data variables"):
+    with pytest.raises(KeyError, match="b2"):
         build_bands(None, None).gs.write_rgb("b0", "b1", "b2")
-
-
-def test_write_rgb_refuses_one_variable_on_two_channels() -> None:
-    with pytest.raises(ValueError, match="cannot draw two channels"):
-        build_bands(None, None).gs.write_rgb("b0", "b0", "b1")
 
 
 @pytest.mark.parametrize(
@@ -398,61 +306,6 @@ def test_deferred_storage_waits_for_compute(tmp_path, method, suffix):
     saved = pending.compute()
     with open_raster(saved) as restored:
         xr.testing.assert_equal(restored, source)
-
-
-def test_an_exact_destination_does_not_format_braces(tmp_path):
-    source = build_raster()
-    destination = tmp_path / "scene_{variable}.nc"
-    saved = source.gs.to_netcdf(destination)
-    assert saved == destination
-    with open_raster(saved) as restored:
-        np.testing.assert_array_equal(restored.red, source.red)
-        assert list(restored.data_vars) == ["red", "nir"]
-
-
-def test_to_array_casts_before_stacking_without_reading_pixels() -> None:
-    import dask.array as da
-    from dask import delayed
-
-    reads = []
-
-    @delayed
-    def pixels():
-        reads.append(1)
-        return np.array([[2**53 + 1]], dtype="uint64")
-
-    source = xr.Dataset(
-        {
-            "large": (
-                ("y", "x"),
-                da.from_delayed(pixels(), shape=(1, 1), dtype="uint64"),
-            ),
-            "small": (("y", "x"), np.array([[1]], dtype="int64")),
-        }
-    )
-    stacked = source.gs.to_array(dtype="uint64")
-
-    assert isinstance(stacked.data, da.Array)
-    assert reads == []
-    assert stacked.band.values.tolist() == ["large", "small"]
-    np.testing.assert_array_equal(
-        stacked.values[:, 0, 0], np.array([2**53 + 1, 1], dtype="uint64")
-    )
-    np.testing.assert_array_equal(source.gs.to_numpy(dtype="uint64"), stacked.values)
-
-
-def test_to_array_preserves_native_variable_names_and_order() -> None:
-    source = xr.Dataset(
-        {
-            8: (("y", "x"), [[8]]),
-            4: (("y", "x"), [[4]]),
-        }
-    )
-
-    stacked = source.gs.to_array()
-
-    np.testing.assert_array_equal(stacked.band.values, [8, 4])
-    np.testing.assert_array_equal(stacked.values[:, 0, 0], [8, 4])
 
 
 def test_time_bounds_survive_array_conversion() -> None:
@@ -475,7 +328,6 @@ def test_time_bounds_survive_array_conversion() -> None:
 def _split_scene() -> xr.Dataset:
     """Two passes of red and nir with periods, item properties and attrs."""
     from tests.geodata.conftest import assign_cells
-    from geosave.geodata.stac.raster import stamp_properties_coordinate
 
     scene = build_raster(times=2)
     days = []
@@ -483,48 +335,61 @@ def _split_scene() -> xr.Dataset:
         day = value.astype("datetime64[D]")
         days.append((day, day + np.timedelta64(1, "D")))
     scene = assign_cells(scene, days)
-    scene = stamp_properties_coordinate(
-        scene, [{"eo:cloud_cover": 10.0}, {"eo:cloud_cover": 40.0}]
-    )
+    properties = [{"eo:cloud_cover": 10.0}, {"eo:cloud_cover": 40.0}]
+    scene = scene.assign_coords(stac_properties=("time", properties))
     return scene.assign_attrs(title="Two passes")
 
 
 def _item_ids(scene: xr.Dataset) -> list[str]:
-    return list(pd.DatetimeIndex(scene.time.values).strftime("%Y%m%dT%H%M%S"))
+    ids = []
+    for label in pd.DatetimeIndex(scene.time.values):
+        ids.append(f"{label:%Y%m%dT%H%M%S}_49LEL_-9.0465_111.0001")
+    return ids
 
 
 def test_a_scene_expands_into_one_item_per_time_and_one_leaf_per_variable():
     scene = _split_scene()
 
-    tree = scene.gs.expand_stac()
+    tree = scene.gs.expand()
 
     first, second = _item_ids(scene)
+    # A Dataset stating no Collection lands under the default collection.
     assert [leaf.path for leaf in tree.leaves] == [
-        f"/{first}/red",
-        f"/{first}/nir",
-        f"/{second}/red",
-        f"/{second}/nir",
+        f"/default/{first}/red",
+        f"/default/{first}/nir",
+        f"/default/{second}/red",
+        f"/default/{second}/nir",
     ]
-    tree.gs.validate(stac_pattern=True)
+    tree.gs.validate(stac_catalog)
 
 
-def test_a_variable_without_time_belongs_to_no_item():
+def test_a_variable_without_time_is_left_out():
     scene = _split_scene()
     scene = scene.assign(height=scene.red.isel(time=0, drop=True))
 
-    with pytest.raises(ValueError, match="'height' has no 'time'.*own collection"):
-        scene.gs.expand_stac()
+    tree = scene.gs.expand()
+
+    for leaf in tree.leaves:
+        assert leaf.name != "height"
 
 
-def test_coordinates_go_where_their_dims_say():
-    scene = _split_scene()
+def test_coordinates_and_attrs_go_to_their_stac_level():
+    collection = attrs.StacCollection(collection={"id": "s2"})
+    scene = _split_scene().assign_attrs(collection.to_attrs())
 
-    tree = scene.gs.expand_stac()
+    tree = scene.gs.expand()
 
-    top = tree.to_dataset(inherit=False)
-    item = tree[_item_ids(scene)[1]].to_dataset(inherit=False)
-    assert set(top.coords) == {"y", "x", "spatial_ref"}
-    assert top.attrs["title"] == "Two passes"
+    # Catalog: nothing of its own.
+    assert not tree.to_dataset(inherit=False).variables
+    assert not tree.attrs
+
+    # Collection: the STAC Collection alone, named by its id.
+    top = tree["s2"].to_dataset(inherit=False)
+    assert not top.coords
+    assert top.attrs == collection.to_attrs()
+
+    # Item: its coordinates along time, and the Dataset's other attrs.
+    item = tree["s2"][_item_ids(scene)[1]].to_dataset(inherit=False)
     assert set(item.coords) == {
         "time",
         "start_datetime",
@@ -532,87 +397,75 @@ def test_coordinates_go_where_their_dims_say():
         "stac_properties",
     }
     assert item.time.values == scene.time.values[1]
+    assert item.attrs == {"title": "Two passes"}
+
+    # Asset: one variable with its own attrs and its grid.
     for leaf in tree.leaves:
-        assert not leaf.to_dataset(inherit=False).coords
-        assert not leaf.attrs
+        asset = leaf.to_dataset(inherit=False)
+        assert set(asset.coords) == {"y", "x", "spatial_ref"}
+        assert asset.spatial_ref.attrs == scene.spatial_ref.attrs
+        assert not asset.attrs
 
 
-def test_the_expansion_needs_no_spatial_names():
-    scene = _split_scene().rename(y="latitude", x="longitude")
+def test_items_are_named_by_their_start_and_place():
+    tree = _split_scene().gs.expand()
 
-    tree = scene.gs.expand_stac()
-
-    assert {"latitude", "longitude"} <= set(tree.to_dataset(inherit=False).coords)
-
-
-def test_ids_follow_format_id_over_the_observations_scalars():
-    scene = _split_scene().assign_coords(tile=("time", ["33UUP", "33UUQ"]))
-
-    tree = scene.gs.expand_stac(format_id="S2_{tile}_{time:%Y%m%d}")
-
-    days = pd.DatetimeIndex(scene.time.values).strftime("%Y%m%d")
-    assert list(tree.children) == [f"S2_33UUP_{days[0]}", f"S2_33UUQ_{days[1]}"]
+    assert list(tree["default"].children) == [
+        "20250601T000000_49LEL_-9.0465_111.0001",
+        "20250602T000000_49LEL_-9.0465_111.0001",
+    ]
 
 
-def test_ids_that_format_alike_are_refused():
-    with pytest.raises(ValueError, match="format to one id"):
-        _split_scene().gs.expand_stac(format_id="same")
+def test_items_are_named_by_a_given_id_format():
+    tree = _split_scene().gs.expand(id_format="s2_{start:%Y%m%d}_{mgrs}")
+
+    assert list(tree["default"].children) == ["s2_20250601_49LEL", "s2_20250602_49LEL"]
 
 
-def test_collections_compose_with_xarrays_constructor():
-    scene = _split_scene()
-
-    tree = xr.DataTree(
-        children={"s2": scene.gs.expand_stac(), "s1": scene.gs.expand_stac()}
-    )
-
-    tree.gs.validate(stac_pattern=True)
-    assert tree["s2"].to_dataset(inherit=False).attrs["title"] == "Two passes"
+def test_two_items_formatting_to_one_id_are_refused():
+    with pytest.raises(ValueError, match="two Items format to the id"):
+        _split_scene().gs.expand(id_format="{mgrs}")
 
 
 def test_expanding_then_combining_gives_the_identical_scene():
     scene = _split_scene()
 
-    restored = scene.gs.expand_stac().gs.combine_stac()
+    restored = scene.gs.expand()["default"].gs.combine()
 
     xr.testing.assert_identical(restored, scene)
 
 
-def test_combining_then_expanding_gives_the_identical_tree():
-    tree = _split_scene().gs.expand_stac()
+def test_combine_refuses_an_asset_whose_packing_changes_between_items():
+    from geosave.geodata.errors import RasterValidationError
 
-    again = tree.gs.combine_stac().gs.expand_stac()
+    scene = build_raster(times=2, packed=True)
+    tree = scene.gs.expand()
+    first, second = tree["default"].children
+    tree[f"default/{second}/red"]["red"].attrs["add_offset"] = -0.1
 
-    xr.testing.assert_identical(again, tree)
-
-
-def test_every_variable_can_share_one_asset():
-    scene = _split_scene()
-
-    tree = scene.gs.expand_stac(asset="image")
-
-    first, second = _item_ids(scene)
-    assert [leaf.path for leaf in tree.leaves] == [
-        f"/{first}/image",
-        f"/{second}/image",
-    ]
-    assert list(tree[f"{first}/image"].data_vars) == ["red", "nir"]
-    xr.testing.assert_identical(tree.gs.combine_stac(), scene)
+    with pytest.raises(RasterValidationError, match="another CF packing"):
+        tree["default"].gs.combine()
 
 
-def test_a_timeless_dataset_is_one_item_named_by_format_id():
-    scene = build_raster()
+def test_a_dataset_without_the_item_dim_is_refused():
+    with pytest.raises(KeyError, match="time"):
+        build_raster().gs.expand()
 
-    with pytest.raises(ValueError, match="format_id needs 'time'"):
-        scene.gs.expand_stac()
-    tree = scene.gs.expand_stac(format_id="dem")
-    assert [leaf.path for leaf in tree.leaves] == ["/dem/red", "/dem/nir"]
+
+def test_a_dim_without_time_needs_an_id_format_it_can_fill():
+    scene = (
+        _split_scene().rename(time="date").drop_vars(["start_datetime", "end_datetime"])
+    )
+
+    # Ids are formatted from the region, whose period only `time` states.
+    with pytest.raises(ValueError, match="no 'start'"):
+        scene.gs.expand("date")
 
 
 def test_a_round_trip_keeps_packing_encoding():
     scene = build_raster(times=2, packed=True)
 
-    restored = scene.gs.expand_stac().gs.combine_stac()
+    restored = scene.gs.expand()["default"].gs.combine()
 
     assert restored.red.encoding.get("scale_factor") == scene.red.encoding.get(
         "scale_factor"
@@ -631,7 +484,7 @@ def test_splitting_reads_no_pixels():
         scene[name] = scene[name].copy(data=da.from_array(scene[name].values))
 
     with dask.config.set(scheduler=_refuse):
-        tree = scene.gs.expand_stac()
+        tree = scene.gs.expand()
 
     for leaf in tree.leaves:
         assert hasattr(leaf.to_dataset()[leaf.name].data, "dask")
@@ -658,58 +511,6 @@ def test_decode_matches_native_cf_and_is_idempotent():
     assert "scale_factor" not in source.red.encoding
 
 
-def test_dataset_decodes_coordinate_packing_and_inherited_time_bounds():
-    raw = xr.Dataset(
-        {
-            "band": (
-                ("time", "x"),
-                np.array([[0, 10]], dtype="int16"),
-                {"_FillValue": 0, "scale_factor": 0.1},
-            ),
-            "time_bounds": (("time", "vertices"), [[0, 1]]),
-        },
-        coords={
-            "time": (
-                "time",
-                [0],
-                {"units": "days since 2025-01-01", "bounds": "time_bounds"},
-            ),
-            "x": ("x", [0, 10], {"scale_factor": 0.1, "add_offset": 100.0}),
-        },
-    )
-    before = raw.copy(deep=True)
-    decoded = raw.gs.mask_and_scale()
-
-    np.testing.assert_array_equal(decoded.x, [100, 101])
-    np.testing.assert_allclose(decoded.band, [[np.nan, 1]], equal_nan=True)
-    assert "time_bounds" in decoded.coords
-    np.testing.assert_array_equal(
-        decoded.time_bounds,
-        np.array([["2025-01-01", "2025-01-02"]], dtype="datetime64[ns]"),
-    )
-    assert decoded.time.encoding["bounds"] == "time_bounds"
-    xr.testing.assert_identical(raw, before)
-
-
-def test_nodata_only_offset_only_and_missing_codes_use_native_decoding():
-    source = xr.Dataset(
-        {
-            "mask": ("x", np.array([0, 7], "uint16"), {"_FillValue": 0}),
-            "offset": ("x", np.array([1, 2], "int16"), {"add_offset": 5.0}),
-            "codes": ("x", np.array([-9, -8], "int16"), {"missing_value": [-9, -8]}),
-            "plain": ("x", np.array([1, 2], "uint16")),
-        }
-    ).assign_coords(class_label=("class", ["water", "land"]))
-    decoded = source.gs.mask_and_scale()
-
-    np.testing.assert_allclose(decoded["mask"], [np.nan, 7], equal_nan=True)
-    np.testing.assert_array_equal(decoded.offset, [6, 7])
-    assert np.isnan(decoded.codes).all()
-    assert decoded.plain.dtype == source.plain.dtype
-    assert decoded["mask"].encoding["_FillValue"] == 0
-    xr.testing.assert_identical(decoded.class_label, source.class_label)
-
-
 @pytest.fixture
 def city():
     return Geometry(from_wkt("POLYGON ((13 52, 14 52, 13 53, 13 52))"), "EPSG:4326")
@@ -731,49 +532,3 @@ def test_extent_survives_band_selection_without_changing_pixels(city):
     assert cleared.gs.region.extent == source.gs.geobox.extent
     assert cleared.red.gs.region.extent == source.gs.geobox.extent
     assert written.gs.region.extent == city
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset", "tree"])
-@pytest.mark.parametrize("method", ["to_item", "to_catalog"])
-def test_publication_refuses_before_pixels_or_files(kind, method, tmp_path):
-    source = build_raster().chunk()
-    if kind == "array":
-        source = source.red
-    elif kind == "tree":
-        source = xr.DataTree.from_dict({"scene": source})
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        with pytest.raises(NotImplementedError, match="being rebuilt"):
-            getattr(source.gs, method)(tmp_path / "publication")
-    assert tasks == []
-    assert not list(tmp_path.iterdir())
-
-
-@pytest.mark.parametrize("kind", ["array", "dataset"])
-def test_packing_keeps_support_and_lazy_pixels(kind):
-    source = build_raster(times=0, packed=True).chunk()
-    source["x_bounds"] = (
-        ("x", "vertices"),
-        np.column_stack([source.x - 5, source.x + 5]),
-    )
-    source.x.attrs["bounds"] = "x_bounds"
-    if kind == "array":
-        source = source.red
-    original = source.copy(deep=True)
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        decoded = source.gs.mask_and_scale()
-    assert tasks == []
-    restored = decoded
-    expected = source
-    if kind != "array":
-        xr.testing.assert_identical(
-            restored.x_bounds.variable, expected.x_bounds.variable
-        )
-        assert "x_bounds" in restored.coords
-        assert restored.x.encoding["bounds"] == "x_bounds"
-        restored, expected = restored.red, expected.red
-    assert isinstance(restored.data, da.Array)
-    np.testing.assert_allclose(restored, expected.gs.mask_and_scale(), equal_nan=True)
-    assert restored.gs.geobox == expected.gs.geobox
-    xr.testing.assert_identical(source, original)

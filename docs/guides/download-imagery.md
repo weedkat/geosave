@@ -14,6 +14,7 @@ network transfer includes source raster blocks and can exceed the output size.
 
 ```python
 import geosave as gs
+from geosave import attrs
 from geosave.geodata import stac
 
 bbox = (-121.82, 38.52, -121.79, 38.55)
@@ -54,7 +55,9 @@ scene = stac.load_dataset(
 ).isel(time=0)
 # Earth Search's COG conversion has already applied the offset for this Item.
 if item.properties.get("earthsearch:boa_offset_applied"):
-    scene = scene.gs.write_packing(attrs.CFPacking(scale_factor=1e-4))
+    scene = scene.gs.write_packing(
+        attrs.CFPacking(scale_factor=1e-4, fill_value=scene["red"].gs.nodata)
+    )
 scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 ```
 
@@ -74,8 +77,8 @@ so check the product and provider metadata when changing sources.
 ## Save locally
 
 ```python
-files = scene.gs.to_cog("imagery", format_paths="scene.tif")
-local = gs.open_raster(files[0])
+path = scene.gs.to_array().gs.to_cog("imagery/scene.tif")
+local = gs.open_raster(path)
 list(local.data_vars)
 ```
 

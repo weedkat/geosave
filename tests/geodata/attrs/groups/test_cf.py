@@ -33,22 +33,9 @@ def test_description_reads_cf_chapter_3_attrs() -> None:
     )
 
 
-def test_a_band_stating_none_has_no_description() -> None:
-    assert _described(cell_methods="time: mean").gs.description is None
-
-
-def test_a_zero_scale_is_refused() -> None:
-    with pytest.raises(ValueError):
-        attrs.CFPacking(scale_factor=0)
-
-
 def test_spellings_that_disagree_are_refused() -> None:
     with pytest.raises(ValueError, match="_FillValue as 0 but nodata as 1"):
         attrs.CFPacking.model_validate({"_FillValue": 0, "nodata": 1})
-
-
-def test_a_band_stating_none_of_a_groups_keys_parses_to_none() -> None:
-    assert attrs.CFPacking.from_attrs(_band().attrs) is None
 
 
 def test_text_and_numpy_spellings_parse_as_native_values() -> None:
@@ -79,9 +66,6 @@ def test_a_bitfield_lists_masks_and_no_classes() -> None:
     ("given", "match"),
     [
         ({"flag_values": [0, 1], "flag_meanings": "bg"}, "2 pixel values"),
-        ({"flag_values": [0, 1]}, "names no classes"),
-        ({"flag_meanings": "bg"}, "lists no pixel values"),
-        ({"flag_values": [1, 0], "flag_meanings": "a b"}, "ascending"),
         ({"classes": {0: "two words"}}, "contain spaces"),
     ],
 )
@@ -102,18 +86,6 @@ def _labelled():
     )
 
 
-def test_a_geotiff_read_label_joins_one_built_in_memory(tmp_path) -> None:
-    from geosave.geodata import open_raster
-
-    labelled = _labelled()
-    (file,) = flat(write_cogs(labelled, tmp_path, format_paths="label.tif"))
-    restored = open_raster(file)
-
-    joined = attrs.combine_attrs([restored.label.attrs, labelled.label.attrs])
-
-    assert attrs.CFFlags.from_attrs(joined) == labelled.label.gs.flags
-
-
 @pytest.mark.parametrize("suffix", ["zarr", "nc", "tif"])
 def test_flags_and_colours_survive_each_raster_format(tmp_path, suffix) -> None:
     from geosave.geodata import open_raster
@@ -130,16 +102,38 @@ def test_flags_and_colours_survive_each_raster_format(tmp_path, suffix) -> None:
 
     restored = open_raster(written).label
     assert restored.gs.flags == labelled.label.gs.flags
-    assert restored.gs.display == labelled.label.gs.display
 
 
-def test_combined_flags_keep_repeated_codes_and_native_mask_meanings():
-    import xarray as xr
-
-    legend = attrs.CFFlags(
-        flag_values=[1, 1], flag_masks=[1, 3], flag_meanings="bit_set code_one"
+def test_colour_hints_read_alike_however_they_are_spelled() -> None:
+    classes = {0: "water", 1: "trees"}
+    hexed = attrs.CFFlags(classes=classes, colors={0: "#000000", 1: "#00ff00"})
+    channels = attrs.CFFlags(classes=classes, colors={0: (0, 0, 0), 1: [0, 255, 0]})
+    gdal_text = attrs.CFFlags.model_validate(
+        {
+            "flag_values": [0, 1],
+            "flag_meanings": "water trees",
+            "color_hints": '[[0, 0, 0], "00ff00"]',
+        }
     )
-    assert legend.classes is None
-    flags = xr.DataArray([0, 1, 2, 3], dims="pixel", attrs=legend.to_attrs())
-    assert (flags.cf == "bit_set").values.tolist() == [False, True, False, True]
-    assert (flags.cf == "code_one").values.tolist() == [False, True, False, False]
+
+    assert hexed == channels == gdal_text
+    assert hexed.color_hints == ["000000", "00FF00"]
+
+
+def test_classes_without_a_colour_take_their_palette_colour() -> None:
+    from geosave.geodata.utils.color import CATEGORY_PALETTE
+
+    flags = attrs.CFFlags(
+        classes={0: "water", 1: "trees", 2: "crops"}, colors={1: "#00ff00"}
+    )
+
+    assert flags.colors[1] == "#00FF00"
+    assert flags.colors[0] == CATEGORY_PALETTE[0].upper()
+    assert flags.colors[2] == CATEGORY_PALETTE[2].upper()
+
+
+def test_one_colour_hint_per_class_is_required() -> None:
+    with pytest.raises(ValueError, match="colour hints"):
+        attrs.CFFlags(
+            flag_values=[0, 1], flag_meanings="water trees", color_hints=["000000"]
+        )

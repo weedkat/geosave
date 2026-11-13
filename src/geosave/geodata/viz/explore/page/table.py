@@ -6,6 +6,7 @@ import asyncio
 from functools import partial
 from typing import TYPE_CHECKING
 
+from geosave.geodata.core.vector.catalog import stac_items
 from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 import pandas as pd
@@ -37,12 +38,13 @@ class AttributeTable(pn.ui.Tabulator):
         self._explorer = explorer
         self._load_generation = 0
         self._released = False
-        frame.gs.validate(crs=True)
+        # A table without a CRS has no place on the map; reading it raises.
+        _ = frame.gs.crs
         self.has_rasters = FOOTER_KEY in frame.attrs or all(
             column in frame for column in ITEM_COLUMNS
         )
         if self.has_rasters:
-            frame.gs.validate(stac_item=True)
+            frame.gs.validate(stac_items)
 
         layer = VectorLayer(frame, name=name)
         layer.footprint_rows = []

@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 
 from geosave.model.chain import Published, chain_step
-from geosave.model.registry import build_model
+from geosave.model.stages.registry import build_model
 
 
 class StubEncoder(torch.nn.Module):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
@@ -10,7 +11,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from geosave.geodata.conventions import END_DATETIME, START_DATETIME, TIME_COORDINATE
+from geosave.geodata.core.conventions import (
+    END_DATETIME,
+    START_DATETIME,
+    TIME_COORDINATE,
+)
+from geosave.geodata.errors import RasterValidationError
 
 if TYPE_CHECKING:
     from affine import Affine
@@ -36,6 +42,22 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
     def time_coordinate(self) -> xr.DataArray | None:
         """Read the `time` coordinate, the name ODC and odc-stac give it."""
         return self._data.coords.get(TIME_COORDINATE)
+
+    @property
+    def times(self) -> pd.DatetimeIndex | None:
+        """Read the time coordinate labels.
+
+        Returns:
+            Labels in axis order, or None for timeless data.
+
+        Examples:
+            >>> ds.gs.times.strftime("%Y%m%d").tolist()
+            ['20250601', '20250611']
+        """
+        labels = self.time_coordinate
+        if labels is None:
+            return None
+        return pd.DatetimeIndex(np.atleast_1d(labels.values))
 
     def write_time_bounds(
         self,
@@ -125,6 +147,32 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         return first.to_pydatetime(), last.to_pydatetime()
 
 
+# A rule raises RasterValidationError when the raster breaks it; `gs.validate`
+# runs rules without reading pixels.
+type Rule[DataT] = Callable[[DataT], None]
+
+
+def georeferenced(raster: xr.DataArray | xr.Dataset | xr.DataTree) -> None:
+    """Require a grid ODC recognizes, with a CRS.
+
+    Raises:
+        RasterValidationError: ODC finds no grid, or the grid has no CRS.
+        NotImplementedError: Pixels are placed by ground control points.
+    """
+    geobox = raster.gs.geobox
+    if geobox is None:
+        raise RasterValidationError(
+            "ODC finds no grid. Name the spatial dimensions as ODC does, "
+            "y/x or latitude/longitude, with their coordinates."
+        )
+
+    if geobox.crs is None:
+        raise RasterValidationError(
+            "The coordinate reference system (CRS) is missing. Declare the "
+            "CRS of the existing coordinates with raster.odc.assign_crs(crs)."
+        )
+
+
 class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
     """Spatial, attrs, and pixel members every `gs` raster accessor shares.
 
@@ -159,41 +207,26 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         dims = self.spatial_dims
         return None if dims is None else dims[1]
 
-    def _require_spatial_dims(self) -> tuple[str, str]:
-        """Return the spatial dimensions pixel operations need, placed or not."""
-        from geosave.geodata.errors import RasterValidationError
+    def validate(self, *rules: Rule[DataT]) -> None:
+        """Require a grid ODC recognizes, with a CRS, then every rule, without reading pixels.
 
-        dims = self.spatial_dims
-        if dims is None:
-            raise RasterValidationError(
-                "ODC finds no spatial dimensions. Name them as ODC does, "
-                "y/x or latitude/longitude."
-            )
-        return dims
-
-    def validate(self) -> None:
-        """Require a grid ODC recognizes, with a CRS, without reading pixels.
+        Args:
+            *rules: Rules the operation needs beyond a georeferenced grid, such
+                as `decoded` for a band or `same_pixel_meaning` for a Dataset.
 
         Raises:
-            RasterValidationError: ODC finds no grid, or the grid has no CRS.
-            NotImplementedError: Pixels are placed by ground control points.
+            RasterValidationError: The grid or a rule is broken. The error
+                names the variable or node and how to fix it.
 
         Examples:
             >>> scene.gs.validate()
+            >>> band.gs.validate(decoded)
+            >>> scene.gs.validate(same_pixel_meaning)
         """
-        from geosave.geodata.errors import RasterValidationError
+        georeferenced(self._data)
 
-        geobox = self.geobox
-        if geobox is None:
-            raise RasterValidationError(
-                "ODC finds no grid. Name the spatial dimensions as ODC does, "
-                "y/x or latitude/longitude, with their coordinates."
-            )
-        if geobox.crs is None:
-            raise RasterValidationError(
-                "The coordinate reference system (CRS) is missing. Declare the "
-                "CRS of the existing coordinates with raster.odc.assign_crs(crs)."
-            )
+        for rule in rules:
+            rule(self._data)
 
     @property
     @abstractmethod
@@ -330,27 +363,6 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
     @abstractmethod
     def timespan(self) -> DateRange | None:
         """Read inclusive temporal coverage using the concrete raster's rules."""
-
-    @property
-    @abstractmethod
-    def time_coordinate(self) -> xr.DataArray | None:
-        """Read the temporal coordinate owned by this raster or tree node."""
-
-    @property
-    def times(self) -> pd.DatetimeIndex | None:
-        """Read the time coordinate labels.
-
-        Returns:
-            Labels in axis order, or None for timeless data.
-
-        Examples:
-            >>> ds.gs.times.strftime("%Y%m%d").tolist()
-            ['20250601', '20250611']
-        """
-        labels = self.time_coordinate
-        if labels is None:
-            return None
-        return pd.DatetimeIndex(np.atleast_1d(labels.values))
 
     @property
     @abstractmethod

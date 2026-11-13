@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+from operator import itemgetter
 from typing import Any, TYPE_CHECKING, Literal, Unpack, cast
 
 import cf_xarray  # noqa: F401  — registers the .cf accessor
@@ -12,14 +13,16 @@ import pandas as pd
 import xarray as xr
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import (
+
+from geosave.geodata.errors import RasterValidationError
+from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
 )
 from geosave.geodata.core.raster.utils.statistics import class_percent, statistics
 from geosave.geodata.core.raster.utils.tensor import as_tensor
 
 
-from .base import GeoRaster, RasterTime
+from .base import GeoRaster, RasterTime, Rule
 from .transform.temporal import Reducer, Interpolation
 
 if TYPE_CHECKING:
@@ -46,11 +49,58 @@ if TYPE_CHECKING:
     from geosave.geodata.io.formats.geotiff import COGWriteOptions
     from geosave.geodata.io.formats.geotiff import GTiffWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
-    from geosave.geodata.io.formats.netcdf import NetCDFEngine
     from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
     from geosave.geodata.io.formats.zarr import ZarrWriteOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
+
+
+# Rules a band can be asked to meet; `band.gs.validate(decoded)` runs one.
+# Methods that pick an existing value rather than compute a new one.
+VALUE_PRESERVING = frozenset({"nearest", "mode", "first", "last"})
+
+
+def decoded(band: xr.DataArray) -> None:
+    """Require no active CF packing, so a reduction sees physical values.
+
+    Raises:
+        RasterValidationError: The band still states CF packing.
+    """
+    if attrs.CFPacking.is_stated_in(band.attrs):
+        raise RasterValidationError(
+            "The band still holds packed values. Decode them with "
+            "mask_and_scale() first.",
+            variable=band.name,
+        )
+
+
+def compatible_resampling(method: str) -> Rule[xr.DataArray]:
+    """Build the rule that the band's values allow resampling with `method`.
+
+    Class codes allow only methods that pick an existing value: nearest or
+    mode in space, first or last in time. Other values allow any method.
+
+    Args:
+        method: Resampling kernel or temporal reducer, such as ``"bilinear"``
+            or ``"mean"``.
+
+    Returns:
+        Rule for `validate`.
+
+    Examples:
+        >>> landcover.gs.validate(compatible_resampling("bilinear"))
+        RasterValidationError: Raster 'landcover': Its class codes need ...
+    """
+
+    def check(band: xr.DataArray) -> None:
+        if band.gs.is_categorical and method not in VALUE_PRESERVING:
+            raise RasterValidationError(
+                f"Its class codes need nearest, mode, first or last, not "
+                f"{method!r}, which would compute values that name no class.",
+                variable=band.name,
+            )
+
+    return check
 
 
 class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
@@ -105,23 +155,13 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
             ValueError: The selected datetime dimension is absent, active CF attrs require explicit
                 `mask_and_scale()`, or class codes would be reduced numerically.
         """
-        from .transform.temporal import CELL_METHODS, composite_da
+        from .transform.temporal import composite
 
-        data = self._data
-        cell_method = CELL_METHODS[method]
-        if attrs.CFPacking.is_stated_in(data.attrs):
-            raise ValueError(
-                "decode active CF attrs with mask_and_scale() before composite"
-            )
-        if self.is_categorical and (
-            cell_method != "point" or interpolation is not None
-        ):
-            raise ValueError(
-                "class codes require 'first' or 'last' without interpolation"
-            )
+        # Interpolation computes values, so it decides compatibility when given.
+        self.validate(decoded, compatible_resampling(interpolation or method))
 
-        result = composite_da(
-            data,
+        result = composite(
+            self._data,
             freq,
             method,
             dim=dim,
@@ -186,11 +226,6 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         return attrs.CFFlags.from_attrs(self._data.attrs)
 
     @property
-    def display(self) -> attrs.Display | None:
-        """Read how this band draws: its class colours, or None."""
-        return attrs.Display.from_attrs(self._data.attrs)
-
-    @property
     def class_colors(self) -> dict[int, str] | None:
         """Read the colour of every class, in class order, or None without classes.
 
@@ -199,9 +234,10 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
             {0: '#1F77B4', 1: '#0000FF'}
         """
         flags = self.flags
-        if flags is None or flags.classes is None:
+        if flags is None:
             return None
-        return (self.display or attrs.Display()).colors(flags.classes)
+
+        return flags.colors
 
     @property
     def is_categorical(self) -> bool:
@@ -209,20 +245,17 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
 
         Dtype does not say: Sentinel-2 reflectance and a land cover map are
         both integers. CF flags (`flag_values` or `flag_masks` with
-        `flag_meanings`) mark the values as codes, and so does a colour map.
+        `flag_meanings`) mark the values as codes.
 
         Returns:
-            True for a CF flag variable or one carrying a colour map; otherwise
-            False. Pixel values and dtype are not inspected.
+            True for a CF flag variable, otherwise False. Pixel values and
+            dtype are not inspected.
 
         Examples:
             >>> scene.landcover.gs.is_categorical, scene.red.gs.is_categorical
             (True, False)
         """
-        if self.flags is not None:
-            return True
-        display = self.display
-        return display is not None and display.color_map is not None
+        return self.flags is not None
 
     @property
     def description(self) -> attrs.CFDescription | None:
@@ -281,6 +314,8 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         """
 
         from .transform.warp import reproject
+
+        self.validate(compatible_resampling(resampling))
 
         return cast(
             "DataArray",
@@ -471,7 +506,8 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
     ) -> DataArray:
         """Write the class each of this band's stored values stands for.
 
-        Classes are written as CF flags, colours as the band's `Display`.
+        Classes are written as CF flags; colours as their `color_hints`, a class
+        `colors` leaves out taking its palette colour.
 
         Args:
             classes: Stored value mapped to class name. None removes the
@@ -490,22 +526,11 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
             >>> ds["label"].gs.write_flags({0: "water", 1: "trees"})
         """
         if classes is None:
-            cleared = attrs.clear_attrs(self._data, attrs.CFFlags)
-            return attrs.clear_attrs(cleared, attrs.Display)
-        flags = attrs.CFFlags.model_validate({"classes": classes})
+            return attrs.clear_attrs(self._data, attrs.CFFlags)
+
+        flags = attrs.CFFlags.model_validate({"classes": classes, "colors": colors})
         flags.check_dtype(self._data.dtype)
-        written = attrs.stamp_attrs(self._data, flags)
-        if colors is None:
-            return attrs.clear_attrs(written, attrs.Display)
-        display = attrs.Display.model_validate({"color_map": colors})
-        uncolored = sorted(set(display.color_map or {}) - set(classes))
-        if uncolored:
-            raise ValueError(
-                f"The colours name pixel values {uncolored}, but no class has "
-                f"those values (the classes are {sorted(classes)}). Add the "
-                "missing classes or remove their colours."
-            )
-        return attrs.stamp_attrs(written, display)
+        return attrs.stamp_attrs(self._data, flags)
 
     def write_packing(self, packing: attrs.CFPacking | None) -> DataArray:
         """Write how this band's stored values decode to physical values.
@@ -562,34 +587,24 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         return attrs.stamp_attrs(self._data, attrs.EOBand(**fields))
 
     def to_numpy(self, *, dtype: DTypeLike | None = None) -> np.ndarray:
-        """Read this band as one model-input array.
-
-        The grid pair trails and a `band` axis sits just ahead of it, matching
-        what `GeoDataset.to_numpy` builds by stacking variables. Other axes keep
-        this band's own order.
+        """Read the pixels as one numpy array, the grid pair last.
 
         Args:
             dtype: Cast applied to the pixels. None keeps their own dtype.
 
         Returns:
-            Array shaped `(*axes, band, y, x)`, or `(*axes, y, x)` where this
-            band spans no `band` axis.
+            Array shaped `(*axes, y, x)`, other axes in this array's order.
 
         Examples:
             >>> ds["ndvi"].gs.to_numpy().shape
             (2, 256, 256)
         """
-        spatial = self._require_spatial_dims()
-        # Put spatial dimensions last.
-        ahead = []
-        for dim in self._data.dims:
-            if dim not in (*spatial, BAND_DIMENSION):
-                ahead.append(dim)
-        if BAND_DIMENSION in self._data.dims:
-            ahead.append(BAND_DIMENSION)
+        self.validate()
 
-        ordered = self._data.transpose(*ahead, *spatial).values
-        return ordered if dtype is None else ordered.astype(dtype)
+        # Models read the grid pair last, as torch's [..., H, W].
+        spatial = cast("tuple[str, str]", self.spatial_dims)
+        pixels = self._data.transpose(..., *spatial).values
+        return pixels if dtype is None else pixels.astype(dtype)
 
     def to_tensor(self, *, dtype: str | torch.dtype | None = None) -> torch.Tensor:
         """Read this band as one model-input tensor, laid out as `to_numpy`.
@@ -632,23 +647,23 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         return cast("DataArray", result)
 
     def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt on `expand_stac` and `tree.gs.to_cog`.
+        """STAC Item publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
+            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
         )
 
     def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
-        """STAC catalog publication is being rebuilt on `expand_stac` and `tree.gs.to_cog`.
+        """STAC catalog publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
+            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
         )
 
     def to_cog(
@@ -675,21 +690,28 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         Raises:
             ValueError: The array cannot be represented by one GeoTIFF.
         """
+        from geosave.geodata.io import storage
         from geosave.geodata.io.formats import geotiff
 
-        return geotiff.write_cog(
-            self._data,
-            path,
-            overwrite=overwrite,
+        destination = storage.create_upath(path, storage_options)
+        written = geotiff.write_files(
+            {destination: self._as_bands()},
             compute=compute,
-            storage_options=storage_options,
+            overwrite=overwrite,
             **options,
         )
+        if not compute:
+            from dask.delayed import delayed
+
+            # The batch of one computes to one path.
+            return delayed(itemgetter(0))(written)
+        return cast("list[UPath]", written)[0]
 
     def to_zarr(
         self,
         path: Location,
         *,
+        dim: str | None = None,
         compute: bool = True,
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
@@ -699,6 +721,8 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
 
         Args:
             path: The store, ending in .zarr.
+            dim: Dimension to split into one variable per label, as in native
+                `to_dataset(dim=...)`; None writes the array as one variable.
             compute: False returns one native `dask.Delayed`; computing it
                 writes the store and returns its path.
             overwrite: Replace an existing store.
@@ -718,10 +742,7 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         """
         from geosave.geodata.io.formats import zarr
 
-        if BAND_DIMENSION in self._data.dims:
-            dataset = self.to_dataset()
-        else:
-            dataset = self._data.to_dataset()
+        dataset = self._data.to_dataset() if dim is None else self.to_dataset(dim)
         return zarr.write_zarr(
             dataset,
             path,
@@ -735,8 +756,8 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         self,
         path: Location,
         *,
+        dim: str | None = None,
         compute: bool = True,
-        engine: NetCDFEngine = "netcdf4",
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[NetCDFWriteOptions],
@@ -745,9 +766,10 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
 
         Args:
             path: The file, ending in .nc, .nc4 or .cdf.
+            dim: Dimension to split into one variable per label, as in native
+                `to_dataset(dim=...)`; None writes the array as one variable.
             compute: False returns one native `dask.Delayed`; computing it
                 writes the file and returns its path.
-            engine: Concrete xarray netCDF backend.
             overwrite: Replace an existing file.
             storage_options: Filesystem options merged into the destination UPath.
             **write_options: Supported xarray netCDF write options.
@@ -765,15 +787,11 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         """
         from geosave.geodata.io.formats import netcdf
 
-        if BAND_DIMENSION in self._data.dims:
-            dataset = self.to_dataset()
-        else:
-            dataset = self._data.to_dataset()
+        dataset = self._data.to_dataset() if dim is None else self.to_dataset(dim)
         return netcdf.write_netcdf(
             dataset,
             path,
             compute=compute,
-            engine=engine,
             overwrite=overwrite,
             storage_options=storage_options,
             **write_options,
@@ -803,16 +821,43 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         Raises:
             ValueError: The array cannot be represented by one GeoTIFF.
         """
+        from geosave.geodata.io import storage
         from geosave.geodata.io.formats import geotiff
 
-        return geotiff.write_geotiff(
-            self._data,
-            path,
-            overwrite=overwrite,
+        destination = storage.create_upath(path, storage_options)
+        written = geotiff.write_files(
+            {destination: self._as_bands()},
+            driver="GTiff",
             compute=compute,
-            storage_options=storage_options,
+            overwrite=overwrite,
             **options,
         )
+        if not compute:
+            from dask.delayed import delayed
+
+            # The batch of one computes to one path.
+            return delayed(itemgetter(0))(written)
+        return cast("list[UPath]", written)[0]
+
+    def _as_bands(self) -> Dataset:
+        """Lay the array out as a GeoTIFF's bands: one per `band` label, else one.
+
+        Each band keeps the array's attrs and encoding, so its pixels keep
+        their meaning; the array's attrs also describe the whole file.
+        """
+        array = self._data
+        if BAND_DIMENSION not in array.dims:
+            name = array.name if array.name is not None else "asset"
+            return cast(
+                "Dataset", array.to_dataset(name=name).assign_attrs(array.attrs)
+            )
+
+        dataset = array.to_dataset(dim=BAND_DIMENSION)
+        dataset = dataset.rename_vars({name: str(name) for name in dataset.data_vars})
+        for band in dataset.data_vars.values():
+            band.attrs = dict(array.attrs)
+            band.encoding = dict(array.encoding)
+        return cast("Dataset", dataset.assign_attrs(array.attrs))
 
     def vectorize(
         self,
@@ -849,33 +894,50 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         )
 
     def to_dataset(self, dim: str = BAND_DIMENSION) -> Dataset:
-        """Split labelled raster bands, retaining shared CF attrs on each variable.
+        """Split labelled raster bands into variables, as native `to_dataset(dim)`.
+
+        As natively, the array's attrs become the Dataset attrs, except its
+        packing and flags, which move to each band so its pixels keep their
+        meaning.
 
         Args:
             dim: Dimension whose unique labels name the output variables.
-                Defaults to "band". Use native `array.to_dataset(name=...)`
-                to wrap an array without splitting.
+                Use native `array.to_dataset(name=...)` to wrap an array
+                without splitting.
 
         Returns:
-            Lazy Dataset with the array's shared attrs on each band. Original
-            per-band metadata and storage recipes lost in stacking are not recovered.
+            Lazy Dataset, one variable per label of `dim`.
 
         Examples:
             >>> bands = image.gs.to_dataset()
         """
-        dataset = cast("Dataset", self._data.to_dataset(dim=dim))
-        dataset.attrs = {}
-        for band in dataset.data_vars.values():
-            band.attrs = dict(self._data.attrs)
-        return dataset
+        packing = self.packing
+        flags = self.flags
 
-    def statistics(self) -> pd.DataFrame:
+        dataset = self._data.to_dataset(dim=dim)
+        dataset = attrs.clear_attrs(dataset, attrs.CFPacking)
+        dataset = attrs.clear_attrs(dataset, attrs.CFFlags)
+
+        for name in dataset.data_vars:
+            band = dataset[name]
+            if packing is not None:
+                band = attrs.stamp_attrs(band, packing)
+            if flags is not None:
+                band = attrs.stamp_attrs(band, flags)
+            dataset[name] = band
+        return cast("Dataset", dataset)
+
+    def statistics(self, dim: str | None = None) -> pd.DataFrame:
         """Summarise present pixels, with one table row per band.
 
         NaN and the fill value are excluded. This eagerly reads every band. A
-        `band` axis is split through `to_dataset(dim="band")`, every band taking the
-        array's own attrs, so a fill value counts only where all bands share
-        it. Other axes are reduced together.
+        `dim` is split through `to_dataset(dim)`, every band taking the array's
+        own attrs, so a fill value counts only where all bands share it. Other
+        axes are reduced together.
+
+        Args:
+            dim: Dimension whose labels name one row each; None summarises the
+                array as one row.
 
         Returns:
             DataFrame with minimum, maximum, mean, population stddev, and
@@ -891,8 +953,9 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
                  minimum  maximum  mean  stddev  valid_percent
             B04      1.0     63.0  32.0    18.2           98.4
         """
-        if BAND_DIMENSION in self._data.dims:
-            return self.to_dataset(dim=BAND_DIMENSION).gs.statistics()
+        if dim is not None:
+            return self.to_dataset(dim).gs.statistics()
+
         return statistics([{self._data.name: self._data}])
 
     def class_percent(self) -> pd.Series:
@@ -912,16 +975,19 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         """
         return class_percent([self._data])
 
-    def colorize(self) -> DataArray:
+    def colorize(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Bake the class colours this band carries into display channels.
 
-        Reads `CFFlags` and `Display`, colouring each pixel by the class its code names. The
+        Reads `CFFlags`, colouring each pixel by the class its code names. The
         result holds colour rather than codes, so it draws without a legend;
         prefer `plot` where a named colorbar is wanted.
 
+        Args:
+            dim: Name of the colour channel dimension the result spans.
+
         Returns:
-            Georeferenced array shaped `(*axes, band, y, x)` valued in
-            `[0, 1]`, whose `band` coordinate is `("red", "green", "blue")`.
+            Georeferenced array shaped `(*axes, dim, y, x)` valued in
+            `[0, 1]`, whose `dim` coordinate is `("red", "green", "blue")`.
             A pixel no class names is absent on every channel.
 
         Raises:
@@ -935,6 +1001,8 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
 
         from geosave.geodata.utils.color import parse_color
 
+        self.validate()
+        spatial = cast("tuple[str, str]", self.spatial_dims)
         variable = self._data
         colors = variable.gs.class_colors
         if colors is None:
@@ -958,16 +1026,16 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
         channels = xr.apply_ufunc(
             look_up,
             variable,
-            output_core_dims=[[BAND_DIMENSION]],
+            output_core_dims=[[dim]],
             dask="parallelized",
             output_dtypes=[np.float32],
-            dask_gufunc_kwargs={"output_sizes": {BAND_DIMENSION: 3}},
+            dask_gufunc_kwargs={"output_sizes": {dim: 3}},
             keep_attrs=False,
         )
         return (
             channels.assign_coords(variable.coords)
-            .assign_coords({BAND_DIMENSION: ["red", "green", "blue"]})
-            .transpose(..., BAND_DIMENSION, *variable.gs._require_spatial_dims())
+            .assign_coords({dim: ["red", "green", "blue"]})
+            .transpose(..., dim, *spatial)
             .rename(None)
         )
 
@@ -1017,7 +1085,7 @@ class GeoDataArray(RasterTime["DataArray"], GeoRaster["DataArray"]):
 
         Args:
             cmap: Colormap. Refused for a band listing classes, whose palette
-                is `Display.color_map`.
+                is `CFFlags.color_hints`.
             clim: Colour limits. Refused for a band listing classes.
             cols: Columns a `time` axis lays panels into. Ignored otherwise.
             title: Panel title above the axes. None suppresses automatic

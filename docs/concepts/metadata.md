@@ -34,9 +34,9 @@ Use the `.gs` properties and `write_*` methods for everyday work, as shown in
 | --- | --- | --- |
 | `CFPacking` | `scale_factor`, `add_offset`, `_FillValue`, `missing_value`, `valid_min`, `valid_max`, `valid_range`; also reads `nodata` | CF packed data (§8.1) and missing data (§2.5.1) on each variable; `xr.decode_cf` reads them together. |
 | `CFDescription` | `long_name`, `standard_name`, `units` | What a variable's values are (CF chapter 3); `band.gs.description`. |
-| `CFFlags` | `flag_values`, `flag_masks`, `flag_meanings` | Class codes or bit flags and their labels (CF §3.5); `band.gs.flags`. |
+| `CFFlags` | `flag_values`, `flag_masks`, `flag_meanings`, `color_hints` | Class codes or bit flags and their labels (CF §3.5), and each class's colour as STAC classification's `color_hint`; `band.gs.flags`. |
 | `EOBand` | `common_name`, `center_wavelength`, `full_width_half_max` | Band identity and wavelength in micrometres, as STAC `eo` states them. |
-| `Display` | `rgb` (Dataset), `color_map` (variable) | How a raster draws; the GeoTIFF writer maps it to GDAL colour interpretations and colour tables. |
+| `Display` | `rgb` | Which variables draw red, green and blue; the GeoTIFF writer maps it to GDAL colour interpretations. |
 | `ACDD` | `id`, `title`, `summary`, `keywords`, `institution`, `license` | Dataset identity and discovery metadata on root attrs. |
 | `ACDDExtent` | `geospatial_bounds`, `geospatial_bounds_crs` | Declared spatial extent as WKT and its CRS, retained on raster roots and spatial variables. |
 | `StacCollection` | `stac_collection`, `stac_extensions` | The STAC Collection and extension URIs on root attrs. |
@@ -60,7 +60,7 @@ so the original keeps its attrs. Construct a new group to replace a declaration.
 ```python
 band = attrs.stamp_attrs(band, attrs.CFPacking(fill_value=255))
 band = attrs.clear_attrs(band, attrs.CFPacking)
-band = attrs.stamp_attrs(band, attrs.Display(color_map={0: "#000000"}))
+band = attrs.stamp_attrs(band, attrs.CFFlags(classes={0: "water"}, colors={0: "#000000"}))
 ```
 
 Writing a group removes all its previous keys before stating the new value.
@@ -72,14 +72,14 @@ Dask arrays or recode classes.
 GeoSave's `gs.to_array()` requires compatible active CF declarations
 before stacking bands, including units, unsigned interpretation, flags, validity
 ranges, calendars and cell methods. Missing units do not agree with declared
-units. `combine_attrs` cannot override or discard these declarations.
+units. The remaining attrs follow xarray's `drop_conflicts`.
 Native `xr.concat` does not check packing or CRS:
 decode and align inputs explicitly before combining them. Attr combination
 follows xarray's policies and does not validate pixel semantics.
 
 ## Decode and encode variable values
 
-Stored DN carries scale, offset and missing-value declarations in variable
+Stored digital numbers (DN) carry scale, offset and missing-value declarations in variable
 attrs. `raster.gs.mask_and_scale()` uses xarray's CF decoder and retains the
 consumed fields and original dtype in each variable's encoding.
 Decoding preserves lazy arrays and leaves the source unchanged. Writers encode
@@ -102,7 +102,9 @@ textual scaling or casts mismatched missing-value declarations.
 
 
 `write_nodata()` and `write_packing()` only declare what existing pixels
-mean; neither changes pixels. Each preserves the other's declarations.
+mean; neither changes pixels. `write_nodata` changes the fill declaration only.
+`write_packing` replaces the whole packing group, so include `fill_value` when
+the new declaration must retain nodata.
 
 An undecoded read (`mask_and_scale=False`) retains DN with CF attrs. A decoded
 read retains the storage recipe in encoding. Writers save either representation
@@ -115,28 +117,17 @@ ODC may still remap different source nodata codes to one output fill value.
 ## Join data with consistent meaning
 
 ```python
-joined = xr.concat([band, band], dim="time", combine_attrs=attrs.combine_attrs)
+joined = xr.concat([band, band], dim="time", combine_attrs="drop_conflicts")
 joined
 ```
 
-`attrs.combine_attrs` is an explicit xarray callback; ordinary xarray operations
-do not automatically apply it. It delegates combination to xarray and adds
-`DroppedAttrsWarning` for omitted keys. Its default, `"drop_conflicts"`, drops
-keys with disagreeing values and retains keys present in only one input.
-Groups do not affect this key-by-key policy, and aliases are not normalized.
-
-Retained GeoSave combinations accept native policy strings or callables and
-warn about omitted keys. In `gs.to_array()` this policy applies only to
-descriptive attrs; validated CF pixel declarations are always retained. Their default is `"drop_conflicts"`. Native `xr.concat`
-and `xr.merge` default to `"override"`; pass a policy explicitly when that is
-not the desired behavior. Direct native calls need `attrs.combine_attrs` to
-add GeoSave warnings.
-
-Warnings describe absent keys, not changed values: `"override"` can select a
-different value without omitting its key. Explicit `"drop"` warns about every
-omitted key. No alias normalization or group validation occurs during combination;
-a resulting partial legend may fail validation when later read. Check physical
-units and class meanings before combining pixels, independently of attrs policy.
+GeoSave uses xarray's attr policies as they are. `"drop_conflicts"` drops keys
+with disagreeing values and keeps keys present in only one input; native
+`xr.concat` and `xr.merge` default to `"override"`, so pass a policy when that
+is not the desired behavior. No alias normalization or group validation occurs
+during combination; a resulting partial legend may fail validation when later
+read. Check physical units and class meanings before combining pixels,
+independently of attrs policy.
 
 ## Decode and encode are different stages
 
@@ -145,9 +136,9 @@ arithmetic and reductions generally discard data encoding; choose a new output
 encoding when saving a derived variable. `.gs.composite()` requires explicit
 decoding first and does not restore the old integer recipe after reduction.
 
-NetCDF and Zarr writers use native xarray encoding. The Dataset GeoTIFF writer
-encodes each raster variable with xarray's CF codec before rioxarray stacks the
-bands, preserving per-band scale and offset. All use native quantization and
+NetCDF and Zarr writers use native xarray encoding. The GeoTIFF format writer
+encodes variables with xarray's CF codec. Array `.gs.to_cog()` writes one file;
+tree `.gs.to_cog()` writes each asset separately. Dataset `.gs.to_cog()` is unavailable. All use native quantization and
 casting behavior; GeoSave adds no integer overflow or fill-collision preflight.
 Choose an appropriate dtype, scale and fill, and verify output with a round trip.
 
@@ -163,9 +154,9 @@ your workflow needs. See the [attrs reference](../reference/attrs.md) and
 
 A raster loaded from STAC carries its STAC metadata in two named places.
 The root `StacCollection` attrs hold the Collection and the Items' extension
-schemas. The `stac_properties` coordinate along `time` holds one JSON mapping
-per observation: the properties every loaded Item shares, plus those requested
-with `with_properties`. `gs.stac_common_properties` is their intersection.
+schemas. The `stac_properties` coordinate along `time` holds one dict
+per observation, stored as JSON text in netCDF and Zarr: the properties every loaded Item shares, plus those requested
+with `with_properties`.
 `to_catalog` builds each Item's properties from these records; no other
 coordinate becomes a property. Dates, `proj:*` and band fields always come
 from the raster's own coordinates, grid and attrs.
@@ -190,4 +181,5 @@ A Dataset's `gs.stac_collection` holds the one it was loaded from. Attrs
 describe one load: native concat keeps the first one's attrs by default, while
 an explicit combination policy may drop conflicting metadata. Request a property
 with `with_properties` to keep it per date. Use
-`GeoCatalog.concat` to combine tables while preserving their definitions.
+`geosave.geodata.stac.catalog.concat_catalogs` to combine compatible tables
+while preserving their definitions; conflicting definitions raise.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 
 from .dense import DenseHead
 

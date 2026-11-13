@@ -1,6 +1,7 @@
 # Storage and file layouts
 
-Details behind [read and save data](../basics/io.md). Examples reuse its `scene`, `files`, `store` and `root`.
+See [Read and save data](../basics/io.md) for working round trips and
+[writer return values](../reference/io.md#saved-raster-files) for exact output types.
 
 ## Recognized suffixes
 
@@ -9,88 +10,47 @@ Details behind [read and save data](../basics/io.md). Examples reuse its `scene`
 | Raster | `.tif`, `.tiff`, `.jp2`, `.png`, `.zarr`, `.nc`, `.nc4`, `.cdf`, `.safe` |
 | Vector | `.parquet`, `.geoparquet`, `.geojson`, `.json`, `.gpkg` |
 
-Suffix matching is case-insensitive. `.SAFE` is a vendor product directory,
-whose whole-product reader is recognized but currently raises
-`NotImplementedError`; open individual `.jp2` files instead. A PNG without georeferencing can be opened,
-but spatial operations still need a locatable grid. Unsupported suffixes raise
-`ValueError`; use the format's reader directly when suffix dispatch is unsuitable.
+Suffix matching is case-insensitive. The whole-product SAFE reader is
+unavailable; open individual `.jp2` files instead. A PNG can open without
+georeferencing, but spatial operations still require a locatable grid.
+Unsupported suffixes raise ValueError; use a format reader directly when needed.
 
-## Save a time series as image files
+## One image file or a tree of assets
 
-```python
-dated = scene.expand_dims(time=[np.datetime64("2025-01-01")])
-items = dated.gs.to_cog(root / "dated", format_paths="scene_{time:%Y%m%d}.tif")
-[file.name for file in items]
+A DataArray writes one explicit TIFF path:
+
+```python title="Adaptation example — use one selected observation"
+path = scene["red"].isel(time=0).gs.to_cog("output/red.tif")
+path = scene[["red", "nir"]].isel(time=0).gs.to_array().gs.to_cog("output/image.tif")
 ```
 
-Output:
+One TIFF holds one instant on one grid. A band array needs compatible pixel
+meaning across its bands. For different band metadata or several dates, use
+a STAC tree of separate assets:
 
-```text
-['scene_20250101.tif']
+```python title="Adaptation example — use a Dataset with a time dimension"
+tree = observations.gs.expand(id_format="{start:%Y%m%d}")
+files = tree.gs.to_cog("output/assets")
 ```
 
-`to_cog(path, format_paths=...)` takes an output directory or URL prefix.
-The relative `path_format` determines the filenames; without it, the accessor
-uses its default filename pattern. Literal braces in `path` stay literal. The template determines how
-data splits into files. `{time}` writes a
-file per date; `{band}` writes a file per band. Bands sharing a file must have
-the same dtype and nodata. For a tree, include `{collection}` to name each
-group. Fill any other fields in the template before passing it. A scalar `time` coordinate is
-accepted for one image. Several dates need distinct paths, or the writer
-raises before writing them.
+The tree names the files: `/default/20250101/red` becomes
+`output/assets/default/20250101/red.tif`. `id_format` controls Item names;
+Collection and asset names come from the tree. The writer does not accept
+file path templates. Returned paths are the files written by that call.
+`tree.gs.to_catalog(...)` writes the same assets and returns their Item table.
+See [catalog publication](../guides/catalogs-and-cuts.md).
 
-Existing destinations raise `FileExistsError` by default. Pass `overwrite=True`
-to replace them. The returned paths are the files this call wrote, not an
-inventory of the destination folder.
-For a searchable catalog, write with `to_catalog` instead: it writes the same
-files and returns their [STAC Items](../guides/stac.md) as a table.
+## Multidimensional stores
 
-## Read a tree
+Zarr and NetCDF write a Dataset or DataTree as one destination. Trees retain
+one group per node; they are not split into separate files. `gs.open_raster`
+returns a DataTree when the store has child groups and a Dataset otherwise.
+Ordinary xarray trees can have arbitrary named groups; GeoSave's STAC combine
+and asset-publication methods require the collection/Item/asset layout.
 
-```python
-optical = gs.open_raster(files[0])
-label = gs.open_raster(store)
-sample = xr.DataTree.from_dict({
-    "/optical": xr.Dataset(attrs=optical.attrs),
-    "/optical/r10m": optical,
-    "/label": xr.Dataset(attrs=label.attrs),
-    "/label/r10m": label,
-})
-sample
-```
-
-Output:
-
-```text
-<xarray.DataTree>
-Group: /
-├── Group: /optical
-│   │   Attributes:
-│   │       AREA_OR_POINT:  Area
-│   └── Group: /optical/r10m
-│           Dimensions:      (y: 4, x: 4)
-│           Coordinates:
-│             * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-│             * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-│               spatial_ref  int64 8B 0
-│           Data variables:
-│               red          (y, x) uint8 16B dask.array<chunksize=(4, 4), meta=np.ndarray>
-└── Group: /label
-    └── Group: /label/r10m
-            Dimensions:      (y: 4, x: 4)
-            Coordinates:
-              * y            (y) float64 32B 5e+06 5e+06 5e+06 5e+06
-              * x            (x) float64 32B 5e+05 5e+05 5e+05 5e+05
-                spatial_ref  int32 4B ...
-            Data variables:
-                red          (y, x) uint8 16B ...
-```
-
-Native xarray composition names the groups explicitly. A tree saved with
-`.gs.to_zarr("scene.zarr")` or `.gs.to_netcdf("scene.nc")` preserves its
-collection and grid groups; `gs.open_raster(path)` returns a DataTree for such
-stores and a Dataset for root-only stores. Directories and mappings are not
-assembled by the opener. Use catalog loading for assets split across files.
+NetCDF stores observation cells as a CF bounds variable; readers restore
+`start_datetime` and `end_datetime`. Zarr stores those coordinates directly.
+Neither format chooses the analysis grid or prepares model inputs.
 
 ## Use remote storage
 
@@ -138,4 +98,4 @@ Reader options are forwarded to the selected format module. See the
 [I/O reference](../reference/io.md) for chunking, format options, and remote
 configuration.
 
-Close file-backed objects when you finish: `sample.close()`.
+Close file-backed objects when their dependent work finishes.

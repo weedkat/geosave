@@ -1,4 +1,4 @@
-# Describe raster values
+# Nodata, scaling, and class labels
 
 Give a label raster its class names and a missing-data value:
 
@@ -8,6 +8,7 @@ import xarray as xr
 from odc.geo.xr import xr_coords
 
 import geosave as gs
+from geosave import attrs
 
 from odc.geo.geobox import GeoBox
 
@@ -23,7 +24,7 @@ codes = np.array([
 ], dtype="uint8")
 labels = xr.Dataset({"label": (("y", "x"), codes)}).assign_coords(xr_coords(grid)).gs.write_nodata(255)
 labels = labels.gs.write_flags(
-    {0: "background", 1: "forest", 2: "water"}, target="label"
+    {0: "background", 1: "forest", 2: "water"}, target=["label"]
 )
 labels["label"]
 ```
@@ -73,9 +74,9 @@ Output:
 255
 ```
 
-For a `Dataset`, `.gs.nodata` returns a mapping keyed by variable name because
-different variables can use different fill values. `.gs.write_nodata(value,
-target="label")` changes one variable; omit `target` to change all of them.
+Each variable states its own fill value, read with `ds["label"].gs.nodata`.
+`.gs.write_nodata(value, target=["label"])` changes one variable; omit `target`
+to change all of them.
 
 Writing nodata or a legend changes metadata, not pixel values. The fill value
 and class codes must fit the stored dtype: `255` fits `uint8`, while `-1` does
@@ -101,8 +102,7 @@ offset. Decode before using those values in your own calculations:
 stored = (
     xr.DataArray(np.array([[0, 1000], [2000, 3000]], dtype="uint16"), dims=("y", "x"))
     .assign_coords(xr_coords(grid[:2, :2]))
-    .gs.write_nodata(0)
-    .gs.write_packing(attrs.CFPacking(scale_factor=0.0001))
+    .gs.write_packing(attrs.CFPacking(scale_factor=0.0001, fill_value=0))
 )
 reflectance = stored.gs.mask_and_scale()
 reflectance.compute()
@@ -131,6 +131,10 @@ Decoding expects native CF names and numeric values. Use `write_nodata` for a
 manually constructed array: it delegates dtype conversion to rioxarray, so the
 fill is stated at the array's precision. Direct attrs are not repaired during
 decoding.
+
+`write_packing` replaces the whole packing declaration, including its missing
+value. State `fill_value` together with scale and offset when replacing it.
+Use `write_nodata` to change only the missing-value declaration.
 
 Readers return stored values by default. Use `gs.open_raster(path,
 mask_and_scale=True)` to decode while opening. STAC loading retains DN by default; use
@@ -169,17 +173,15 @@ Ordinary keys such as `long_name`, `units`, and dataset `title` remain ordinary
 xarray attrs. Their preservation depends on the operation and output format;
 adding attrs does not change values or coordinates.
 
-GeoSave's Dataset-to-DataArray and DataTree-to-Dataset conversions accept
-xarray's `combine_attrs` policies. Their default, `"drop_conflicts"`, keeps
-nonconflicting keys, including keys present in only one input, and automatically
-warns about dropped keys. Use `combine_attrs="override"` to take the first
-input's attrs, or `"identical"` to require agreement. Attr groups validate
-declarations; they do not change how xarray combines keys.
+GeoSave combines attrs with xarray's own policies. Its Dataset-to-DataArray
+and DataTree-to-Dataset conversions use `"drop_conflicts"`: a key the inputs
+disagree on is dropped, and a key present in only one input is kept. Attr
+groups validate declarations; they do not change how xarray combines keys.
 
-For ordinary concatenation and merging, call `xr.concat` or `xr.merge` directly.
-Their default is `"override"`; pass `combine_attrs=gs.attrs.combine_attrs` for
-GeoSave's drop-conflicts policy and warnings. Native joins do not check that
-stored pixels share packing, CRS, units or class meanings. Decode and align
+For ordinary concatenation and merging, call `xr.concat` or `xr.merge` directly
+and pass the `combine_attrs` policy you want; their default is `"override"`.
+Native joins do not check that stored pixels share packing, CRS, units or
+class meanings. Decode and align
 inputs explicitly before combining them. GeoSave's band stacking still requires
 compatible active CF packing.
 

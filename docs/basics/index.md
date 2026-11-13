@@ -10,7 +10,7 @@ boundaries. GeoSave works with both as ordinary Python objects, so start with
 | [Raster data](rasters.md) | Create, select, calculate and plot bands. | Image, band or group. |
 | [Describe raster values](attrs.md) | Tell missing pixels, scaling and class codes apart. | Values with explicit meaning. |
 | [Read and save data](io.md) | Pick a reader and writer for a file. | Python objects; files. |
-| [Vector data](vectors.md) | Read polygons and convert to and from pixels. | Shapes or a label image. |
+| [Vector data](vectors.md) | Create, select and save spatial features. | GeoDataFrame and GeoParquet. |
 
 ```python
 import geosave as gs

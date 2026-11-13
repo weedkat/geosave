@@ -42,8 +42,9 @@ comparison
 
 The sidebar lists the image and index independently. Switch their visibility,
 adjust opacity, or use the comparison controls. You can also add a GeoDataFrame
-of polygons, or explore a catalog to select which footprints and raster assets
-to display.
+of polygons, or explore a catalog to select its footprints. Opening raster pixels from a
+catalog row is currently unavailable; load a tree, combine a collection, and
+explore that Dataset instead.
 
 ## Open it in a browser
 
@@ -71,4 +72,4 @@ scene.close()
 
 **Next:** [explorer controls, catalogs, and performance](../concepts/explorer.md).
 For a static figure suitable for a report, use
-[`.gs.plot()`](../basics/rasters.md#plot-a-band).
+[`.gs.plot()`](../basics/rasters.md#calculate-and-plot-an-index).

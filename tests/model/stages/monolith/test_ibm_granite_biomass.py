@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from geosave.model.registry import build_model
+from geosave.model.stages.registry import build_model
 
 
 def test_the_monolith_runs_alone_in_a_chain_and_names_its_variable() -> None:

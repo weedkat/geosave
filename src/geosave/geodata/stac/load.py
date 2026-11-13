@@ -17,7 +17,7 @@ from odc.loader.types import RasterSource, ReaderDriverSpec
 from odc.stac.model import ParsedItem, PropertyLoadRequest
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import (
+from geosave.geodata.core.conventions import (
     DEFAULT_COLLECTION,
     END_DATETIME,
     STAC_PROPERTIES,
@@ -154,8 +154,8 @@ def load_datatree(
 
     Examples:
         >>> tree = stac.load_datatree(items)
-        >>> list(tree.gs.datasets)
-        ['s2/S2B_33UUP_20250115/B04', 's2/S2B_33UUP_20250115/B11']
+        >>> [leaf.path for leaf in tree.leaves]
+        ['/s2/S2B_33UUP_20250115/B04', '/s2/S2B_33UUP_20250115/B11']
     """
     matched = list(items)
     if not matched:
@@ -238,18 +238,13 @@ def load_datatree(
 def _place_asset(observation: xr.Dataset, entry: pystac.Item) -> xr.Dataset:
     """Make one Item's slice of a batch load its asset, as the Item states it."""
     # A batch fuses only the properties its Items share; the Item states its own.
-    stated = stac_raster.read_properties_coordinate(observation)
-    fields = {
-        **(stated[0] if stated else {}),
-        **item.select_item_properties(entry.properties),
-    }
+    stated = {}
+    if STAC_PROPERTIES in observation.coords:
+        stated = observation[STAC_PROPERTIES].item()
+    fields = {**stated, **item.select_item_properties(entry.properties)}
     if fields:
-        observation = stac_raster.stamp_properties_coordinate(observation, [fields])
+        observation = observation.assign_coords({STAC_PROPERTIES: ((), fields)})
     observation = attrs.clear_attrs(observation, attrs.StacCollection)
-    # The Item's geometry is each asset's region; the grids stay whole.
-    footprint = item.read_footprint([entry])
-    if footprint is not None:
-        observation = observation.gs.write_extent(footprint)
     # A tree-published asset key carries its node path; the band is the last part.
     bands = {}
     for name in observation.data_vars:
@@ -397,7 +392,10 @@ def _stamp_date_properties(
                 continue
             fields[key] = value
         mappings.append(fields)
-    return stac_raster.stamp_properties_coordinate(loaded.drop_vars(keys), mappings)
+    loaded = loaded.drop_vars(keys)
+    if TIME_COORDINATE not in loaded.dims:
+        return loaded.assign_coords({STAC_PROPERTIES: ((), mappings[0])})
+    return loaded.assign_coords({STAC_PROPERTIES: (TIME_COORDINATE, mappings)})
 
 
 def stamp_band_attrs(
@@ -413,10 +411,8 @@ def stamp_band_attrs(
         cfg: The `stac_cfg` the load used, so band names resolve as it resolved them.
 
     Returns:
-        `loaded` with each variable's agreed STAC band attrs, nodata in CF's spelling.
-
-    Warns:
-        DroppedAttrsWarning: Items disagree on a band's metadata.
+        `loaded` with each variable's agreed STAC band attrs, nodata in CF's
+        spelling, and `Display.rgb` when bands name red, green and blue.
     """
 
     sources = _band_sources(items, [str(name) for name in loaded.data_vars], cfg)
@@ -430,7 +426,20 @@ def stamp_band_attrs(
         if fill is not None:
             stated = stated.rio.write_nodata(fill)
         stamped[name] = stated
-    return loaded.assign(stamped)
+    loaded = loaded.assign(stamped)
+
+    # STAC states each band's colour; GeoSave states the composite once, on the Dataset.
+    names_by_channel: dict[str, str] = {}
+    for name in loaded.data_vars:
+        spectral = loaded[name].gs.spectral
+        if spectral is not None and spectral.common_name in ("red", "green", "blue"):
+            names_by_channel.setdefault(spectral.common_name, str(name))
+    if len(names_by_channel) < 3:
+        return loaded
+
+    return loaded.gs.write_rgb(
+        names_by_channel["red"], names_by_channel["green"], names_by_channel["blue"]
+    )
 
 
 def _band_sources(

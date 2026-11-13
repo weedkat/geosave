@@ -52,7 +52,7 @@ __all__ = [
     "StacClient",
     "StacQuery",
     "create_catalog",
-    "create_stac_item",
+    "StacItem",
     "attrs",
     "configure_gdal",
     "features",
@@ -71,12 +71,12 @@ _LAZY = (
     "features",
     "stac",
     "create_catalog",
-    "create_stac_item",
+    "StacItem",
 )
 
 if TYPE_CHECKING:
     from geosave.geodata import StacClient, StacQuery, features, stac
-    from geosave.geodata.stac import create_catalog, create_stac_item
+    from geosave.geodata.stac import StacItem, create_catalog
 
 
 def __getattr__(name: str) -> object:

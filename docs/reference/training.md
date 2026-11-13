@@ -1,8 +1,13 @@
 # Training recipes
 
+ModelSpec-based workflows on this page are paused pending redesign and raise
+`NotImplementedError`. Use caller-owned data preparation and DataLoaders.
+See [ModelSpec status](../guides/model-spec.md).
+
 Lightning Modules, DataModules, Datasets, and sample definitions are generated
 project code. They are no longer imported from `geosave.ml.tasks`.
-Geospatial recipes use [ModelSpec version 1 and explicit DataModule size](../guides/workspaces.md#geospatial-recipes); their Datasets remain project-owned.
+Geospatial recipes are paused while [ModelSpec is rebuilt](../guides/model-spec.md).
+Training Modules still accept their sample contracts from caller-owned DataLoaders.
 See [workspaces](../guides/workspaces.md) for generation and
 [training behavior](../concepts/training.md) for the recipes' initial contracts.
 

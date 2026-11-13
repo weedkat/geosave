@@ -15,8 +15,6 @@ to `False`, while CF decoding and store layout follow its raster contract.
 The convenience opener docstrings include every supported format option and
 the storage option reference for IDE help. Backend links provide further
 details about extension dictionaries and version-specific SDK options.
-Regenerate literal docstrings with `python scripts/opener_docstrings.py`;
-use `--check` to detect drift.
 
 | Format | Read options | Write options |
 | --- | --- | --- |
@@ -33,58 +31,33 @@ use `--check` to detect drift.
       members:
         - open_raster
         - open_vector
-        - open_item
 
 ## STAC Item pixels
 
-```python
-from geosave.geodata import io
-
-# One Item, one node per exact native grid. Closing the tree closes its files.
-with io.open_item(item) as tree:
-    pixels = tree[f"{item.collection_id}/{item.id}"].gs.combine_stac().compute()  # when the Item has one grid
-
-# Several selected Items, explicitly assembled onto a common grid.
-cube = stac.load_dataset(items, geobox=grid, groupby="id")
-```
-
-`open_item` replaces `io.stac.open_scene`. There is no public `open_items`,
-`open_collection` or `open_stack`. Existing catalog
-`rows.gs.to_datatree()` retains native Collection/grid time series: it requires
-matching grids and variables within each Collection and owns its file handles.
-This conversion preserves native temporal bounds and timeless rasters; it does
-not invoke ODC. Use `load_dataset` / `load_datatree` for output-grid assembly.
+Use `stac.load_dataset(items, grid)` for one collection on a chosen grid,
+`stac.load_datatree(items)` for native asset grids, or `rows.gs.to_datatree()`
+for an Item table. Native-grid loading requires asset Projection metadata.
+See [STAC loading](stac.md) and [catalog operations](catalog.md).
 
 ## Saved raster files
 
-Format writers return a UPath. Dataset/DataArray `to_cog` returns a list of
-paths; `to_zarr` and `to_netcdf` also return lists of paths. DataTree writers return group
-dictionaries. With `compute=False`, writers return one native Dask Delayed.
-STAC publication requires one observation per Item. `to_catalog` writes and
-describes actual files while retaining source observation properties.
+| Object and call | Default return | With `compute=False` |
+| --- | --- | --- |
+| DataArray `.gs.to_cog(path)` or `.gs.to_gtiff(path)` | One file `UPath` | Delayed yielding that UPath |
+| DataTree `.gs.to_cog(folder)` | List of asset UPaths | Delayed yielding that list |
+| Dataset, DataArray, DataTree `.gs.to_zarr(path)` | One store `UPath` | Delayed yielding that UPath |
+| Dataset, DataArray, DataTree `.gs.to_netcdf(path)` | One file `UPath` | Delayed yielding that UPath |
+| DataTree `.gs.to_catalog(folder)` | Item GeoDataFrame; assets written | Not supported |
 
-The catalog table remains in memory until saved with `catalog.gs.to_geoparquet`.
-Item metadata and identities are checked before writing raster assets.
+Dataset `.gs.to_cog()` is unavailable. Select one band, stack compatible bands
+with `.gs.to_array()`, or expand dated data to a STAC tree. Tree asset paths
+follow `folder/collection/Item/asset.tif`; path templates are not accepted by
+these accessors. Zarr and NetCDF retain the full hierarchy in one store.
 
-::: geosave.geodata.stac.publish
-    options:
-      members:
-        - write_assets
-
-## Path formats
-
-::: geosave.geodata.io.paths
-    options:
-      members:
-        - default_path_format
-        - expand_paths
-        - split_by_time
-        - split_by_band
-
-::: geosave.geodata.io.formats.geotiff
-    options:
-      members:
-        - write_files
+Writers refuse existing destinations unless `overwrite=True`. Deferred writes
+return one native Dask Delayed; keep sources open until it has computed.
+A returned Item table remains in memory until `.gs.to_geoparquet(...)` saves it.
+See [Read and save data](../basics/io.md) for working round trips.
 
 ## GeoTIFF and GDAL
 
@@ -173,7 +146,6 @@ SAFE loading is not implemented.
       members:
         - write_stac_geoparquet
         - read_collections
-        - resolve_asset_hrefs
         - parse_collections
 
 
@@ -189,13 +161,10 @@ SAFE loading is not implemented.
       members:
         - Location
         - StorageOptions
-        - location
-        - is_local
-        - local_path
-        - absolute_location
-        - write_file
+        - create_upath
+        - check_destination
+        - stage_file
 
-::: geosave.geodata.stac.publish
 
 ## Load selected STAC Items
 

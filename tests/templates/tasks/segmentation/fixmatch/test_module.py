@@ -114,6 +114,7 @@ def test_lightning_fits_a_few_steps(tmp_path) -> None:
     )
 
 
+@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = fixmatch.DataModule(
         _spec(),

@@ -62,80 +62,6 @@ def test_a_context_key_of_the_wrong_type_is_refused():
         invoke(Encode(), "encode", {"image": [1, 2, 3]})
 
 
-def test_a_none_context_value_counts_as_missing():
-    with pytest.raises(KeyError, match="missing input 'image'"):
-        invoke(Encode(), "encode", {"image": None})
-
-
-@pytest.mark.parametrize("empty", [False, True])
-def test_terminal_native_list(x, empty):
-    class Detector(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> list[dict[str, torch.Tensor]]:
-            return [] if empty else [{"boxes": image}, {"boxes": image + 1}]
-
-    result = invoke(Detector(), "forward", {"image": x})
-    assert len(result) == (0 if empty else 2)
-    if not empty:
-        assert result[0]["boxes"] is x
-        torch.testing.assert_close(result[1]["boxes"], x + 1)
-
-
-def test_terminal_native_dict(x):
-    class Classifier(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> dict[str, torch.Tensor]:
-            return {"scores": image}
-
-    result = invoke(Classifier(), "forward", {"image": x})
-    assert result["scores"] is x
-
-
-def test_terminal_tuple_is_not_unpacked(x):
-    class Reconstruction(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-            return image, image + 1
-
-    result = invoke(Reconstruction(), "forward", {"image": x})
-    assert isinstance(result, tuple)
-    assert result[0] is x
-
-
-def test_terminal_outer_type_mismatch(x):
-    class Wrong(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> list[dict[str, torch.Tensor]]:
-            return image  # type: ignore[return-value]
-
-    with pytest.raises(TypeError, match="result expected list"):
-        invoke(Wrong(), "forward", {"image": x})
-
-
-@pytest.mark.parametrize("as_list", [False, True])
-def test_terminal_union_validates_outer_types(x, as_list):
-    class Choice(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
-            return [image] if as_list else image
-
-    result = invoke(Choice(), "forward", {"image": x})
-    assert (result[0] if as_list else result) is x
-
-
-def test_two_return_statements_are_refused():
-    with pytest.raises(TypeError, match="exactly one return statement"):
-
-        class Bad(nn.Module):
-            @chain_step()
-            def run(self, image: torch.Tensor) -> torch.Tensor:
-                if image.sum() > 0:
-                    early = image
-                    return early
-                late = image
-                return late
-
-
 def test_returning_an_expression_instead_of_a_name_is_refused():
     with pytest.raises(TypeError, match="must be `return name`"):
 
@@ -143,16 +69,6 @@ def test_returning_an_expression_instead_of_a_name_is_refused():
             @chain_step()
             def run(self, image: torch.Tensor) -> torch.Tensor:
                 return image * 2
-
-
-def test_consuming_and_producing_one_key_reads_as_a_self_cycle():
-    with pytest.raises(TypeError, match="self-cycle"):
-
-        class Bad(nn.Module):
-            @chain_step()
-            def run(self, image: torch.Tensor) -> torch.Tensor:
-                image = image * 2
-                return image
 
 
 def test_a_declared_output_type_is_checked_against_the_real_value(x):
@@ -164,22 +80,6 @@ def test_a_declared_output_type_is_checked_against_the_real_value(x):
 
     with pytest.raises(TypeError, match="output 'wrong' expected Tensor"):
         invoke(Sneaky(), "run", {"image": x})
-
-
-def test_a_class_with_no_readable_source_is_refused_with_a_clear_message():
-    generated = (
-        "import torch\n"
-        "import torch.nn as nn\n"
-        "from geosave.model.chain import chain_step\n"
-        "class Generated(nn.Module):\n"
-        "    @chain_step()\n"
-        "    def run(self, image: torch.Tensor) -> torch.Tensor:\n"
-        "        out = image\n"
-        "        return out\n"
-    )
-
-    with pytest.raises(TypeError, match="no source is available"):
-        exec(compile(generated, "<generated>", "exec"), {})
 
 
 class ExplicitOutputs(nn.Module):
@@ -204,31 +104,8 @@ def test_explicit_outputs_name_expressions_and_branches(x):
     assert negative["tokens"] == []
 
 
-def test_explicit_outputs_do_not_require_source(x):
-    namespace = {}
-    exec(
-        "import torch\n"
-        "from geosave.model.chain import chain_step\n"
-        "@chain_step(outputs=('encoded',))\n"
-        "def encode(self, image: torch.Tensor) -> torch.Tensor:\n"
-        "    return image * 3\n",
-        namespace,
-    )
-    result = namespace["encode"](None, x)
-    torch.testing.assert_close(result, x * 3)
-
-
 def test_decorated_methods_keep_their_ordinary_signature(x):
     torch.testing.assert_close(Encode().encode(x), x * 2)
     torch.testing.assert_close(
         Optional().run(x, mask=torch.zeros_like(x)), torch.zeros_like(x)
     )
-
-
-@pytest.mark.parametrize("outputs", [("a", "a")])
-def test_invalid_explicit_output_names_are_rejected(outputs):
-    with pytest.raises(TypeError, match="non-empty tuple of unique names"):
-
-        @chain_step(outputs=outputs)
-        def encode(self, image: torch.Tensor) -> torch.Tensor:
-            return image

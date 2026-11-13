@@ -17,18 +17,8 @@ _METRIC_FNS: dict[str, Callable[..., torch.Tensor]] = {
 
 
 def softmax_argmax(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the top class and softmax confidence for each pixel.
-
-    Args:
-        logits: Raw class scores shaped `(batch, classes, y, x)`.
-
-    Returns:
-        Int64 labels and top-class probabilities, both `(batch, y, x)` and
-        on the input device. This does not apply calibrated thresholds.
-    """
-    probabilities = logits.softmax(dim=1)
-    confidence, labels = probabilities.max(dim=1)
-    return labels, confidence
+    """Raise while prediction decoding is being redesigned."""
+    raise NotImplementedError("Prediction decoding is being redesigned.")
 
 
 def _sweep(

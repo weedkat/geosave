@@ -67,20 +67,11 @@ the other `write_*` methods.
 
 ```python
 latlon = scene.gs.reproject("EPSG:4326", resampling="nearest")
-latlon
+latlon.gs.crs.epsg
 ```
 
-Output:
-
 ```text
-<xarray.Dataset> Size: 212B
-Dimensions:      (y: 6, x: 8)
-Coordinates:
-  * y            (y) float64 48B 45.15 45.15 45.15 45.15 45.15 45.15
-  * x            (x) float64 64B 15.0 15.0 15.0 15.0 15.0 15.0 15.0 15.0
-    spatial_ref  int32 4B 4326
-Data variables:
-    red          (y, x) uint16 96B 65535 65535 65535 65535 ... 65535 65535 65535
+4326
 ```
 
 Reprojection creates values on a new grid. Nearest-neighbour resampling chooses
@@ -94,22 +85,22 @@ so `resolution=10` is not always ten metres.
 
 ## Keep or align a tree's native grids
 
-An xarray `Dataset` uses one spatial grid for its variables. A `DataTree`
-tree can keep different grids in separate groups. When all groups share an
-exact grid, the root publishes common spatial coordinates. Otherwise each
-group retains its own coordinates, and the tree has no common `geobox`.
+A Dataset uses shared spatial coordinates. A DataTree can retain different
+asset grids, such as Sentinel-2's 10 m and 20 m bands, in separate leaf nodes.
+Each asset has its own `gs.geobox`; do not assume the tree has one common grid.
 
-Use `tree.gs.reproject(...)` before pixelwise combination. It takes an exact
-GeoBox, or a CRS with a `resolution` that covers every node's footprint, and
-states the one grid on the root. One resampling method applies per call:
+An exact GeoBox places every asset on the same grid:
 
-```python
-aligned = tree.gs.reproject(reference.gs.geobox, resampling="bilinear")
-aligned = tree.gs.reproject("EPSG:32633", resolution=10)
+```python title="Adaptation example — use your tree and reference raster"
+aligned = tree.gs.reproject(reference.gs.geobox, resampling="nearest")
+scene = aligned["sentinel-2-l2a"].gs.combine()
 ```
 
-Categorical variables refuse interpolating kernels. Constructing a tree does
-not resample it.
+A CRS destination instead sizes each asset independently, even with an explicit
+resolution. It does not ensure identical placement or extent. `combine` needs
+matching CRS, resolution and pixel alignment, and spans the union of extents.
+Categorical variables refuse interpolating kernels. Reproject imagery and labels
+separately when they need different methods; see [align labels with imagery](../guides/align-rasters.md).
 
 ## Cropping and windows
 
@@ -117,10 +108,10 @@ not resample it.
 pixels outside a geometry, using nodata. Neither operation changes resolution.
 A catalog window's rows open with `.gs.to_datatree()` as one node per STAC
 asset, each on its own grid (`/s2/<item>/B04`, `/s2/<item>/B11`).
-`tree["s2"].gs.combine_stac()` requires one grid; align mixed grids explicitly first:
+`tree["s2"].gs.combine()` requires one grid; align mixed grids explicitly first:
 
 ```python
-scene = tree.gs.reproject(tree["s2/<item>/B04"].gs.geobox)["s2"].gs.combine_stac()
+scene = tree.gs.reproject(tree["s2/<item>/B04"].gs.geobox)["s2"].gs.combine()
 ```
 
 Combining does not select a grid or resample pixels.
@@ -130,20 +121,11 @@ depend on the resampling backend. Check a small representative area before
 running a large job. See [transforms](../reference/transforms.md),
 [rasters](../reference/rasters.md), and [large data](../guides/large-data.md).
 
-## Measured lazy-warp limitation
-
-The current lazy cross-CRS warp can differ numerically from the eager path on
-the same target grid.
-Choose and validate the resampling behavior your data needs; a correct output
-shape and CRS do not by themselves prove equivalent pixels. The review does
-not recommend silently computing a whole raster to hide this limitation.
-
 ## Reprojection destinations
 
 `raster.gs.reproject(how, ...)` accepts an ODC `GeoBox` or a CRS
 (string, EPSG integer, or supported CRS object). A GeoBox specifies the exact
-shape, affine transform, and CRS. Resolution is derived from its transform;
-do not also supply a resolution override. A CRS destination derives an output
+shape, affine transform, and CRS. Its transform supplies resolution; a separate `resolution` argument is ignored. A CRS destination derives an output
 grid from the source, optionally using `resolution=`.
 
 ```python
@@ -152,5 +134,5 @@ matched = raster.gs.reproject(reference.gs.geobox)
 aligned = tree.gs.reproject(reference.gs.geobox)
 ```
 
-Raster objects are not destinations; pass their `gs.geobox`. A tree with a CRS
-destination needs `resolution`, since its nodes may differ in pixel size.
+Raster objects are not destinations; pass their `gs.geobox`. A tree with a CRS destination reprojects each asset independently. Pass a GeoBox
+when all assets must land on one grid.

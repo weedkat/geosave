@@ -6,7 +6,6 @@ from tests.conftest import write_cogs
 
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -112,82 +111,6 @@ def test_a_source_loads_from_a_table(catalog, scene) -> None:
     assert loaded.gs.stac_collection.license == "CC-BY-4.0"
 
 
-def test_search_uses_the_rustac_session_configuration(catalog) -> None:
-    import rustac
-
-    folder, _ = catalog
-    duckdb = rustac.DuckdbClient()
-    duckdb.execute("SET enable_external_access = false")
-    client = StacTable(str(folder), duckdb=duckdb)
-
-    with pytest.raises(rustac.RustacError, match="disabled by configuration"):
-        client.search_items(StacQuery(collections=["forest"]))
-
-
-def test_a_custom_s3_endpoint_reads_items_and_stored_collections(catalog, tmp_path):
-    import subprocess
-    import sys
-
-    import rustac
-
-    _, (first, _) = catalog
-    # rustac holds the GIL during I/O, so the endpoint needs its own process.
-    code = """
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-
-class Handler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        requested = self.headers.get('Range')
-        if requested is None:
-            return super().do_GET()
-        path = Path(self.translate_path(self.path))
-        start, end = requested.removeprefix('bytes=').split('-')
-        start, end = int(start), int(end) if end else path.stat().st_size - 1
-        with path.open('rb') as source:
-            source.seek(start)
-            data = source.read(end - start + 1)
-        self.send_response(206)
-        self.send_header('Content-Length', str(len(data)))
-        self.send_header('Content-Range', f'bytes {start}-{end}/{path.stat().st_size}')
-        self.end_headers()
-        self.wfile.write(data)
-
-server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-print(server.server_port, flush=True)
-server.serve_forever()
-"""
-    server = subprocess.Popen(
-        [sys.executable, "-u", "-c", code],
-        cwd=tmp_path,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    assert server.stdout is not None
-    port = int(server.stdout.readline())
-    try:
-        duckdb = rustac.DuckdbClient()
-        duckdb.execute(
-            "CREATE SECRET (TYPE s3, KEY_ID 'test-key', SECRET 'test-secret', "
-            f"ENDPOINT '127.0.0.1:{port}', URL_STYLE 'path', "
-            "USE_SSL false)"
-        )
-        # The HTTP server represents an S3 endpoint with tmp_path as its buckets.
-        location = "s3://catalog/items.parquet"
-        client = StacTable(location, duckdb=duckdb)
-
-        (found, _) = client.search_items(StacQuery(collections=["forest"]))
-
-        assert found.id == first.id
-        assert client.collection("forest").license == "CC-BY-4.0"
-        assert found.assets["red"].href.startswith("s3://")
-    finally:
-        server.terminate()
-        server.wait(timeout=5)
-        server.stdout.close()
-
-
 def test_search_returns_an_item_table(scene, tmp_path) -> None:
     forest = create_test_collection("forest", description="Forest samples")
     paths = write_cogs(scene, tmp_path, format_paths="forest_{time:%Y%m%dT%H%M%S}.tif")
@@ -201,39 +124,7 @@ def test_search_returns_an_item_table(scene, tmp_path) -> None:
     none = client.search(StacQuery(collections=["absent"]))
 
     assert found["id"].tolist() == rows["id"].tolist()
-    assert [item.id for item in found.gs.to_items()] == rows.id.tolist()
     assert none.empty
-    assert none.gs.to_items() == []
-
-
-def test_search_reads_collection_metadata_once(catalog, tmp_path):
-    _, items = catalog
-    forest = create_test_collection(
-        "forest", description="Forest samples", license="CC-BY-4.0"
-    )
-    water = create_test_collection("water", description="Water samples")
-    first, second = items
-    second = second.clone()
-    second.set_collection(water)
-    path = create_catalog([first, second]).gs.to_geoparquet(
-        tmp_path / "mixed.parquet", collections=[forest, water]
-    )
-    import rustac
-
-    session = Mock(wraps=rustac.DuckdbClient())
-    client = StacTable(path, duckdb=session)
-    found = client.search(StacQuery(collections=["forest", "water"]))
-
-    assert set(found.id) == {first.id, second.id}
-    assert found.gs.collections["forest"].license == "CC-BY-4.0"
-    assert found.gs.collections["water"].description == "Water samples"
-    assert session.get_collections.call_count == 1
-    assert session.query_to_table.call_count == 1
-
-    session.reset_mock()
-    assert client.search(StacQuery(collections=["absent"])).empty
-    session.get_collections.assert_not_called()
-    session.query_to_table.assert_not_called()
 
 
 def test_stac_client_opens_a_parquet_table_like_an_api(catalog) -> None:

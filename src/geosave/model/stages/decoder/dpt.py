@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from typing import Literal
 
-from geosave.model.registry import register_model
+from geosave.model.stages.registry import register_model
 from geosave.model.chain import Published, chain_step
 
 

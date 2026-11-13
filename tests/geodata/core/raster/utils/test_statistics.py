@@ -1,6 +1,5 @@
 import dask.array as da
 import numpy as np
-import pandas as pd
 import pytest
 import xarray as xr
 from dask import delayed
@@ -8,8 +7,7 @@ from dask import delayed
 import geosave as gs
 
 
-@pytest.mark.parametrize("as_array", [False, True])
-def test_statistics_compute_shared_band_sources_once(as_array):
+def test_statistics_compute_shared_band_sources_once():
     reads = []
 
     @delayed
@@ -25,9 +23,6 @@ def test_statistics_compute_shared_band_sources_once(as_array):
             "nir": xr.DataArray(values[1], dims="x", attrs={"nodata": 0}),
         }
     )
-    if as_array:
-        # Conversion requires a spatial pair; a singleton y axis adds no pixels.
-        source = source.expand_dims(y=[0]).gs.to_array()
 
     table = source.gs.statistics()
 
@@ -36,20 +31,6 @@ def test_statistics_compute_shared_band_sources_once(as_array):
     assert table.loc["red", "mean"] == 2.0
     assert table.loc["nir", "mean"] == 15.0
     assert table.loc["nir", "valid_percent"] == pytest.approx(200 / 3)
-
-
-def test_empty_dataset_statistics_keep_the_table_columns():
-    table = xr.Dataset().gs.statistics()
-
-    assert isinstance(table, pd.DataFrame)
-    assert table.empty
-    assert list(table.columns) == [
-        "minimum",
-        "maximum",
-        "mean",
-        "stddev",
-        "valid_percent",
-    ]
 
 
 def test_statistics_pool_the_pixels_of_rasters_of_different_sizes():
@@ -159,31 +140,3 @@ def test_dataset_class_percent_has_a_column_per_categorical_variable():
 
     assert list(table.columns) == ["label"]
     assert table.loc["trees", "label"] == 75.0
-
-
-def test_class_percent_read_every_tile_in_one_compute():
-    reads = []
-
-    @delayed
-    def pixels():
-        reads.append(1)
-        return np.array([0, 1, 1, 255], dtype="uint8")
-
-    values = da.from_delayed(pixels(), shape=(4,), dtype="uint8")
-    band = xr.DataArray(values, dims="x")
-    band = band.gs.write_flags({0: "water", 1: "trees"}).gs.write_nodata(255)
-
-    percent = band.gs.class_percent()
-
-    assert reads == [1]
-    assert percent["trees"] == pytest.approx(200 / 3)
-
-
-def test_class_percent_drop_the_class_that_names_the_fill():
-    band = xr.DataArray(np.array([[0, 1, 255]], dtype="uint8"), dims=("y", "x"))
-    band = band.gs.write_flags({0: "water", 1: "trees", 255: "unlabelled"})
-
-    percent = band.gs.write_nodata(255).gs.class_percent()
-
-    assert list(percent.index) == ["water", "trees"]
-    assert percent.sum() == pytest.approx(100.0)

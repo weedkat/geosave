@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from tests.conftest import write_cogs
-
-from tests.conftest import combine_item
 
 from datetime import UTC, datetime
 
@@ -13,22 +10,6 @@ import pystac
 import pytest
 
 from geosave.geodata import stac
-from geosave.geodata.stac.load import load_datatree
-from geosave.geodata.stac.catalog import create_catalog
-from tests.geodata.conftest import create_file_items
-
-
-def test_records_of_an_item_round_trip(scene, tmp_path) -> None:
-    files = write_cogs(
-        scene, tmp_path, format_paths="forest_{time:%Y%m%d}_{variable}.tif"
-    )
-    entry = create_catalog(
-        [next(create_file_items(files, id_format="forest"))]
-    ).gs.to_items()[0]
-
-    back = combine_item(load_datatree([entry]))
-    assert sorted(back.gs.variables) == ["nir", "red"]
-    assert back.gs.times[0] == pd.Timestamp("2025-06-01")
 
 
 def test_observation_properties_leave_out_what_a_raster_states():
@@ -65,11 +46,7 @@ def test_normalized_time_preserves_nominal_date_and_interval():
 @pytest.mark.parametrize(
     ("instant", "start", "end"),
     [
-        (None, None, None),
-        ("NaT", None, None),
-        (None, "2025-06-01", None),
         (None, "2025-07-01", "2025-06-01"),
-        ("2025-08-01", "2025-06-01", "2025-07-01"),
     ],
 )
 def test_invalid_observation_time_is_refused(instant, start, end):

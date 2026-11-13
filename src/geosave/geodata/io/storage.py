@@ -1,9 +1,16 @@
-"""Locations, filesystems, and the one way a single file is written."""
+"""Locations: every path or URL becomes one UPath carrying its filesystem's options.
+
+Each format reaches storage through the UPath: pyarrow through `path.fs`,
+Zarr through `str(path)` and `path.storage_options`, readers through
+`path.open()`, GDAL through `io.rasterio`. Writers that need random access to
+their file (HDF5, GDAL, SQLite) write a local file that `stage_file` puts in
+place. No code asks whether a path is local; a local path is a UPath on the
+local filesystem.
+"""
 
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from os import PathLike
 from pathlib import Path
@@ -33,12 +40,11 @@ type StorageOptions = (
 )
 type Location = str | PathLike[str] | UPath
 
-# Protocols UPath reports for a path on this machine: none for a plain path.
-_LOCAL_PROTOCOLS = ("", "file", "local")
 
-
-def location(path: Location, storage_options: StorageOptions | None = None) -> UPath:
-    """Read a path or URL as a UPath carrying its filesystem's options.
+def create_upath(
+    path: Location, storage_options: StorageOptions | None = None
+) -> UPath:
+    """Create the UPath of a path or URL, carrying its filesystem's options.
 
     Args:
         path: Local path, fsspec URL, or UPath.
@@ -49,10 +55,13 @@ def location(path: Location, storage_options: StorageOptions | None = None) -> U
         UPath whose `fs` and `path` address the location. A local one, a
         `file://` URL included, is a `PosixUPath`, which is a `pathlib.Path`.
 
+    Raises:
+        ValueError: `storage_options` sets a key UPath reserves.
+
     Examples:
-        >>> location("s3://bucket/scene.tif", {"anon": True}).fs
+        >>> create_upath("s3://bucket/scene.tif", {"anon": True}).fs
         <s3fs.core.S3FileSystem ...>
-        >>> location("file:///data/scene.tif")
+        >>> create_upath("file:///data/scene.tif")
         PosixUPath('/data/scene.tif')
     """
     # upath's option types are open TypedDicts, so a checker cannot rule out a
@@ -63,152 +72,68 @@ def location(path: Location, storage_options: StorageOptions | None = None) -> U
             f"storage_options cannot set {reserved}; the path's URL names its "
             f"filesystem"
         )
-    found = UPath(path, **options)
+    created = UPath(path, **options)
     # A `file://` URL reads as a FilePath, which pathlib and GDAL do not take.
-    if found.protocol in ("file", "local"):
-        return UPath(found.path)
-    return found
+    if created.protocol in ("file", "local"):
+        return UPath(created.path)
+    return created
 
 
-def is_local(path: Location) -> bool:
-    """Return whether a location names a path on this machine.
-
-    Args:
-        path: String, Path, or UPath to classify by its filesystem protocol.
-
-    Returns:
-        True for plain paths and `file://` or `local://` locations.
-        This checks the protocol, not whether the path exists.
-    """
-    return location(path).protocol in _LOCAL_PROTOCOLS
-
-
-def local_path(path: Location) -> Path:
-    """Read a local location as a path, without the `file://` it may carry.
+def check_destination(path: UPath, suffixes: Sequence[str], *, overwrite: bool) -> None:
+    """Refuse a destination of another format, or one that exists unless replaced.
 
     Args:
-        path: Local string, Path, or UPath. Check remote inputs with
-            `is_local` first; this helper does not download files.
-
-    Returns:
-        pathlib Path with the local protocol removed. Relative paths remain
-        relative, and the path need not exist.
-    """
-    return Path(location(path).path)
-
-
-def absolute_location(path: Location) -> str:
-    """Spell a location as the one string xarray, zarr, GDAL and STAC take.
-
-    A remote UPath is not `os.PathLike`, so libraries beneath take its URL,
-    with its `storage_options` passed beside it where they read through
-    fsspec.
-
-    Args:
-        path: Local path, remote URL, or UPath to spell as text.
-
-    Returns:
-        The resolved absolute path of a local location, else its URL.
-
-    Examples:
-        >>> absolute_location("scene.tif")
-        '/home/me/scene.tif'
-        >>> absolute_location(UPath("s3://bucket/scene.tif", anon=True))
-        's3://bucket/scene.tif'
-    """
-    if is_local(path):
-        return str(local_path(path).resolve())
-    return str(path)
-
-
-def write_file(
-    path: Location,
-    save: Callable[[Path], None],
-    *,
-    suffixes: Sequence[str],
-    overwrite: bool = False,
-    storage_options: StorageOptions | None = None,
-) -> UPath:
-    """Write one file through `save`, leaving its destination whole or untouched.
-
-    Every single-file format writes this way: `save` only ever sees a local
-    path, and the finished file is moved or uploaded to where it belongs.
-    Local writes use private staging on the destination filesystem. Without
-    overwrite, publishing uses a hard link that fails if the destination
-    already exists, including when another writer creates it during encoding.
-    Remote uploads retain the backend's behavior; their existence check does
-    not guarantee exclusion of concurrent writers.
-
-    Args:
-        path: Output path, fsspec URL, or UPath.
-        save: Writes the file at the local path it is handed.
-        suffixes: Lowercase suffixes the destination may end in.
-        overwrite: Replace an existing file when true.
-        storage_options: Options for the filesystem a URL names.
-
-    Returns:
-        The written file: a `PosixUPath` for a local write, else the remote
-        UPath carrying its `storage_options`.
+        path: Destination of one file or store.
+        suffixes: Lowercase suffixes the format's destinations end in.
+        overwrite: Allow an existing destination.
 
     Raises:
-        FileExistsError: The path exists and `overwrite` is false.
-        ValueError: The suffix is wrong.
-        OSError: Local publication fails, including when the filesystem does
-            not support hard links for a no-overwrite write.
-
-    Examples:
-        >>> write_file("plots.parquet", plots.to_parquet, suffixes=(".parquet",))
-        PosixUPath('plots.parquet')
+        ValueError: The suffix is not one of `suffixes`.
+        FileExistsError: The destination exists and `overwrite` is false.
     """
-    destination = location(path, storage_options)
-    if destination.suffix.lower() not in suffixes:
+    if path.suffix.lower() not in suffixes:
         raise ValueError(
-            f"destination {destination.name!r} must end in one of {list(suffixes)}"
+            f"destination {path.name!r} must end in one of {list(suffixes)}"
         )
-    if not overwrite and destination.exists():
+    if not overwrite and path.exists():
         raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
-
-    # A remote file is written in a temporary folder, then uploaded.
-    if not is_local(destination):
-        with TemporaryDirectory() as folder:
-            staging = Path(folder) / destination.name
-            save(staging)
-            destination.fs.put(str(staging), destination.path)
-        return destination
-
-    # Stay on the destination filesystem for atomic replacement or linking.
-    target = local_path(destination)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(
-        prefix=f".{target.stem}.staging-", dir=target.parent
-    ) as folder:
-        staging = Path(folder) / target.name
-        save(staging)
-        if overwrite:
-            os.replace(staging, target)
-        else:
-            os.link(staging, target)
-    return destination
 
 
 @contextmanager
-def localize(
-    path: Location, storage_options: StorageOptions | None = None
-) -> Iterator[Path]:
-    """Yield a local file, downloading a remote source for this context's lifetime.
+def stage_file(path: UPath) -> Generator[Path]:
+    """Yield a local file to write, put at `path` when the block ends without error.
+
+    A writer that seeks back into its file, as HDF5, GDAL and SQLite do,
+    cannot write an object store's forward-only stream, so it writes here.
 
     Args:
-        path: Local path or filesystem URL.
-        storage_options: Credentials and connection options for that filesystem.
+        path: Destination of the finished file.
 
     Yields:
-        Local path. A downloaded copy is removed when the context exits.
+        Local path in a temporary folder, named as `path`.
+
+    Examples:
+        >>> with stage_file(create_upath("s3://bucket/scene.nc")) as local:
+        ...     ds.to_netcdf(local)
     """
-    source = location(path, storage_options)
-    if is_local(source):
-        yield local_path(source)
-    else:
-        with TemporaryDirectory() as folder:
-            target = Path(folder) / "source"
-            source.fs.get_file(source.path, str(target))
-            yield target
+    with TemporaryDirectory() as folder:
+        local = Path(folder) / path.name
+        yield local
+        create_parent(path)
+        path.fs.put_file(str(local), path.path)
+
+
+def create_parent(path: UPath) -> None:
+    """Create the folder a file is written in, where its filesystem has folders.
+
+    Object stores such as S3 or Hugging Face buckets have none; a key is
+    written whole, and some UPaths refuse `mkdir`.
+
+    Args:
+        path: The file about to be written.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    # pathlib's UnsupportedOperation, which object-store UPaths raise, is one.
+    except NotImplementedError:
+        pass

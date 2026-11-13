@@ -75,7 +75,7 @@ _LAZY_MEMBERS = {
     "StacClient": "stac",
     "StacQuery": "stac",
     "create_catalog": "stac",
-    "create_stac_item": "stac",
+    "StacItem": "stac",
 }
 
 
@@ -110,7 +110,7 @@ __all__ = [
     "StacClient",
     "StacQuery",
     "create_catalog",
-    "create_stac_item",
+    "StacItem",
     "configure_gdal",
     "features",
     "io",

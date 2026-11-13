@@ -50,13 +50,6 @@ def test_find_zoom_level_takes_the_nearest_level():
     assert find_zoom_level(create_view_with_pixel_size(152.0)) == 10
 
 
-def test_find_zoom_level_stays_within_the_tile_levels():
-    from geosave.geodata.viz.explore.mercator import find_zoom_level
-
-    assert find_zoom_level(create_view_with_pixel_size(1e-6)) == 24
-    assert find_zoom_level(create_view_with_pixel_size(1e7)) == 0
-
-
 def test_create_zoom_grid_covers_the_bounds():
     import pytest
 

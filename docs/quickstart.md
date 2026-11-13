@@ -37,7 +37,7 @@ scene = xr.Dataset({
     "nir": (("y", "x"), nir),
     "label": (("y", "x"), label),
 }).assign_coords(xr_coords(grid))
-scene.gs.to_array(dtype="float32").gs.to_cog("training-scene.tif", overwrite=True)
+scene.gs.to_array().astype("float32").gs.to_cog("training-scene.tif", overwrite=True)
 ```
 
 For the next tutorial, all three variables are stored in one GeoTIFF. A TIFF
@@ -101,7 +101,7 @@ chips = gs.Chips([scene], size=256, mode="reflect")
 ```
 
 Keep both source files open until training or prediction has finished, then close
-them. For different grids, [align them explicitly](concepts/raster-grids.md), using nearest-neighbor
+them. For different grids, [align them explicitly](guides/align-rasters.md), using nearest-neighbor
 resampling for categorical labels. Equal array shapes alone do not prove alignment.
 
 Before training, decode packed imagery, handle missing inputs, and map label
@@ -110,5 +110,5 @@ requires a label dtype that can represent it and a loss configured to ignore it.
 The synthetic example has no missing pixels or padding.
 
 **Next:** [train on these exact samples](guides/training.md). When you have many
-scenes or dates, use [catalogs and sampling](guides/catalogs-and-cuts.md) to select
-observations before constructing chips. A catalog is optional for this workflow.
+scenes or dates, use [catalogs](guides/catalogs-and-cuts.md) to index observations and select
+rows before constructing chips. Catalog sampling is currently unavailable. A catalog is optional for this workflow.

@@ -10,9 +10,7 @@ import pandas as pd
 import pystac
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from odc.geo.geom import Geometry
+    pass
 
 
 # The time of an Item whose rasters state none. STAC dates every Item, so a
@@ -133,32 +131,6 @@ def read_instant(item: pystac.Item) -> pd.Timestamp | None:
         return None
     nominal = item.datetime
     return pd.to_datetime(nominal, utc=True).tz_convert(None) if nominal else covered[0]
-
-
-def read_footprint(items: Sequence[pystac.Item]) -> Geometry | None:
-    """Return the area the Items' geometries cover, as one lon/lat geometry.
-
-    Args:
-        items: Items whose `geometry` states their region.
-
-    Returns:
-        Union of their geometries in EPSG:4326, or None where none states one.
-
-    Examples:
-        >>> read_footprint([item]).crs
-        CRS('EPSG:4326')
-    """
-    from odc.geo.geom import Geometry
-    from shapely.geometry import shape
-    from shapely.ops import unary_union
-
-    shapes = []
-    for entry in items:
-        if entry.geometry is not None:
-            shapes.append(shape(entry.geometry))
-    if not shapes:
-        return None
-    return Geometry(unary_union(shapes), "EPSG:4326")
 
 
 class ItemTime(TypedDict):

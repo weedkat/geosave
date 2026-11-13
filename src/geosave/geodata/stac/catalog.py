@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 ITEM_COLUMNS = ("id", "links", "assets", "stac_extensions")
 FOOTER_KEY = "stac-geoparquet"
+# The file rows were read from, which their relative asset hrefs resolve against.
+SOURCE_KEY = "source"
 
 
 def merge_collections(
@@ -61,6 +63,69 @@ def merge_collections(
     return merged
 
 
+def concat_catalogs(catalogs: Sequence[gpd.GeoDataFrame]) -> GeoDataFrame:
+    """Concatenate item tables, keeping every Collection their footers define.
+
+    Rows concatenate as native GeoPandas does, which refuses differing CRSs;
+    pandas drops footers that differ, so the Collections are merged here.
+
+    Args:
+        catalogs: Item tables, as `create_catalog` or reading a file returns them.
+
+    Returns:
+        One table of every row, with a fresh index and every Collection.
+
+    Raises:
+        ValueError: No table is given, or two define one Collection differently.
+
+    Examples:
+        >>> concat_catalogs([optical_rows, radar_rows]).gs.collections.keys()
+        dict_keys(['optical', 'radar'])
+    """
+    if not catalogs:
+        raise ValueError("concat_catalogs needs at least one table")
+
+    # Relative hrefs resolve against one file; rows from several cannot share it.
+    sources = set()
+    for catalog in catalogs:
+        if SOURCE_KEY in catalog.attrs:
+            sources.add(catalog.attrs[SOURCE_KEY])
+    if len(sources) > 1:
+        raise ValueError(
+            f"the tables were read from different files {sorted(sources)}, "
+            "against which their asset hrefs resolve; concatenate their Items "
+            "instead: create_catalog(rows_a.gs.to_items() + rows_b.gs.to_items())"
+        )
+
+    rows = pd.concat(catalogs, ignore_index=True)
+
+    collections = []
+    for catalog in catalogs:
+        collections.extend(catalog.gs.collections.values())
+    stored = {}
+    for collection in merge_collections(collections).values():
+        stored[collection.id] = collection.to_dict(transform_hrefs=False)
+    rows.attrs = {FOOTER_KEY: {"collections": stored}}
+    if sources:
+        rows.attrs[SOURCE_KEY] = sources.pop()
+    return cast("GeoDataFrame", rows)
+
+
+def resolve_asset_hrefs(item: pystac.Item, source: str | None) -> None:
+    """Make an Item's asset hrefs absolute against the file its row was read from.
+
+    Args:
+        item: Item whose relative hrefs a stac-geoparquet file stored.
+        source: That file's absolute location; None leaves the hrefs as they are.
+    """
+    if source is None:
+        return
+    item.set_self_href(source)
+    item.make_asset_hrefs_absolute()
+    # The row's file is not the Item's own document.
+    item.set_self_href(None)
+
+
 def to_item(row: pd.Series) -> pystac.Item:
     """Convert one WGS84 Item record to PySTAC, reconstructing its bbox.
 
@@ -70,10 +135,14 @@ def to_item(row: pd.Series) -> pystac.Item:
     import shapely
     from stac_geoparquet import to_dict
 
-    row.gs.validate(geometry=False, stac_item=True)
+    from geosave.geodata.core.vector.catalog import stac_items
+
+    row.gs.validate(stac_items)
     item_json = to_dict(row.to_dict())
     item_json["bbox"] = shapely.bounds(row["geometry"]).tolist()
-    return build_item(cast("ItemDocument", item_json))
+    item = build_item(cast("ItemDocument", item_json))
+    resolve_asset_hrefs(item, row.attrs.get(SOURCE_KEY))
+    return item
 
 
 def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
@@ -84,7 +153,9 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
 
     import pystac
 
-    rows.gs.validate(geometry=False, stac_item=True)
+    from geosave.geodata.core.vector.catalog import stac_items
+
+    rows.gs.validate(stac_items)
     if rows.empty:
         return []
     collections = {}
@@ -103,6 +174,7 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
     items = []
     for fields in stac_table_to_items(table):
         item = build_item(cast("ItemDocument", fields))
+        resolve_asset_hrefs(item, rows.attrs.get(SOURCE_KEY))
         if item.collection_id in collections:
             item.set_collection(collections[item.collection_id])
         items.append(item)

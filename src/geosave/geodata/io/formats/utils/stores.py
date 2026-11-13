@@ -8,6 +8,8 @@ from typing import Any
 import xarray as xr
 from upath import UPath
 
+from geosave.geodata.io import storage
+
 
 def check_store(
     raster: xr.Dataset | xr.DataTree,
@@ -31,10 +33,7 @@ def check_store(
         FileExistsError: The destination exists and overwrite is false.
         KeyError: An encoding names a variable no group holds.
     """
-    if store.suffix.lower() not in suffixes:
-        raise ValueError(f"destination {store.name!r} must end in {suffixes}")
-    if not overwrite and store.exists():
-        raise FileExistsError(f"{store} exists; pass overwrite=True to replace it")
+    storage.check_destination(store, suffixes, overwrite=overwrite)
     nodes = list(raster.subtree) if isinstance(raster, xr.DataTree) else [raster]
     names = set()
     for node in nodes:

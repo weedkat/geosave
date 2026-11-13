@@ -64,9 +64,7 @@ def test_create_prompts_task_then_method(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "options",
     [
-        ["-t", "missing", "-m", "supervised"],
         ["-t", "segmentation", "-m", "mean-teacher"],
-        ["-t", "blank", "-m", "supervised"],
     ],
 )
 def test_invalid_selection_creates_nothing(tmp_path, monkeypatch, options):

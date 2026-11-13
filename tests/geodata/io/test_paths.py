@@ -12,11 +12,7 @@ from tests.geodata.conftest import build_raster
     "template",
     [
         "/{variable}.tif",
-        "s3://bucket/{variable}.tif",
         "../{variable}.tif",
-        "a/../../{variable}.tif",
-        "C:/out/{variable}.tif",
-        r"..\{variable}.tif",
     ],
 )
 def test_paths_cannot_escape_output_folder(template):

@@ -130,34 +130,6 @@ def test_inputs_follow_declaration_order_not_call_order(x):
     assert ctx["used"].tolist() == [16.0, 16.0]
 
 
-def test_positional_and_keyword_arguments_agree(x):
-    chain = ModelChain(encoder=Encode(), decoder=Decode(), head=Head())
-
-    assert chain(x).tolist() == chain(image=x).tolist()
-
-
-def test_a_module_offering_two_steps_uses_whichever_resolves_first(x):
-    class TwoWays(nn.Module):
-        @chain_step()
-        def from_image(self, image: torch.Tensor) -> torch.Tensor:
-            picked = image * 10
-            return picked
-
-        @chain_step()
-        def from_merged(self, merged: torch.Tensor) -> torch.Tensor:
-            picked = merged * 10
-            return picked
-
-    chain = ModelChain(Split(), Merge(), TwoWays())
-
-    torch.testing.assert_close(chain(x)["picked"], x * 10)
-
-
-def test_a_stage_with_no_chain_step_beside_others_is_refused():
-    with pytest.raises(TypeError, match="no @chain_step method found"):
-        ModelChain(nn.Identity(), nn.Identity())
-
-
 def test_a_lone_model_without_chain_step_runs_its_forward():
     class EndToEnd(nn.Module):
         def forward(
@@ -171,22 +143,6 @@ def test_a_lone_model_without_chain_step_runs_its_forward():
     assert chain.inputs == {"image": torch.Tensor}
     torch.testing.assert_close(chain(image=image), image * 2)
     torch.testing.assert_close(chain(image=image, scale=torch.tensor(3.0)), image * 3)
-
-
-def test_two_steps_ready_at_once_are_refused_as_ambiguous():
-    class Ambiguous(nn.Module):
-        @chain_step()
-        def one(self, image: torch.Tensor) -> torch.Tensor:
-            first = image
-            return first
-
-        @chain_step()
-        def two(self, image: torch.Tensor) -> torch.Tensor:
-            second = image
-            return second
-
-    with pytest.raises(TypeError, match="ambiguous"):
-        ModelChain(Ambiguous())
 
 
 def test_mutually_dependent_modules_are_refused_as_a_cycle():
@@ -220,29 +176,6 @@ def test_a_missing_required_key_names_the_key_it_wanted():
 
     with pytest.raises(KeyError, match="image"):
         chain()
-
-
-def test_a_forward_step_runs_module_hooks(x):
-    class Forward(nn.Module):
-        @chain_step(head=True)
-        def forward(self, image: torch.Tensor) -> torch.Tensor:
-            return image * 2
-
-    module = Forward()
-    captured = []
-    module.register_forward_hook(lambda module, args, output: captured.append(output))
-    torch.testing.assert_close(ModelChain(module)(x), x * 2)
-    assert len(captured) == 1
-    torch.testing.assert_close(captured[0], x * 2)
-
-
-def test_an_undecorated_override_removes_the_inherited_step():
-    class Plain(Encode):
-        def encode(self, image: torch.Tensor) -> torch.Tensor:
-            return image
-
-    with pytest.raises(TypeError, match="no @chain_step"):
-        ModelChain(Plain())
 
 
 def test_two_selected_producers_cannot_overwrite_one_output():

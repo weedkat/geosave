@@ -3,25 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import dask
-import dask.array as da
 import numpy as np
 import orjson
 import pytest
 import xarray as xr
 from upath import UPath
-from zarr import open_group
 
 from geosave.geodata import open_raster
 from geosave.geodata.io.formats import zarr
-from tests.conftest import build_dataset, build_tree
 from tests.geodata.conftest import _refuse, build_raster
 
 
 @pytest.mark.parametrize("crs", ["EPSG:32749", "EPSG:4326"])
-@pytest.mark.parametrize("times", [0, 2])
-def test_zarr_round_trip_preserves_the_profile(
-    tmp_path: Path, crs: str, times: int
-) -> None:
+def test_zarr_round_trip_preserves_the_profile(tmp_path: Path, crs: str) -> None:
+    times = 2
     written = build_raster(crs=crs, times=times, packed=True)
 
     destination = zarr.write_zarr(written, tmp_path / "scene.zarr")
@@ -64,22 +59,6 @@ def test_zarr_reads_its_variables_in_the_order_they_were_written(
         assert list(zarr.open_zarr(destination).data_vars) == names
 
 
-def test_a_zarr_variable_written_elsewhere_trails_the_written_order(
-    tmp_path: Path,
-) -> None:
-    names = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"]
-    destination = zarr.write_zarr(build_shuffled(names), tmp_path / "ordered.zarr")
-    # Another tool appends a variable to the store, leaving the order attr as it was.
-    group = open_group(destination, mode="a")
-    group.create_array(
-        "swir", data=build_raster().red.values, dimension_names=("y", "x")
-    )
-
-    restored = zarr.open_zarr(destination)
-
-    assert list(restored.data_vars) == [*names, "swir"]
-
-
 def test_digital_numbers_stay_stored_and_decode_on_request(tmp_path: Path) -> None:
     destination = zarr.write_zarr(build_raster(packed=True), tmp_path / "packed.zarr")
 
@@ -96,22 +75,6 @@ def test_digital_numbers_stay_stored_and_decode_on_request(tmp_path: Path) -> No
     assert bool(np.isnan(decoded.red.values.ravel()[-1]))
 
 
-def test_external_store_without_order_metadata_reads_every_variable(
-    tmp_path: Path,
-) -> None:
-    written = build_raster()[["nir", "red"]]
-    destination = tmp_path / "external.zarr"
-    written.to_zarr(destination, zarr_format=3, consolidated=False)
-
-    with zarr.open_zarr(destination) as restored:
-        assert set(restored.data_vars) == {"nir", "red"}
-
-
-def test_destination_must_name_a_zarr_store(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match=r"\.zarr"):
-        zarr.write_zarr(build_raster(), tmp_path / "scene.nc")
-
-
 def test_overwrite_guards_an_existing_store(tmp_path: Path) -> None:
     raster = build_raster()
     destination = tmp_path / "scene.zarr"
@@ -121,22 +84,6 @@ def test_overwrite_guards_an_existing_store(tmp_path: Path) -> None:
         zarr.write_zarr(raster, destination)
 
     assert zarr.write_zarr(raster, destination, overwrite=True) == destination
-
-
-def test_a_deferred_store_is_written_only_once_computed(tmp_path: Path) -> None:
-    destination = tmp_path / "deferred.zarr"
-
-    pending = build_raster().gs.to_zarr(destination, compute=False)
-
-    from dask.delayed import Delayed
-
-    assert isinstance(pending, Delayed)
-    assert not destination.exists()
-    saved = pending.compute()
-    assert isinstance(saved, UPath)
-    assert saved == destination
-    with open_raster(saved) as restored:
-        assert restored.gs.geobox == build_raster().gs.geobox
 
 
 def test_a_zarr_array_holds_the_fill_value_a_gdal_reader_masks_on(
@@ -169,178 +116,6 @@ def test_a_raster_round_trips_through_a_remote_store(
         xr.testing.assert_identical(restored, expected)
 
 
-@pytest.mark.parametrize("remote", [True, False], ids=["memory", "file-url"])
-def test_a_raster_round_trips_through_a_upath(
-    bucket: str, tmp_path: Path, remote: bool
-) -> None:
-    written = build_raster(times=2)
-    root = UPath(bucket) if remote else UPath(tmp_path.as_uri())
-
-    saved = zarr.write_zarr(written, root / "scene.zarr")
-
-    with (
-        zarr.open_zarr(root / "scene.zarr") as restored,
-        zarr.open_zarr(saved) as again,
-    ):
-        xr.testing.assert_identical(restored, again)
-        np.testing.assert_array_equal(restored["red"], written["red"])
-
-
-def test_a_remote_store_refuses_to_be_replaced_silently(bucket: str) -> None:
-    written = build_raster()
-    destination = f"{bucket}/scene.zarr"
-    written.gs.to_zarr(destination)
-
-    with pytest.raises(FileExistsError):
-        written.gs.to_zarr(destination)
-    saved = written.gs.to_zarr(destination, overwrite=True)
-    assert saved == UPath(destination)
-
-
-def test_zarr_preserves_foreign_cf_coordinate_names(tmp_path: Path) -> None:
-    from affine import Affine
-    from odc.geo.geobox import GeoBox
-    from odc.geo.xr import xr_coords
-
-    grid = GeoBox((2, 3), Affine(1, 0, 10, 0, -1, 20), "EPSG:4326")
-    foreign = xr.Dataset(
-        {"red": (("latitude", "longitude"), np.ones(grid.shape, "uint16"))},
-        coords=xr_coords(grid),
-    )
-    foreign.red.encoding["grid_mapping"] = "spatial_ref"
-    foreign.to_zarr(tmp_path / "foreign.zarr")
-
-    restored = zarr.open_zarr(tmp_path / "foreign.zarr", chunks={})
-
-    assert restored.red.dims == ("latitude", "longitude")
-    assert restored.gs.geobox == grid
-    assert restored.red.chunks is not None
-    restored.close()
-
-
-def test_relative_stores_open_after_changing_directory(tmp_path, monkeypatch):
-    source = build_raster(times=2).isel(time=0)
-    monkeypatch.chdir(tmp_path)
-    build_tree({"image": source}).gs.to_zarr("scene.zarr")
-    with open_raster("scene.zarr") as opened:
-        monkeypatch.chdir(tmp_path.parent)
-        child = opened["image"].gs.combine_stac()
-        assert "time" in child.coords
-        assert "spatial_ref" in child.coords
-
-
-def test_a_stacked_arrays_attrs_survive_storage(tmp_path):
-    grid = build_raster().gs.geobox
-    source = build_dataset(
-        {
-            "red": (
-                ("y", "x"),
-                da.ones((2, 2), chunks=(1, 1), dtype="uint16"),
-            )
-        },
-        grid,
-    )
-    source.attrs = {"units": "root-unit", "title": "scene"}
-    source.red.attrs = {"units": "band-unit"}
-    stacked = source.gs.to_array()
-    assert isinstance(stacked.data, da.Array)
-    path = zarr.write_zarr(stacked.to_dataset(name="pixels"), tmp_path / "bands.zarr")
-
-    with open_raster(path, chunks={}) as reopened:
-        restored = reopened.pixels.gs.to_dataset(dim="band")
-        assert restored.red.attrs == {"units": "band-unit"}
-        assert restored.gs.geobox == grid
-        assert isinstance(restored.red.data, da.Array)
-        np.testing.assert_array_equal(restored.red, source.red)
-
-
-def test_a_selected_stored_band_keeps_the_shared_attrs_and_lazy_pixels(tmp_path):
-    grid = build_raster().gs.geobox
-    source = build_dataset(
-        {
-            "red": (
-                ("y", "x"),
-                da.ones((2, 2), chunks=(1, 1), dtype="uint16"),
-            ),
-            "nir": (
-                ("y", "x"),
-                da.full((2, 2), 2, chunks=(1, 1), dtype="uint16"),
-            ),
-        },
-        grid,
-    )
-    source.attrs = {"title": "scene", "nodata": -9999}
-    source.red.attrs = {"_FillValue": np.uint16(0), "long_name": "red", "units": "1"}
-    source.nir.attrs = {"_FillValue": np.uint16(1), "long_name": "nir", "units": "1"}
-    path = zarr.write_zarr(
-        source.gs.mask_and_scale().gs.to_array().to_dataset(name="pixels"),
-        tmp_path / "bands.zarr",
-    )
-
-    with open_raster(path, chunks={}, mask_and_scale=True) as reopened:
-        restored = reopened.pixels.sel(band=["nir"]).gs.to_dataset(dim="band")
-        assert list(restored.data_vars) == ["nir"]
-        # Decoded bands share units, without inheriting incompatible storage fills.
-        assert restored.nir.attrs == {"units": "1"}
-        assert restored.gs.geobox == grid
-        assert isinstance(restored.nir.data, da.Array)
-        np.testing.assert_array_equal(restored.nir, source.nir)
-
-
-def test_stored_nodata_preserves_child_crs_and_restacking(tmp_path):
-    grid = build_raster().gs.geobox
-    source = build_dataset(
-        {"red": (("y", "x"), np.ones((2, 2), dtype="uint16"))},
-        grid,
-        nodata=0,
-    )
-    source = source.assign_coords(time=np.datetime64("2025-06-01", "ns"))
-    store = build_tree({"optical": source}).gs.to_zarr(tmp_path / "raw.zarr")
-
-    with open_raster(store) as restored:
-        child = restored["optical"].gs.combine_stac()
-        assert "spatial_ref" in child.coords
-        assert "spatial_ref" not in child.data_vars
-        assert child.gs.geobox == grid
-        assert child.time.values == source.time.values
-        rebuilt = build_tree({"prepared": child.gs.mask_and_scale()})
-        assert rebuilt.gs.geobox == grid
-
-
-def test_rewriting_a_loaded_child_retains_scalar_time_and_grid(tmp_path):
-    grid = build_raster().gs.geobox
-    source = build_dataset(
-        {"red": (("y", "x"), np.ones((2, 2), dtype="uint16"))},
-        grid,
-        nodata=0,
-    )
-    source = source.assign_coords(time=np.datetime64("2025-06-01", "ns"))
-    store = build_tree({"optical": source}).gs.to_zarr(tmp_path / "raw.zarr")
-    with open_raster(store) as restored:
-        child = restored["optical"].gs.combine_stac()
-        copied = build_tree({"derived": child}).gs.to_zarr(tmp_path / "copied.zarr")
-    with open_raster(copied) as restored:
-        child = restored["derived"].gs.combine_stac()
-        assert child.gs.geobox == grid
-        assert child.time.values == source.time.values
-        np.testing.assert_array_equal(child.red, source.red)
-
-
-def test_nan_band_metadata_survives_stacked_storage(tmp_path):
-    grid = build_raster().gs.geobox
-    source = build_dataset(
-        {"red": (("y", "x"), da.ones((2, 2), chunks=(1, 1)))},
-        grid,
-        nodata=np.nan,
-    )
-    path = zarr.write_zarr(
-        source.gs.to_array().to_dataset(name="pixels"), tmp_path / "nan-bands.zarr"
-    )
-    with open_raster(path, chunks={}) as reopened:
-        restored = reopened.pixels.gs.to_dataset(dim="band")
-        assert np.isnan(restored.red.gs.nodata)
-
-
 @pytest.mark.integration
 def test_a_zarr_store_round_trips_lazily(remote) -> None:
     prefix, options = remote
@@ -355,19 +130,20 @@ def test_a_zarr_store_round_trips_lazily(remote) -> None:
 
 
 def test_a_tree_round_trips_through_one_zarr_store(tmp_path):
-    from tests.geodata.core.raster.test_datatree import build_mixed_collection
+    from tests.geodata.core.raster.test_datatree import build_stac_catalog
 
-    tree = build_mixed_collection()
-    tree["s2"].attrs["title"] = "Sentinel-2"
+    tree = build_stac_catalog()["s2"].copy()
+    tree.attrs["title"] = "Sentinel-2"
 
     store = tree.gs.to_zarr(tmp_path / "scene.zarr")
 
     assert store == tmp_path / "scene.zarr"
     with open_raster(store) as restored:
-        assert list(restored.gs.datasets) == ["s2/r10m", "s2/r20m"]
-        assert restored["s2"].attrs["title"] == "Sentinel-2"
-        for path, raster in tree.gs.datasets.items():
-            loaded = restored.gs.datasets[path]
+        assert restored.isomorphic(tree)
+        assert restored.attrs["title"] == "Sentinel-2"
+        for leaf in tree.leaves:
+            raster = leaf.to_dataset(inherit="all_coords")
+            loaded = restored[leaf.relative_to(tree)].to_dataset(inherit="all_coords")
             assert loaded.gs.geobox == raster.gs.geobox
             np.testing.assert_array_equal(loaded.time.values, raster.time.values)
             xr.testing.assert_equal(
@@ -387,24 +163,3 @@ def test_zarr_stores_cells_as_start_and_end_coordinates(tmp_path):
     for name in ("time", "start_datetime", "end_datetime"):
         np.testing.assert_array_equal(back[name].values, raster[name].values)
     assert "time_bounds" not in back.variables
-
-
-def test_tree_cells_round_trip_on_their_collection_node(tmp_path):
-    from tests.geodata.conftest import build_dated_raster
-
-    raster = build_dated_raster()
-    coords = ["time", "start_datetime", "end_datetime"]
-    tree = xr.DataTree.from_dict(
-        {
-            "/s2": xr.Dataset(coords={name: raster[name].variable for name in coords}),
-            "/s2/r10m": raster.drop_vars(coords),
-        }
-    )
-    path = zarr.write_zarr(tree, tmp_path / "tree.zarr")
-
-    assert (path / "s2" / "start_datetime").exists()
-    back = zarr.open_zarr(path)
-
-    child = back["s2/r10m"].to_dataset(inherit="all_coords")
-    np.testing.assert_array_equal(child.end_datetime.values, raster.end_datetime.values)
-    assert "time_bounds" not in back["s2"].to_dataset(inherit=False).variables

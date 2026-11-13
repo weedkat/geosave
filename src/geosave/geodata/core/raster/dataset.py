@@ -47,11 +47,14 @@ import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import pandas as pd
 import xarray as xr
 from odc.geo.geobox import GeoBox
-from odc.geo.xr import xr_coords
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import (
+
+from geosave.geodata.errors import RasterValidationError
+from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
+    DEFAULT_COLLECTION,
+    ITEM_ID_FORMAT,
     TIME_COORDINATE,
 )
 from geosave.geodata.core.raster.utils.statistics import class_percent, statistics
@@ -59,12 +62,10 @@ from geosave.geodata.core.raster.utils.tensor import as_tensor
 
 from .base import GeoRaster, RasterTime
 from .transform.temporal import Reducer, Interpolation
-from geosave.geodata.errors import RasterValidationError
 
 if TYPE_CHECKING:
     from datetime import datetime, timedelta
     from geosave.geodata.utils.datetime import Freq
-    from xarray.core.types import CombineAttrsOptions
     from odc.geo import SomeResolution
     from .transform.warp import Resampling
     from .transform.extent import Padding, Region
@@ -82,12 +83,39 @@ if TYPE_CHECKING:
     from geosave.geodata import DataArray, Dataset, DataTree
     from dask.delayed import Delayed
     from upath import UPath
-    from geosave.geodata.io.formats.netcdf import NetCDFEngine
     from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
     from geosave.geodata.io.formats.zarr import ZarrWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
+
+
+# Rules a Dataset can be asked to meet; `ds.gs.validate(same_pixel_meaning)`
+# runs one.
+def same_pixel_meaning(raster: xr.Dataset) -> None:
+    """Require every variable to state the same CF packing, flags and units.
+
+    Raises:
+        RasterValidationError: Two variables state different pixel meaning.
+    """
+    names = list(raster.data_vars)
+    if not names:
+        return
+
+    first = raster[names[0]]
+    for name in names[1:]:
+        band = raster[name]
+        if (
+            band.gs.packing != first.gs.packing
+            or band.gs.flags != first.gs.flags
+            or band.attrs.get("units") != first.attrs.get("units")
+        ):
+            raise RasterValidationError(
+                f"It states different CF packing, flags or units than "
+                f"{names[0]!r}, so stacked pixels would mean different things. "
+                "Decode them with mask_and_scale() first.",
+                variable=name,
+            )
 
 
 class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
@@ -144,38 +172,26 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             ValueError: The selected datetime dimension is absent, active CF attrs require explicit
                 `mask_and_scale()`, or class codes would be reduced numerically.
         """
-        from .transform.temporal import CELL_METHODS, composite_ds
 
-        data = self._data
-        cell_method = CELL_METHODS[method]
+        bands = {}
         for name in self.variables:
-            variable = data[name]
-            if attrs.CFPacking.is_stated_in(variable.attrs):
-                raise ValueError(
-                    f"decode active CF attrs on {name!r} with mask_and_scale() before composite"
-                )
-            if dim not in variable.dims:
+            band = self._data[name]
+            # A band without `dim`, such as a static elevation, passes through.
+            if dim not in band.dims:
+                bands[name] = band
                 continue
-            if variable.gs.is_categorical and (
-                cell_method != "point" or interpolation is not None
-            ):
-                raise ValueError(
-                    f"class codes in {name!r} require 'first' or 'last' without interpolation"
-                )
-
-        result = composite_ds(
-            self._data,
-            freq,
-            method,
-            dim=dim,
-            interpolation=interpolation,
-            properties=properties,
-            closed=closed,
-            label=label,
-            origin=origin,
-            offset=offset,
-        )
-        return cast("Dataset", result)
+            bands[name] = band.gs.composite(
+                freq,
+                method,
+                dim=dim,
+                interpolation=interpolation,
+                properties=properties,
+                closed=closed,
+                label=label,
+                origin=origin,
+                offset=offset,
+            )
+        return cast("Dataset", xr.Dataset(bands, attrs=self._data.attrs))
 
     @property
     def spatial_dims(self) -> tuple[str, str] | None:
@@ -200,89 +216,36 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             )
         return grid
 
-    def _validate_nonempty(self, variables: Mapping[Hashable, xr.DataArray]) -> None:
-        """Require at least one data-bearing variable."""
-        if not variables:
-            raise RasterValidationError(
-                "There are no raster variables to validate. Select or load raster data first."
-            )
-
     @property
     def variables(self) -> tuple[Hashable, ...]:
         """Name the data variables, in Dataset order."""
         return tuple(self._data.data_vars)
 
-    def _targets(self, target: list[str] | None) -> list[Hashable]:
-        """Return the data variables `target` names, every one when None.
-
-        Raises:
-            KeyError: A name is not a data variable.
-        """
-        if target is None:
-            return list(self.variables)
-        missing = [name for name in target if name not in self._data.data_vars]
-        if missing:
-            raise KeyError(
-                f"{missing} are not data variables of this raster; it carries "
-                f"{list(self.variables)}"
-            )
-        return list(target)
-
     @property
     def rgb(self) -> tuple[str, str, str] | None:
-        """Name the variables drawing red, green and blue, or None where none are named.
+        """Read the variables `Display.rgb` names for red, green and blue.
 
-        A stated `Display.rgb` wins; otherwise the variables whose `EOBand`
-        common name is red, green and blue draw them.
+        STAC loading and GeoTIFF opening state it from band colours; `write_rgb`
+        states it explicitly.
+
+        Returns:
+            The three variable names, or None where none are stated or a named
+            variable is no longer in the Dataset.
 
         Examples:
             >>> ds.gs.write_rgb("B04", "B03", "B02").gs.rgb
             ('B04', 'B03', 'B02')
         """
         display = attrs.Display.from_attrs(self._data.attrs)
-        if display is not None and display.rgb is not None:
-            if all(name in self._data.data_vars for name in display.rgb):
-                red, green, blue = display.rgb
-                return red, green, blue
+        if display is None or display.rgb is None:
             return None
-        drawing: dict[str, str] = {}
-        for name in reversed(self.variables):
-            band = self._data[name].gs.spectral
-            if band is not None and band.common_name in ("red", "green", "blue"):
-                drawing[band.common_name] = str(name)
-        if len(drawing) != 3:
+
+        # Selecting variables keeps the Dataset attrs, so a stated name may be gone.
+        red, green, blue = display.rgb
+        if red not in self._data or green not in self._data or blue not in self._data:
             return None
-        return drawing["red"], drawing["green"], drawing["blue"]
 
-    @property
-    def nodata(self) -> dict[Hashable, float | int | None]:
-        """Read the stored value standing for nodata in each variable.
-
-        Returns:
-            {
-                variable name: its fill value, or None where it carries none,
-            }
-
-        Examples:
-            >>> ds.gs.nodata
-            {'red': 0, 'nir': 0}
-        """
-        return {name: self._data[name].gs.nodata for name in self.variables}
-
-    @property
-    def flags(self) -> dict[Hashable, attrs.CFFlags | None]:
-        """Read what each variable's values mean, None where they are no classes."""
-        return {name: self._data[name].gs.flags for name in self.variables}
-
-    @property
-    def packing(self) -> dict[Hashable, attrs.CFPacking | None]:
-        """Read how each variable's stored values decode, None where they are physical."""
-        return {name: self._data[name].gs.packing for name in self.variables}
-
-    @property
-    def spectral(self) -> dict[Hashable, attrs.EOBand | None]:
-        """Read where in the spectrum each variable was measured, None where unknown."""
-        return {name: self._data[name].gs.spectral for name in self.variables}
+        return red, green, blue
 
     @property
     def stac_collection(self) -> pystac.Collection | None:
@@ -298,42 +261,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         if stated is None or stated.collection is None:
             return None
         return pystac.Collection.from_dict(stated.collection)
-
-    @property
-    def stac_common_properties(self) -> dict[str, Any]:
-        """Derive properties present and equal across the selected observations.
-
-        Examples:
-            >>> stac.load_dataset(items, geobox=grid).gs.stac_common_properties["platform"]
-            'sentinel-2a'
-        """
-        from geosave.geodata.stac.raster import read_properties_coordinate
-        from geosave.geodata.utils.mapping import intersect_mappings
-
-        properties = read_properties_coordinate(self._data)
-        return intersect_mappings(properties) if properties else {}
-
-    @property
-    def stac_properties(self) -> pd.DataFrame:
-        """Read each date's Item properties from the `stac_properties` coordinate.
-
-        Returns:
-            One row per `time` label, one column per property key; a key a
-            date lacks is NaN. Empty where the coordinate is absent.
-
-        Examples:
-            >>> clear = ds.sel(time=ds.gs.stac_properties["eo:cloud_cover"] < 30)
-        """
-        from geosave.geodata.stac.raster import read_properties_coordinate
-
-        mappings = read_properties_coordinate(self._data)
-        if not mappings:
-            return pd.DataFrame()
-        coordinate = self.time_coordinate
-        if coordinate is None:
-            return pd.DataFrame(mappings)
-        labels = np.atleast_1d(coordinate.values)
-        return pd.DataFrame(mappings, index=pd.Index(labels, name=coordinate.name))
 
     @property
     def acdd(self) -> attrs.ACDD | None:
@@ -400,46 +327,12 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> srtm.gs.reproject(scene.gs.geobox, resampling="bilinear")
         """
 
-        raster = self._data
-
-        raster.gs.validate()
-        if resampling not in {"nearest", "mode"} and any(
-            raster[name].gs.is_categorical for name in raster.gs.variables
-        ):
-            raise ValueError(
-                "class codes require a value-preserving kernel: nearest or mode"
+        bands = {}
+        for name in self.variables:
+            bands[name] = self._data[name].gs.reproject(
+                how, resampling=resampling, resolution=resolution
             )
-        source = cast("GeoBox", raster.gs.geobox)
-        if isinstance(how, GeoBox):
-            geobox = how
-        else:
-            size = "auto" if resolution is None else resolution
-            geobox = raster.gs.output_geobox(how, resolution=size)
-
-        dims = cast("tuple[str, str]", raster.gs.spatial_dims)
-        raster = raster.transpose(..., *dims)
-        if geobox == source:
-            return cast("Dataset", raster)
-
-        crs_coord = raster.odc.crs_coord
-        crs_names = [] if crs_coord is None else [crs_coord.name]
-        coordinates = (
-            raster.coords.to_dataset()
-            .drop_dims(dims, errors="ignore")
-            .drop_vars(crs_names, errors="ignore")
-        )
-        warped = raster[list(raster.gs.variables)].odc.reproject(
-            geobox, resampling=resampling
-        )
-        # ODC Dataset.map keeps the source CRS and drops coordinate-only dimensions.
-        crs_name = str(warped.odc.crs_coord.name)
-        placed_crs = xr_coords(geobox, crs_coord_name=crs_name)[crs_name]
-        return cast(
-            "Dataset",
-            warped.assign_coords({crs_name: placed_crs}).assign_coords(
-                coordinates.coords
-            ),
-        )
+        return cast("Dataset", xr.Dataset(bands, attrs=self._data.attrs))
 
     def mask(
         self, mask: xr.DataArray | np.ndarray, *, fill: float | int | None = None
@@ -465,30 +358,10 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> clear = ds.gs.mask(ds.scl.isin([4, 5, 6, 7]))
         """
 
-        from .transform.nodata import mask_with_da, mask_with_np
-
-        self._require_spatial_dims()
-
-        if isinstance(mask, xr.DataArray):
-            foreign = set(mask.dims) - set(self._data.dims)
-            if foreign:
-                raise ValueError(
-                    f"mask spans axes the raster does not carry: {foreign}"
-                )
-
-        variables = {}
-        if isinstance(mask, np.ndarray):
-            for name in self.variables:
-                variable = self._data[name]
-                variables[name] = mask_with_np(variable, mask, fill=fill).variable
-        else:
-            for name in self.variables:
-                variable = self._data[name]
-                variables[name] = mask_with_da(variable, mask, fill=fill).variable
-
-        masked = self._data.assign(variables)
-        masked.encoding.pop("source", None)
-        return cast("Dataset", masked)
+        bands = {}
+        for name in self.variables:
+            bands[name] = self._data[name].gs.mask(mask, fill=fill)
+        return cast("Dataset", xr.Dataset(bands, attrs=self._data.attrs))
 
     def crop(self, region: Region, *, mask: bool = True) -> Dataset:
         """Crop to a CRS-bearing region, optionally masking outside its geometry.
@@ -636,6 +509,15 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             raster[name] = raster[name].gs.clip_extent(geometry)
         return cast("Dataset", raster)
 
+    def _target_variables(self, target: list[str] | None) -> list[str]:
+        """Select variables for metadata writes without treating a name as characters."""
+        if isinstance(target, str):
+            raise TypeError(
+                "target must be a list of variable names, "
+                f"for example target=[{target!r}]"
+            )
+        return self.variables if target is None else target
+
     def write_nodata(
         self,
         value: float | int | None,
@@ -648,12 +530,14 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
 
         Args:
             value: Stored value marking nodata. None clears it.
-            target: Variable names to write, defaulting to every data variable.
+            target: List of variable names; None writes every data variable,
+                and an empty list writes none.
 
         Returns:
             New Dataset whose named variables carry `value` as their fill.
 
         Raises:
+            TypeError: `target` is a string instead of a list of names.
             KeyError: `target` names something that is not a data variable.
             ValueError: A named variable's dtype cannot hold `value`.
 
@@ -663,7 +547,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> ds.gs.write_nodata(-9999, target=["elevation"])
         """
         written = self._data.copy()
-        for name in self._targets(target):
+        for name in self._target_variables(target):
             written[name] = self._data[name].gs.write_nodata(value)
         return written
 
@@ -684,12 +568,14 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 flags and colours.
             colors: Stored value mapped to hex or RGB colour. None writes
                 names only.
-            target: Variable names to write, defaulting to every data variable.
+            target: List of variable names; None writes every data variable,
+                and an empty list writes none.
 
         Returns:
             New Dataset whose named variables carry the flags.
 
         Raises:
+            TypeError: `target` is a string instead of a list of names.
             KeyError: `target` names something that is not a data variable.
             ValueError: `colors` colours a value `classes` does not name.
 
@@ -697,7 +583,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> labels.gs.write_flags({0: "water", 1: "trees"}, {0: "#419bdf", 1: "#397d49"})
         """
         written = self._data.copy()
-        for name in self._targets(target):
+        for name in self._target_variables(target):
             written[name] = self._data[name].gs.write_flags(classes, colors)
         return written
 
@@ -712,12 +598,14 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         Args:
             packing: Scale, offset and fill, as CF packs them. None removes
                 every packing and missing-value attr.
-            target: Variable names to write, defaulting to every data variable.
+            target: List of variable names; None writes every data variable,
+                and an empty list writes none.
 
         Returns:
             New Dataset whose named variables carry the packing.
 
         Raises:
+            TypeError: `target` is a string instead of a list of names.
             KeyError: `target` names something that is not a data variable.
 
         Examples:
@@ -725,7 +613,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> ds.gs.write_packing(packing, target=["B04", "B08"])
         """
         written = self._data.copy()
-        for name in self._targets(target):
+        for name in self._target_variables(target):
             written[name] = self._data[name].gs.write_packing(packing)
         return written
 
@@ -743,19 +631,21 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             common_name: Band name shared across sensors, e.g. `"red"`.
             center_wavelength: Centre of the band, in micrometres.
             full_width_half_max: Width at half peak response, in micrometres.
-            target: Variable names to write, defaulting to every data variable.
+            target: List of variable names; None writes every data variable,
+                and an empty list writes none.
 
         Returns:
             New Dataset whose named variables carry the description.
 
         Raises:
+            TypeError: `target` is a string instead of a list of names.
             KeyError: `target` names something that is not a data variable.
 
         Examples:
             >>> ds.gs.write_spectral("red", center_wavelength=0.665, target=["B04"])
         """
         written = self._data.copy()
-        for name in self._targets(target):
+        for name in self._target_variables(target):
             written[name] = self._data[name].gs.write_spectral(
                 common_name,
                 center_wavelength=center_wavelength,
@@ -786,7 +676,7 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> ds.gs.write_rgb("B04", "B03", "B02").gs.plot()
         """
         channels = [red, green, blue]
-        self._targets(channels)
+        self._data[channels]  # a missing variable raises KeyError
         if len(set(channels)) < len(channels):
             raise ValueError(
                 f"one variable cannot draw two channels, but these name "
@@ -837,173 +727,135 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
                 columns[name] = class_percent([band])
         return pd.DataFrame(columns)
 
-    def expand_stac(
-        self,
-        *,
-        format_id: str = "{time:%Y%m%dT%H%M%S}",
-        asset: str | None = None,
+    def expand(
+        self, item_dim: str = TIME_COORDINATE, id_format: str = ITEM_ID_FORMAT
     ) -> DataTree:
-        """Expand a collection's Dataset into a STAC tree: an Item per time, assets as leaves.
+        """Expand a collection's Dataset into a STAC tree: collection, an Item per step, an asset per variable.
 
-        Each `time` step becomes an Item node holding the coordinates along
-        `time`; every other coordinate and the Dataset attrs sit once on the
-        top node, the collection. A Dataset without `time` is one Item.
+            /                          catalog
+            └── /sentinel-2-l2a        collection   StacCollection attrs
+                ├── /20250601T..._33UUU_...  Item   the Dataset's other attrs; coords along item_dim
+                │   ├── /red           asset        one variable with its attrs and its grid
+                │   └── /nir           asset
+
+        The collection is named by its `StacCollection` id, else ``"default"``.
+        An Item is named by its id, formatted from its region: its period and
+        place, as `GeoRegion.format` reads them. The id is the Item's name in
+        every catalog the tree is published to. A variable without `item_dim`
+        belongs to no Item and is left out.
 
         Args:
-            format_id: Item ID template over each observation's scalar
-                coordinates, such as ``"S2_{tile}_{time:%Y%m%d}"``.
-            asset: None makes each variable its own asset; a name makes every
-                variable a band of that one asset, as one multi-band file.
+            item_dim: Dimension whose steps become Items.
+            id_format: Item id template over `GeoRegion.format` fields, such as
+                ``"s2_{start:%Y%m%d}_{mgrs}"``.
 
         Returns:
-            Lazy tree of ``{item}/{asset}`` leaves, rooted at the collection.
+            Lazy tree of ``{collection}/{item id}/{variable}`` leaves.
 
         Raises:
-            ValueError: A variable lacks `time`, so it belongs to no Item; two
-                observations share an ID; or `format_id` names a field the
-                observation lacks.
+            KeyError: The Dataset has no `item_dim`.
+            ValueError: An Item lacks a field the format names, or two Items
+                format to one id.
 
         Examples:
-            >>> [leaf.path for leaf in scene.gs.expand_stac().leaves][:2]
-            ['/20250601T103000/red', '/20250601T103000/nir']
-            >>> scene.gs.expand_stac(asset="image").gs.to_cog("out")
-            [UPath('/abs/out/20250601T103000/image.tif'), ...]
+            >>> [leaf.path for leaf in scene.gs.expand().leaves][:2]
+            ['/sentinel-2-l2a/20250601T103000_33UUU_52.5200_13.4050/red', ...]
         """
-        from geosave.geodata.io.paths import read_scalar_coords
-
         raster = self._data
-        observations = [raster]
-        if TIME_COORDINATE in raster.dims:
-            for name, variable in raster.data_vars.items():
-                if TIME_COORDINATE not in variable.dims:
-                    raise ValueError(
-                        f"{name!r} has no {TIME_COORDINATE!r}, so it belongs to no "
-                        "Item; expand it as its own collection"
-                    )
-            observations = []
-            for index in range(raster.sizes[TIME_COORDINATE]):
-                observations.append(raster.isel({TIME_COORDINATE: index}))
+        count = raster.sizes[item_dim]
 
-        # Coordinates along time describe each Item; the rest is the collection's.
-        own = []
+        # A variable without the Item dim belongs to no Item, so no asset holds it.
+        raster = raster.drop_vars(list(raster.drop_dims(item_dim).data_vars))
+
+        # Collection: the STAC Collection alone, named by its id; the grid
+        # belongs to each asset.
+        collection = xr.Dataset()
+        collection_id = DEFAULT_COLLECTION
+        stated_collection = attrs.StacCollection.from_attrs(raster.attrs)
+        if stated_collection is not None:
+            collection = attrs.stamp_attrs(collection, stated_collection)
+            if stated_collection.collection is not None:
+                collection_id = stated_collection.collection["id"]
+        nodes: dict[str, xr.Dataset] = {"/": xr.Dataset(), collection_id: collection}
+
+        # The other Dataset attrs describe every Item alike.
+        item_attrs = attrs.clear_attrs(raster, attrs.StacCollection).attrs
+
+        # Coordinates along the Item dim describe one Item each.
+        item_coords = []
         for name, coord in raster.coords.items():
-            if name == TIME_COORDINATE or TIME_COORDINATE in coord.dims:
-                own.append(name)
-        shared = [name for name in raster.coords if name not in own]
+            if item_dim in coord.dims:
+                item_coords.append(name)
 
-        top = xr.Dataset(coords=raster.coords.to_dataset()[shared].coords)
-        nodes = {"/": top.assign_attrs(raster.attrs)}
-        for observation in observations:
-            labels = read_scalar_coords(observation)
-            try:
-                item = format_id.format_map(labels)
-            except KeyError as missing:
+        for index in range(count):
+            observation = raster.isel({item_dim: index})
+            item = observation.gs.region.format(id_format)
+            # from_dict would overwrite a repeated node.
+            if f"{collection_id}/{item}" in nodes:
                 raise ValueError(
-                    f"format_id needs {missing}, which the observation lacks; "
-                    "name its Item with a format_id over its own coordinates"
-                ) from None
-            if item in nodes:
-                raise ValueError(
-                    f"two observations format to one id {item!r}; give format_id a "
-                    "field that tells them apart"
+                    f"two Items format to the id {item!r}; give expand an "
+                    "id_format that tells them apart"
                 )
-            facts = {}
-            for name in own:
-                facts[name] = observation[name].variable
-            nodes[item] = xr.Dataset(coords=facts)
 
-            # The top node holds the Dataset attrs; a variable keeps its own.
-            leaf = observation.drop_vars([*own, *shared]).drop_attrs(deep=False)
-            if asset is not None:
-                nodes[f"{item}/{asset}"] = leaf
-                continue
-            for name in leaf.data_vars:
-                nodes[f"{item}/{name}"] = leaf[[name]]
+            # Item: its coordinates, now scalar, and the Dataset's other attrs.
+            coords = {name: observation[name].variable for name in item_coords}
+            nodes[f"{collection_id}/{item}"] = xr.Dataset(
+                coords=coords, attrs=item_attrs
+            )
+
+            # Asset: one variable with its own attrs and its grid; it inherits
+            # the Item's coordinates.
+            for name in observation.data_vars:
+                nodes[f"{collection_id}/{item}/{name}"] = (
+                    observation[[name]].drop_vars(item_coords).drop_attrs(deep=False)
+                )
+
         return cast("DataTree", xr.DataTree.from_dict(nodes))
 
-    def to_array(
-        self,
-        *,
-        dtype: DTypeLike | None = None,
-        combine_attrs: CombineAttrsOptions = "drop_conflicts",
-    ) -> DataArray:
+    def to_array(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Stack variables lazily along `band`, in their existing order.
 
-        Stacked pixels share one meaning, so every variable must state the same
-        `CFPacking`, `CFFlags` and units; those stay on the array whatever
-        `combine_attrs` decides for the descriptive rest.
+        Native `Dataset.to_array` stacks, broadcasting dims and promoting
+        dtypes as xarray does. Stacked pixels share one meaning, so every
+        variable must state the same `CFPacking`, `CFFlags` and units. As
+        natively, the stack keeps the Dataset attrs and drops variable attrs,
+        except packing and flags, which the pixels need to keep their meaning.
 
         Args:
-            dtype: Cast each variable before stacking. None requires all
-                variables to have the same dtype.
-            combine_attrs: Native policy for the remaining variable attrs.
+            dim: Name of the stacking dimension, as in native `to_array`.
 
         Returns:
-            Array shaped `(*axes, band, y, x)`. No packing is applied.
+            Array shaped `(*axes, dim, y, x)`. No packing is applied.
 
         Raises:
-            ValueError: Variables are absent, span different axes, state
-                different pixel meaning, or need an explicit common dtype.
-            RasterValidationError: ODC finds no spatial dimensions.
+            ValueError: The raster already spans `dim`.
+            RasterValidationError: A variable has no georeferenced grid, or two
+                variables state different pixel meaning.
 
         Examples:
-            >>> image = ds[["B04", "B08"]].gs.to_array(dtype="float32")
+            >>> image = ds[["B04", "B08"]].gs.to_array().astype("float32")
             >>> image.dims
             ('time', 'band', 'y', 'x')
         """
-        names = list(self.variables)
-        if not names:
+        # Native to_array only warns, then builds an array with `dim` twice.
+        if dim in self._data.dims:
             raise ValueError(
-                "this raster carries no variables to stack; it holds only coordinates"
+                f"this raster already spans {dim!r}, which stacking would name; "
+                "pass another dim or rename it first"
             )
-        if BAND_DIMENSION in self._data.dims:
-            raise ValueError(
-                f"this raster already spans {BAND_DIMENSION!r}, which stacking "
-                "would name; rename it first"
-            )
-        spatial = self._require_spatial_dims()
-        first = self._data[names[0]]
-        pixel_keys = (*attrs.CFPacking.KEYS, *attrs.CFFlags.KEYS, "units")
-        for name in names[1:]:
-            band = self._data[name]
-            if band.dims != first.dims:
-                raise ValueError(
-                    f"{name!r} spans {band.dims} but {names[0]!r} spans "
-                    f"{first.dims}; stack variables sharing one shape"
-                )
-            if dtype is None and band.dtype != first.dtype:
-                raise ValueError(
-                    f"{names[0]!r} and {name!r} carry different dtypes; "
-                    "pass dtype= to choose one"
-                )
-            if band.gs.packing != first.gs.packing or band.gs.flags != first.gs.flags:
-                raise ValueError(
-                    f"{names[0]!r} and {name!r} state different CF packing or "
-                    "flags; decode them with mask_and_scale() before stacking"
-                )
-            if band.attrs.get("units") != first.attrs.get("units"):
-                raise ValueError(
-                    f"{names[0]!r} and {name!r} state different units, so "
-                    "stacked pixels would mean different things"
-                )
 
-        descriptive = []
-        for name in names:
-            kept = dict(self._data[name].attrs)
-            for key in pixel_keys:
-                kept.pop(key, None)
-            descriptive.append(kept)
-        stacked = (
-            self._data[names] if dtype is None else self._data[names].astype(dtype)
-        )
-        array = stacked.to_dataarray(dim=BAND_DIMENSION).transpose(
-            ..., BAND_DIMENSION, *spatial
-        )
-        shared = {key: first.attrs[key] for key in pixel_keys if key in first.attrs}
-        array.attrs = {
-            **attrs.combine_attrs(descriptive, policy=combine_attrs),
-            **shared,
-        }
+        self.validate(same_pixel_meaning)
+
+        spatial = cast("tuple[str, str]", self.spatial_dims)
+        array = self._data.to_array(dim=dim).transpose(..., dim, *spatial)
+
+        # Native stacking drops variable attrs. Packing and flags are checked equal
+        # and kept, since without them a stacked pixel would mean another number.
+        first = self._data[self.variables[0]]
+        if first.gs.packing is not None:
+            array = attrs.stamp_attrs(array, first.gs.packing)
+        if first.gs.flags is not None:
+            array = attrs.stamp_attrs(array, first.gs.flags)
         return cast("DataArray", array)
 
     def explore(
@@ -1131,7 +983,10 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             >>> ds[["B04", "B08"]].gs.to_numpy().shape
             (2, 2, 256, 256)
         """
-        return self.to_array(dtype=dtype).values
+        array = self.to_array()
+        if dtype is not None:
+            array = array.astype(dtype)
+        return array.values
 
     def to_tensor(self, *, dtype: str | torch.dtype | None = None) -> torch.Tensor:
         """Stack every variable into one model-input tensor, laid out as `to_numpy`.
@@ -1164,36 +1019,36 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         return cast("Dataset", decoded)
 
     def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt on `expand_stac` and `tree.gs.to_cog`.
+        """STAC Item publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
+            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
         )
 
     def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
-        """STAC catalog publication is being rebuilt on `expand_stac` and `tree.gs.to_cog`.
+        """STAC catalog publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt on expand_stac and tree.gs.to_cog"
+            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
         )
 
     def to_cog(self, path: Location, **options: Any) -> list[UPath]:
         """A Dataset is not COG-shaped: a COG holds one instant of one grid.
 
-        Write ``ds.gs.expand_stac(...).gs.to_cog(path)`` for one file per asset,
+        Publish ``ds.gs.expand().gs.to_catalog(path)`` for one file per asset,
         or ``array.gs.to_cog(path)`` for one array.
 
         Raises:
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "a Dataset is not COG-shaped; use ds.gs.expand_stac(...).gs.to_cog(path) "
+            "a Dataset is not COG-shaped; publish ds.gs.expand().gs.to_catalog(path) "
             "or DataArray.gs.to_cog(path)"
         )
 
@@ -1243,7 +1098,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
         path: Location,
         *,
         compute: bool = True,
-        engine: NetCDFEngine = "netcdf4",
         overwrite: bool = False,
         storage_options: StorageOptions | None = None,
         **write_options: Unpack[NetCDFWriteOptions],
@@ -1254,7 +1108,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             path: The file, ending in .nc, .nc4 or .cdf.
             compute: False returns one native `dask.Delayed`; computing it
                 writes the file and returns its path.
-            engine: Concrete xarray netCDF backend.
             overwrite: Replace an existing file.
             storage_options: Filesystem options merged into the destination UPath.
             **write_options: Supported xarray netCDF write options.
@@ -1276,7 +1129,6 @@ class GeoDataset(RasterTime["Dataset"], GeoRaster["Dataset"]):
             self._data,
             path,
             compute=compute,
-            engine=engine,
             overwrite=overwrite,
             storage_options=storage_options,
             **write_options,

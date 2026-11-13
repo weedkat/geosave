@@ -84,13 +84,6 @@ def test_each_date_uses_its_own_azimuth() -> None:
     assert not np.array_equal(first, second)
 
 
-def test_shadow_refuses_a_mask_that_is_not_boolean() -> None:
-    scene = sentinel()
-
-    with pytest.raises(ValueError, match="boolean"):
-        shadow_mask(scene, cloud="B10", sun_azimuth="sun_azimuth")
-
-
 def test_shadow_refuses_a_grid_that_does_not_measure_metres() -> None:
     geographic = GeoBox((4, 4), Affine(0.01, 0, 10, 0, -0.01, 20), "EPSG:4326")
     mask = build_dataset(
@@ -102,16 +95,3 @@ def test_shadow_refuses_a_grid_that_does_not_measure_metres() -> None:
         shadow_mask(mask, cloud="cloud", sun_azimuth=180.0)
     with pytest.raises(ValueError, match="grid"):
         shadow_mask(unreferenced, cloud="cloud", sun_azimuth=180.0)
-
-
-def test_shadow_refuses_an_azimuth_that_does_not_match_the_mask() -> None:
-    scene = cloud().assign_coords(azimuth=("stations", [1.0, 2.0]))
-
-    with pytest.raises(ValueError, match="scalar or along 'time'"):
-        shadow_mask(scene, cloud="cloud", sun_azimuth="azimuth")
-
-    timeless = scene.isel(time=0, drop=True).assign_coords(
-        sun_azimuth=("time", [45.0, 135.0])
-    )
-    with pytest.raises(ValueError, match="varies with time"):
-        shadow_mask(timeless, cloud="cloud", sun_azimuth="sun_azimuth")

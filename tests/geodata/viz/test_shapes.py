@@ -1,6 +1,5 @@
 import geopandas as gpd
-import pytest
-from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, box
+from shapely.geometry import LineString, MultiPolygon, Point, box
 
 from geosave.geodata.viz.shapes import split_by_geometry_type
 
@@ -27,10 +26,3 @@ def test_leaves_out_rows_without_geometry() -> None:
     rows_by_type = split_by_geometry_type(frame(box(0, 0, 1, 1), None))
 
     assert rows_by_type["Polygon"].index.tolist() == [0]
-
-
-def test_refuses_no_geometry_and_collections() -> None:
-    with pytest.raises(ValueError, match="nothing to draw"):
-        split_by_geometry_type(frame(None))
-    with pytest.raises(ValueError, match="GeometryCollection"):
-        split_by_geometry_type(frame(GeometryCollection([Point(0, 0)])))

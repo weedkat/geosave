@@ -6,7 +6,6 @@ from pathlib import Path
 
 import dask
 import dask.array as da
-import pytest
 import xarray as xr
 
 from geosave.geodata import open_raster
@@ -32,15 +31,10 @@ def test_the_engine_stays_lazy_and_forwards_reader_options(tmp_path: Path) -> No
     decoded.close()
 
 
-def test_the_engine_drops_named_variables(tmp_path: Path) -> None:
-    path = build_raster().gs.to_zarr(tmp_path / "scene.zarr")
-
-    with xr.open_dataset(path, engine="geosave", drop_variables="nir") as opened:
-        assert list(opened.data_vars) == ["red"]
-
-
 def test_the_engine_opens_a_tree_as_a_tree(tmp_path: Path) -> None:
-    sample = build_tree({"optical": build_raster(times=2), "dem": build_raster()})
+    sample = build_tree(
+        {"optical": build_raster(times=2), "dem": build_raster(times=1)}
+    )
     store = sample.gs.to_zarr(tmp_path / "s0.zarr")
 
     with xr.open_datatree(store, engine="geosave") as opened:
@@ -55,18 +49,3 @@ def test_the_engine_claims_no_file_unasked(tmp_path: Path) -> None:
         assert "gs" not in opened.encoding.get("engine", "")
     assert "geosave" in xr.backends.list_engines()
     assert not xr.backends.list_engines()["geosave"].guess_can_open(path)
-
-
-@pytest.mark.parametrize("suffix", [".nc", ".zarr"])
-def test_xarray_controls_chunking_when_using_the_geosave_engine(tmp_path, suffix):
-    source = build_raster()
-    path = tmp_path / f"scene{suffix}"
-    if suffix == ".nc":
-        source.gs.to_netcdf(path)
-    else:
-        source.gs.to_zarr(path)
-    with xr.open_dataset(path, engine="geosave", chunks=None) as opened:
-        assert not isinstance(opened.red.data, da.Array)
-    with xr.open_dataset(path, engine="geosave", chunks={}) as opened:
-        assert isinstance(opened.red.data, da.Array)
-        xr.testing.assert_equal(opened, source)

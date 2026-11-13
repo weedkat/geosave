@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence, Hashable
-from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 import pystac
 import xarray as xr
 
 import geosave.geodata.attrs as attrs
-from geosave.geodata.conventions import (
+from geosave.geodata.core.conventions import (
     END_DATETIME,
     START_DATETIME,
     STAC_PROPERTIES,
-    TIME_COORDINATE,
 )
 from geosave.geodata.stac.item import (
     read_instant,
@@ -24,58 +22,46 @@ from geosave.geodata.stac.item import (
 )
 
 
-def stamp_properties_coordinate[T: xr.Dataset | xr.DataArray](
-    raster: T, properties: Sequence[dict[str, Any]], *, dim: Hashable = TIME_COORDINATE
-) -> T:
-    """Record each date's Item properties as JSON on the `stac_properties` coordinate.
+def encode_properties(raster: xr.Dataset) -> xr.Dataset:
+    """Write each Item's properties as JSON text, which netCDF and Zarr store.
+
+    In memory `stac_properties` holds one dict per `time` label; a file holds
+    strings.
 
     Args:
-        raster: Raster carrying the selected observation coordinate, or a timeless raster.
-        properties: One mapping per selected dimension label, in label order.
-        dim: Observation coordinate, default "time".
+        raster: Dataset about to be written.
 
     Returns:
-        Raster with `stac_properties` along the selected coordinate, or scalar
-        when that coordinate is scalar.
-
-    Raises:
-        ValueError: The mappings do not match the selected labels one to one.
-
-    Examples:
-        >>> stamp_properties_coordinate(scene, [{"eo:cloud_cover": 20.0}]).stac_properties.item()
-        '{"eo:cloud_cover": 20.0}'
-    """
-    texts = [json.dumps(dict(entry)) for entry in properties]
-    labels = raster.coords.get(dim)
-    if labels is None or labels.ndim == 0:
-        if len(texts) != 1:
-            raise ValueError(
-                "a scalar observation coordinate takes one properties mapping"
-            )
-        return raster.assign_coords({STAC_PROPERTIES: texts[0]})
-    if len(texts) != labels.size:
-        raise ValueError(
-            f"{len(texts)} properties mappings for {labels.size} observation labels"
-        )
-    return raster.assign_coords({STAC_PROPERTIES: (labels.dims[0], texts)})
-
-
-def read_properties_coordinate(
-    raster: xr.Dataset | xr.DataArray,
-) -> list[dict[str, Any]]:
-    """Read each date's Item properties from the `stac_properties` coordinate.
-
-    Args:
-        raster: Raster, with or without the coordinate.
-
-    Returns:
-        One mapping per `time` label, in label order; empty without the
-        coordinate.
+        Dataset with `stac_properties` as JSON text, or `raster` unchanged
+        when it has none.
     """
     if STAC_PROPERTIES not in raster.coords:
-        return []
-    texts = np.atleast_1d(raster.coords[STAC_PROPERTIES].values)
-    return [json.loads(str(text)) for text in texts]
+        return raster
+    coordinate = raster[STAC_PROPERTIES]
+    texts = []
+    for mapping in np.ravel(coordinate.values):
+        texts.append(json.dumps(mapping))
+    stored = np.reshape(np.array(texts), coordinate.shape)
+    return raster.assign_coords({STAC_PROPERTIES: (coordinate.dims, stored)})
+
+
+def decode_properties(raster: xr.Dataset) -> xr.Dataset:
+    """Read each Item's properties back from JSON text into dicts after opening.
+
+    Args:
+        raster: Dataset as a reader opened it.
+
+    Returns:
+        Dataset with `stac_properties` holding dicts, or `raster` unchanged
+        when it has none.
+    """
+    if STAC_PROPERTIES not in raster.coords:
+        return raster
+    coordinate = raster[STAC_PROPERTIES]
+    mappings = np.empty(coordinate.shape, dtype=object)
+    for index, text in np.ndenumerate(coordinate.values):
+        mappings[index] = json.loads(str(text))
+    return raster.assign_coords({STAC_PROPERTIES: (coordinate.dims, mappings)})
 
 
 def stamp_item_time(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
@@ -119,10 +105,10 @@ def stamp_item_properties(raster: xr.Dataset, item: pystac.Item) -> xr.Dataset:
     if coordinate is None or read_instant(item) is None:
         return raster
     properties = select_item_properties(item.properties)
-    labels = np.atleast_1d(coordinate.values)
-    return stamp_properties_coordinate(
-        raster, [properties] * labels.size, dim=coordinate.name
-    )
+    if coordinate.ndim == 0:
+        return raster.assign_coords({STAC_PROPERTIES: ((), properties)})
+    mappings = [properties] * coordinate.size
+    return raster.assign_coords({STAC_PROPERTIES: (coordinate.dims, mappings)})
 
 
 def build_stac_metadata(
