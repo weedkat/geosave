@@ -150,100 +150,84 @@ def read_metadata(
     return root, bands
 
 
-def write_metadata(
-    dst: DatasetWriter, raster: xr.Dataset, *, tiff_tags: bool = False
-) -> None:
-    """Write every attr onto an open GDAL raster, in the slot GDAL reads it from.
+# These attrs have native GDAL properties rather than generic metadata tags.
+_BAND_PROPERTIES = {
+    *attrs.CFPacking.KEYS,
+    *attrs.Display.KEYS,
+    "color_hints",
+    "long_name",
+    "units",
+}
 
-    GDAL keeps the description, unit, scale, offset, fill value, interpretation
-    and palette as band properties of its own, where `gdalinfo` and QGIS look;
-    every other attr is a plain metadata item, and none is stated twice. The
-    `Display` maps to GDAL: `rgb` to red/green/blue interpretations, a
-    `CFFlags.color_hints` to a colour table. Each band names its variable in a
-    `variable_name` item.
 
-    Args:
-        dst: Raster open for update.
-        raster: Prepared Dataset with encoded time tags, one variable per band.
-        tiff_tags: Map ACDD fields to baseline TIFF tags.
-
-    Raises:
-        ValueError: `bands` does not hold one variable per band of `dst`.
-
-    Examples:
-        >>> with rasterio.open(path, "r+") as dst:
-        ...     write_metadata(dst, ds)
-    """
-    root = dict(raster.attrs)
+def file_tags(raster: xr.Dataset, *, tiff_tags: bool = False) -> dict[str, str]:
+    """Translate root attrs and observation coordinates into GDAL tags."""
+    owned = {*attrs.CFPacking.KEYS, *attrs.Display.KEYS, "color_hints"}
+    root = {key: value for key, value in raster.attrs.items() if key not in owned}
+    root.update(format_time_tags(raster))
     if tiff_tags:
         root = _map_tiff_tags(root)
-    bands = list(raster.data_vars.values())
-    if len(bands) != dst.count:
-        raise ValueError(
-            f"{dst.name} holds {dst.count} bands but {len(bands)} variables "
-            f"name them; pass one variable per band, in band order"
-        )
+    return _as_text(root)
 
-    # GDAL stores these as band properties, never as dataset JSON tags; class
-    # colours become each band's colour table.
-    owned = {*attrs.CFPacking.KEYS, *attrs.Display.KEYS, "color_hints"}
-    root_tags = {key: value for key, value in root.items() if key not in owned}
-    dst.update_tags(**_as_text(root_tags))
-    display = attrs.Display.from_attrs(root)
-    rgb = [] if display is None or display.rgb is None else display.rgb
 
-    scales: list[float] = []
-    offsets: list[float] = []
-    interpretations: list[ColorInterp] = []
-    for index, band in enumerate(bands, start=1):
-        packing = band.gs.packing
-        flags = band.gs.flags
-        tags = {key: value for key, value in band.attrs.items() if key not in owned}
-        tags["variable_name"] = str(band.name)
-
-        # Each of these leaves the tags for a band property GDAL keeps it in.
-        description = tags.pop("long_name", None)
-        unit = tags.pop("units", None)
+def write_band_tags(dst: DatasetWriter, bands: xr.Dataset) -> None:
+    """Write variable identity and attrs without native GDAL properties."""
+    for index, (name, band) in enumerate(bands.data_vars.items(), start=1):
+        tags = {
+            key: value
+            for key, value in band.attrs.items()
+            if key not in _BAND_PROPERTIES
+        }
+        tags["variable_name"] = str(name)
         dst.update_tags(index, **_as_text(tags))
 
-        if description is not None:
-            dst.set_band_description(index, description)
+
+def write_descriptions(dst: DatasetWriter, bands: xr.Dataset) -> None:
+    """Assign each band's description and unit."""
+    for index, band in enumerate(bands.data_vars.values(), start=1):
+        description = band.attrs.get("long_name", str(band.name))
+        dst.set_band_description(index, description)
+        unit = band.attrs.get("units")
         if unit is not None:
             dst.set_band_unit(index, unit)
 
-        scales.append(1.0 if packing is None else packing.scale_factor)
-        offsets.append(0.0 if packing is None else packing.add_offset)
-        palette = None
-        if flags is not None and flags.color_hints is not None:
-            palette = flags.colors
-        if palette is not None:
-            interpretations.append(ColorInterp.palette)
-        elif str(band.name) in rgb:
-            channel = ("red", "green", "blue")[rgb.index(str(band.name))]
-            interpretations.append(ColorInterp[channel])
-        else:
-            interpretations.append(ColorInterp.undefined)
 
-        if palette is not None:
-            dst.write_colormap(
-                index,
-                {
-                    int(value): (*parse_color(colour), 255)
-                    for value, colour in palette.items()
-                },
-            )
+def write_packing(dst: DatasetWriter, bands: xr.Dataset) -> None:
+    """Assign stored bands' scale and offset; nodata belongs to the profile."""
+    dst.scales = [
+        band.attrs.get("scale_factor", 1.0) for band in bands.data_vars.values()
+    ]
+    dst.offsets = [
+        band.attrs.get("add_offset", 0.0) for band in bands.data_vars.values()
+    ]
 
-    if any(scale != 1.0 for scale in scales):
-        dst.scales = scales
-    if any(offset != 0.0 for offset in offsets):
-        dst.offsets = offsets
-    # Assigning none of them would clear what GDAL inferred for itself.
-    if any(band is not ColorInterp.undefined for band in interpretations):
-        dst.colorinterp = interpretations
 
-    shared = bands[0].gs.nodata if bands else None
-    if shared is not None:
-        dst.nodata = shared
+def write_colorinterp(dst: DatasetWriter, raster: xr.Dataset) -> None:
+    """Assign declared RGB channels; palette writers own palette interpretation."""
+    rgb = raster.gs.rgb
+    if rgb is None:
+        return
+    channels = dict(
+        zip(rgb, (ColorInterp.red, ColorInterp.green, ColorInterp.blue), strict=True)
+    )
+    dst.colorinterp = [
+        channels.get(str(name), ColorInterp.undefined) for name in raster.data_vars
+    ]
+
+
+def write_colormaps(dst: DatasetWriter, bands: xr.Dataset) -> None:
+    """Write a colour table for each band declaring class colours."""
+    for index, band in enumerate(bands.data_vars.values(), start=1):
+        flags = band.gs.flags
+        if flags is None or flags.color_hints is None:
+            continue
+        dst.write_colormap(
+            index,
+            {
+                int(value): (*parse_color(colour), 255)
+                for value, colour in flags.colors.items()
+            },
+        )
 
 
 def format_time_tags(cube: xr.Dataset) -> dict[str, str]:
@@ -266,7 +250,7 @@ def format_time_tags(cube: xr.Dataset) -> dict[str, str]:
             f"got {type(instant).__name__}; convert it with pd.to_datetime first"
         )
     if np.isnat(instant):
-        return {}
+        raise ValueError("a GeoTIFF observation time cannot be NaT")
 
     stamp = instant.astype("datetime64[s]").item()
     tags = {"TIFFTAG_DATETIME": stamp.strftime(GDAL_DATETIME_FORMAT)}

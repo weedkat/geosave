@@ -206,7 +206,7 @@ the model package.
   `stac/band.py` composes storage, spectral and classification attrs; extension
   modules translate native PySTAC bands and own `pystac.extensions` imports.
 - `io/formats/` owns encoding-specific readers/writers. `io/rasterio.py` owns
-  Rasterio reading and environment configuration. `io/gdal_metadata.py` owns
+  Rasterio reading, filesystem adaptation and environment configuration. `io/gdal_metadata.py` owns
   translation between GDAL properties/tags and raster metadata in both directions.
   `utils/geopandas.py` prepares
   GeoPandas engine options; `utils/stores.py` checks NetCDF/Zarr destinations.
@@ -221,11 +221,13 @@ the model package.
   (`create_upath`); nothing below takes a string path or `storage_options`, and
   no code asks whether a path is local. Each format reaches storage through the
   UPath: pyarrow through `path.fs`, Zarr through `str(path)` and
-  `path.storage_options`, readers through `path.open()`. Writers that seek back
-  into their file (HDF5, GDAL, SQLite) write a local file that `stage_file`
-  puts in place. GDAL reads a file itself (`io.rasterio.read_gdal_address`)
-  unless the UPath carries options GDAL cannot see; then the file is downloaded
-  for the Dataset's lifetime.
+  `path.storage_options`, readers through `path.open()`. HDF5 and SQLite writers stage local files. GTiff writes use Rasterio
+  with `opener=path.fs`; object stores that cannot seek in write mode stage
+  locally. COG writes convert a temporary disk TIFF through GDAL to avoid
+  Rasterio's full-raster memory buffer. GDAL reads supported URLs itself
+  (`io.rasterio.read_gdal_address`); other paths and paths with filesystem
+  options use the UPath filesystem opener. rioxarray opens one band array,
+  then xarray splits it into named Dataset variables without reading pixels.
 - `stac/publish.py` owns `StacItem.from_datatree`, raster asset descriptions,
   and `create_stac_collection`. Native Item/table conversion stays in
   `stac/catalog.py`; STAC GeoParquet persistence stays in its format module.

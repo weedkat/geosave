@@ -905,7 +905,6 @@ fields appear as attributes, including their annotated types and defaults.
         - bigtiff
         - interleave
         - sparse_ok
-        - creation_options
         - tiff_tags
       inherited_members:
         - compress
@@ -915,12 +914,7 @@ fields appear as attributes, including their annotated types and defaults.
         - bigtiff
         - interleave
         - sparse_ok
-        - creation_options
         - tiff_tags
-
-::: geosave.geodata.io.formats.geotiff.CreationOptionValue
-    options:
-      show_root_full_path: true
 
 ::: geosave.geodata.io.formats.geotiff.FILE_SUFFIXES
     options:
@@ -944,7 +938,6 @@ fields appear as attributes, including their annotated types and defaults.
         - bigtiff
         - interleave
         - sparse_ok
-        - creation_options
         - tiff_tags
       inherited_members:
         - compress
@@ -954,7 +947,6 @@ fields appear as attributes, including their annotated types and defaults.
         - bigtiff
         - interleave
         - sparse_ok
-        - creation_options
         - tiff_tags
 
 ::: geosave.geodata.io.formats.geotiff.GeoTIFFWriteOptions
@@ -969,14 +961,25 @@ fields appear as attributes, including their annotated types and defaults.
         - bigtiff
         - interleave
         - sparse_ok
-        - creation_options
         - tiff_tags
+
+::: geosave.geodata.io.formats.geotiff.encode_band
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.formats.geotiff.encode_bands
+    options:
+      show_root_full_path: true
 
 ::: geosave.geodata.io.formats.geotiff.open_geotiff
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.formats.geotiff.validate
+::: geosave.geodata.io.formats.geotiff.raster_profile
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.formats.geotiff.single_observation
     options:
       show_root_full_path: true
 
@@ -989,6 +992,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.formats.geotiff.write_geotiff
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.formats.geotiff.write_pixels
     options:
       show_root_full_path: true
 
@@ -1115,6 +1122,10 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.io.gdal_metadata.file_tags
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.io.gdal_metadata.format_time_tags
     options:
       show_root_full_path: true
@@ -1123,7 +1134,23 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.gdal_metadata.write_metadata
+::: geosave.geodata.io.gdal_metadata.write_band_tags
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.write_colorinterp
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.write_colormaps
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.write_descriptions
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.write_packing
     options:
       show_root_full_path: true
 
@@ -1176,6 +1203,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.rasterio.open_raster
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.rasterio.open_writer
     options:
       show_root_full_path: true
 

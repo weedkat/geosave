@@ -10,11 +10,11 @@ grid.
 from __future__ import annotations
 
 import os
-from contextlib import ExitStack
+from collections.abc import Generator
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from enum import Enum, auto
-from pathlib import Path, PurePath
-from tempfile import TemporaryDirectory
+from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 import numpy as np
@@ -30,7 +30,13 @@ from geosave.geodata.core.conventions import (
     TIME_COORDINATE,
 )
 from geosave.geodata.io.gdal_metadata import GDAL_DATETIME_FORMAT, read_metadata
-from geosave.geodata.io.storage import Location, StorageOptions, create_upath
+from geosave.geodata.io.storage import (
+    Location,
+    StorageOptions,
+    create_upath,
+    stage_file,
+    create_parent,
+)
 from geosave.geodata.utils.datetime import parse_stem_dates
 
 # Protocols GDAL reaches by itself, with the credentials `configure_gdal` sets;
@@ -38,6 +44,7 @@ from geosave.geodata.utils.datetime import parse_stem_dates
 GDAL_PROTOCOLS = ("", "s3", "gs", "gcs", "az", "abfs", "http", "https", "hf")
 
 if TYPE_CHECKING:
+    from rasterio.io import DatasetWriter
     from upath import UPath
 
     from geosave.geodata import Dataset
@@ -97,6 +104,21 @@ def read_gdal_address(path: UPath) -> str | None:
     return hf_to_s3(path)
 
 
+@contextmanager
+def open_writer(path: UPath, **profile: Any) -> Generator[DatasetWriter]:
+    """Open a GTiff writer; stage object-store writes that cannot seek in w+b."""
+    if path.protocol in {"s3", "s3a", "gs", "gcs", "az", "abfs", "abfss", "hf"}:
+        with stage_file(path) as local:
+            with rasterio.open(local, "w", driver="GTiff", **profile) as dst:
+                yield dst
+    else:
+        create_parent(path)
+        with rasterio.open(
+            path.path, "w", opener=path.fs, driver="GTiff", **profile
+        ) as dst:
+            yield dst
+
+
 def open_raster(
     source: Location,
     *,
@@ -121,7 +143,7 @@ def open_raster(
         mask_and_scale: Decode CF packing to physical values instead of
             returning stored digital numbers.
         storage_options: Options for the filesystem a URL names. GDAL cannot
-            see them, so the file is downloaded for the Dataset's lifetime;
+            see them, so Rasterio uses the UPath filesystem as its opener;
             without them, GDAL reads remote URLs lazily itself with its
             configured environment (see `read_gdal_address`).
         **open_options: Supported rioxarray and rasterio open options.
@@ -147,49 +169,52 @@ def open_raster(
     """
     path = create_upath(source, storage_options)
     with ExitStack() as handles:
+        options: dict[str, Any] = dict(open_options)
         address = read_gdal_address(path)
         if address is None:
-            # rioxarray reopens bands by name, which a read through fsspec
-            # (`opener=`) does not survive; the file is read locally instead.
-            folder = handles.enter_context(TemporaryDirectory())
-            local = Path(folder) / path.name
-            path.fs.get_file(path.path, str(local))
-            address = str(local)
-        src = handles.enter_context(rasterio.open(address, **open_options))
-        # `{}` asks for the backend's preferred chunks, as Zarr's are its own;
-        # a tiled file's are its tiles, so a window reads only what it overlaps.
-        block_y, block_x = src.block_shapes[0]
-        if chunks == {} and block_x < src.width:
-            chunks = {"y": block_y, "x": block_x}
-        root, bands = read_metadata(src)
+            address = path.path
+            options["opener"] = path.fs
+        with rasterio.open(address, **options) as src:
+            # `{}` asks for the backend's preferred chunks, as Zarr's are its own;
+            # a tiled file's are its tiles, so a window reads only what it overlaps.
+            block_y, block_x = src.block_shapes[0]
+            if chunks == {} and block_x < src.width:
+                chunks = {"y": block_y, "x": block_x}
+            root, bands = read_metadata(src)
         cube = rioxarray.open_rasterio(
-            src,
-            band_as_variable=True,
+            address,
+            band_as_variable=False,
             chunks=chunks,
             mask_and_scale=mask_and_scale,
-            **open_options,
+            **options,
         )
 
         if isinstance(cube, list):
             raise ValueError(
                 f"{source} holds subdatasets; open one of them by its own URI instead"
             )
-        if not isinstance(cube, xr.Dataset):
+        if not isinstance(cube, xr.DataArray):
             raise ValueError(
-                f"{source} opened as a banded array rather than one variable per "
+                f"{source} did not open as an array of "
                 f"band; open it with the reader for its own format"
             )
 
         opened = cube
         handles.callback(opened.close)
         try:
-            # rioxarray names the bands by position; the bands name themselves.
+            cube = cube.to_dataset(dim="band")
             cube = cube.rename_vars(dict(zip(cube.data_vars, bands, strict=True)))
             cube.attrs = root
             for number, (name, band_attrs) in enumerate(bands.items(), start=1):
                 cube[name].attrs = band_attrs
                 # A reader of the file's own tiles finds the variable by its band
                 cube[name].encoding["band"] = number
+                if mask_and_scale:
+                    packing = attrs.CFPacking.from_attrs(band_attrs)
+                    if packing is not None:
+                        cube[name].encoding.update(packing.to_attrs())
+                    cube[name].encoding.pop("scales", None)
+                    cube[name].encoding.pop("offsets", None)
             if mask_and_scale:
                 # Decoded pixels are physical, so the file's packing lives in encoding alone.
                 cube = cube.assign(

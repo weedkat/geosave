@@ -68,6 +68,20 @@ See [Read and save data](../basics/io.md) for working round trips.
 
 ## GeoTIFF and GDAL
 
+Dataset writers map variables to TIFF bands. Each band keeps its own CF storage
+encoding, description, units and tags; the file shares one grid, stored dtype
+and nodata value. Dask sources are written by source chunk. COG output is made
+by converting a temporary disk TIFF with GDAL, avoiding Rasterio's in-memory
+COG writer.
+
+Pass creation options directly, for example `write_cog(ds, path, compress="LZW")`.
+The former nested `creation_options` dictionary is removed. GDAL interprets
+these keywords; GeoSave does not normalize or validate driver options.
+
+Filesystem-backed reads pass `UPath.fs` to Rasterio's opener and remain lazy.
+GTiff writes use that opener for seekable filesystems; object-store writes
+stage a local file before uploading.
+
 ::: geosave.geodata.io.rasterio
     options:
       members:

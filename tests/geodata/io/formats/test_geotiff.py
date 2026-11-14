@@ -439,32 +439,14 @@ def test_deferred_batch_rechecks_all_destinations_before_writing(tmp_path):
 
 
 @pytest.mark.parametrize("writer", [geotiff.write_cog, geotiff.write_geotiff])
-def test_nested_creation_options_reach_gdal(writer, tmp_path):
+def test_creation_options_reach_gdal(writer, tmp_path):
     path = writer(
         build_raster(times=0),
         tmp_path / "image.tif",
-        creation_options={"COMPRESS": "LZW"},
+        compress="LZW",
     )
     with rasterio.open(path) as stored:
         assert stored.compression.name == "lzw"
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"COMPRESS": "LZW"},
-        {"DRIVER": "PNG"},
-        {"DTYPE": "uint8"},
-        {"LEVEL": 1, "level": 2},
-    ],
-)
-def test_nested_options_cannot_override_direct_or_managed_options(extra, tmp_path):
-    path = tmp_path / "image.tif"
-    with pytest.raises(TypeError, match="creation_options"):
-        geotiff.write_cog(
-            build_raster(times=0), path, compress="DEFLATE", creation_options=extra
-        )
-    assert not path.exists()
 
 
 @pytest.mark.parametrize("compute", [True, False])
@@ -485,3 +467,65 @@ def test_cog_destination_can_be_named_source(tmp_path):
     path = geotiff.write_cog(build_raster(times=0), tmp_path / "source.tif")
     with rasterio.open(path) as stored:
         assert stored.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+
+
+@pytest.mark.parametrize("writer", [geotiff.write_geotiff, geotiff.write_cog])
+def test_writing_computes_each_source_chunk_once(writer, tmp_path):
+    from dask import delayed
+
+    reads = []
+
+    @delayed
+    def block(value):
+        reads.append(value)
+        return np.full((32, 32), value, dtype="uint16")
+
+    pixels = da.block(
+        [
+            [
+                da.from_delayed(block(value), shape=(32, 32), dtype="uint16")
+                for value in row
+            ]
+            for row in ((1, 2), (3, 4))
+        ]
+    )
+    source = (
+        xr.DataArray(
+            pixels,
+            dims=("y", "x"),
+            coords={"y": 1000 - np.arange(64), "x": np.arange(64)},
+            name="red",
+        )
+        .rio.write_crs("EPSG:32649")
+        .to_dataset()
+    )
+    with dask.config.set(scheduler="synchronous"):
+        path = writer(source, tmp_path / "chunks.tif")
+    assert sorted(reads) == [1, 2, 3, 4]
+    with rasterio.open(path) as stored:
+        np.testing.assert_array_equal(stored.read(1)[::32, ::32], [[1, 2], [3, 4]])
+
+
+@pytest.mark.parametrize("writer", [geotiff.write_geotiff, geotiff.write_cog])
+def test_filesystem_opener_round_trip_without_download(writer, tmp_path, monkeypatch):
+    path = UPath(f"memory://{tmp_path.name}/scene.tif")
+    source = build_raster(times=0).gs.write_nodata(0)
+    source.red.attrs.update(scale_factor=0.01, add_offset=0.5)
+    source.nir.attrs.update(scale_factor=0.02, add_offset=1.0)
+    writer(source, path)
+    monkeypatch.setattr(
+        path.fs, "get_file", lambda *a, **kw: pytest.fail("downloaded file")
+    )
+    try:
+        with io.open_raster(path, mask_and_scale=True) as opened:
+            expected = xr.decode_cf(source, decode_coords=False)
+            for name in source.data_vars:
+                np.testing.assert_allclose(opened[name], expected[name], equal_nan=True)
+            rewritten = tmp_path / "rewritten.tif"
+            geotiff.write_geotiff(opened, rewritten)
+        with io.open_raster(rewritten) as raw:
+            for name in source.data_vars:
+                np.testing.assert_array_equal(raw[name], source[name])
+                assert raw[name].dtype == source[name].dtype
+    finally:
+        path.unlink()
