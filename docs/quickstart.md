@@ -37,7 +37,7 @@ scene = xr.Dataset({
     "nir": (("y", "x"), nir),
     "label": (("y", "x"), label),
 }).assign_coords(xr_coords(grid))
-scene.gs.to_array().astype("float32").gs.to_cog("training-scene.tif", overwrite=True)
+scene.gs.to_array().astype("float32").gs.to_cog("training-scene.tif")
 ```
 
 For the next tutorial, all three variables are stored in one GeoTIFF. A TIFF

@@ -21,26 +21,28 @@ grid = GeoBox.from_bbox(
 pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
 scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid))
 scene = scene.gs.write_nodata(0)
-path = scene["red"].gs.to_cog(root / "scene.tif")
+path = root / "scene.tif"
+scene["red"].gs.to_cog(path)
 reopened = gs.open_raster(path)
 list(reopened.data_vars), reopened.gs.geobox == scene.gs.geobox
 ```
 
 ```text
-(['red'], True)
+(['band_1'], True)
 ```
 
 ```python
-np.array_equal(reopened["red"].values, pixels), reopened["red"].gs.nodata
+np.array_equal(reopened["band_1"].values, pixels), reopened["band_1"].gs.nodata
 ```
 
 ```text
 (True, 0)
 ```
 
-`to_cog` returns the destination as a `UPath`, which readers accept directly.
-Opening a TIFF returns a Dataset with one variable per band. Writes compute
-pixels and refuse an existing file unless you pass `overwrite=True`.
+Array `to_cog` delegates to `.rio.to_raster(driver="COG")` and normally
+returns `None`. Keep the destination path yourself. Native writes replace an
+existing file. Opening a TIFF returns a Dataset with one variable per band;
+without GeoSave publication metadata those variables use `band_1`, `band_2`, etc.
 
 ## Several bands in one TIFF
 
@@ -57,7 +59,7 @@ unavailable; explicitly choose a band array, a tree of assets, or another format
 
 | Data and goal | Write | Return value |
 | --- | --- | --- |
-| One band or compatible band array at one instant | `array.gs.to_cog("image.tif")` | One `UPath` |
+| One band or compatible band array at one instant | `array.gs.to_cog("image.tif")` | Native result (normally `None`) |
 | Dataset or DataTree, including multiple dates | `raster.gs.to_zarr("scene.zarr")` | One store `UPath` |
 | Dataset or DataTree in one scientific file | `raster.gs.to_netcdf("scene.nc")` | One file `UPath` |
 | One TIFF per asset of a STAC tree | `tree.gs.to_cog("assets")` | List of file UPaths |

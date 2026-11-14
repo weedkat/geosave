@@ -137,8 +137,10 @@ encoding when saving a derived variable. `.gs.composite()` requires explicit
 decoding first and does not restore the old integer recipe after reduction.
 
 NetCDF and Zarr writers use native xarray encoding. The GeoTIFF format writer
-encodes variables with xarray's CF codec. Array `.gs.to_cog()` writes one file;
-tree `.gs.to_cog()` writes each asset separately. Dataset `.gs.to_cog()` is unavailable. All use native quantization and
+encodes variables with xarray's CF codec. Array `.gs.to_cog()` and `.gs.to_gtiff()`
+delegate to rioxarray with native metadata and packing behavior. Tree
+`.gs.to_cog()` writes each asset with GeoSave variable identity, time coverage,
+and display metadata. Dataset `.gs.to_cog()` is unavailable. All use native quantization and
 casting behavior; GeoSave adds no integer overflow or fill-collision preflight.
 Choose an appropriate dtype, scale and fill, and verify output with a round trip.
 

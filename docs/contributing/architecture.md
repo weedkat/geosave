@@ -206,12 +206,17 @@ the model package.
   `stac/band.py` composes storage, spectral and classification attrs; extension
   modules translate native PySTAC bands and own `pystac.extensions` imports.
 - `io/formats/` owns encoding-specific readers/writers. `io/rasterio.py` owns
-  Rasterio reading and environment configuration. `utils/geopandas.py` prepares
+  Rasterio reading and environment configuration. `io/gdal_metadata.py` owns
+  translation between GDAL properties/tags and raster metadata in both directions.
+  `utils/geopandas.py` prepares
   GeoPandas engine options; `utils/stores.py` checks NetCDF/Zarr destinations.
 - Dataset `expand` owns splitting dates into Items and variables into assets.
   DataTree `to_cog` writes each asset at its node path; `to_catalog` adds
   Item and Collection descriptions. Array writers take one explicit filename.
-  GeoTIFF writing validates all destinations before executing writes.
+  Dataset GeoTIFF writing prepares encoded rasters separately from execution;
+  batch writes validate all destinations before writing and recheck them when
+  deferred execution starts. DataArray TIFF/COG accessors delegate directly to
+  `.rio.to_raster` with native options, return values and overwrite behavior.
 - `io/storage.py` turns a path or URL into a UPath once, at the public function
   (`create_upath`); nothing below takes a string path or `storage_options`, and
   no code asks whether a path is local. Each format reaches storage through the
@@ -309,7 +314,7 @@ combine one collection, and construct Chips from the prepared raster.
 Dataset/DataArray `to_item` and `to_catalog`, and Dataset `to_cog`, raise
 `NotImplementedError`. Dataset `expand` builds a STAC tree; tree `to_cog`
 writes its assets and tree `to_catalog` publishes Item rows. Array `to_cog`
-and `to_gtiff` write one explicit file. Zarr and NetCDF writers preserve whole
+and `to_gtiff` delegate to native rioxarray writing. Zarr and NetCDF writers preserve whole
 Datasets or tree hierarchies in one destination.
 
 Packing belongs to each concrete accessor. Dataset metadata writers require

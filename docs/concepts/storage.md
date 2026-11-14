@@ -20,11 +20,20 @@ Unsupported suffixes raise ValueError; use a format reader directly when needed.
 A DataArray writes one explicit TIFF path:
 
 ```python title="Adaptation example — use one selected observation"
-path = scene["red"].isel(time=0).gs.to_cog("output/red.tif")
-path = scene[["red", "nir"]].isel(time=0).gs.to_array().gs.to_cog("output/image.tif")
+from pathlib import Path
+
+path = Path("output/red.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+scene["red"].isel(time=0).gs.to_cog(path)
+from pathlib import Path
+
+path = Path("output/image.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+scene[["red", "nir"]].isel(time=0).gs.to_array().gs.to_cog(path)
 ```
 
-One TIFF holds one instant on one grid. A band array needs compatible pixel
+For geospatial publication, select one instant on one grid before exporting.
+Native rioxarray writes a third array dimension as bands. A band array needs compatible pixel
 meaning across its bands. For different band metadata or several dates, use
 a STAC tree of separate assets:
 

@@ -77,13 +77,17 @@ so check the product and provider metadata when changing sources.
 ## Save locally
 
 ```python
-path = scene.gs.to_array().gs.to_cog("imagery/scene.tif")
+from pathlib import Path
+
+path = Path("imagery/scene.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+scene.gs.to_array().gs.to_cog(path)
 local = gs.open_raster(path)
 list(local.data_vars)
 ```
 
 ```text
-['red', 'green', 'blue', 'nir']
+['band_1', 'band_2', 'band_3', 'band_4']
 ```
 
 `imagery/scene.tif` contains the selected region and four bands, with their grid

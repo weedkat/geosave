@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 
-from operator import itemgetter
 from typing import Any, TYPE_CHECKING, Literal, Unpack, cast
 
+import rioxarray  # noqa: F401 registers .rio
 import cf_xarray  # noqa: F401  — registers the .cf accessor
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
@@ -46,8 +46,6 @@ if TYPE_CHECKING:
     from geosave.geodata import DataArray, Dataset, GeoDataFrame
     from dask.delayed import Delayed
     from upath import UPath
-    from geosave.geodata.io.formats.geotiff import COGWriteOptions
-    from geosave.geodata.io.formats.geotiff import GTiffWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
     from geosave.geodata.io.formats.zarr import ZarrWriteOptions
@@ -666,46 +664,19 @@ class GeoDataArray(
             "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
         )
 
-    def to_cog(
-        self,
-        path: Location,
-        *,
-        overwrite: bool = False,
-        compute: bool = True,
-        storage_options: StorageOptions | None = None,
-        **options: Unpack[COGWriteOptions],
-    ) -> UPath | Delayed:
-        """Write this array to one explicit GeoTIFF path.
+    def to_cog(self, path: Location, **options: Any) -> Any:
+        """Write through ``DataArray.rio.to_raster(driver="COG")``.
 
         Args:
-            path: Destination file ending in .tif or .tiff.
-            overwrite: Replace an existing file.
-            compute: False returns one delayed write without reading pixels.
-            storage_options: Filesystem options.
-            **options: Raster creation options.
+            path: Destination understood by Rasterio.
+            **options: Native rioxarray writing options and GDAL creation options.
 
         Returns:
-            Written path, or a delayed path.
-
-        Raises:
-            ValueError: The array cannot be represented by one GeoTIFF.
+            The native result: normally None, or a Dask result when writing a
+            chunked array with ``lock`` and ``compute=False``. Rioxarray owns
+            overwrite, metadata, and execution behavior.
         """
-        from geosave.geodata.io import storage
-        from geosave.geodata.io.formats import geotiff
-
-        destination = storage.create_upath(path, storage_options)
-        written = geotiff.write_files(
-            {destination: self._as_bands()},
-            compute=compute,
-            overwrite=overwrite,
-            **options,
-        )
-        if not compute:
-            from dask.delayed import delayed
-
-            # The batch of one computes to one path.
-            return delayed(itemgetter(0))(written)
-        return cast("list[UPath]", written)[0]
+        return self._data.rio.to_raster(path, driver="COG", **options)
 
     def to_zarr(
         self,
@@ -797,67 +768,19 @@ class GeoDataArray(
             **write_options,
         )
 
-    def to_gtiff(
-        self,
-        path: Location,
-        *,
-        overwrite: bool = False,
-        compute: bool = True,
-        storage_options: StorageOptions | None = None,
-        **options: Unpack[GTiffWriteOptions],
-    ) -> UPath | Delayed:
-        """Write this array to one explicit GeoTIFF path.
+    def to_gtiff(self, path: Location, **options: Any) -> Any:
+        """Write through ``DataArray.rio.to_raster(driver="GTiff")``.
 
         Args:
-            path: Destination file ending in .tif or .tiff.
-            overwrite: Replace an existing file.
-            compute: False returns one delayed write without reading pixels.
-            storage_options: Filesystem options.
-            **options: Raster creation options.
+            path: Destination understood by Rasterio.
+            **options: Native rioxarray writing options and GDAL creation options.
 
         Returns:
-            Written path, or a delayed path.
-
-        Raises:
-            ValueError: The array cannot be represented by one GeoTIFF.
+            The native result: normally None, or a Dask result when writing a
+            chunked array with ``lock`` and ``compute=False``. Rioxarray owns
+            overwrite, metadata, and execution behavior.
         """
-        from geosave.geodata.io import storage
-        from geosave.geodata.io.formats import geotiff
-
-        destination = storage.create_upath(path, storage_options)
-        written = geotiff.write_files(
-            {destination: self._as_bands()},
-            driver="GTiff",
-            compute=compute,
-            overwrite=overwrite,
-            **options,
-        )
-        if not compute:
-            from dask.delayed import delayed
-
-            # The batch of one computes to one path.
-            return delayed(itemgetter(0))(written)
-        return cast("list[UPath]", written)[0]
-
-    def _as_bands(self) -> Dataset:
-        """Lay the array out as a GeoTIFF's bands: one per `band` label, else one.
-
-        Each band keeps the array's attrs and encoding, so its pixels keep
-        their meaning; the array's attrs also describe the whole file.
-        """
-        array = self._data
-        if BAND_DIMENSION not in array.dims:
-            name = array.name if array.name is not None else "asset"
-            return cast(
-                "Dataset", array.to_dataset(name=name).assign_attrs(array.attrs)
-            )
-
-        dataset = array.to_dataset(dim=BAND_DIMENSION)
-        dataset = dataset.rename_vars({name: str(name) for name in dataset.data_vars})
-        for band in dataset.data_vars.values():
-            band.attrs = dict(array.attrs)
-            band.encoding = dict(array.encoding)
-        return cast("Dataset", dataset.assign_attrs(array.attrs))
+        return self._data.rio.to_raster(path, driver="GTiff", **options)
 
     def vectorize(
         self,

@@ -10,7 +10,6 @@ grid.
 from __future__ import annotations
 
 import os
-import warnings
 from contextlib import ExitStack
 from datetime import datetime
 from enum import Enum, auto
@@ -23,30 +22,16 @@ import rasterio
 import rioxarray  # noqa: F401  — registers the .rio accessor
 import xarray as xr
 from fsspec.core import split_protocol
-from rasterio.enums import ColorInterp, MaskFlags
 
 import geosave.geodata.attrs as attrs
-from geosave import __path__ as _package_paths
 from geosave.geodata.core.conventions import (
     END_DATETIME,
     START_DATETIME,
     TIME_COORDINATE,
 )
+from geosave.geodata.io.gdal_metadata import GDAL_DATETIME_FORMAT, read_metadata
 from geosave.geodata.io.storage import Location, StorageOptions, create_upath
 from geosave.geodata.utils.datetime import parse_stem_dates
-from geosave.geodata.warnings import UnreadMaskWarning
-
-# The text GDAL writes in the TIFF datetime tag, whole seconds only.
-GDAL_DATETIME_FORMAT = "%Y:%m:%d %H:%M:%S"
-
-# ACDD attrs and the baseline TIFF tags GDAL writes them as, which any TIFF
-# reader shows; other attrs go to GDAL's private metadata XML.
-TIFF_TAGS = {
-    "title": "TIFFTAG_DOCUMENTNAME",
-    "summary": "TIFFTAG_IMAGEDESCRIPTION",
-    "license": "TIFFTAG_COPYRIGHT",
-    "institution": "TIFFTAG_ARTIST",
-}
 
 # Protocols GDAL reaches by itself, with the credentials `configure_gdal` sets;
 # a Hugging Face bucket through its S3 gateway.
@@ -176,7 +161,7 @@ def open_raster(
         block_y, block_x = src.block_shapes[0]
         if chunks == {} and block_x < src.width:
             chunks = {"y": block_y, "x": block_x}
-        root, bands = _attrs(src)
+        root, bands = read_metadata(src)
         cube = rioxarray.open_rasterio(
             src,
             band_as_variable=True,
@@ -425,117 +410,3 @@ def configure_gdal(
     for key, value in values.items():
         if value is not _UNSET:
             os.environ[key] = value
-
-
-def read_class_attrs(src: rasterio.DatasetReader, index: int) -> dict[str, Any]:
-    """Read a band's CF flags and, for a palette band, its class colours.
-
-    Args:
-        src: Open raster.
-        index: One-based band index.
-
-    Returns:
-        `CFFlags` attrs, empty where the band's tags list no `flag_values`.
-        A palette band takes its classes' colour hints from its table.
-    """
-    tags = src.tags(index)
-    if "flag_values" not in tags:
-        return {}
-    flags = attrs.CFFlags.model_validate(tags)
-    if src.colorinterp[index - 1] is not ColorInterp.palette or flags.classes is None:
-        return flags.to_attrs()
-
-    colours = src.colormap(index)
-    palette = {}
-    for value in flags.classes:
-        if value in colours:
-            palette[value] = colours[value][:3]
-    painted = attrs.CFFlags.model_validate(
-        {"classes": flags.classes, "colors": palette}
-    )
-    return painted.to_attrs()
-
-
-def _attrs(
-    src: rasterio.DatasetReader,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """Read the file's tags and each band's native properties as CF attrs.
-
-    Args:
-        src: Open raster.
-
-    Returns:
-        (attrs of the whole file, variable name mapped to its band's attrs,
-        in band order). A band is named by its `variable_name` tag, else by
-        rasterio's positional `band_<n>`.
-
-    Raises:
-        ValueError: Two bands name one variable.
-
-    Warns:
-        UnreadMaskWarning: A band records absence in a mask that is not read.
-    """
-    with_mask_band = [
-        index
-        for index, flags in zip(src.indexes, src.mask_flag_enums, strict=True)
-        if MaskFlags.per_dataset in flags
-    ]
-    if with_mask_band:
-        warnings.warn(
-            f"bands {with_mask_band} mark their absent pixels in a mask band, "
-            f"which this reader does not read, so every pixel reads as present; "
-            f"give them a fill value, or read the mask with rasterio",
-            UnreadMaskWarning,
-            skip_file_prefixes=tuple(_package_paths),
-        )
-
-    bands: dict[str, dict[str, Any]] = {}
-    for index in src.indexes:
-        position = index - 1
-        band: dict[str, Any] = {
-            key: value
-            for key, value in src.tags(index).items()
-            if not key.startswith("STATISTICS_")
-        }
-        native: dict[str, Any] = {
-            "long_name": src.descriptions[position],
-            "units": src.units[position],
-        }
-        band.update({key: value for key, value in native.items() if value is not None})
-
-        # GDAL keeps packing and fill as band properties; they read as CF's attrs.
-        packing = attrs.CFPacking(
-            scale_factor=src.scales[position],
-            add_offset=src.offsets[position],
-            fill_value=src.nodatavals[position],
-        )
-        band.update(packing.to_attrs())
-
-        name = band.pop("variable_name", None) or f"band_{index}"
-        # rioxarray names an unlabelled band after its position, which is no label.
-        if band.get("long_name") == name:
-            del band["long_name"]
-
-        band.update(read_class_attrs(src, index))
-
-        if name in bands:
-            raise ValueError(
-                f"band {index} names variable {name!r}, which an earlier band "
-                f"already names; one file names each variable once"
-            )
-        bands[name] = band
-
-    root = dict(src.tags())
-    # Baseline TIFF tags read back as the ACDD attrs a `tiff_tags` write moved.
-    for key, tag in TIFF_TAGS.items():
-        if tag in root and key not in root:
-            root[key] = root.pop(tag)
-    # GDAL states a composite per band; GeoSave states it once, on the Dataset.
-    drawing = {}
-    for name, interpretation in zip(bands, src.colorinterp, strict=True):
-        if interpretation.name in ("red", "green", "blue"):
-            drawing[interpretation.name] = name
-    if len(drawing) == 3:
-        rgb = [drawing["red"], drawing["green"], drawing["blue"]]
-        root.update(attrs.Display(rgb=rgb).to_attrs())
-    return root, bands

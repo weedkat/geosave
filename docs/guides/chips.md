@@ -70,7 +70,11 @@ no predictions. Choose dimensions appropriate for your output, such as
 class legend and nodata policy; source band metadata may not describe them.
 
 ```python
-path = red.gs.to_cog("output/red-copy.tif", overwrite=True)
+from pathlib import Path
+
+path = Path("output/red-copy.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+red.gs.to_cog(path)
 source.close()
 ```
 

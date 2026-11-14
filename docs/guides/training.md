@@ -127,7 +127,10 @@ pixels = valid.chips.merge(predictions())[0]
 source = valid.chips.xarray[0]
 scores = xr.DataArray(pixels, dims=("class", "y", "x")).assign_coords(xr_coords(source.gs.geobox))
 prediction = scores.argmax("class").astype("uint8").rename("prediction")
-prediction.gs.to_cog("output/prediction.tif", overwrite=True)
+from pathlib import Path
+
+Path("output").mkdir(parents=True, exist_ok=True)
+prediction.gs.to_cog("output/prediction.tif")
 prediction.gs.plot(cmap=["#263b50", "#65b98b"], xlabel="")
 ```
 

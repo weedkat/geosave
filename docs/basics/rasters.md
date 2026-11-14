@@ -73,17 +73,22 @@ For interactive inspection, use [the map explorer](../guides/explore.md).
 ## Save the result
 
 ```python
-path = ndvi.gs.to_cog("output/ndvi.tif", overwrite=True)
+from pathlib import Path
+
+path = Path("output/ndvi.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+ndvi.gs.to_cog(path)
 result = gs.open_raster(path)
 list(result.data_vars), result.gs.geobox == patch.gs.geobox
 ```
 
 ```text
-(['ndvi'], True)
+(['band_1'], True)
 ```
 
-A Cloud Optimized GeoTIFF preserves this result's grid and variable name.
-Writing computes the result; `overwrite=True` lets you rerun the example.
+A Cloud Optimized GeoTIFF preserves this result's grid. Native array export
+does not add GeoSave variable identity tags, so the reader uses `band_1`.
+Writing computes the result and replaces an existing destination.
 For several compatible bands in one TIFF, convert the selected Dataset to a
 band array first: `image.gs.to_array().gs.to_cog("output/image.tif")`.
 [Read and save data](io.md) explains other formats and return values.

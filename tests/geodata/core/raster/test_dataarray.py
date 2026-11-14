@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,7 +9,6 @@ import xarray as xr
 from tests.conftest import build_dataset
 from tests.geodata.conftest import build_raster, geobox
 from tests.geodata.core.raster.conftest import optical
-from tests.geodata.conftest import create_file_items
 from geosave.geodata import attrs
 
 from affine import Affine
@@ -19,8 +17,6 @@ from tests.conftest import build_dataarray
 
 import dask.array as da
 from dask.callbacks import Callback
-
-from geosave.geodata import open_raster
 
 
 UTM = "EPSG:32633"
@@ -96,18 +92,6 @@ def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
     assert table.loc["nir", "mean"] == 15.0
     assert table.loc["red", "mean"] == 2.0
     assert table.loc["red", "valid_percent"] == pytest.approx(200 / 3)
-
-
-def test_a_band_indexes_as_its_one_variable_raster(tmp_path: Path) -> None:
-
-    band = build_raster(times=2)["red"].isel(time=0)
-    path = band.gs.to_cog(tmp_path / "red.tif")
-
-    (item,) = create_file_items(path, id_format="red")
-
-    assert item.id == "red"
-    assert list(item.assets) == ["red"]
-    assert item.assets["red"].href == str(path)
 
 
 def test_to_dataset_recovers_only_the_attrs_every_band_shared() -> None:
@@ -224,43 +208,61 @@ def test_class_codes_keep_their_values_and_legend_after_masking():
 
 @pytest.mark.parametrize("method", ["to_cog", "to_gtiff"])
 @pytest.mark.parametrize("multiband", [False, True])
-def test_array_file_roundtrip_preserves_packing_grid_and_values(
-    method, multiband, tmp_path
-):
-    source = build_raster(times=0, packed=True).red.chunk()
+def test_array_export_uses_native_packing_grid_and_return(method, multiband, tmp_path):
+    import rasterio
+
+    source = build_raster(times=0, packed=True).red
     if multiband:
         source = xr.concat(
             [source, source], dim=xr.IndexVariable("band", ["red", "nir"])
         )
-    original = source.copy(deep=True)
     decoded = source.gs.mask_and_scale()
+    before = decoded.copy(deep=True)
+    path = tmp_path / "image.tif"
+
+    assert getattr(decoded.gs, method)(path, compress="LZW") is None
+    with rasterio.open(path) as stored:
+        expected = source.values if multiband else source.values[None]
+        np.testing.assert_array_equal(stored.read(), expected)
+        assert stored.dtypes == (str(source.dtype),) * stored.count
+        assert stored.transform == source.gs.transform
+        assert stored.scales == (source.gs.packing.scale_factor,) * stored.count
+        assert stored.offsets == (source.gs.packing.add_offset,) * stored.count
+        assert stored.nodata == source.gs.nodata
+        assert stored.compression.name == "lzw"
+        if method == "to_cog":
+            assert stored.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+    # Native writes replace the destination and return None.
+    assert getattr(decoded.gs, method)(path) is None
+    xr.testing.assert_identical(decoded, before)
+    assert decoded.encoding == before.encoding
+
+
+def test_array_gtiff_uses_native_dask_execution(tmp_path):
+    source = build_raster(times=0).red.chunk({"x": 1, "y": 1})
     path = tmp_path / "image.tif"
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args[0])):
-        pending = getattr(decoded.gs, method)(path, compute=False)
+        pending = source.gs.to_gtiff(path, lock=True, compute=False)
     assert tasks == []
-    assert not path.exists()
-    saved = pending.compute()
-    assert saved == path
-    with open_raster(saved) as restored:
-        assert restored.gs.geobox == source.gs.geobox
-        for name, variable in restored.data_vars.items():
-            expected = source.sel(band=name) if multiband else source
-            np.testing.assert_array_equal(variable, expected)
-            assert variable.dtype == expected.dtype
-            assert variable.gs.packing == expected.gs.packing
-    xr.testing.assert_identical(source, original)
-    with pytest.raises(FileExistsError):
-        getattr(decoded.gs, method)(path)
-    assert getattr(decoded.gs, method)(path, overwrite=True) == path
+    # Native rioxarray creates the header before deferring pixel writes.
+    assert path.exists()
+    pending.compute(scheduler="synchronous")
+    import rasterio
+
+    with rasterio.open(path) as stored:
+        np.testing.assert_array_equal(stored.read(1), source.values)
 
 
 @pytest.mark.parametrize("method", ["to_cog", "to_gtiff"])
-def test_array_writer_rejects_a_time_series(method, tmp_path):
-    source = build_raster(times=2).red.chunk()
-    with pytest.raises(ValueError, match="one instant"):
-        getattr(source.gs, method)(tmp_path / "dates.tif", compute=False)
-    assert not list(tmp_path.iterdir())
+def test_array_export_keeps_native_third_dimension_behavior(method, tmp_path):
+    import rasterio
+
+    source = build_raster(times=2).red
+    path = tmp_path / "dates.tif"
+    getattr(source.gs, method)(path)
+    with rasterio.open(path) as stored:
+        np.testing.assert_array_equal(stored.read(), source.values)
 
 
 def test_stacking_and_splitting_keep_dataset_attrs_apart_from_pixel_meaning() -> None:

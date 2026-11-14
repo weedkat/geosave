@@ -146,9 +146,10 @@ def test_merged_prediction_round_trips_on_source_grid(tmp_path):
     (merged,) = chips.merge(predictions)
     output = xr.DataArray(merged[0], dims=("y", "x"), name="prediction")
     output = output.pipe(place, source.gs.geobox)
-    path = output.gs.to_cog(tmp_path / "prediction.tif")
+    path = tmp_path / "prediction.tif"
+    output.gs.to_cog(path)
     with open_raster(path) as restored:
-        np.testing.assert_allclose(restored.prediction, source.image * 2)
+        np.testing.assert_allclose(restored.band_1, source.image * 2)
         assert restored.gs.geobox == source.gs.geobox
 
 

@@ -992,10 +992,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.formats.geotiff.write_header
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.io.formats.netcdf.FILE_SUFFIXES
     options:
       show_root_full_path: true
@@ -1111,6 +1107,26 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.io.gdal_metadata.GDAL_DATETIME_FORMAT
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.TIFF_TAGS
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.format_time_tags
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.read_metadata
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.gdal_metadata.write_metadata
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.io.openers.open_raster
     options:
       show_root_full_path: true
@@ -1135,10 +1151,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.rasterio.GDAL_DATETIME_FORMAT
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.io.rasterio.GDAL_PROTOCOLS
     options:
       show_root_full_path: true
@@ -1155,10 +1167,6 @@ fields appear as attributes, including their annotated types and defaults.
         - decode_timedelta
         - overview_level
 
-::: geosave.geodata.io.rasterio.TIFF_TAGS
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.io.rasterio.configure_gdal
     options:
       show_root_full_path: true
@@ -1168,10 +1176,6 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.rasterio.open_raster
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.io.rasterio.read_class_attrs
     options:
       show_root_full_path: true
 

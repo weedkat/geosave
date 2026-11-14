@@ -44,7 +44,11 @@ values. Preserve categorical label codes instead of treating them as imagery.
 ## Save and check the result
 
 ```python
-path = ndvi.gs.to_cog("prepared/ndvi.tif", overwrite=True)
+from pathlib import Path
+
+path = Path("prepared/ndvi.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+ndvi.gs.to_cog(path)
 result = gs.open_raster(path)
 result.gs.geobox == patch.gs.geobox
 ```
@@ -54,8 +58,8 @@ True
 ```
 
 Writing computes the selected pixels. `prepared/ndvi.tif` can be reopened in
-Python or a GIS; its extent is the cropped region. Existing destinations are
-protected unless you pass `overwrite=True`.
+Python or a GIS; its extent is the cropped region. Native array export
+replaces existing destinations.
 
 ```python
 result.close()

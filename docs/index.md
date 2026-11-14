@@ -23,6 +23,9 @@ scene = gs.open_raster("sample-scene.tif")
 ndvi = gs.features.ndvi(
     scene, nir="nir", red="red"
 ).rename("ndvi")
+from pathlib import Path
+
+Path("output").mkdir(parents=True, exist_ok=True)
 ndvi.gs.to_cog("output/ndvi.tif")
 ```
 

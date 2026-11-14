@@ -6,7 +6,10 @@ import geosave as gs
 scene = gs.open_raster("sample-scene.tif")
 patch = scene[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
 ndvi = gs.features.ndvi(patch, nir="nir", red="red").rename("ndvi")
-ndvi.gs.to_cog("output/ndvi.tif", overwrite=True)
+from pathlib import Path
+
+Path("output").mkdir(parents=True, exist_ok=True)
+ndvi.gs.to_cog("output/ndvi.tif")
 scene.close()
 ```
 

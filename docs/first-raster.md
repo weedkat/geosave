@@ -59,19 +59,22 @@ Plotting reads pixels; the calculation itself can remain lazy.
 ## Save and reopen
 
 ```python
-path = ndvi.gs.to_cog("output/ndvi.tif", overwrite=True)
+from pathlib import Path
+
+path = Path("output/ndvi.tif")
+path.parent.mkdir(parents=True, exist_ok=True)
+ndvi.gs.to_cog(path)
 result = gs.open_raster(path)
 list(result.data_vars), result.gs.geobox == scene.gs.geobox
 ```
 
 ```text
-(['ndvi'], True)
+(['band_1'], True)
 ```
 
 The Cloud Optimized GeoTIFF at `output/ndvi.tif` keeps the source pixel grid.
 You can open it in QGIS or another Python process. Writing computes the result.
-GeoSave refuses an existing destination; use `overwrite=True` when intentionally
-rerunning the write.
+Array exports follow native rioxarray behavior: existing destinations are replaced.
 
 ```python
 result.close()

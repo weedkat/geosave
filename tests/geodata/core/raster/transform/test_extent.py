@@ -189,7 +189,8 @@ def test_selected_chip_round_trips_through_geotiff(tmp_path):
     scene = _scene(times=0)
     grid = scene.gs.geobox.translate_pix(2, 1).crop((3, 3))
     chip = scene.gs.crop_to_grid(grid, mode="edge")
-    path = chip.red.gs.to_cog(tmp_path / "chip.tif")
+    path = tmp_path / "chip.tif"
+    chip.red.gs.to_cog(path)
     with open_raster(path) as restored:
         assert restored.gs.geobox == grid
-        np.testing.assert_array_equal(restored.red.values, chip.red.values)
+        np.testing.assert_array_equal(restored.band_1.values, chip.red.values)

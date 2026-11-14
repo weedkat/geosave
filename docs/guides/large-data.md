@@ -160,8 +160,11 @@ prepared.close()
 Writing computes the selected data and stores its chunks. To schedule a write
 yourself, assign `pending = cropped.gs.to_zarr(path, compute=False)`, then call
 `paths = pending.compute()`. Nothing reaches the destination until then.
-`to_cog` and `to_netcdf` take `compute=False` too. Each call returns one
-native Dask Delayed; its computed value has the same shape as an eager result.
+Tree `to_cog` and the NetCDF writers take `compute=False` too. Each returns
+one native Dask Delayed whose computed value matches the eager result.
+Array TIFF/COG methods instead forward to rioxarray: deferred pixels require
+chunked data and a write lock, and the file header may be created immediately.
+See [native array export](../reference/io.md#saved-raster-files).
 
 ## Read one model input at a time
 

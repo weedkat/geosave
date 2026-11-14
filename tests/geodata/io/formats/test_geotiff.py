@@ -414,3 +414,74 @@ def test_acdd_attrs_round_trip_with_or_without_tiff_tags(tmp_path, tiff_tags) ->
     restored = open_raster(path)
     assert restored.attrs["title"] == "Forest"
     assert restored.attrs["license"] == "CC-BY-4.0"
+
+
+@pytest.mark.parametrize("writer", [geotiff.write_cog, geotiff.write_geotiff])
+def test_single_write_rechecks_destination_when_computed(writer, tmp_path):
+    path = tmp_path / "later.tif"
+    pending = writer(build_raster(times=0), path, compute=False)
+    path.write_bytes(b"keep me")
+    with pytest.raises(FileExistsError):
+        pending.compute(scheduler="synchronous")
+    assert path.read_bytes() == b"keep me"
+
+
+def test_deferred_batch_rechecks_all_destinations_before_writing(tmp_path):
+    first, second = UPath(tmp_path / "a.tif"), UPath(tmp_path / "b.tif")
+    pending = geotiff.write_files(
+        {first: build_raster(times=0), second: build_raster(times=0)}, compute=False
+    )
+    second.write_bytes(b"keep me")
+    with pytest.raises(FileExistsError):
+        pending.compute(scheduler="synchronous")
+    assert not first.exists()
+    assert second.read_bytes() == b"keep me"
+
+
+@pytest.mark.parametrize("writer", [geotiff.write_cog, geotiff.write_geotiff])
+def test_nested_creation_options_reach_gdal(writer, tmp_path):
+    path = writer(
+        build_raster(times=0),
+        tmp_path / "image.tif",
+        creation_options={"COMPRESS": "LZW"},
+    )
+    with rasterio.open(path) as stored:
+        assert stored.compression.name == "lzw"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"COMPRESS": "LZW"},
+        {"DRIVER": "PNG"},
+        {"DTYPE": "uint8"},
+        {"LEVEL": 1, "level": 2},
+    ],
+)
+def test_nested_options_cannot_override_direct_or_managed_options(extra, tmp_path):
+    path = tmp_path / "image.tif"
+    with pytest.raises(TypeError, match="creation_options"):
+        geotiff.write_cog(
+            build_raster(times=0), path, compress="DEFLATE", creation_options=extra
+        )
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("compute", [True, False])
+def test_invalid_later_time_cells_prevent_all_batch_writes(tmp_path, compute):
+    first = build_raster(times=0)
+    broken = first.assign_coords(
+        time=np.datetime64("2025-01-01"), start_datetime=np.datetime64("2025-01-01")
+    )
+    with pytest.raises(KeyError, match="end_datetime"):
+        geotiff.write_files(
+            {UPath(tmp_path / "a.tif"): first, UPath(tmp_path / "b.tif"): broken},
+            compute=compute,
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_cog_destination_can_be_named_source(tmp_path):
+    path = geotiff.write_cog(build_raster(times=0), tmp_path / "source.tif")
+    with rasterio.open(path) as stored:
+        assert stored.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"

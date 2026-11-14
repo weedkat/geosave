@@ -43,7 +43,7 @@ See [STAC loading](stac.md) and [catalog operations](catalog.md).
 
 | Object and call | Default return | With `compute=False` |
 | --- | --- | --- |
-| DataArray `.gs.to_cog(path)` or `.gs.to_gtiff(path)` | One file `UPath` | Delayed yielding that UPath |
+| DataArray `.gs.to_cog(path)` or `.gs.to_gtiff(path)` | Native rioxarray result (normally `None`) | Native Dask result with chunked data and `lock=True` |
 | DataTree `.gs.to_cog(folder)` | List of asset UPaths | Delayed yielding that list |
 | Dataset, DataArray, DataTree `.gs.to_zarr(path)` | One store `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_netcdf(path)` | One file `UPath` | Delayed yielding that UPath |
@@ -54,8 +54,15 @@ with `.gs.to_array()`, or expand dated data to a STAC tree. Tree asset paths
 follow `folder/collection/Item/asset.tif`; path templates are not accepted by
 these accessors. Zarr and NetCDF retain the full hierarchy in one store.
 
-Writers refuse existing destinations unless `overwrite=True`. Deferred writes
-return one native Dask Delayed; keep sources open until it has computed.
+DataArray TIFF/COG methods delegate directly to `.rio.to_raster`, selecting
+`GTiff` or `COG`. They use native options, overwrite behavior and return values;
+`compute=False` requires chunked data and a write lock to defer pixels, and may
+create the header immediately. They do not apply GeoSave metadata translation
+or fsspec staging.
+
+GeoSave Dataset/tree writers refuse existing destinations unless
+`overwrite=True`. Their deferred writes return a Dask Delayed; keep sources
+open until it has computed.
 A returned Item table remains in memory until `.gs.to_geoparquet(...)` saves it.
 See [Read and save data](../basics/io.md) for working round trips.
 
@@ -74,7 +81,6 @@ See [Read and save data](../basics/io.md) for working round trips.
       members:
         - write_cog
         - write_geotiff
-        - write_header
         - GeoTIFFWriteOptions
         - COGWriteOptions
         - GTiffWriteOptions
