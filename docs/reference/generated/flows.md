@@ -53,6 +53,10 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave_flows.monitor.monitor
+    options:
+      show_root_full_path: true
+
 ::: geosave_flows.tasks.labels.find_labels
     options:
       show_root_full_path: true

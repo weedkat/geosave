@@ -37,19 +37,20 @@ def test_geodata_loads_no_torch():
 @pytest.mark.slow
 def test_model_core_loads_no_lightning():
     imports = (
-        "geosave.model.chain, geosave.model.stages.registry, geosave.model.stages.head"
+        "geosave.ml.chain, geosave.ml.components.build, geosave.ml.components.head, "
+        "geosave.ml.processing.processor"
     )
     assert not _loads(imports, "lightning")
 
 
 @pytest.mark.slow
-def test_spec_loads_no_torch():
-    assert not _loads("geosave.model.spec", "torch")
+def test_ml_package_loads_no_torch():
+    assert not _loads("geosave.ml", "torch")
 
 
 @pytest.mark.slow
 def test_library_loads_no_flows_or_prefect():
-    imports = "geosave, geosave.model.spec, geosave.ml, geosave.cli.main"
+    imports = "geosave, geosave.ml, geosave.cli.main"
     loaded = _run(
         f"import sys\nimport {imports}\n"
         "print([m for m in ('geosave_flows', 'prefect') if m in sys.modules])"
@@ -59,4 +60,4 @@ def test_library_loads_no_flows_or_prefect():
 
 @pytest.mark.slow
 def test_release_loads_no_lightning():
-    assert not _loads("geosave.model.release", "lightning")
+    assert not _loads("geosave.ml.release", "lightning")

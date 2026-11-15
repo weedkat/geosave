@@ -10,7 +10,7 @@ import rustac
 from pystac.utils import datetime_to_str
 
 from geosave.geodata.errors import CollectionNotFoundError
-from geosave.geodata.io.formats import stac_geoparquet
+from geosave.geodata.io.vector import stac_geoparquet
 from geosave.geodata.io.storage import create_upath
 
 from .query import SearchParams, StacQuery
@@ -86,7 +86,8 @@ class StacTable:
             query: Query object, or raw `rustac` search parameters.
 
         Returns:
-            Every matching Item, its asset hrefs absolute.
+            Every matching Item, its asset hrefs absolute, linked to its
+            Collection where the table holds it.
 
         Examples:
             >>> query = StacQuery(collections=["forest"])
@@ -104,12 +105,16 @@ class StacTable:
         elif when is not None and not isinstance(when, str):
             params["datetime"] = datetime_to_str(when)
 
+        collections = self._read_collections()
         items = []
         for fields in self._duckdb.search(self._location, **params):
             item = pystac.Item.from_dict(fields)
             # A table stores asset hrefs relative to itself.
             item.set_self_href(self._location)
             item.make_asset_hrefs_absolute()
+            # The Item links to its Collection, as a searched API Item does.
+            if item.collection_id in collections:
+                item.set_collection(collections[item.collection_id])
             items.append(item)
         return items
 

@@ -1,41 +1,65 @@
-"""Public geospatial I/O: formats, storage, discovery-independent loading.
+"""Public geospatial I/O: raster and vector formats, storage, suffix openers.
 
-Use io.formats.geotiff.write_cog for a known format, open_raster for suffix
-selection. STAC Items load through `geosave.geodata.stac`.
+Use a format's own writer, such as `write_cog`, for a known format, and
+`open_raster`, `open_raster_tree`, or `open_vector` to read by suffix.
+Raster openers return a Dataset or a DataTree respectively. STAC Items load
+through `geosave.geodata.stac`.
 """
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from . import formats, paths, rasterio, storage
-from .formats.geojson import GeoJSONOpenOptions, open_geojson, write_geojson
-from .formats.geopackage import GeoPackageOpenOptions, open_geopackage, write_geopackage
-from .formats.geoparquet import GeoParquetOpenOptions, open_geoparquet, write_geoparquet
-from .formats.geotiff import (
+from . import gdal_env, raster, storage, vector
+from .gdal_env import configure_gdal
+from .openers import open_raster, open_raster_tree, open_vector
+from .raster.geotiff import (
     COGWriteOptions,
+    GeoTIFFOpenOptions,
     GeoTIFFWriteOptions,
     GTiffWriteOptions,
     open_geotiff,
     write_cog,
     write_geotiff,
 )
-from .formats.netcdf import (
+from .raster.netcdf import (
     NetCDFOpenOptions,
     NetCDFWriteOptions,
     open_netcdf,
+    open_netcdf_tree,
     write_netcdf,
+    write_netcdf_tree,
 )
-from .formats.zarr import ZarrOpenOptions, ZarrWriteOptions, open_zarr, write_zarr
-from .openers import open_raster, open_vector
-from .rasterio import RasterioOpenOptions, configure_gdal
+from .raster.zarr import (
+    ZarrOpenOptions,
+    ZarrWriteOptions,
+    open_zarr,
+    open_zarr_tree,
+    write_zarr,
+    write_zarr_tree,
+)
+from .vector.geoparquet import (
+    GeoParquetOpenOptions,
+    GeoParquetWriteOptions,
+    open_geoparquet,
+    write_geoparquet,
+)
+from .vector.ogr import (
+    OGROpenOptions,
+    OGRWriteOptions,
+    open_geojson,
+    open_geopackage,
+    write_geojson,
+    write_geopackage,
+)
 
 if TYPE_CHECKING:
-    from .formats.stac_geoparquet import write_stac_geoparquet
+    from .vector.stac_geoparquet import write_stac_geoparquet
 
 
 def __getattr__(name: str) -> Any:
+    # stac_geoparquet imports the STAC package, which imports this one.
     if name == "write_stac_geoparquet":
-        return getattr(import_module(f"{__name__}.formats.stac_geoparquet"), name)
+        return getattr(import_module(f"{__name__}.vector.stac_geoparquet"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -44,36 +68,42 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "open_raster",
+    "open_raster_tree",
+    "open_vector",
+    "open_geotiff",
+    "write_geotiff",
+    "write_cog",
+    "open_zarr",
+    "open_zarr_tree",
+    "write_zarr",
+    "write_zarr_tree",
+    "open_netcdf",
+    "open_netcdf_tree",
+    "write_netcdf",
+    "write_netcdf_tree",
     "open_geojson",
     "write_geojson",
     "open_geopackage",
     "write_geopackage",
     "open_geoparquet",
     "write_geoparquet",
-    "open_geotiff",
-    "write_geotiff",
-    "open_zarr",
-    "write_zarr",
-    "open_netcdf",
-    "write_netcdf",
-    "write_cog",
     "write_stac_geoparquet",
     "COGWriteOptions",
     "GTiffWriteOptions",
-    "GeoJSONOpenOptions",
-    "GeoPackageOpenOptions",
-    "GeoParquetOpenOptions",
+    "GeoTIFFOpenOptions",
     "GeoTIFFWriteOptions",
     "NetCDFOpenOptions",
     "NetCDFWriteOptions",
-    "RasterioOpenOptions",
     "ZarrOpenOptions",
     "ZarrWriteOptions",
+    "OGROpenOptions",
+    "OGRWriteOptions",
+    "GeoParquetOpenOptions",
+    "GeoParquetWriteOptions",
     "configure_gdal",
-    "rasterio",
-    "paths",
-    "formats",
-    "open_raster",
-    "open_vector",
+    "gdal_env",
+    "raster",
+    "vector",
     "storage",
 ]

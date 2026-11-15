@@ -93,12 +93,12 @@ An exact GeoBox places every asset on the same grid:
 
 ```python title="Adaptation example — use your tree and reference raster"
 aligned = tree.gs.reproject(reference.gs.geobox, resampling="nearest")
-scene = aligned["sentinel-2-l2a"].gs.combine()
+scene = aligned["optical"].to_dataset()
 ```
 
 A CRS destination instead sizes each asset independently, even with an explicit
-resolution. It does not ensure identical placement or extent. `combine` needs
-matching CRS, resolution and pixel alignment, and spans the union of extents.
+resolution. It does not ensure identical placement or extent. Select the
+Dataset at a caller-defined node after alignment; native xarray combines Datasets.
 Categorical variables refuse interpolating kernels. Reproject imagery and labels
 separately when they need different methods; see [align labels with imagery](../guides/align-rasters.md).
 
@@ -106,15 +106,14 @@ separately when they need different methods; see [align labels with imagery](../
 
 `isel(y=..., x=...)` selects pixel positions. `.gs.crop(region)` also masks
 pixels outside a geometry, using nodata. Neither operation changes resolution.
-A catalog window's rows open with `.gs.to_datatree()` as one node per STAC
-asset, each on its own grid (`/s2/<item>/B04`, `/s2/<item>/B11`).
-`tree["s2"].gs.combine()` requires one grid; align mixed grids explicitly first:
+Load selected catalog rows onto an exact grid directly:
 
-```python
-scene = tree.gs.reproject(tree["s2/<item>/B04"].gs.geobox)["s2"].gs.combine()
+```python title="Adaptation example — use selected catalog rows and a reference raster"
+scene = rows.gs.to_dataset(geobox=reference.gs.geobox, chunks={})
 ```
 
-Combining does not select a grid or resample pixels.
+Use `stac.load_native_datasets(rows.gs.to_items())` when separate native-grid
+Datasets are preferable to resampling.
 
 Reprojection can be lazy for Dask inputs, but interpolation and nodata behavior
 depend on the resampling backend. Check a small representative area before

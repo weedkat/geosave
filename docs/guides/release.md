@@ -1,4 +1,4 @@
-# Save and load a release
+# Release and run a model
 
 Install the [Hub extra](../install.md#choose-what-you-need) on the source or
 wheel installation you chose. It adds the Transformers release adapter.
@@ -14,8 +14,8 @@ recipes and weights; they do not upload executable model code.
 ```python
 import torch
 
-from geosave.model import build_model
-from geosave.model.release import GeoSaveModel
+from geosave.ml import build_model
+from geosave.ml.release import ChainModel
 
 chain = build_model({
     "head": {
@@ -26,7 +26,7 @@ chain = build_model({
         },
     },
 })
-release = GeoSaveModel.from_chain(chain).eval()
+release = ChainModel.from_chain(chain).eval()
 release.save_pretrained("release")
 ```
 
@@ -38,15 +38,13 @@ For a project Module whose `model` is a registered chain, save its trained chain
 
 ```python
 module.eval()
-trained = GeoSaveModel.from_chain(module.model)
+trained = ChainModel.from_chain(module.model)
 trained.save_pretrained("trained-release")
 ```
 
 The plain Lightning starter in [Training](training.md) uses a custom network,
 so it cannot use this registered-chain export. Use its Lightning checkpoint
 or build a registered architecture first.
-
-ModelSpec is disabled pending redesign; releases contain no processing recipe.
 
 Every stage must have been constructed by `build_model` with a registered `name`
 specification. A directly composed `ModelChain`, a prebuilt module instance, or
@@ -62,7 +60,7 @@ release/
 ```
 
 `config.json` records stage order, registered names, resolved constructor
-arguments, and the exact GeoSave version. `model.safetensors` stores the weights.
+arguments, the processor when one is attached, and the exact GeoSave version. `model.safetensors` stores the weights.
 Larger models can produce multiple weight shards through Transformers' saving options.
 
 If the chain started from pretrained encoder weights, the saved construction
@@ -77,7 +75,7 @@ chain, without the optimizer, scheduler, DataModule, metrics, or callbacks.
 ## Load and call the model
 
 ```python
-import geosave.model.release
+import geosave.ml.release
 from transformers import AutoModel
 
 model = AutoModel.from_pretrained("release", local_files_only=True).eval()
@@ -91,12 +89,88 @@ logits.shape
 torch.Size([1, 3, 16, 16])
 ```
 
-Importing `geosave.model.release` registers the GeoSave model type with
+Importing `geosave.ml.release` registers the GeoSave model type with
 Transformers. Loading reconstructs the chain from its configuration and restores
 the weights. `model.chain` is the native `ModelChain`.
 
-Prepare inputs explicitly before calling the chain. Releases do not execute
-preparation or attach geographic metadata to predictions.
+Called directly, the model takes prepared tensors and returns tensors without
+geographic metadata. To prepare a raster and map the output, attach a processor.
+
+## Run the model with a processor
+
+A processor holds the model and four registered sub-processors:
+
+| Role | Method | Does |
+| --- | --- | --- |
+| ingestor | `ingest(region) -> list[Dataset]` | Loads the rasters to predict for a region. |
+| preprocessor | `preprocess(raster) -> Dataset`, `normalize(image) -> Tensor` | Selects and decodes bands; standardizes each batch. The same class serves training. |
+| predictor | `predict(forward, image) -> DataArray` | Runs the model over a prepared raster of any size. |
+| postprocessor | `postprocess(logits) -> Dataset` | Turns merged `(band, y, x)` scores into the product. |
+
+The processor runs `preprocess → predict → postprocess`. The built-in `chips`
+predictor runs `RasterChipper → normalize → model → RasterMerger`, so a raster of any
+size is predicted on its own grid. The library registers one of each role;
+select them by name:
+
+```python
+from geosave.ml.processing.processor import ProcessorSpec, build_processor
+from geosave.ml.release import ChainModel, load_processor
+
+chain = build_model({
+    "encoder": {"name": "small_cnn", "init_args": {"in_channels": 2, "input_size": 64}},
+    "decoder": {"name": "unet"},
+    "head": {"name": "segmentation", "init_args": {"num_classes": 3}},
+}).eval()
+spec = ProcessorSpec(
+    ingestor={"name": "sentinel2_l2a", "init_args": {"bands": ["B04", "B08"]}},
+    preprocessor={"name": "sentinel2_reflectance", "init_args": {"bands": ["red", "nir"]}},
+    predictor={"name": "chips", "init_args": {"size": 64, "stride": 48}},
+    postprocessor={
+        "name": "class_map",
+        "init_args": {
+            "classes": ["water", "vegetation", "bare"],
+            "colors": ["#419bdf", "#397d49", "#a59b8f"],
+        },
+    },
+)
+processor = build_processor(spec, chain)
+product = processor.predict_path("sample-scene.tif")
+product["class_id"].shape
+```
+
+```text
+(337, 267)
+```
+
+`product` is a Dataset on the [sample scene](../first-raster.md#open-the-sample)'s
+grid; the random weights make its classes meaningless until trained. Chips of
+64 pixels overlap by 16 and blend with the default `"hann"` window.
+`predict_raster(raster)` takes an open raster and `predict_region(region)`
+predicts each raster the ingestor loads.
+
+A project may write its own sub-processor: a class with its role's method,
+registered as `@PREPROCESSORS.register("my_name")` or selected by
+`class_path`. It predicts locally, but a release refuses it. A release rebuilds
+from `pip install geosave` alone, so a model is deployed by adding its
+components and sub-processors to the library first.
+
+Save the processor with the chain, then rebuild both in one call:
+
+```python
+ChainModel.from_processor(processor).save_pretrained("release-with-processor")
+reloaded = load_processor("release-with-processor")
+reloaded.predict_path("sample-scene.tif").equals(product)
+```
+
+```text
+True
+```
+
+`config.json` stores the processor's name and every argument, defaults
+included, as `processor.spec` shows. The release stores names, not code:
+import the module that registers your ingestor, preprocessor and postprocessor
+before `load_processor`. A release saved without a processor makes
+`load_processor` raise `ValueError`.
 
 ## Publish to Hugging Face
 
@@ -117,21 +191,36 @@ Pin the returned commit hash for reproducible deployment.
 For a trained release made above, publish `trained` instead of the randomly
 initialized demonstration `release`.
 
+## Three repositories
+
+A trained project lives in three Hugging Face repositories, one audience each:
+
+```text
+your-account/<name>-data       dataset repo          raw and processed rasters, labels
+your-account/<name>-training   model repo, private   workspace code, run configs,
+                                                     checkpoints and TensorBoard metrics
+your-account/<name>            model repo, public    config.json + model.safetensors
+```
+
+A workspace's `publish.py` writes the release folder and, given
+`--release-repo` and `--training-repo`, uploads the release and archives the
+run, one commit each. LitData stores are preloads tailored to one model; keep
+them local or in a bucket, not in the data repository.
+
 ## What a loader needs
 
-- Install the exact GeoSave version recorded in the release configuration.
-  Loading rejects a different version or an unsupported artifact format.
-- Make every registered stage factory available through the GeoSave version
-  containing the integrated implementations. A research artifact using a local
-  registration additionally needs that Python implementation installed and
-  imported; it is not a self-contained supported deployment.
-- Preserve the saved input preparation and class order. The wrapper delegates
-  to the chain; it does not normalize inputs, turn logits into labels, or attach
-  geospatial metadata to predictions.
+- `pip install geosave`. A release names only components and sub-processors
+  the library registers, so it rebuilds without the project's code. To deploy
+  a model, add its components and sub-processors to geosave first; releasing
+  a project's own class is refused.
+- The same artifact format version. A different GeoSave version loads with a
+  warning; the weights must still match the rebuilt chain exactly.
+- Without a processor, the model delegates to the chain; it does not
+  normalize inputs, turn logits into labels, or attach geospatial metadata.
 
 Loading rejects missing or unexpected weight keys; incompatible tensor shapes
-also fail under the default loading behavior. Task-owned calibration buffers,
-such as thresholds on a LightningModule, are outside a chain-only release.
+also fail under the default loading behavior. Class thresholds belong to the
+postprocessor's configuration, not to the model.
 
 See the [release reference](../reference/model-release.md) for configuration and
 adapter methods.

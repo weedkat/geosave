@@ -22,8 +22,6 @@ their dimensions, coordinates, indexes, and node inheritance, with printouts.
 
 ```mermaid
 flowchart LR
-    ml --> model
-    model --> geodata
     ml --> geodata
     geosave_flows --> geosave
 ```
@@ -31,13 +29,13 @@ flowchart LR
 | Package | Responsibility |
 | --- | --- |
 | `geodata` | Accessors, metadata, I/O, transforms, STAC, sampling, and visualization. |
-| `model` | Model chains, registry, stages, specifications, and native releases. |
-| `ml` | Reusable metrics, builders, losses, transforms, CLI, and callbacks. |
+| `ml` | Model chains, components, processors, native releases, and reusable training support: builders, losses, metrics, transforms, CLI, and callbacks. |
 | `cli` | Workspace creation and task templates. |
 | `templates` | Project-owned Lightning Modules, DataModules, Datasets, configs, and scripts copied into consumer workspaces. |
 
-The model package does not import GeoSave's training package. Importing
-`geosave` or `geosave.model.spec` does not load torch. Operations that need it,
+The inference path of `ml` (chain, components, processing, release) does not
+import its training support. Importing `geosave` or `geosave.ml` does not load
+torch. Operations that need it,
 such as `.gs.to_tensor()`, import it when called. Encoder libraries may load
 additional dependencies when their modules are imported.
 
@@ -60,7 +58,7 @@ Coordinates:
   * time            datetime64           "time" by name (odc-stac, wrap_xr)
     start_datetime  (time)               ┐ time cell: STAC period, composite bin
     end_datetime    (time)               ┘
-    stac_properties (time)               STAC Item properties as JSON
+    eo_cloud_cover  (time)               example property, marked stac_property="eo:cloud_cover"
   * y, x            ODC units, resolution
     spatial_ref     crs_wkt, GeoTransform
 Data variables:  bands with attr groups (CFPacking, CFFlags with color_hints, CFDescription, EOBand)
@@ -75,7 +73,7 @@ declared extent over ODC. Grid operations are ODC's; `gs.spatial_dims`,
 requires a grid ODC recognizes, with a CRS; pixel operations (`to_numpy`,
 `to_array`, `mask`) need only spatial dimensions.
 
-CF is a file encoding, applied by `io/formats/cf.py`:
+CF is a file encoding, applied by `io/raster/codecs/cf.py`:
 
 | Part | Zarr | netCDF | GeoTIFF/COG |
 | --- | --- | --- | --- |
@@ -94,33 +92,62 @@ GeoSave's own `Display`. Band metadata is per variable and constant along
 ## Data flow
 
 ```text
-raster files -> item table -> samples -> trees -> chips -> Dataset samples -> Lightning -> release
+Item rows -> ODC Dataset -> prepared one-grid DataTree -> RasterChipper -> project Dataset -> Lightning
+Dataset -> RasterStac -> COG assets + Item rows -> GeoParquet
+trained chain + processor -> release -> load_processor -> predict_path / predict_region -> product Dataset
 ```
 
-Raster writers save pixels and return paths. STAC describes
-those files in an item table. `sample` groups its Items into samples, the
-row positions of each, without reading pixels; a sample's rows `to_datatree` open
-it as a lazy tree. The caller selects and aligns native Datasets or DataArrays
-before `Chips` reads windows at the model's input size. A source-specific torch Dataset reads chips,
-converts pixels to named tensors, and returns the task's sample contract. A DataModule batches and
-prepares those samples; the Module owns training behavior.
+Raster writers save pixels and return paths. STAC describes those files in
+an Item table. Select rows with GeoPandas; `rows.gs.to_dataset` or
+`stac.load_dataset` reads selected Items onto a chosen grid. The caller prepares
+one-grid DataTrees before RasterChipper cuts model-sized windows. Temporal `.gs.sample`
+produces raster windows independently of spatial chips. A project-owned torch
+Dataset reads pixels, converts them to tensors, and returns its sample contract.
+A DataModule batches and prepares samples; the Module owns training behavior.
 
-Model stages own the network; `model/stages/registry.py` owns stage registration
-and chain construction. `model/factory.py` owns `BuildSpec`, the name/class-path
-selector shared by stage, optimizer, scheduler and loss builders. It is
-independent of ModelSpec.
+`ml/factory.py` owns `BuildSpec`, the name/class-path selector, and
+`Registry`, the one mechanism every builder uses: components, sub-processors,
+optimizers, schedulers and losses. A registry maps case-insensitive names to
+constructors of one base type and imports the modules that register the
+library's own entries on first lookup. A `class_path` reaches any importable
+subclass of that type without registration. `get_spec` writes out every
+constructor argument, defaults included, as a release stores it.
 
-ModelSpec is disabled pending redesign. The old ingestion and raster-processing
-helpers have been removed; geospatial template workflows depending on recipes
-are paused. A native release contains registered chain construction and weights,
-without a processing recipe. A Lightning checkpoint additionally holds training
-state. Training Modules remain project-owned; Prefect orchestration stays outside
-the model package.
+Components own the network. `ml/components/registry.py` declares one registry
+per stage (`ENCODERS`, `DECODERS`, `HEADS`, `MONOLITHS`); `build.py` builds a
+chain from a recipe, filling `Published` values from earlier stages;
+`catalog.py` lists what is registered and what connects.
+
+`ml/processing/roles.py` declares the four roles (`Ingestor`, `Preprocessor`,
+`Predictor`, `Postprocessor`), one Protocol and one registry each.
+`processor.py` holds `Processor`, which runs them around a model
+(`predict_region`, `predict_path`, `predict_raster`), and `build_processor`,
+which records each role's `get_spec` in `Processor.spec`. The library
+registers one module per role: `ingestors.py` (`sentinel2_l2a`),
+`preprocessors.py` (`sentinel2_reflectance`), `predictors.py` (`chips`) and
+`postprocessors.py` (`class_map`). Projects may register more or select them
+by class path for local prediction.
+
+`ml/release/huggingface.py` holds `ChainConfig` and `ChainModel`, the
+Transformers config and model of a `ModelChain`. `ChainModel.from_chain(chain)`
+releases a chain alone; `ChainModel.from_processor(processor)` adds the
+processor's spec (`ChainConfig.processor`, format version 2). Both refuse any
+component or sub-processor defined outside geosave: a release rebuilds from
+`pip install geosave` alone, so a model is deployed by adding its components
+and sub-processors to the library. `load_processor` rebuilds the processor
+around the loaded model. A different GeoSave version only warns; exact weight
+keys guard the architecture. A Lightning checkpoint additionally holds
+training state.
+
+Each template method's `processing.py` holds its `Preprocessor`; its datasets
+call `preprocess` and its DataModule `normalize`, as a release's processor
+does. Training Modules remain project-owned; Prefect orchestration stays
+outside `ml`.
 
 ## Implementation rules
 
 - `core/raster` and `core/vector` own geospatial accessors and their operations,
-  including raster `Chips`. DataArray owns one array, Dataset owns variable
+  while `geodata/sampling` owns chip layout, cutting and merging. DataArray owns one array, Dataset owns variable
   traversal, and DataTree owns node traversal. Ordinary array operations use
   native xarray; there is no public `transform/` package or parallel dispatcher.
   Keep short behavior on its accessor. `core/raster/transform` owns substantial
@@ -128,14 +155,12 @@ the model package.
   they do not combine type dispatch, traversal and format policy.
   `core/raster/utils` owns grid placement, statistics and tensor conversion;
   `core/vector/utils` owns geometry checks and row membership planning.
-  Dataset `expand` places variables under Item/asset nodes for publication. General independent helpers stay
+  STAC hierarchy belongs to `RasterStac`. General independent helpers stay
   in `geodata/utils`; format and visualization helpers stay with their owners.
 - `core/conventions.py` defines the shared raster layout and coordinate names
   consumed by accessors, I/O, STAC, features and visualization.
 - `geodata/errors.py` owns public geodata exceptions.
-- `io/paths.py` expands file path templates and formats grid node names
-  (`r10m`).
-  STAC collection/Item/asset paths are loader and publication conventions, not
+  STAC Item/asset paths are publication conventions, not
   requirements on arbitrary native DataTrees. Aligning a tree's nodes always
   takes an explicit target, `how=`; no grid is chosen implicitly.
 - Concrete Dataset and DataArray accessors own reading and assigning temporal
@@ -148,16 +173,16 @@ the model package.
 - `GeoRegion.format` is the public location/time formatter used by STAC Item
   publication. An explicit `geobox=` supplies grid fields. STAC owns the Item's
   WGS84 union footprint, date selection and matching-grid validation.
-- `stac/load.py` owns ODC band/alias resolution, grouping, fused property output and
-  DataTree assembly. It checks selected source scale/offset compatibility before
-  fusion, while ODC owns output nodata remapping. STAC modules interpret
-  published metadata and combine attrs using native policies; `attrs/stamp.py` applies attribute groups. The
-  loader places Collection metadata on the Dataset root or collection node,
-  and per-observation properties follow ODC's actual grouped time axis.
+- `stac/load.py` calls `odc.stac.load`, turns requested Item properties and
+  each step's period into `(time,)` coordinates, applies `dtype`/`nodata` to
+  bands only, then runs the named stamps. ODC owns band/alias resolution,
+  grouping, fusion and output nodata remapping. `stac/stamps/` is a registry of
+  named steps (`register_stamp`; defaults `raster`, `eo`, `classification`,
+  `rgb`, `title`, `collection`) that write metadata read from the Items without
+  reading pixels; the `raster` stamp refuses differing source scale/offset.
+  `attrs/stamp.py` writes attribute groups onto variables.
 - Rasters are built with xarray's own constructors and placed with ODC's `wrap_xr`;
-  `xr.DataTree.from_dict` assigns explicit paths and parent attrs. Tree
-  `gs.combine()` on a collection merges assets and stacks Items;
-  `gs.reproject(geobox)` explicitly prepares mixed grids before combination.
+  `xr.DataTree.from_dict` assigns explicit paths and parent attrs. `gs.reproject(geobox)` explicitly prepares mixed grids.
   There is no `core/ctor`: no GeoSave constructor builds an xarray or pandas
   object. Item tables come from `to_catalog`, `StacClient.search`, a stac-geoparquet
   file or `stac.create_catalog`, and plain vector tables from native
@@ -169,8 +194,8 @@ the model package.
 
 - `core/vector/catalog.py` owns GeoCatalog coverage, drawing, validation,
   Item conversion and table persistence. Item tables follow stac-geoparquet,
-  one Item per row. `item.py` owns GeoCatalogItem. Sampling, `GeoSamples`,
-  vector rasterization and row pixel reads are paused. `stac/catalog.py`
+  one Item per row. `item.py` owns GeoCatalogItem. Catalog sampling,
+  vector rasterization and row pixel reads remain unavailable. `stac/catalog.py`
   owns native Item/table conversion and `concat_catalogs`; conflicting
   Collection definitions raise. STAC encoding is selected by the frame's
   `stac-geoparquet` metadata at write time; damaged catalogs raise instead
@@ -184,7 +209,7 @@ the model package.
   `layers/` is the model: each layer is a Parameterized holding its
   data and live display settings, draws its viewport, and returns its legend
   as plain values; a `VectorLayer` of catalog rows owns the rasters its
-  raster column opens. Catalog pixels come from the row's `.gs.read_pixels`.
+  raster column opens. Catalog pixels come from the row's `.gs.read_pixels`, which raises until rebuilt.
   `explorer.py` owns the sources, the derived shown layers, the selection and
   the basemap. `page/` is the view, one module per region of the screen: it
   binds widgets to that state by reference, and keeps a class (`Map`,
@@ -201,18 +226,28 @@ the model package.
   Frames and trees union their footprints and envelope dated members. A point
   names a location, not a raster window.
 - `stac/catalog.py` owns native Item/table conversion, including `create_catalog`.
-  `stac/item.py` interprets Item time and asset naming without file I/O.
-  `stac/raster.py` translates Item metadata onto xarray coordinates and attrs.
-  `stac/band.py` composes storage, spectral and classification attrs; extension
-  modules translate native PySTAC bands and own `pystac.extensions` imports.
-- `io/formats/` owns encoding-specific readers/writers. `io/rasterio.py` owns
-  Rasterio reading, filesystem adaptation and environment configuration. `io/gdal_metadata.py` owns
-  translation between GDAL properties/tags and raster metadata in both directions.
-  `utils/geopandas.py` prepares
-  GeoPandas engine options; `utils/stores.py` checks NetCDF/Zarr destinations.
-- Dataset `expand` owns splitting dates into Items and variables into assets.
-  DataTree `to_cog` writes each asset at its node path; `to_catalog` adds
-  Item and Collection descriptions. Array writers take one explicit filename.
+  `stac/raster.py` owns the publication layout. `stac/publish.py` constructs
+  Items and asset metadata; `stac/stamps/` applies source, Collection, band and
+  property metadata on load. Extension modules translate native PySTAC bands.
+
+- `io/raster/` persists a Dataset or tree and `io/vector/` a GeoDataFrame, one
+  module per format. Every writer runs the same steps: locate, check the
+  destination, encode, then write now or deferred (`storage.defer`); every
+  reader runs them back. `io/raster/codecs/` holds the translations: a
+  `Codec` pairs an `encode` with the `decode` that undoes it, a format lists
+  its codecs (`zarr.CODECS`, `netcdf.CODECS`), and `codecs/gdal.py` stacks a
+  Dataset into the band array rioxarray writes, with `EXTRA_WRITERS` for the
+  properties rioxarray has no slot for. `geotiff.py` owns lazy
+  Rasterio/rioxarray reading and backend handle lifetime. `io/gdal_env.py`
+  retains the documented `configure_gdal` environment interface. Typed
+  property snapshots survive closing the metadata reader; arbitrary GDAL tags
+  remain string mappings. `vector/ogr.py` writes GeoJSON and GeoPackage
+  through one pyogrio path; `openers.py` picks a reader from the suffixes
+  each format module states. `open_raster` returns one Dataset, opening the
+  root group or an explicit `group=` in Zarr and NetCDF. `open_raster_tree`
+  returns the whole hierarchy as a DataTree, including root-only stores;
+  `open_zarr_tree` and `open_netcdf_tree` own the format-specific tree reads.
+- Dataset publication stages `RasterStac`, writes COG assets and returns an Item table. Array writers take one explicit filename.
   Dataset GeoTIFF writing prepares encoded rasters separately from execution;
   batch writes validate all destinations before writing and recheck them when
   deferred execution starts. DataArray TIFF/COG accessors delegate directly to
@@ -225,30 +260,43 @@ the model package.
   with `opener=path.fs`; object stores that cannot seek in write mode stage
   locally. COG writes convert a temporary disk TIFF through GDAL to avoid
   Rasterio's full-raster memory buffer. GDAL reads supported URLs itself
-  (`io.rasterio.read_gdal_address`); other paths and paths with filesystem
-  options use the UPath filesystem opener. rioxarray opens one band array,
-  then xarray splits it into named Dataset variables without reading pixels.
-- `stac/publish.py` owns `StacItem.from_datatree`, raster asset descriptions,
-  and `create_stac_collection`. Native Item/table conversion stays in
-  `stac/catalog.py`; STAC GeoParquet persistence stays in its format module.
+  (`io.raster.geotiff.read_gdal_address`); other paths and paths with filesystem
+  options use the UPath filesystem opener. rioxarray normally opens bands as Dataset variables. For filesystem openers,
+  GeoSave splits one lazy band array to avoid rioxarray's per-band reopen issue;
+  the same metadata mappings restore per-band properties in either path.
+- `stac/raster.py` defines `RasterStac`, a dataclass holding one
+  collection's opened raster assets in a prescribed Item/asset DataTree,
+  with native Collection metadata stored separately. Its class docstring
+  owns the hierarchy diagram. `from_dataset` lazily splits observations and variables, extracting Collection
+  metadata from attrs. `merge` joins assets by Item id; `to_cog` writes files
+  and returns native Items. Loading returns Datasets; general DataTree
+  accessors impose no STAC structure.
+- `stac/publish.py` owns the native `StacItem` subclass and its
+  `from_region` and `add_raster_asset` builders. Tree-based Item/Collection builders are removed.
+  Native Item/table conversion stays in `stac/catalog.py`; STAC GeoParquet
+  persistence stays in its format module.
 - `stac/search/` owns API/table discovery. `set_region` replaces spatial and time
-  selectors. Selected Items feed `stac.load_dataset` or `stac.load_datatree` without
+  selectors. Selected Items feed `stac.load_dataset` or `stac.load_native_datasets` without
   another search. ODC owns raster reading, grouping, mosaicking and resampling;
   GeoSave preserves CF axes, band attrs and fused per-time properties.
-- DataTree loading retains each Item asset's exact stated grid under
-  collection/Item/asset nodes. Assets require Projection metadata. Dataset
-  loading assembles one collection on a supplied GeoBox through ODC.
+- Dataset loading assembles selected Items through ODC. Native-grid loading
+  returns Datasets. General DataTrees impose no STAC hierarchy.
 
-- `core/raster/chips.py` owns tile layout, flat/tuple indexing, and merging.
-  Construction inspects metadata; indexing returns `gs.crop_to_grid(chips.geobox(key))`,
-  a lazy chip whose concrete raster accessor preserves the exact grid and
-  coordinates and clips the declared extent. Converting chips to arrays is the caller's step.
-  Merger reconstructs NumPy arrays with native weighting and missing-tile behavior,
-  allocating full output accumulators.
-  Original sources remain accessible as `chips.xarray[i]`; callers construct
-  xarray outputs. Keys are `(sample_index, tile_id)`; merge state is local to
-  each call. Collection sampling and geographic regions do not choose a pixel
-  grid implicitly.
+- `sampling/layout.py` owns `ChipLayout`: grids, integer chip indices, pixel
+  offsets and edge placement. `RasterChipper` holds prepared one-grid DataTrees and
+  cuts them lazily with `crop_to_grid`; converting pixels is the caller's step.
+  `RasterMerger(chipper.layout)` accumulates `(band, size, size)` predictions
+  by chip index. It returns a DataArray on the source grid, with NaN where
+  uncovered, and holds full output accumulators in memory. Sources remain
+  accessible as `chipper.rasters`; chip positions as `chipper.layout.locate`.
+  Catalog selection and geographic regions do not choose a pixel grid implicitly.
+- `sampling/tensor.py` holds the tensor pair for a LightningModule step:
+  `TensorChipper` cuts collated samples by `transform`/`crs` and keeps the
+  batch structure; `TensorMerger` merges on the predictions' device. Both use
+  the same `ChipLayout` and `create_chip_weights`, so a step simulates the
+  release processor's `RasterChipper` -> model -> `RasterMerger`; tests hold
+  the two pairs equal. Torch is imported only when they run.
+
 - Loaders own open resources and transfer cleanup to native xarray objects.
   Native combination and accessor assembly do not take ownership of source
   resources; callers keep file-backed arrays open until lazy work completes.
@@ -309,15 +357,15 @@ Neither path changes the layer's viewport cache.
 
 ### Sampling and persistence availability
 
-Catalog sampling and `GeoSamples` are paused pending redesign; they are not
-part of current raster preparation. Select rows with GeoPandas, load a tree,
-combine one collection, and construct Chips from the prepared raster.
+Catalog sampling is unavailable. Select rows with GeoPandas, load through
+`rows.gs.to_dataset` or `stac.load_dataset`, and construct RasterChipper from prepared
+one-grid trees. `GeoSamples` and the old `Chips` class have been removed.
 
-Dataset/DataArray `to_item` and `to_catalog`, and Dataset `to_cog`, raise
-`NotImplementedError`. Dataset `expand` builds a STAC tree; tree `to_cog`
-writes its assets and tree `to_catalog` publishes Item rows. Array `to_cog`
-and `to_gtiff` delegate to native rioxarray writing. Zarr and NetCDF writers preserve whole
-Datasets or tree hierarchies in one destination.
+Dataset `to_catalog` publishes dated rasters; `RasterStac` stages assets on
+several grids. DataArray `to_catalog` and raster `to_item` remain unavailable.
+Array `to_cog` and `to_gtiff` delegate to native rioxarray writing. Dataset
+`to_cog` remains a stub; use `io.write_cog` for a named-band file. Zarr and NetCDF preserve whole Datasets or tree
+hierarchies in one destination.
 
 Packing belongs to each concrete accessor. Dataset metadata writers require
 a list of target variable names: None selects all variables, an empty list

@@ -1,8 +1,23 @@
 # Readers, writers, and format options
 
-Use `gs.open_raster` and `gs.open_vector` to select a reader
-from a path. Use a format module when you need format-specific options.
+Use `gs.open_raster`, `gs.open_raster_tree`, and `gs.open_vector` to select a
+reader from a path. Use a format module when you need format-specific options.
 See [Read and save data](../basics/io.md) for complete examples.
+
+`open_raster` always returns a Dataset. Zarr and NetCDF open their root group
+by default; `group="scene"` selects one group without opening its children.
+`open_raster_tree` reads a whole Zarr or NetCDF store as a DataTree, including
+root-only stores. GeoTIFF and other banded formats use `open_raster`.
+Group selection follows native xarray semantics. To include coordinates inherited
+from parent nodes, open the tree and use `to_dataset(inherit="all_coords")`.
+
+```python
+with gs.open_raster("archive.nc", group="scene") as raster:
+    pixels = raster["red"].compute()
+
+with gs.open_raster_tree("archive.nc") as tree:
+    pixels = tree["scene"].to_dataset(inherit="all_coords")["red"].compute()
+```
 
 ## Forwarded options
 
@@ -30,13 +45,13 @@ details about extension dictionaries and version-specific SDK options.
     options:
       members:
         - open_raster
+        - open_raster_tree
         - open_vector
 
 ## STAC Item pixels
 
-Use `stac.load_dataset(items, grid)` for one collection on a chosen grid,
-`stac.load_datatree(items)` for native asset grids, or `rows.gs.to_datatree()`
-for an Item table. Native-grid loading requires asset Projection metadata.
+Use `stac.load_dataset(items, geobox=grid)` for one collection on a chosen grid,
+or `stac.load_native_datasets(items)` for one Dataset per native asset grid, which requires asset Projection metadata.
 See [STAC loading](stac.md) and [catalog operations](catalog.md).
 
 ## Saved raster files
@@ -44,15 +59,16 @@ See [STAC loading](stac.md) and [catalog operations](catalog.md).
 | Object and call | Default return | With `compute=False` |
 | --- | --- | --- |
 | DataArray `.gs.to_cog(path)` or `.gs.to_gtiff(path)` | Native rioxarray result (normally `None`) | Native Dask result with chunked data and `lock=True` |
-| DataTree `.gs.to_cog(folder)` | List of asset UPaths | Delayed yielding that list |
+| `io.write_cog(dataset, path)` or `io.write_geotiff(dataset, path)` | One file `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_zarr(path)` | One store `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_netcdf(path)` | One file `UPath` | Delayed yielding that UPath |
-| DataTree `.gs.to_catalog(folder)` | Item GeoDataFrame; assets written | Not supported |
+| `Dataset.gs.to_catalog(folder)` | Item GeoDataFrame; assets written | Not supported |
+| `RasterStac.to_cog(folder)` | Native Items; assets written | Not supported |
 
-Dataset `.gs.to_cog()` is unavailable. Select one band, stack compatible bands
-with `.gs.to_array()`, or expand dated data to a STAC tree. Tree asset paths
-follow `folder/collection/Item/asset.tif`; path templates are not accepted by
-these accessors. Zarr and NetCDF retain the full hierarchy in one store.
+Dataset `.gs.to_cog()` is unavailable. Use `io.write_cog(dataset, path)` for
+one file preserving variable names and band metadata. For dated assets use
+`Dataset.gs.to_catalog`; `RasterStac` stages assets on several grids. Asset paths
+follow `folder/Item/asset.tif`. Zarr and NetCDF retain a whole hierarchy in one store.
 
 DataArray TIFF/COG methods delegate directly to `.rio.to_raster`, selecting
 `GTiff` or `COG`. They use native options, overwrite behavior and return values;
@@ -79,59 +95,75 @@ The former nested `creation_options` dictionary is removed. GDAL interprets
 these keywords; GeoSave does not normalize or validate driver options.
 
 Filesystem-backed reads pass `UPath.fs` to Rasterio's opener and remain lazy.
-GTiff writes use that opener for seekable filesystems; object-store writes
-stage a local file before uploading.
+A local destination is written in place; any other is staged as a local file
+and uploaded when the write finishes.
 
-::: geosave.geodata.io.rasterio
+::: geosave.geodata.io.raster.geotiff
     options:
       members:
-        - open_raster
-        - configure_gdal
-        - RasterioOpenOptions
-        - hf_to_s3
-
-::: geosave.geodata.io.formats.geotiff
-    options:
-      members:
+        - open_geotiff
+        - GeoTIFFOpenOptions
         - write_cog
         - write_geotiff
         - GeoTIFFWriteOptions
         - COGWriteOptions
         - GTiffWriteOptions
+        - read_gdal_address
+        - hf_to_s3
 
+`configure_gdal` remains available as `geosave.configure_gdal` and
+`geosave.geodata.configure_gdal`. Call it at startup to set the process-wide
+GDAL environment; its explicit options document the corresponding variables.
+
+::: geosave.geodata.io.gdal_env
+    options:
+      members:
+        - configure_gdal
 
 ## Zarr
 
-::: geosave.geodata.io.formats.zarr
+::: geosave.geodata.io.raster.zarr
     options:
       members:
         - open_zarr
+        - open_zarr_tree
         - write_zarr
+        - write_zarr_tree
         - ZarrOpenOptions
         - ZarrWriteOptions
         - ZarrChunkSpec
-        - fill_encoding
 
 ## NetCDF
 
-::: geosave.geodata.io.formats.netcdf
+::: geosave.geodata.io.raster.netcdf
     options:
       members:
         - open_netcdf
+        - open_netcdf_tree
         - write_netcdf
+        - write_netcdf_tree
         - NetCDFOpenOptions
         - NetCDFWriteOptions
-        - NetCDFEngine
         - NetCDFChunkSpec
-        - NetCDFFormat
 
-## Vendor products
+## Codecs
 
-SAFE loading is not implemented.
+A format lists the codecs that translate GeoSave's in-memory conventions to
+its own; writing encodes in order and reading decodes in reverse, so a file
+reads back as the raster written.
+
+::: geosave.geodata.io.raster.codecs
+    options:
+      members:
+        - Codec
+        - encode_dataset
+        - decode_dataset
+        - encode_tree
+        - decode_tree
 
 ## GeoParquet
 
-::: geosave.geodata.io.formats.geoparquet
+::: geosave.geodata.io.vector.geoparquet
     options:
       members:
         - open_geoparquet
@@ -139,40 +171,28 @@ SAFE loading is not implemented.
         - GeoParquetOpenOptions
         - GeoParquetWriteOptions
 
-## GeoJSON
+## GeoJSON and GeoPackage
 
-::: geosave.geodata.io.formats.geojson
+A GeoPackage keeps the frame's CRS and stores its `attrs` as layer metadata.
+GeoJSON is WGS84 by specification and has no slot for `attrs`.
+
+::: geosave.geodata.io.vector.ogr
     options:
       members:
         - open_geojson
         - write_geojson
-        - GeoJSONOpenOptions
-        - GeoJSONWriteOptions
-
-## GeoPackage
-
-::: geosave.geodata.io.formats.geopackage
-    options:
-      members:
         - open_geopackage
         - write_geopackage
-        - GeoPackageOpenOptions
-        - GeoPackageWriteOptions
+        - OGROpenOptions
+        - OGRWriteOptions
 
 ## STAC GeoParquet
 
-::: geosave.geodata.io.formats.stac_geoparquet
+::: geosave.geodata.io.vector.stac_geoparquet
     options:
       members:
         - write_stac_geoparquet
-        - read_collections
         - parse_collections
-
-
-::: geosave.geodata.io.formats.utils.geopandas
-    options:
-      members:
-        - unpack_engine_options
 
 ## Locations and storage
 
@@ -183,11 +203,13 @@ SAFE loading is not implemented.
         - StorageOptions
         - create_upath
         - check_destination
+        - refuse_existing
         - stage_file
+        - defer
 
 
 ## Load selected STAC Items
 
 ::: geosave.geodata.stac.load
     options:
-      members: [load_dataset, load_datatree, StacLoadOptions]
+      members: [load_dataset, load_native_datasets, group_bands_by_grid, StacLoadOptions]

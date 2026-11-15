@@ -78,7 +78,7 @@ Remote notebook servers may need port forwarding. See
 workspace data recipes, catalog sampling, row pixel viewing and vector
 rasterization are currently paused. Use [explicit input preparation](guides/model-inputs.md),
 [the Lightning boilerplate](guides/workspaces.md), and
-[catalog-tree loading](guides/catalogs-and-cuts.md) for current workflows.
+[catalog loading](guides/catalogs-and-cuts.md) for current workflows.
 
 **A model rejects the image shape.** Inspect one Dataset sample and one batch.
 DINOv3 expects `(batch, band, y, x)`; a retained time axis needs a temporal

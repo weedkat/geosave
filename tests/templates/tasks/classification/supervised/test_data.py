@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 from torch.utils.data import Dataset
 
 from modules.classification import supervised
-from tests.templates.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
-
-pytestmark = pytest.mark.skip(
-    reason="Template processing awaits the ModelSpec redesign."
+from tests.templates.tasks.segmentation.supervised.test_data import (
+    FLIP,
+    _batch,
+    _preprocessor,
 )
 
 
@@ -28,7 +27,7 @@ class Chips(Dataset[supervised.Sample]):
 
 
 def test_training_batches_move_pixels_and_preserve_class_targets(tmp_path) -> None:
-    data = supervised.DataModule(_spec(), Chips(), Chips(), augmentations=FLIP)
+    data = supervised.DataModule(_preprocessor(), Chips(), Chips(), augmentations=FLIP)
     data.trainer = SimpleNamespace(training=True)
     batch = _batch()
     image = batch["inputs"]["image"].clone()

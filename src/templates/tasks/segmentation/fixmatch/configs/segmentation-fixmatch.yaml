@@ -54,7 +54,8 @@ model:
 data:
   class_path: modules.segmentation.fixmatch.data.DataModule
   init_args:
-    spec: configs/segmentation-fixmatch/model_spec.yaml
+    preprocessor:
+      class_path: modules.segmentation.fixmatch.processing.Reflectance
     train:
       class_path: modules.segmentation.fixmatch.datasets.MyDataset
       init_args:

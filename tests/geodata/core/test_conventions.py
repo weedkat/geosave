@@ -58,7 +58,10 @@ def test_files_carry_cf_axes_that_memory_does_not(tmp_path, suffix) -> None:
         raster.gs.to_zarr(path)
 
     assert "axis" not in raster.y.attrs
+    engine = "h5netcdf" if suffix == "nc" else "zarr"
+    with xr.open_dataset(path, engine=engine) as stored:
+        assert stored.y.attrs["axis"] == "Y"
+        assert stored.x.attrs["standard_name"] == "longitude"
     opened = open_raster(path)
-    assert opened.y.attrs["axis"] == "Y"
-    assert opened.x.attrs["standard_name"] == "longitude"
+    assert "axis" not in opened.y.attrs
     assert opened.gs.geobox == GRID

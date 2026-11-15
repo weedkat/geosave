@@ -18,13 +18,11 @@ fields appear as attributes, including their annotated types and defaults.
         - class_path
         - init_args
         - validate_selector
-        - resolve
       inherited_members:
         - name
         - class_path
         - init_args
         - validate_selector
-        - resolve
 
 ::: geosave.ml.builders.criterion.build_criterion
     options:
@@ -44,13 +42,11 @@ fields appear as attributes, including their annotated types and defaults.
         - class_path
         - init_args
         - validate_selector
-        - resolve
       inherited_members:
         - name
         - class_path
         - init_args
         - validate_selector
-        - resolve
 
 ::: geosave.ml.builders.optimizer.build_optimizer
     options:
@@ -74,29 +70,13 @@ fields appear as attributes, including their annotated types and defaults.
         - class_path
         - init_args
         - validate_selector
-        - resolve
       inherited_members:
         - name
         - class_path
         - init_args
         - validate_selector
-        - resolve
 
 ::: geosave.ml.builders.scheduler.build_scheduler
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.callbacks.calibrate.ThresholdCalibrator
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - num_classes
-        - ignore_index
-        - on_validation_batch_end
-        - on_validation_end
-
-::: geosave.ml.callbacks.calibrate.softmax_argmax
     options:
       show_root_full_path: true
 

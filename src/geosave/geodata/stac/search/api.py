@@ -215,7 +215,7 @@ class StacClient:
 
     @property
     def patch_url(self) -> Callable[[str], str] | None:
-        """Return the provider signer to pass to load_dataset/load_datatree.
+        """Return the provider signer to pass to load_dataset.
 
         Search Items retain durable hrefs; the loader signs at read time.
         """

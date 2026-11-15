@@ -5,7 +5,7 @@
 below are rendered directly from the implementation. Configuration input
 fields appear as attributes, including their annotated types and defaults.
 
-::: geosave.model.chain.chain.ModelChain
+::: geosave.ml.chain.chain.ModelChain
     options:
       show_root_full_path: true
       filters: []
@@ -16,23 +16,7 @@ fields appear as attributes, including their annotated types and defaults.
         - __repr__
         - to_mermaid
 
-::: geosave.model.chain.published.Published
-    options:
-      show_root_full_path: true
-
-::: geosave.model.chain.published.accepts
-    options:
-      show_root_full_path: true
-
-::: geosave.model.chain.published.published_attrs
-    options:
-      show_root_full_path: true
-
-::: geosave.model.chain.published.published_kwargs
-    options:
-      show_root_full_path: true
-
-::: geosave.model.chain.routing.BoundStep
+::: geosave.ml.chain.routing.BoundStep
     options:
       show_root_full_path: true
       filters: []
@@ -42,23 +26,23 @@ fields appear as attributes, including their annotated types and defaults.
         - method
         - name
 
-::: geosave.model.chain.routing.declared_steps
+::: geosave.ml.chain.routing.declared_steps
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.routing.dependencies
+::: geosave.ml.chain.routing.dependencies
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.routing.ordered_steps
+::: geosave.ml.chain.routing.ordered_steps
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.routing.required_inputs
+::: geosave.ml.chain.routing.required_inputs
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.step.Step
+::: geosave.ml.chain.step.Step
     options:
       show_root_full_path: true
       filters: []
@@ -72,70 +56,27 @@ fields appear as attributes, including their annotated types and defaults.
         - head
         - invoke
 
-::: geosave.model.chain.step.chain_step
+::: geosave.ml.chain.step.chain_step
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.step.terminal_step
+::: geosave.ml.chain.step.terminal_step
     options:
       show_root_full_path: true
 
-::: geosave.model.chain.step.type_name
+::: geosave.ml.chain.step.type_name
     options:
       show_root_full_path: true
 
-::: geosave.model.factory.BuildSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-        - resolve
-
-::: geosave.model.release.huggingface.ARTIFACT_FORMAT_VERSION
+::: geosave.ml.components.build.build_model
     options:
       show_root_full_path: true
 
-::: geosave.model.release.huggingface.GeoSaveConfig
+::: geosave.ml.components.catalog.list_models
     options:
       show_root_full_path: true
-      filters: []
-      members:
-        - model_type
-        - stages
-        - format_version
-        - geosave_version
 
-::: geosave.model.release.huggingface.GeoSaveModel
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - config_class
-        - base_model_prefix
-        - chain
-        - from_chain
-        - forward
-
-::: geosave.model.release.huggingface.StageConfig
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - stage
-        - spec
-
-::: geosave.model.spec.model.ModelSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - load
-
-::: geosave.model.stages.decoder.dpt.DPT
+::: geosave.ml.components.decoder.dpt.DPT
     options:
       show_root_full_path: true
       filters: []
@@ -147,7 +88,7 @@ fields appear as attributes, including their annotated types and defaults.
         - fusion_blocks
         - forward
 
-::: geosave.model.stages.decoder.unet.Unet
+::: geosave.ml.components.decoder.unet.Unet
     options:
       show_root_full_path: true
       filters: []
@@ -158,7 +99,7 @@ fields appear as attributes, including their annotated types and defaults.
         - final_up
         - forward
 
-::: geosave.model.stages.encoder.clay.Clay
+::: geosave.ml.components.encoder.clay.Clay
     options:
       show_root_full_path: true
       filters: []
@@ -174,35 +115,27 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - forward_pyramid
 
-::: geosave.model.stages.encoder.clay.MODEL_SOURCE
+::: geosave.ml.components.encoder.clay.MODEL_SOURCE
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.clay.MODEL_SPECS
+::: geosave.ml.components.encoder.clay.MODEL_SPECS
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.clay.build_clay
+::: geosave.ml.components.encoder.clay.build_clay
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.clay.default_out_indices
+::: geosave.ml.components.encoder.clay.default_out_indices
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.clay.latlon
+::: geosave.ml.components.encoder.clay.week_and_hour
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.clay.model_context
-    options:
-      show_root_full_path: true
-
-::: geosave.model.stages.encoder.clay.time
-    options:
-      show_root_full_path: true
-
-::: geosave.model.stages.encoder.dinov3.DINOv3
+::: geosave.ml.components.encoder.dinov3.DINOv3
     options:
       show_root_full_path: true
       filters: []
@@ -215,11 +148,19 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - forward_pyramid
 
-::: geosave.model.stages.encoder.dinov3.MODEL_SPECS
+::: geosave.ml.components.encoder.dinov3.MODEL_SPECS
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.prithvi.Prithvi
+::: geosave.ml.components.encoder.grid.locate_centres
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.encoder.grid.read_dates
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.encoder.prithvi.Prithvi
     options:
       show_root_full_path: true
       filters: []
@@ -242,7 +183,7 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - __init__
 
-::: geosave.model.stages.encoder.prithvi.PrithviTL
+::: geosave.ml.components.encoder.prithvi.PrithviTL
     options:
       show_root_full_path: true
       filters: []
@@ -263,19 +204,11 @@ fields appear as attributes, including their annotated types and defaults.
         - model
         - forward
 
-::: geosave.model.stages.encoder.prithvi.location_coords
+::: geosave.ml.components.encoder.prithvi.temporal_coords
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.encoder.prithvi.model_context
-    options:
-      show_root_full_path: true
-
-::: geosave.model.stages.encoder.prithvi.temporal_coords
-    options:
-      show_root_full_path: true
-
-::: geosave.model.stages.encoder.small_cnn.SmallCNN
+::: geosave.ml.components.encoder.small_cnn.SmallCNN
     options:
       show_root_full_path: true
       filters: []
@@ -287,7 +220,7 @@ fields appear as attributes, including their annotated types and defaults.
         - levels
         - forward_pyramid
 
-::: geosave.model.stages.head.classification.ClassificationHead
+::: geosave.ml.components.head.classification.ClassificationHead
     options:
       show_root_full_path: true
       filters: []
@@ -297,7 +230,7 @@ fields appear as attributes, including their annotated types and defaults.
         - projection
         - forward_logits
 
-::: geosave.model.stages.head.dense.DenseHead
+::: geosave.ml.components.head.dense.DenseHead
     options:
       show_root_full_path: true
       filters: []
@@ -307,7 +240,7 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - forward_logits
 
-::: geosave.model.stages.head.regression.RegressionHead
+::: geosave.ml.components.head.regression.RegressionHead
     options:
       show_root_full_path: true
       filters: []
@@ -324,7 +257,7 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - forward_logits
 
-::: geosave.model.stages.head.segmentation.SegmentationHead
+::: geosave.ml.components.head.segmentation.SegmentationHead
     options:
       show_root_full_path: true
       filters: []
@@ -340,7 +273,7 @@ fields appear as attributes, including their annotated types and defaults.
         - forward
         - forward_logits
 
-::: geosave.model.stages.monolith.ibm_granite_biomass.GraniteGeospatialBiomass
+::: geosave.ml.components.monolith.ibm_granite_biomass.GraniteGeospatialBiomass
     options:
       show_root_full_path: true
       filters: []
@@ -349,18 +282,253 @@ fields appear as attributes, including their annotated types and defaults.
         - variables
         - forward
 
-::: geosave.model.stages.registry.MODEL_REGISTRY
+::: geosave.ml.components.published.Published
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.registry.build_model
+::: geosave.ml.components.published.accepts
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.registry.list_models
+::: geosave.ml.components.published.published_attrs
     options:
       show_root_full_path: true
 
-::: geosave.model.stages.registry.register_model
+::: geosave.ml.components.published.published_kwargs
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.registry.COMPONENTS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.registry.DECODERS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.registry.ENCODERS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.registry.HEADS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.components.registry.MONOLITHS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.factory.BuildSpec
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - name
+        - class_path
+        - init_args
+        - validate_selector
+
+::: geosave.ml.factory.Registry
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - base
+        - imports
+        - __getitem__
+        - __iter__
+        - __len__
+        - import_modules
+        - register
+        - check_base
+        - resolve
+        - import_class
+        - get_spec
+        - build
+
+::: geosave.ml.factory.bind_init_args
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.ingestors.COLLECTION
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.ingestors.Sentinel2Ingestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - bands
+        - resolution
+        - client
+        - search_items
+        - ingest
+        - ingest_grid
+
+::: geosave.ml.processing.ingestors.drop_superseded
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.ingestors.read_esa_packing
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.postprocessors.ClassMap
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - classes
+        - colors
+        - postprocess
+
+::: geosave.ml.processing.postprocessors.NO_PREDICTION
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.predictors.ChipPredictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - size
+        - stride
+        - mode
+        - window
+        - batch_size
+        - predict
+
+::: geosave.ml.processing.preprocessors.Reflectance
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - bands
+        - mean
+        - std
+        - preprocess
+        - normalize
+
+::: geosave.ml.processing.processor.Processor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+        - ingestor
+        - preprocessor
+        - predictor
+        - postprocessor
+        - spec
+        - predict_region
+        - predict_path
+        - predict_raster
+        - forward
+
+::: geosave.ml.processing.processor.ProcessorSpec
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - ingestor
+        - preprocessor
+        - predictor
+        - postprocessor
+
+::: geosave.ml.processing.processor.build_processor
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.roles.INGESTORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.roles.Ingestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - ingest
+
+::: geosave.ml.processing.roles.POSTPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.roles.PREDICTORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.roles.PREPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.roles.Postprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - postprocess
+
+::: geosave.ml.processing.roles.Predictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - predict
+
+::: geosave.ml.processing.roles.Preprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - preprocess
+        - normalize
+
+::: geosave.ml.processing.thresholds.calibrate_thresholds
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.release.huggingface.ARTIFACT_FORMAT_VERSION
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.release.huggingface.ChainConfig
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model_type
+        - stages
+        - processor
+        - format_version
+        - geosave_version
+
+::: geosave.ml.release.huggingface.ChainModel
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - config_class
+        - base_model_prefix
+        - chain
+        - from_chain
+        - from_processor
+        - wrap
+        - forward
+
+::: geosave.ml.release.huggingface.StageConfig
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - stage
+        - spec
+
+::: geosave.ml.release.huggingface.check_library_spec
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.release.huggingface.load_processor
     options:
       show_root_full_path: true

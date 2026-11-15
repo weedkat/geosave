@@ -9,8 +9,8 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 from geosave.ml.builders import build_criterion, build_optimizer, build_scheduler
 from geosave.ml.metrics import MulticlassMetrics
-from geosave.model.chain import ModelChain
-from geosave.model.stages.registry import build_model
+from geosave.ml.chain import ModelChain
+from geosave.ml.components.build import build_model
 
 from .data import Sample
 

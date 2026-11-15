@@ -10,7 +10,7 @@ a small encoder with acquisition-time and location inputs.
 ## Choose an encoder
 
 ```python
-from geosave.model import list_models
+from geosave.ml import list_models
 
 list_models().loc["encoder", ["forward", "requires"]]
 ```
@@ -61,9 +61,11 @@ run.** To try the same architecture offline, change `pretrained` to `False`
 before calling `build_model`; every stage will then start with random weights.
 
 ```python
+import pandas as pd
 import torch
+import xarray as xr
 
-from geosave.model import build_model
+from geosave.ml import build_model
 
 stages = {
     "encoder": {
@@ -105,8 +107,9 @@ a training task checkpoint.
 ```python
 inputs = {
     "image": torch.zeros(1, 6, 224, 224),
-    "temporal_coords": torch.tensor([[[2025.0, 151.0]]]),
-    "location_coords": torch.tensor([[-6.2, 106.8]]),
+    "transform": torch.tensor([[10.0, 0, 700_000, 0, -10.0, 9_320_000]]).double(),
+    "crs": ["EPSG:32748"],
+    "time": torch.tensor([[pd.Timestamp("2025-06-01").value]]),
 }
 with torch.inference_mode():
     logits = chain(**inputs)
@@ -123,26 +126,26 @@ trained crop classifier. Supply prepared, normalized imagery for real data.
 | Input | Shape | Values |
 | --- | --- | --- |
 | `image` | `(batch, 6, 224, 224)` | One frame, six bands in the configured order |
-| `temporal_coords` | `(batch, 1, 2)` | Acquisition year and zero-based day of year; June 1, 2025 is day `151` |
-| `location_coords` | `(batch, 2)` | Raster centre as latitude, longitude in degrees |
+| `transform` | `(batch, 6)` float64 | Affine coefficients placing each image's pixels |
+| `crs` | one string per image | `"EPSG:<code>"` or WKT |
+| `time` | `(batch, 1)` int64 | Nanoseconds since 1970 of each frame |
 
-Context tensors are float32 calendar/geographic values, without normalization.
-For multiple frames, set `num_frames` accordingly and supply an image shaped
-`(batch, time, band, y, x)` with matching `(batch, time, 2)` temporal coordinates.
+These are the grid entries `DataTree.gs.to_tensor` writes beside the pixels.
+The encoder derives Prithvi's own inputs from them: the grid centre's latitude
+and longitude, and each frame's year and zero-based day of year. For multiple
+frames, set `num_frames` accordingly and supply an image shaped
+`(batch, time, band, y, x)` with `time` shaped `(batch, time)`.
 
 The tiny encoder uses 16 × 16 spatial patches. Use chip dimensions divisible
 by 16 to retain every border pixel. `input_size` is also supplied to this head,
 which resizes logits to that configured size. Keep chip size, encoder
 `input_size`, and target size aligned when training.
 
-## Prepare bands, values, and context together
+## Prepare bands and values from a raster
 
-Use a project function when preparing pixels and a context mapping together:
+Use a project function to prepare pixels; the tree's tensors carry the grid:
 
 ```python
-from geosave.model.stages.encoder.prithvi import model_context
-
-
 def prepare_inputs(scene):
     selected = scene[["B02", "B03", "B04", "B8A", "B11", "B12"]]
     selected.gs.validate()
@@ -153,8 +156,9 @@ def prepare_inputs(scene):
     mean = image.new_tensor([0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363])
     std = image.new_tensor([0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049])
     image = (image - mean.reshape(1, 6, 1, 1)) / std.reshape(1, 6, 1, 1)
-    inputs = {"image": image, **model_context(reflectance)}
-    return {name: value.unsqueeze(0) for name, value in inputs.items()}
+    sample = xr.DataTree.from_dict({"image": reflectance}).gs.to_tensor()
+    sample["image"] = image
+    return torch.utils.data.default_collate([sample])
 
 
 inputs = prepare_inputs(scene)

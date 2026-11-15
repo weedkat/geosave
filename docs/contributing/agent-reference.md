@@ -10,14 +10,15 @@ paths and implementation details against the current source.
 src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
-├── model/        # what a release contains: chain, spec, release; stages/ owns the registry; stages/ holds encoder/decoder/head/monolith
+├── model/        # what a release contains: chain, processing (processors), release; stages/ holds the registry and encoder/decoder/head/monolith; spec/ is disabled
 └── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
 
 src/geosave/geodata/
-├── core/         # `gs` accessors, GeoRegion and Chips; raster/ (dataarray, dataset, datatree, chips, grid), vector/ (vector base, frame, catalog, sampling)
+├── core/         # concrete raster/vector accessors, conventions and GeoRegion
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
-├── stac/         # extensions/ per schema, catalog/item/asset/band metadata, search/
+├── sampling/     # ChipLayout; RasterChipper/RasterMerger and TensorChipper/TensorMerger
+├── stac/         # search, ODC loading and stamps, catalog conversion, RasterStac publication
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
@@ -43,12 +44,14 @@ Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_fl
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
+STAC table conversion lives in `stac/catalog.py`; publication in `raster.py`
+and `publish.py`; loading metadata in `stac/stamps/`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
-`stac.load_dataset` and `stac.load_datatree` load selected Items through ODC. Format
-readers/writers live in `io/formats/`. `stac/publish.py` owns `StacItem` and `create_stac_collection`;
-DataTree publication writes its collection/Item/asset hierarchy.
+`stac.load_dataset` and `stac.load_native_datasets` load selected Items through ODC. Format
+readers/writers live in `io/raster/` and `io/vector/`. `stac/publish.py` owns `StacItem` (`from_region`, `add_raster_asset`).
+`RasterStac` stages a publication: `from_dataset`, `merge`, `to_cog`; loading returns Datasets, never the tree;
+general DataTree accessors impose no STAC layout.
 `GeoRegion` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Machine Learning
@@ -75,10 +78,14 @@ declares the samples its Datasets return. Semi-supervised methods carry a local
 supervised base; editing one method must not change another method's files.
 Generated configs and scripts use separate method paths.
 
-ModelSpec is disabled pending redesign; its old graph executor, ingestion and
-raster-processing helpers are removed. Recipe-based template data workflows are
-paused. Stage construction and chain/weight releases remain supported. Generated workspaces compose GeoSave and Lightning
-APIs and own their experiment-specific training implementations.
+Preparation shared by training and inference lives in a project's registered
+preprocessor (`model/processing.py`); a release stores the processor that runs
+the model, and `load_processor` rebuilds it. Model code must not import `ml`.
+
+ModelSpec is disabled pending redesign; its graph executor is removed, and
+template data workflows depending on it are paused. Generated workspaces
+compose GeoSave and Lightning APIs and own their experiment-specific training
+implementations.
 
 ## Public API and Docstrings
 

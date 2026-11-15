@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 
 from geosave.geodata import open_vector
-from geosave.geodata.io.formats import geotiff
+from geosave.geodata.io.raster import geotiff
 from geosave.geodata.io.openers import open_raster
 from tests.geodata.conftest import build_raster
 
@@ -18,8 +18,8 @@ from odc.geo.geom import Geometry
 from geosave.geodata import io
 
 import zarr
-from geosave.geodata.io.formats import netcdf
-from geosave.geodata.io.formats import zarr as zarr_io
+from geosave.geodata.io.raster import netcdf
+from geosave.geodata.io.raster import zarr as zarr_io
 from geosave.geodata import attrs
 
 
@@ -53,8 +53,8 @@ def test_a_signed_url_opens_by_the_suffix_of_its_path(monkeypatch) -> None:
     from geosave.geodata.io import openers
 
     opened = []
-    monkeypatch.setattr(
-        openers.rasterio, "open_raster", lambda source, **options: opened.append(source)
+    monkeypatch.setitem(
+        openers.RASTER_OPENERS, ".tif", lambda source, **options: opened.append(source)
     )
     url = "https://host/scene/B02.tif?st=2026-10-11&sig=CXPh%3D"
 
@@ -93,7 +93,7 @@ def test_asset_reference_is_not_automatically_stac(tmp_path, georeferenced):
 
 @pytest.mark.parametrize("suffix", [".zarr", ".nc"])
 @pytest.mark.parametrize("grouped", [False, True])
-def test_stored_hierarchy_determines_type_without_computing_pixels(
+def test_dataset_and_tree_openers_preserve_the_requested_shape_without_computing_pixels(
     tmp_path, suffix, grouped
 ):
     import dask
@@ -111,12 +111,70 @@ def test_stored_hierarchy_determines_type_without_computing_pixels(
         raise AssertionError("Opening computed pixels")
 
     with dask.config.set(scheduler=refuse):
-        restored = open_raster(path)
+        restored = open_raster(path, group="scene" if grouped else None)
     with restored:
-        assert isinstance(restored, xr.DataTree if grouped else xr.Dataset)
-        dataset = restored["scene"].to_dataset() if grouped else restored
+        assert isinstance(restored, xr.Dataset)
+        assert isinstance(restored.red.data, da.Array)
+        xr.testing.assert_equal(restored, source)
+
+    with dask.config.set(scheduler=refuse):
+        tree = io.open_raster_tree(path)
+    with tree:
+        assert isinstance(tree, xr.DataTree)
+        assert tree.groups == (("/", "/scene") if grouped else ("/",))
+        dataset = tree["scene"].to_dataset() if grouped else tree.to_dataset()
         assert isinstance(dataset.red.data, da.Array)
         xr.testing.assert_equal(dataset, source)
+
+    with open_raster(path) as root:
+        assert isinstance(root, xr.Dataset)
+        if grouped:
+            assert not root.data_vars
+        else:
+            xr.testing.assert_equal(root, source)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "open_dataset", "open_tree"),
+    [
+        (".zarr", io.open_zarr, io.open_zarr_tree),
+        (".nc", io.open_netcdf, io.open_netcdf_tree),
+    ],
+)
+@pytest.mark.parametrize("remote", [False, True])
+def test_format_openers_read_one_group_or_the_whole_tree(
+    tmp_path, bucket, suffix, open_dataset, open_tree, remote
+):
+    from tests.geodata.io.raster.test_round_trip import (
+        assert_same_raster,
+        build_described_raster,
+    )
+
+    source = build_described_raster()
+    tree = xr.DataTree.from_dict({"/nested/scene": source})
+    destination = f"{bucket}/tree{suffix}" if remote else tmp_path / f"tree{suffix}"
+    writer = tree.gs.to_zarr if suffix == ".zarr" else tree.gs.to_netcdf
+    path = writer(destination)
+
+    with open_dataset(path, group="nested/scene", chunks={}) as restored:
+        assert isinstance(restored, xr.Dataset)
+        assert restored.red.chunks is not None
+        assert_same_raster(restored, source)
+
+    with open_tree(path, chunks={}) as restored:
+        assert isinstance(restored, xr.DataTree)
+        assert restored.groups == ("/", "/nested", "/nested/scene")
+        assert_same_raster(restored["nested/scene"].to_dataset(), source)
+
+
+def test_group_selection_is_not_supported_for_banded_files():
+    with pytest.raises(ValueError, match="group is only supported"):
+        open_raster("scene.tif", group="scene")
+
+
+def test_tree_opening_requires_a_hierarchical_format():
+    with pytest.raises(ValueError, match="which this opener does not read"):
+        io.open_raster_tree("scene.tif")
 
 
 @pytest.mark.parametrize("suffix", [".geojson", ".gpkg", ".parquet"])
@@ -176,7 +234,7 @@ def test_remote_filesystem_options_work_for_real_reads(tmp_path, bucket, suffix)
 
 
 def test_gdal_reads_by_itself_only_where_it_reaches_a_file():
-    from geosave.geodata.io.rasterio import read_gdal_address
+    from geosave.geodata.io.raster.geotiff import read_gdal_address
     from geosave.geodata.io.storage import create_upath
 
     # GDAL reaches s3 itself, unless the UPath carries options GDAL never sees.
@@ -199,7 +257,9 @@ def test_a_raster_on_a_filesystem_gdal_lacks_reads_back(bucket, tmp_path):
     with open_raster(remote) as restored:
         assert restored.red.chunks is not None
         np.testing.assert_array_equal(restored.red.compute(), _flat().red)
-    with pytest.raises(FileNotFoundError):
+    from rasterio.errors import RasterioIOError
+
+    with pytest.raises(RasterioIOError):
         open_raster(f"{bucket}/missing.tif")
 
 
@@ -215,21 +275,22 @@ def test_extent_round_trip(tmp_path, suffix):
     raster = build_raster().gs.write_extent(geometry)
     path = tmp_path / f"raster.{suffix}"
     if suffix == "nc":
-        io.formats.netcdf.write_netcdf(raster, path)
+        io.raster.netcdf.write_netcdf(raster, path)
     elif suffix == "zarr":
-        io.formats.zarr.write_zarr(raster, path)
+        io.raster.zarr.write_zarr(raster, path)
     else:
-        io.formats.geotiff.write_cog(raster, path)
+        io.raster.geotiff.write_cog(raster, path)
     with io.open_raster(path) as restored:
         assert restored.gs.region.extent == geometry
         assert restored.red.gs.region.extent == geometry
         np.testing.assert_array_equal(restored.red.values, raster.red.values)
 
 
+# A GeoTIFF holds one band stack with one packing; per-variable packing is
+# netCDF's and Zarr's.
 @pytest.mark.parametrize(
     ("suffix", "writer"),
     [
-        ("tif", geotiff.write_cog),
         ("nc", netcdf.write_netcdf),
         ("zarr", zarr_io.write_zarr),
     ],

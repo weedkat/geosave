@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 from torch.utils.data import Dataset
 
 from modules.regression import supervised
-from tests.templates.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
-
-pytestmark = pytest.mark.skip(
-    reason="Template processing awaits the ModelSpec redesign."
+from tests.templates.tasks.segmentation.supervised.test_data import (
+    FLIP,
+    _batch,
+    _preprocessor,
 )
 
 
@@ -29,8 +28,9 @@ class Chips(Dataset[supervised.Sample]):
 
 def _training(tmp_path, **options: object) -> supervised.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
-    path = _spec().save(tmp_path / "model_spec.yaml")
-    data = supervised.DataModule(spec=path, train=Chips(), val=Chips(), **options)
+    data = supervised.DataModule(
+        preprocessor=_preprocessor(), train=Chips(), val=Chips(), **options
+    )
     data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
     return data
 

@@ -7,7 +7,7 @@ import sys
 
 from huggingface_hub import HfApi
 
-from geosave.model.release import GeoSaveModel
+from geosave.ml.release import ChainModel
 
 # An allowlist, so `.env` credentials, data, and logs never reach the Hub.
 WORKSPACE_FILES = ["*.py", "README.md", "configs/**", "scripts/**", "modules/**"]
@@ -29,7 +29,7 @@ def main() -> None:
     checkpoint = args.checkpoint.resolve()
     run = checkpoint.parent.relative_to(workspace)
     task = Module.load_from_checkpoint(checkpoint)
-    GeoSaveModel.from_chain(task.model).push_to_hub(args.repo_id)
+    ChainModel.from_chain(task.model).push_to_hub(args.repo_id)
 
     commit = HfApi().upload_folder(
         repo_id=args.repo_id,

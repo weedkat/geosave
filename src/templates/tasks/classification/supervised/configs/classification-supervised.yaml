@@ -49,7 +49,8 @@ model:
 data:
   class_path: modules.classification.supervised.data.DataModule
   init_args:
-    spec: configs/classification-supervised/model_spec.yaml
+    preprocessor:
+      class_path: modules.classification.supervised.processing.Reflectance
     train:
       class_path: modules.classification.supervised.datasets.MyDataset
       init_args:

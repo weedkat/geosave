@@ -23,6 +23,7 @@ from odc.geo.xr import xr_coords
 from odc.geo.geobox import GeoBox
 
 import geosave as gs
+from geosave.geodata import io
 
 rng = np.random.default_rng(7)
 y, x = np.mgrid[:128, :128]
@@ -37,10 +38,11 @@ scene = xr.Dataset({
     "nir": (("y", "x"), nir),
     "label": (("y", "x"), label),
 }).assign_coords(xr_coords(grid))
-scene.gs.to_array().astype("float32").gs.to_cog("training-scene.tif")
+io.write_cog(scene.astype("float32"), "training-scene.tif")
 ```
 
-For the next tutorial, all three variables are stored in one GeoTIFF. A TIFF
+The Dataset writer preserves variable names as band metadata. For the next
+tutorial, all three variables are stored in one GeoTIFF. A TIFF
 uses a common dtype, so the label values reopen as floating-point numbers;
 the class codes remain `0` and `1`. We convert them to integers for the loss.
 In a real project you can keep imagery and labels in separate files.
@@ -49,8 +51,9 @@ In a real project you can keep imagery and labels in separate files.
 
 ```python
 source = gs.open_raster("training-scene.tif")
-chips = gs.Chips([source[["red", "nir", "label"]]], size=32)
-chip = chips[0].gs.to_numpy(dtype="float32")  # First tile across the scenes.
+tree = xr.DataTree.from_dict({"scene": source[["red", "nir", "label"]]})
+chips = gs.RasterChipper([tree], size=32)
+chip = chips[0]["scene"].to_dataset().gs.to_numpy(dtype="float32")  # First tile across the scenes.
 len(chips), chip.shape[-2:]
 ```
 
@@ -58,11 +61,11 @@ len(chips), chip.shape[-2:]
 (16, (32, 32))
 ```
 
-Chips plans windows without reading pixels. Indexing returns a lazy Dataset on the
-chip's grid; `gs.to_numpy` reads it. File blocks or upstream calculations may read
-more than that window.
-Keep the source open while using the chips. `chips.key(0)` returns the
-`(sample_index, tile_id)` identity used when merging predictions.
+RasterChipper plans windows without reading pixels. Indexing returns a lazy DataTree
+on the chip grid; selecting its `scene` Dataset and calling `gs.to_numpy` reads
+the pixels. File blocks or upstream calculations may read more than that window.
+Keep the source open while using the chips. The integer chip index identifies
+a prediction for merging; `chips.layout.locate(0)` states its source raster and pixel offsets.
 
 ## Convert one sample
 
@@ -97,7 +100,8 @@ labels = gs.open_raster("data/labels.tif")
 if image.gs.geobox is None or image.gs.geobox != labels.gs.geobox:
     raise ValueError("Imagery and labels must have the same georeferenced grid")
 scene = image[["red", "nir"]].assign(label=labels["label"])
-chips = gs.Chips([scene], size=256, mode="reflect")
+tree = xr.DataTree.from_dict({"scene": scene})
+chips = gs.RasterChipper([tree], size=256, mode="reflect")
 ```
 
 Keep both source files open until training or prediction has finished, then close

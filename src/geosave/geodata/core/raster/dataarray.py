@@ -47,8 +47,8 @@ if TYPE_CHECKING:
     from dask.delayed import Delayed
     from upath import UPath
     from geosave.geodata.io.storage import Location, StorageOptions
-    from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
-    from geosave.geodata.io.formats.zarr import ZarrWriteOptions
+    from geosave.geodata.io.raster.netcdf import NetCDFWriteOptions
+    from geosave.geodata.io.raster.zarr import ZarrWriteOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
 
@@ -645,23 +645,23 @@ class GeoDataArray(
         return cast("DataArray", result)
 
     def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
+        """STAC Item publication is being rebuilt as `the pending RasterStac publication interface`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
+            "STAC publication is being rebuilt as the pending RasterStac publication interface"
         )
 
     def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
-        """STAC catalog publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
+        """STAC catalog publication is being rebuilt as `the pending RasterStac publication interface`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
+            "STAC publication is being rebuilt as the pending RasterStac publication interface"
         )
 
     def to_cog(self, path: Location, **options: Any) -> Any:
@@ -711,7 +711,7 @@ class GeoDataArray(
         Examples:
             >>> ds["red"].gs.to_zarr("red.zarr")
         """
-        from geosave.geodata.io.formats import zarr
+        from geosave.geodata.io.raster import zarr
 
         dataset = self._data.to_dataset() if dim is None else self.to_dataset(dim)
         return zarr.write_zarr(
@@ -756,7 +756,7 @@ class GeoDataArray(
         Examples:
             >>> ds["red"].gs.to_netcdf("red.nc")
         """
-        from geosave.geodata.io.formats import netcdf
+        from geosave.geodata.io.raster import netcdf
 
         dataset = self._data.to_dataset() if dim is None else self.to_dataset(dim)
         return netcdf.write_netcdf(
@@ -820,8 +820,10 @@ class GeoDataArray(
         """Split labelled raster bands into variables, as native `to_dataset(dim)`.
 
         As natively, the array's attrs become the Dataset attrs, except its
-        packing and flags, which move to each band so its pixels keep their
-        meaning.
+        packing, flags and units, which move to each band so its pixels keep
+        their meaning, as does its storage recipe in encoding. Coords along
+        `dim` other than its labels become each variable's own attrs, as
+        `Dataset.gs.to_array` stacked them.
 
         Args:
             dim: Dimension whose unique labels name the output variables.
@@ -836,17 +838,32 @@ class GeoDataArray(
         """
         packing = self.packing
         flags = self.flags
+        units = self._data.attrs.get("units")
+        recipe = dict(self._data.encoding)
+        labels = [
+            name
+            for name, coord in self._data.coords.items()
+            if coord.dims == (dim,) and name != dim
+        ]
 
-        dataset = self._data.to_dataset(dim=dim)
+        dataset = self._data.drop_vars(labels).to_dataset(dim=dim)
         dataset = attrs.clear_attrs(dataset, attrs.CFPacking)
         dataset = attrs.clear_attrs(dataset, attrs.CFFlags)
+        dataset.attrs.pop("units", None)
 
-        for name in dataset.data_vars:
+        for index, name in enumerate(dataset.data_vars):
             band = dataset[name]
             if packing is not None:
                 band = attrs.stamp_attrs(band, packing)
             if flags is not None:
                 band = attrs.stamp_attrs(band, flags)
+            if units is not None:
+                band.attrs["units"] = units
+            for label in labels:
+                value = self._data[label].values[index]
+                if value is not None:
+                    band.attrs[label] = value
+            band.encoding = dict(recipe)
             dataset[name] = band
         return cast("Dataset", dataset)
 

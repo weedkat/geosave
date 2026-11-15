@@ -275,6 +275,7 @@ def test_stacking_and_splitting_keep_dataset_attrs_apart_from_pixel_meaning() ->
 
     assert restored.attrs == scene.attrs
     assert restored.red.gs.packing == scene.red.gs.packing
-    # A variable's own descriptive attrs are dropped, as native stacking does.
-    assert "long_name" not in restored.red.attrs
+    # A variable's own attrs ride along `band` as coords and come back to it.
+    assert restored.red.attrs["long_name"] == "Red"
+    assert "long_name" not in restored.nir.attrs
     assert "title" not in restored.red.attrs

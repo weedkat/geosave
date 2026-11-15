@@ -43,8 +43,8 @@ comparison
 The sidebar lists the image and index independently. Switch their visibility,
 adjust opacity, or use the comparison controls. You can also add a GeoDataFrame
 of polygons, or explore a catalog to select its footprints. Opening raster pixels from a
-catalog row is currently unavailable; load a tree, combine a collection, and
-explore that Dataset instead.
+catalog row is currently unavailable; load selected rows with
+`rows.gs.to_dataset(geobox=grid, chunks={})` and explore that Dataset instead.
 
 ## Open it in a browser
 

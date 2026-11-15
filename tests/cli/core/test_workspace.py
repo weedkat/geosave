@@ -115,15 +115,22 @@ from torch.utils.data import DataLoader
 from lightning.pytorch import Trainer
 from transformers import AutoModel
 from modules.segmentation.supervised.module import Module
-from geosave.model.release import GeoSaveModel
+from geosave.ml.release import ChainModel
 
-module = Module(model_chain={
-    'head': {'name': 'segmentation', 'init_args': {
+module = Module(
+    model_chain={'head': {'name': 'segmentation', 'init_args': {
         'feature_channels': 2, 'num_classes': 2,
-    }},
-})
+    }}},
+    ignore_index=255,
+    criterion={'name': 'cross_entropy', 'init_args': {'ignore_index': 255}},
+    optimizer={'name': 'adamw', 'init_args': {'lr': 1e-3}},
+    lr_scheduler=None,
+    metrics=['iou.macro'],
+    predictor={'name': 'chips', 'init_args': {'size': 4}},
+)
 inputs = torch.arange(32, dtype=torch.float32).reshape(2, 4, 4) / 32
-samples = [{'inputs': {'feature_map': inputs}, 'target': torch.zeros(4, 4, dtype=torch.long)}] * 2
+grid = {'transform': torch.tensor([1.0, 0, 0, 0, -1, 0], dtype=torch.float64), 'crs': 'EPSG:32749'}
+samples = [{'inputs': {'feature_map': inputs}, 'target': torch.zeros(4, 4, dtype=torch.long), **grid}] * 2
 trainer = Trainer(
     accelerator='cpu', devices=1, max_steps=1, logger=False,
     enable_checkpointing=False, enable_progress_bar=False,
@@ -132,7 +139,7 @@ trainer = Trainer(
 trainer.fit(module, train_dataloaders=DataLoader(samples, batch_size=2))
 trainer.save_checkpoint('trained.ckpt')
 restored = Module.load_from_checkpoint('trained.ckpt').eval()
-release = GeoSaveModel.from_chain(restored.model).eval()
+release = ChainModel.from_chain(restored.model).eval()
 release.save_pretrained('release')
 loaded = AutoModel.from_pretrained('release', local_files_only=True).eval()
 module.eval()

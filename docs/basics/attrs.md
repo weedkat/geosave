@@ -137,8 +137,7 @@ value. State `fill_value` together with scale and offset when replacing it.
 Use `write_nodata` to change only the missing-value declaration.
 
 Readers return stored values by default. Use `gs.open_raster(path,
-mask_and_scale=True)` to decode while opening. STAC loading retains DN by default; use
-`load_dataset(..., mask_and_scale=True)` for immediate in-memory decoding, or
+mask_and_scale=True)` to decode while opening. STAC loading retains DN; decode with
 `.gs.mask_and_scale()` on a loaded Dataset or DataArray. Dataset decoding also
 interprets CF coordinates and relationships. Spectral indices already decode
 the bands they select; cloud-mask functions expect decoded reflectance.

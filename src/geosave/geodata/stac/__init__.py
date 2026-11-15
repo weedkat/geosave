@@ -5,8 +5,15 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .catalog import create_catalog
-    from .load import StacLoadOptions, load_dataset, load_datatree
-    from .publish import StacItem, create_stac_collection
+    from .load import (
+        StacLoadOptions,
+        group_bands_by_grid,
+        list_properties,
+        load_dataset,
+        load_native_datasets,
+    )
+    from .publish import StacItem
+    from .raster import RasterStac
     from .search.api import StacClient, StacProvider
     from .search.query import StacQuery
     from .search.table import StacTable
@@ -19,9 +26,11 @@ _LAZY = {
     "create_catalog": ".catalog",
     "StacLoadOptions": ".load",
     "load_dataset": ".load",
-    "load_datatree": ".load",
+    "group_bands_by_grid": ".load",
+    "list_properties": ".load",
+    "load_native_datasets": ".load",
     "StacItem": ".publish",
-    "create_stac_collection": ".publish",
+    "RasterStac": ".raster",
 }
 
 
@@ -43,7 +52,9 @@ __all__ = [
     "create_catalog",
     "StacLoadOptions",
     "load_dataset",
-    "load_datatree",
+    "group_bands_by_grid",
+    "list_properties",
+    "load_native_datasets",
     "StacItem",
-    "create_stac_collection",
+    "RasterStac",
 ]

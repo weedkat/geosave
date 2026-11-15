@@ -7,27 +7,24 @@ if TYPE_CHECKING:
     import pystac
 
     from geosave import GeoCatalog, open_vector
-    from geosave.geodata import DataTree
+    from geosave.geodata import Dataset
     from geosave.geodata.core import GeoCatalogItem
-    from geosave.geodata.io.formats import geojson
-    from geosave.geodata.io.formats import geopackage
-    from geosave.geodata.io.formats import geoparquet
+    from geosave.geodata.io.vector import geoparquet, ogr
 
-    def check_row_reader(item: GeoCatalogItem) -> None:
-        assert_type(item.to_datatree(), DataTree)
+    def check_row_reader(row: GeoCatalogItem) -> None:
+        assert_type(row.to_item(), pystac.Item)
 
     def check_accessors(item: pystac.Item) -> None:
         catalog = create_catalog([item])
         assert_type(catalog.gs, GeoCatalog)
-        assert_type(catalog.gs.to_datatree(), DataTree)
+        assert_type(catalog.gs.to_items(), list[pystac.Item])
+        assert_type(catalog.gs.to_dataset(), Dataset)
 
         # File readers retain the same accessor for feature and Item rows.
         assert_type(open_vector("items.parquet").gs, GeoCatalog)
         assert_type(geoparquet.open_geoparquet("items.parquet").gs, GeoCatalog)
-        open_vector("items.parquet").gs.sample()
-        geoparquet.open_geoparquet("items.parquet").gs.sample()
-        geojson.open_geojson("plots.geojson").gs.crs
-        geopackage.open_geopackage("plots.gpkg").gs.crs
+        ogr.open_geojson("plots.geojson").gs.crs
+        ogr.open_geopackage("plots.gpkg").gs.crs
 
 
 def test_native_containers_dispatch_in_a_fresh_process():

@@ -64,28 +64,31 @@ Download a small real Sentinel-2 crop, calculate NDVI, and save a georeferenced
 result. No account or GPU is needed for this example.
 
 ```python
+from pathlib import Path
 from urllib.request import urlretrieve
 
 import geosave as gs
+from geosave.geodata import io
 
 urlretrieve(
     "https://raw.githubusercontent.com/weedkat/geosave/main/docs/assets/sample-scene.tif",
     "scene.tif",
 )
-with gs.open_raster("scene.tif") as stored:
-    scene = stored.gs.mask_and_scale()
+Path("output").mkdir(exist_ok=True)
+with gs.open_raster("scene.tif") as scene:
     ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
-    ndvi.gs.to_cog("output", path_format="ndvi.tif")
+    io.write_cog(ndvi.to_dataset(), "output/ndvi.tif")
 ```
 
 Open `output/ndvi.tif` in your GIS. The sample is a 752 KiB crop of agricultural
-land near Davis, California. An index shows spectral variation; one scene
-does not establish crop health, drought, or change.
+land near Davis, California. `ndvi` decodes the bands' nodata and scale before
+calculating. An index shows spectral variation; one scene does not establish
+crop health, drought, or change.
 
 Follow the [vegetation tutorial](https://weedkat.github.io/geosave-engine/first-raster/)
-for the map and interpretation, or run
-[zone summaries](https://github.com/weedkat/geosave/blob/main/examples/vegetation_zones.py)
-to produce a map and CSV for two demonstration areas.
+for the map and interpretation, or the
+[zone comparison](https://weedkat.github.io/geosave-engine/guides/vegetation-zones/)
+to summarize NDVI and valid coverage for two areas in a CSV.
 
 ## Follow a land-cover project
 

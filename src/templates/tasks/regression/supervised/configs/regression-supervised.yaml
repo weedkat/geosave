@@ -53,7 +53,8 @@ model:
 data:
   class_path: modules.regression.supervised.data.DataModule
   init_args:
-    spec: configs/regression-supervised/model_spec.yaml
+    preprocessor:
+      class_path: modules.regression.supervised.processing.Reflectance
     train:
       class_path: modules.regression.supervised.datasets.MyDataset
       init_args:

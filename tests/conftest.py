@@ -56,9 +56,10 @@ def write_cogs(raster, root, format_paths, **options):
     A template naming ``{variable}`` writes a file per variable; otherwise every
     variable of a date shares one file.
     """
+    import pandas as pd
+
     from geosave.geodata.io import storage
-    from geosave.geodata.io.formats.geotiff import write_files
-    from geosave.geodata.io.paths import read_scalar_coords
+    from geosave.geodata.io.raster.geotiff import write_files
 
     folder = storage.create_upath(root, options.pop("storage_options", None))
     observations = [raster]
@@ -68,7 +69,15 @@ def write_cogs(raster, root, format_paths, **options):
             observations.append(raster.isel(time=position))
     files = {}
     for observation in observations:
-        labels = read_scalar_coords(observation)
+        # Scalar coordinates fill the template, dates as Timestamps for strftime.
+        labels = {}
+        for name, coord in observation.coords.items():
+            if coord.ndim != 0 or name == "spatial_ref":
+                continue
+            if coord.dtype.kind == "M":
+                labels[str(name)] = pd.Timestamp(coord.values[()])
+            else:
+                labels[str(name)] = coord.item()
         if "{variable}" not in format_paths:
             files[folder / format_paths.format_map(labels)] = observation
             continue
@@ -90,12 +99,8 @@ def combine_item(tree):
 
 
 def build_tree(rasters):
-    """Build a STAC catalog tree: one collection per raster, an Item per time label."""
-    nodes = {}
-    for name, raster in rasters.items():
-        (collection,) = raster.gs.expand().children.values()
-        nodes[name] = collection
-    return xr.DataTree.from_dict(nodes)
+    """Group whole Datasets in a native tree."""
+    return xr.DataTree.from_dict(rasters)
 
 
 @pytest.fixture(autouse=True)

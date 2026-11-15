@@ -12,6 +12,7 @@ own image with red and near-infrared bands.
 
 ```python
 import geosave as gs
+from geosave.geodata import io
 
 scene = gs.open_raster("sample-scene.tif", chunks={"y": 128, "x": 128})
 list(scene.data_vars)
@@ -48,7 +49,7 @@ from pathlib import Path
 
 path = Path("prepared/ndvi.tif")
 path.parent.mkdir(parents=True, exist_ok=True)
-ndvi.gs.to_cog(path)
+io.write_cog(ndvi.to_dataset(), path)
 result = gs.open_raster(path)
 result.gs.geobox == patch.gs.geobox
 ```
@@ -70,7 +71,7 @@ scene.close()
 
 | Data | Read | Write |
 | --- | --- | --- |
-| GeoTIFF | `gs.open_raster(path)` | `array.gs.to_cog("scene.tif")` |
+| GeoTIFF | `gs.open_raster(path)` | `io.write_cog(dataset, "scene.tif")` |
 | Multidimensional raster | `gs.open_raster(path)` | `raster.gs.to_zarr(path)` or `.gs.to_netcdf(path)` |
 | Vector features | `gs.open_vector(path)` | `features.gs.to_geoparquet(path)` |
 

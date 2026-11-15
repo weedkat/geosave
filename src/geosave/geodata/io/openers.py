@@ -1,48 +1,57 @@
-"""Read native rasters, trees, and vectors through their format modules."""
+"""Open a raster or vector file by the format its suffix names."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
-
-from geosave.geodata.io import rasterio
-from geosave.geodata.io.formats import geojson, geopackage, geoparquet, netcdf, zarr
+from geosave.geodata.io.raster import geotiff, netcdf, zarr
+from geosave.geodata.io.vector import geoparquet, ogr
 
 from .storage import Location, StorageOptions
 
 if TYPE_CHECKING:
     from geosave.geodata import Dataset, DataTree, GeoDataFrame
 
-_NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
+# The reader of each suffix, built from the suffixes each format module states.
+RASTER_OPENERS: dict[str, Callable[..., Dataset]] = {}
+RASTER_TREE_OPENERS: dict[str, Callable[..., DataTree]] = {}
+for _suffix in zarr.SUFFIXES:
+    RASTER_OPENERS[_suffix] = zarr.open_zarr
+    RASTER_TREE_OPENERS[_suffix] = zarr.open_zarr_tree
+for _suffix in netcdf.SUFFIXES:
+    RASTER_OPENERS[_suffix] = netcdf.open_netcdf
+    RASTER_TREE_OPENERS[_suffix] = netcdf.open_netcdf_tree
+for _suffix in geotiff.READ_SUFFIXES:
+    RASTER_OPENERS[_suffix] = geotiff.open_geotiff
 
-# Stores holding named variables.
-_DATASET_SUFFIXES = (".zarr", *_NETCDF_SUFFIXES)
-
-# Files holding one banded array, which GDAL reads.
-_ARRAY_SUFFIXES = (".tif", ".tiff", ".jp2", ".png")
-
-_VECTOR_SUFFIXES = (".geojson", ".json", ".gpkg", ".parquet", ".geoparquet")
-
-# Vendor product directories, whose leaves name themselves by path.
-_PRODUCT_SUFFIXES = (".safe",)
+VECTOR_OPENERS: dict[str, Callable[..., Any]] = {}
+for _suffix in ogr.GEOJSON_SUFFIXES:
+    VECTOR_OPENERS[_suffix] = ogr.open_geojson
+for _suffix in ogr.GEOPACKAGE_SUFFIXES:
+    VECTOR_OPENERS[_suffix] = ogr.open_geopackage
+for _suffix in geoparquet.SUFFIXES:
+    VECTOR_OPENERS[_suffix] = geoparquet.open_geoparquet
 
 
 def open_raster(
     source: Location,
     *,
+    group: str | None = None,
     chunks: int | Mapping[str, int] | Literal["auto"] | None = {},
     mask_and_scale: bool = False,
     storage_options: StorageOptions | None = None,
     **options: Any,
-) -> Dataset | DataTree:
-    """Open one raster file, preserving its stored group hierarchy.
+) -> Dataset:
+    """Open one raster file or one stored group as a Dataset.
 
     Args:
         source: Path, URL, or UPath ending in .tif, .tiff, .jp2, .png, .zarr,
             .nc, .nc4, or .cdf. Signed URL queries are preserved.
+        group: Zarr or NetCDF group path; None opens the root group.
+            Child groups are not opened. Other formats do not accept a group.
         chunks: Dask chunk sizes: {} (default) uses backend-preferred chunks,
             "auto" uses Dask's target sizes, an integer or dimension mapping
             requests sizes, and None uses backend lazy indexing without Dask.
@@ -55,14 +64,13 @@ def open_raster(
             use the installed backend's defaults unless explicitly stated.
 
     Returns:
-        Dataset for a banded file or root-only store; DataTree when a Zarr or
-        NetCDF store has child groups, even one child. Close the returned object
-        to release handles and temporary downloads. Opening does not reproject.
+        Dataset for the file or selected group. Use `open_raster_tree` to open
+        a Zarr or NetCDF hierarchy. Close the result to release handles.
+        Opening does not reproject.
 
     Raises:
         ValueError: Unsupported format or incompatible backend option.
         TypeError: A sequence is supplied instead of one location.
-        NotImplementedError: SAFE product directories are not supported.
 
     GeoTIFF / COG, JPEG2000 and PNG options:
         parse_coordinates (bool | None): Generate spatial coordinates from the file's
@@ -89,8 +97,6 @@ def open_raster(
             encoding when opening with a different requested chunk layout.
         chunk_store (Any): Separate store for chunk data where the backend supports
             it. The current Zarr 3 library warns that this is unimplemented.
-        storage_options (Mapping[str, Any]): Filesystem credentials and connection options merged
-            into the source UPath. These are forwarded only for remote stores.
         decode_timedelta (bool | None): Decode CF duration variables as timedeltas; False
             retains numbers, and None delegates the decoding policy.
         use_zarr_fill_value_as_mask (bool | None): Use the Zarr fill value as missing-value
@@ -101,7 +107,6 @@ def open_raster(
             operation, such as options for `dask.array.from_array`.
 
     NetCDF options:
-        engine: "netcdf4" (default) or "h5netcdf".
         cache (bool | None): Cache accessed pixels as NumPy arrays; None delegates the
             choice to xarray based on whether chunking is enabled.
         decode_cf (bool | None): Decode CF conventions. False can leave time and grid
@@ -123,19 +128,19 @@ def open_raster(
         chunked_array_type (str | None): Registered xarray chunk manager, such as `"dask"`.
         from_array_kwargs (dict[str, Any] | None): Extra keywords for the chunk manager's `from_array`
             operation, such as options for `dask.array.from_array`.
-        backend_kwargs (dict[str, Any] | None): Extra keywords for the selected NetCDF engine's open
-            function. Supported keys depend on that engine.
+        backend_kwargs (dict[str, Any] | None): Extra keywords for h5netcdf's open function.
 
     Storage options:
         Options are merged with a source UPath's options. Omitted values use the
         installed filesystem backend's defaults and credential discovery. Install
         the corresponding fsspec backend for cloud protocols. These are synchronous
         openers: leave asynchronous=False. protocol and chain_parser are forbidden.
-        NetCDF, GeoJSON and GeoPackage download remote files; NetCDF retains its
-        temporary copy until close(). Zarr and GeoParquet use filesystem reads.
-        Rasterio downloads a temporary file when storage_options are supplied; without
-        options it uses GDAL's URL handling and configured environment. HF bucket
-        URLs without options use the existing S3 gateway configuration.
+        Every format reads through the UPath's filesystem: NetCDF, GeoJSON and
+        GeoPackage from an open file handle, Zarr and GeoParquet by filesystem
+        reads. A GDAL raster given storage_options is read through the filesystem
+        as Rasterio's opener; without options GDAL reads the URL itself, with the
+        environment configure_gdal sets. HF bucket URLs without options go through
+        the S3 gateway that environment names.
 
         Common filesystem keys (where supported by the selected backend):
             use_listings_cache (bool): Cache directory listings.
@@ -245,37 +250,64 @@ def open_raster(
         raise TypeError(
             "open_raster reads one file or store; files laid out across dates or bands "
             "read back through the catalog `to_catalog` writes with them "
-            "(rows.gs.to_datatree()), or open each file on its own"
+            "(stac.load_dataset(rows.gs.to_items(), ...)), or open each file on its own"
         )
-    options.update(
-        chunks=chunks, mask_and_scale=mask_and_scale, storage_options=storage_options
+    opener = find_opener(source, RASTER_OPENERS)
+    if group is not None:
+        if opener is geotiff.open_geotiff:
+            raise ValueError("group is only supported for Zarr and NetCDF")
+        options["group"] = group
+    return opener(
+        source,
+        chunks=chunks,
+        mask_and_scale=mask_and_scale,
+        storage_options=storage_options,
+        **options,
     )
-    suffix = _read_suffix(source)
 
-    if suffix == ".zarr":
-        return zarr.open_zarr(source, **options)
 
-    if suffix in _NETCDF_SUFFIXES:
-        return netcdf.open_netcdf(source, **options)
+def open_raster_tree(
+    source: Location,
+    *,
+    chunks: int | Mapping[str, int] | Literal["auto"] | None = {},
+    mask_and_scale: bool = False,
+    storage_options: StorageOptions | None = None,
+    **options: Any,
+) -> DataTree:
+    """Open a whole Zarr or NetCDF hierarchy as a DataTree.
 
-    if suffix in _ARRAY_SUFFIXES:
-        return rasterio.open_raster(source, **options)
+    Args:
+        source: Path, URL, or UPath ending in .zarr, .nc, .nc4, or .cdf.
+            Signed URL queries are preserved.
+        chunks: Chunk sizes, as in `open_raster`; {} uses backend-preferred
+            Dask chunks and None uses backend indexing without Dask.
+        mask_and_scale: Decode missing values, scale_factor and add_offset.
+        storage_options: Filesystem configuration, as in `open_raster`.
+        **options: Format-specific options, as in `open_zarr_tree` or
+            `open_netcdf_tree`.
 
-    if suffix in _PRODUCT_SUFFIXES:
-        raise NotImplementedError(
-            "reading a SAFE product is not built yet; open its JP2 leaves with io.rasterio.open_raster"
-        )
+    Returns:
+        DataTree preserving the groups, including a root-only tree for a
+        store without children. Close the result to release handles.
+        Opening does not reproject.
 
-    if suffix in _VECTOR_SUFFIXES:
-        raise ValueError(
-            f"{source} holds vector features rather than pixels; read it with "
-            f"open_vector"
-        )
+    Raises:
+        ValueError: Unsupported format or incompatible backend option.
+        TypeError: A sequence is supplied instead of one location.
 
-    raise ValueError(
-        f"{source} ends in {suffix!r}, which names no supported raster format; "
-        f"read a store ending in {_DATASET_SUFFIXES} or a raster ending in "
-        f"{_ARRAY_SUFFIXES}"
+    Examples:
+        >>> tree = open_raster_tree("scene.zarr")
+        >>> raster = tree["s2/r10m"].to_dataset()
+    """
+    if isinstance(source, (list, tuple)):
+        raise TypeError("open_raster_tree reads one file or store")
+    opener = find_opener(source, RASTER_TREE_OPENERS)
+    return opener(
+        source,
+        chunks=chunks,
+        mask_and_scale=mask_and_scale,
+        storage_options=storage_options,
+        **options,
     )
 
 
@@ -312,7 +344,6 @@ def open_vector(
         TypeError: Unsupported or duplicated backend option.
 
     GeoJSON options:
-        engine: "pyogrio" (default) or "fiona".
         columns (list[str] | None): Property columns to read; an empty list keeps only geometry.
             None reads all properties.
         bbox (tuple[float, float, float, float] | None): Feature filter `(minx, miny, maxx, maxy)` in the file's CRS.
@@ -322,32 +353,28 @@ def open_vector(
             bare geometries must use the file's CRS. Cannot combine with `bbox`.
         rows (int | slice | None): Read the first N features with an integer, or a feature-position
             slice. None reads all matching features.
-        engine_options (dict[str, Any]): Extra read keywords for the selected GeoPandas engine,
-            such as pyogrio's `use_arrow`. Do not repeat direct options or set
-            `engine` or `ignore_geometry` here.
+        engine_options (dict[str, Any]): Extra pyogrio read keywords, such as `use_arrow`. Do
+            not repeat direct options or set `engine` or `ignore_geometry` here.
 
     GeoPackage options:
-        engine: "pyogrio" (default) or "fiona".
         layer: Layer name; None requires exactly one layer.
         columns (list[str] | None): Property columns to read; an empty list keeps only geometry.
             None reads all properties.
-        bbox (tuple[float, float, float, float] | None): Feature filter `(minx, miny, maxx, maxy)` in the selected layer's
-            CRS. Mutually exclusive with `mask`.
+        bbox (tuple[float, float, float, float] | None): Feature filter `(minx, miny, maxx, maxy)` in the file's CRS.
+            Mutually exclusive with `mask`.
         mask (Any): Geometry, GeoSeries, GeoDataFrame, or GeoJSON geometry selecting
             intersecting features. GeoPandas reprojects objects carrying a CRS;
-            bare geometries must use the layer's CRS. Cannot combine with `bbox`.
+            bare geometries must use the file's CRS. Cannot combine with `bbox`.
         rows (int | slice | None): Read the first N features with an integer, or a feature-position
             slice. None reads all matching features.
-        engine_options (dict[str, Any]): Extra read keywords for the selected engine. Do not
-            repeat direct options or set `engine` or `ignore_geometry` here.
+        engine_options (dict[str, Any]): Extra pyogrio read keywords, such as `use_arrow`. Do
+            not repeat direct options or set `engine` or `ignore_geometry` here.
 
     GeoParquet / STAC GeoParquet options:
         columns (Sequence[str] | None): Attribute columns to read; the primary geometry column is
             retained. None reads all columns; [] reads only geometry.
         bbox (tuple[float, float, float, float] | None): Feature filter `(minx, miny, maxx, maxy)` in the stored CRS;
             requires covering-bbox metadata written with `write_covering_bbox`.
-        storage_options (StorageOptions | None): Credentials and connection options merged into the
-            source UPath and used by its filesystem.
         to_pandas_kwargs (Mapping[str, object] | None): Options for converting non-geometry Arrow columns to
             pandas, such as dtype-conversion settings.
         parquet_options (dict[str, object]): Extra `pyarrow.parquet.read_table` keywords. Do not
@@ -358,11 +385,12 @@ def open_vector(
         installed filesystem backend's defaults and credential discovery. Install
         the corresponding fsspec backend for cloud protocols. These are synchronous
         openers: leave asynchronous=False. protocol and chain_parser are forbidden.
-        NetCDF, GeoJSON and GeoPackage download remote files; NetCDF retains its
-        temporary copy until close(). Zarr and GeoParquet use filesystem reads.
-        Rasterio downloads a temporary file when storage_options are supplied; without
-        options it uses GDAL's URL handling and configured environment. HF bucket
-        URLs without options use the existing S3 gateway configuration.
+        Every format reads through the UPath's filesystem: NetCDF, GeoJSON and
+        GeoPackage from an open file handle, Zarr and GeoParquet by filesystem
+        reads. A GDAL raster given storage_options is read through the filesystem
+        as Rasterio's opener; without options GDAL reads the URL itself, with the
+        environment configure_gdal sets. HF bucket URLs without options go through
+        the S3 gateway that environment names.
 
         Common filesystem keys (where supported by the selected backend):
             use_listings_cache (bool): Cache directory listings.
@@ -468,32 +496,38 @@ def open_vector(
         additional SDK keys depend on the installed backend version. A filesystem
         may reject options unsupported by its implementation.
     """
-    options.update(columns=columns, bbox=bbox, storage_options=storage_options)
-    suffix = _read_suffix(source)
-
-    if suffix in (".geojson", ".json"):
-        return cast("GeoDataFrame", geojson.open_geojson(source, **options))
-
-    if suffix == ".gpkg":
-        return cast("GeoDataFrame", geopackage.open_geopackage(source, **options))
-
-    if suffix in (".parquet", ".geoparquet"):
-        return geoparquet.open_geoparquet(source, **options)
-
-    if suffix in _DATASET_SUFFIXES or suffix in _ARRAY_SUFFIXES:
-        raise ValueError(
-            f"{source} holds pixels rather than vector features; open it with "
-            f"open_raster"
-        )
-
-    raise ValueError(
-        f"{source} ends in {suffix!r}, which names no supported vector format; "
-        f"read a vector ending in {_VECTOR_SUFFIXES}"
+    opener = find_opener(source, VECTOR_OPENERS)
+    frame = opener(
+        source, columns=columns, bbox=bbox, storage_options=storage_options, **options
     )
+    return cast("GeoDataFrame", frame)
 
 
-def _read_suffix(source: Location) -> str:
-    """Read the format suffix without a URL's query or fragment."""
+def find_opener[T](
+    source: Location, openers: Mapping[str, Callable[..., T]]
+) -> Callable[..., T]:
+    """Pick the reader of the format a location's suffix names.
+
+    Args:
+        source: Path or URL; a URL's query and fragment are not its suffix.
+        openers: Readers by lowercase suffix.
+
+    Returns:
+        The format's `open_*` function.
+
+    Raises:
+        ValueError: No reader takes the suffix.
+
+    Examples:
+        >>> find_opener("s3://bucket/scene.TIF?versionId=3", RASTER_OPENERS)
+        <function open_geotiff at ...>
+    """
     text = str(source)
     path = urlsplit(text).path if "://" in text else text
-    return PurePath(path).suffix.lower()
+    suffix = PurePath(path).suffix.lower()
+    if suffix not in openers:
+        raise ValueError(
+            f"{source} ends in {suffix!r}, which this opener does not read; "
+            f"it reads {sorted(openers)}"
+        )
+    return openers[suffix]

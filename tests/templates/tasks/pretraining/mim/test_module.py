@@ -8,11 +8,11 @@ from torch.utils.data import DataLoader, Dataset
 
 from modules.pretraining import mim
 from modules.pretraining.mim.module import patch_mask
-from geosave.model.chain import chain_step
+from geosave.ml.chain import chain_step
 from tests.templates.tasks.pretraining.mim.test_data import Chips as Scenes
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    _spec,
+    _preprocessor,
 )
 
 
@@ -99,10 +99,14 @@ def test_a_validation_batch_hides_the_same_patches_every_epoch() -> None:
     assert not torch.equal(first[0], first[1])
 
 
-@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = mim.DataModule(
-        _spec(), Scenes(), Scenes(), augmentations=FLIP, batch_size=2, num_workers=0
+        _preprocessor(),
+        Scenes(),
+        Scenes(),
+        augmentations=FLIP,
+        batch_size=2,
+        num_workers=0,
     )
     module = mim.Module(model_chain=STAGES)
     trainer = Trainer(

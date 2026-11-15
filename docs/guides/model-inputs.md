@@ -73,12 +73,12 @@ for image/target conversion and [alignment](align-rasters.md) for differing grid
 
 ## Reuse a trained model
 
-Store the preparation function, normalization statistics, band order, missing
-policy and their versions with your experiment. A native GeoSave model release
-contains registered stage construction and weights; loading it does not run
-preprocessing. Call preparation before inference with the same settings used
-for training. See [model releases](release.md).
+To ship preparation with a model, put it in a registered preprocessor class:
+`preprocess(raster)` selects and decodes bands, and `normalize(image)`
+standardizes a batch. Use the same class in your training Dataset, then attach
+it to the release through a processor; `load_processor` rebuilds it with the
+saved arguments. See [run the model with a processor](release.md#run-the-model-with-a-processor).
 
-ModelSpec and its old recipe executor are disabled pending redesign.
-[ModelSpec status](model-spec.md) records that limitation; no replacement
-recipe schema is currently supported.
+A release stores the class's registered name and constructor arguments, not
+its code. Keep the module that registers it importable and versioned with
+your experiment, along with normalization statistics and missing-value policy.

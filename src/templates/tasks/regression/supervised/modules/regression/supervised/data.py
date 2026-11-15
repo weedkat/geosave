@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import torch
@@ -8,7 +7,8 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.transforms import DataKey, ImageAugmenter
-from geosave.model.spec import ModelSpec
+from geosave.ml.factory import BuildSpec
+from geosave.ml.processing.roles import PREPROCESSORS
 
 
 class Sample(TypedDict):
@@ -44,10 +44,11 @@ class DataModule(LightningDataModule):
     """Feed supervised pixelwise regression from datasets returning a `Sample`.
 
     Batches are finished on the device: augmentations move pixels and values
-    together while training, then the spec's configured input transforms.
+    together while training, then the preprocessor's normalization.
 
     Args:
-        spec: Recipe, or its file, with `from_tensor` and `normalized` calls.
+        preprocessor: Preprocessor by registered `name` or `class_path`, with
+            `init_args`; its `normalize` runs on every batch.
         pixels: Names of tensors that share augmentation and normalization.
         train: Training dataset.
         val: Validation dataset.
@@ -63,14 +64,14 @@ class DataModule(LightningDataModule):
         data:
           class_path: modules.regression.supervised.DataModule
           init_args:
-            spec: configs/regression-supervised/model_spec.yaml
+            preprocessor: {class_path: modules.regression.supervised.processing.Reflectance}
             train: {class_path: my_project.Biomass, init_args: {split: train}}
             val: {class_path: my_project.Biomass, init_args: {split: val}}
     """
 
     def __init__(
         self,
-        spec: str | Path | ModelSpec,
+        preprocessor: dict[str, Any],
         train: SampleDataset,
         val: SampleDataset,
         *,
@@ -82,7 +83,7 @@ class DataModule(LightningDataModule):
         pixels: tuple[str, ...] = ("image",),
     ) -> None:
         super().__init__()
-        self.spec = spec if isinstance(spec, ModelSpec) else ModelSpec.load(spec)
+        self.preprocessor = PREPROCESSORS.build(BuildSpec.model_validate(preprocessor))
         self.pixels = pixels
         self.train_dataset = train
         self.val_dataset = val
@@ -97,9 +98,7 @@ class DataModule(LightningDataModule):
         """Normalize pixel tensors after augmentation, retaining auxiliary inputs."""
         result = dict(inputs)
         for name in self.pixels:
-            result[name] = self.spec.run(
-                entry="from_tensor", output="normalized", value=inputs[name]
-            )
+            result[name] = self.preprocessor.normalize(inputs[name])
         return result
 
     def _loader(self, dataset: SampleDataset, *, shuffle: bool) -> DataLoader[Sample]:

@@ -16,7 +16,7 @@ search STAC, build catalogs, and read raster chips. Begin with
 
 ## Which installation do I need?
 
-The base install covers geodata. ModelSpec is currently disabled. Add `ml` for tensors,
+The base install covers geodata. Add `ml` for tensors,
 model stages, and training; `hub` for native releases; `flows` for Prefect jobs;
 and `cloud` for S3 or Google Cloud filesystems. `hub` includes `ml`.
 See [Installation](install.md) for the extras and commands.
@@ -64,8 +64,8 @@ for the current method's inputs and behavior.
 
 Prototype it in ordinary PyTorch, a notebook, or a workspace. For supported
 deployment, integrate the model implementation and registered factory into
-GeoSave first. A native release contains construction data and weights, without
-executable custom Python. See [model releases](guides/release.md).
+GeoSave first. A native release contains construction data, weights and
+processor settings, without executable custom Python. See [model releases](guides/release.md).
 
 ## Why does converting to a tensor leave my stored integers unchanged?
 
@@ -87,7 +87,7 @@ continuous imagery. See [the alignment recipe](guides/align-rasters.md).
 An Item table stores metadata and asset addresses; pixels stay in their
 source files. Item catalogs can use relative hrefs that resolve against the
 catalog's location. Move the catalog and its asset folders together. Catalog sampling is currently unavailable; select rows with GeoPandas and
-load their assets explicitly. Moving files does not provide credentials for remote assets. See [catalog rules](concepts/catalog-windows.md).
+load their assets explicitly. Moving files does not provide credentials for remote assets.
 
 ## Will GeoSave make my Dataset and train/validation split?
 
@@ -106,8 +106,12 @@ Use [pretrained models](guides/pretrained.md) to choose the loading path and
 
 ## Does a saved model run all preprocessing automatically?
 
-ModelSpec is disabled pending redesign. Prepare inputs explicitly; a release
-forwards named inputs to its chain and performs no automatic preprocessing.
+Only when the release carries a processor. `load_processor(repo)` rebuilds the
+model with its registered ingestor, preprocessor and postprocessor, and
+`predict_path` runs preparation, chipping, merging and decoding. Import the
+module that registers those classes first. A release without a processor
+forwards named tensors to its chain and prepares nothing. See
+[run the model with a processor](guides/release.md#run-the-model-with-a-processor).
 
 ## How do I find exact parameters, defaults, and return values?
 

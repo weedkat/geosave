@@ -15,8 +15,11 @@ Examples:
 from typing import TYPE_CHECKING
 
 from geosave.geodata import (
-    Chips,
-    GeoSamples,
+    ChipLayout,
+    RasterChipper,
+    RasterMerger,
+    TensorChipper,
+    TensorMerger,
     DataArray,
     Dataset,
     DataTree,
@@ -32,6 +35,7 @@ from geosave.geodata import (
     configure_gdal,
     io,
     open_raster,
+    open_raster_tree,
     open_vector,
     statistics,
 )
@@ -46,8 +50,11 @@ __all__ = [
     "GeoDataset",
     "GeoDataTree",
     "GeoCatalog",
-    "Chips",
-    "GeoSamples",
+    "ChipLayout",
+    "RasterChipper",
+    "RasterMerger",
+    "TensorChipper",
+    "TensorMerger",
     "GeoCatalogItem",
     "StacClient",
     "StacQuery",
@@ -58,6 +65,7 @@ __all__ = [
     "features",
     "io",
     "open_raster",
+    "open_raster_tree",
     "open_vector",
     "stac",
     "class_percent",

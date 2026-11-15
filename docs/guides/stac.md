@@ -43,8 +43,7 @@ grid = GeoBox.from_bbox(
     resolution=10,
 )
 cube = stac.load_dataset(
-    selected, grid, bands=["B04", "B08"],
-    collection=client.collection("sentinel-2-l2a"),
+    selected, geobox=grid, bands=["B04", "B08"], chunks={},
     patch_url=client.patch_url,
 )
 ```
@@ -52,59 +51,59 @@ cube = stac.load_dataset(
 The GeoBox chooses the exact output CRS, resolution, shape and placement.
 Use `reference.gs.geobox` to match an existing raster. Bounds snap to a
 rectangular grid; the loader does not mask pixels outside a search polygon.
-It reads the Items supplied without repeating the search. An empty selection
-raises `RegionFetchError`.
+It reads the Items supplied without repeating the search. Options are
+`odc.stac.load`'s, with its defaults; an empty selection raises ODC's
+`ValueError`.
 
 | Loading choice | Behavior |
 | --- | --- |
-| Default `groupby="solar_day"` | Mosaic Items from one local solar day into one time plane. |
+| Default `groupby="time"` | Mosaic Items with one timestamp into one time plane. |
+| `groupby="solar_day"` | Mosaic Items from one local solar day into one time plane. |
 | `groupby="id"` | Keep one plane per Item. |
-| Default spatial chunks of 1024 | Build Dask-backed pixel reads. |
-| `chunks=None` | Load eagerly; unlike backend-lazy file reading. |
-| `mask_and_scale=True` | Decode stored values into physical values. |
+| Default `chunks=None` | Load eagerly, as ODC does. |
+| `chunks={}` or sizes | Build Dask-backed pixel reads. |
 | `resampling="nearest"` or a band mapping | Choose ODC resampling explicitly. |
 
-Opening normally retains stored digital numbers (DN). Decode with
+Loading retains stored digital numbers (DN). Decode with
 `cube.gs.mask_and_scale()` before physical calculations. The loader rejects
 selected sources with conflicting scale/offset declarations.
-Collection metadata is supplied explicitly; the pixel loader never fetches it.
+The Collection is the one the Items link to, as `item.get_collection()`
+resolves it: searched Items reach it through their catalog, catalog rows carry
+it, and a hand-built Item names it with `item.set_collection(collection)`.
 
 ## Keep each asset's native grid
 
 ```python
-with stac.load_datatree(
-    selected,
-    collections=[client.collection("sentinel-2-l2a")],
-    bands=["B04", "B08"],
-    patch_url=client.patch_url,
-) as tree:
-    scene = tree["sentinel-2-l2a"].gs.combine(["B04", "B08"])
-    result = scene.gs.mask_and_scale().mean("time").compute()
+for crs, resolution, native in stac.load_native_datasets(
+    selected, bands=["B04", "B08", "B11"], chunks={}, patch_url=client.patch_url
+):
+    native.gs.to_zarr(f"s2_{abs(resolution.x):g}m.zarr")
 ```
 
-A tree keeps `collection/Item/asset` nodes. Each asset has the exact grid its
-Projection metadata states; assets and Items can differ in grid. `combine`
-requires the selected assets to share CRS, resolution and pixel alignment.
-Extents may differ. For mixed grids, use
-`tree.gs.reproject(grid)["sentinel-2-l2a"].gs.combine(...)` or load directly
-onto a grid with `load_dataset`.
-
-`load_datatree` and catalog `.gs.to_datatree()` require asset grids in
-`proj:*`. When that metadata is absent, supply a GeoBox to `load_dataset`, or
-open a known asset file directly with `gs.open_raster`. No geographic location
-is invented. Consume lazy pixels before closing the source tree.
+`load_native_datasets` loads once per group of `stac.group_bands_by_grid`, the
+bands sharing the CRS and resolution their `proj:*` states, finest first. With
+no grid option, ODC loads each group onto its native grid, the finest among the
+group's bands, which is every band's own: no band is resampled. A region option (`bbox`, `geopolygon`) crops each group at its own
+resolution. Bands without `proj:*` are left out; load them onto a chosen grid
+with `geobox=`.
 
 ## Search a saved Item table
 
 Use the file produced by the [catalog tutorial](catalogs-and-cuts.md):
 
 ```python title="Adaptation example — use your catalog path"
-client = gs.StacClient.open("catalog.parquet")
-found = client.search(gs.StacQuery(collections=["default"]))
+table = gs.StacClient.open("catalog.parquet")
+query = gs.StacQuery(
+    collections=["my-collection"], bbox=(-121.82, 38.52, -121.79, 38.55),
+)
+found = table.search(query)
 ```
 
-Use the collection IDs actually stored in your table. `found.gs.collections`
-retains their definitions. Search does not load raster pixels.
+Opening a `.parquet` path returns a `StacTable`, which searches the file with
+the same queries as an API. `table.collections()` lists its Collection ids;
+`found.gs.collections` retains their definitions. To read the whole table
+without filtering, use `gs.open_vector("catalog.parquet")`. Search does not
+load raster pixels.
 
 For a static STAC JSON catalog, use native PySTAC:
 
@@ -121,17 +120,18 @@ reads vector files and Item GeoParquet tables, rather than STAC JSON catalogs.
 ## Preserve properties and Collection definitions
 
 Pass `with_properties=["eo:cloud_cover"]` to `load_dataset` to retain a
-requested property per observation, alongside the properties shared by its
-source Items. Read them from `cube.stac_properties`; Collection metadata lives
-separately in `cube.gs.stac_collection`.
+property per time plane. ODC names it `eo_cloud_cover`; the coordinate's
+`stac_property` attr keeps the STAC key, and `cube.gs.stac_properties` maps each
+key to its coordinate. Text properties need `{"key": ..., "dtype": "str"}`.
+Collection metadata lives separately in `cube.gs.stac_collection`.
 
-A time plane built from several Items uses their shared properties and ODC's
-requested property summaries. Cropping does not recalculate scene cloud cover;
+A time plane built from several Items holds ODC's fused value: numbers
+averaged, text joined with ",". Cropping does not recalculate scene cloud cover;
 remove or recompute facts that no longer describe a derived output.
 
 To publish a Dataset with a time dimension, use
-`cube.gs.expand().gs.to_catalog("assets")`. The tree publisher reads Item
-properties from `stac_properties`, and time and grid facts from the raster.
+`cube.gs.to_catalog("assets")`. Publication reads marked Item property
+coordinates, and time and grid facts from the raster.
 For a derived dataset, replace the source Collection with one describing the
 new product. See [metadata behavior](../concepts/metadata.md).
 
@@ -147,5 +147,5 @@ through [storage options and GDAL](../concepts/storage.md#use-remote-storage).
 The same client can search remote Item tables with a configured rustac
 DuckDB session; see [STAC reference](../reference/stac.md) for its arguments.
 
-Catalog sampling and direct `rows.gs.to_dataset()` are currently unavailable.
-Select rows with GeoPandas, load a tree, and combine a collection explicitly.
+Select rows with GeoPandas, then call `rows.gs.to_dataset(geobox=grid, chunks={})`
+to load one collection. Catalog sampling remains unavailable.

@@ -9,14 +9,12 @@ GeoSave connects native geospatial data with model development. Catalogs index d
 **Catalog**: A table of geospatial Items and their assets, used to discover and
 select data. It is not a model input tensor.
 
-**Item**: One STAC observation, as publication writes it: the positions along
-`split_item` (time by default) make separate Items.
+**Item**: One STAC observation. `RasterStac.from_dataset` groups an existing
+Item dimension (`time` by default); each group becomes one Item.
 _Avoid_: observation row, inventory row
 
-**Asset**: One file within an Item. `split_asset` divides an Item into assets:
-`"variable"` gives one per data variable, and a dimension one per label. A
-lone raster's sole asset is named `asset`; a tree's asset names start with
-the node path.
+**Asset**: One file within an Item. Raster publication writes one COG per
+variable and Item, named `<root>/<item id>/<variable>.tif`.
 _Avoid_: inventory, layer
 
 **Sample**: The inputs belonging to one model example, with targets when labelled.
@@ -27,19 +25,18 @@ one grid, or one model-sized chip. Use explicit dimensions and grids to describe
 what a model accepts.
 
 **Grid**: For an affine raster, the CRS, affine transform and array shape that
-place its pixels. Resolution alone does not identify a grid. A tree's grid
-node names are local labels; `tree.gs.grids` summarizes their actual metadata.
-Publication selects Collection boundaries with `collections=["s2", "dem"]`;
-neither hierarchy depth nor grid inspection implies Collection membership.
+place its pixels. Resolution alone does not identify a grid. General DataTrees
+have caller-defined nodes; `RasterStac` separately owns the publication layout.
 
-**Recipe**: A ModelSpec YAML declaration of invocation inputs and dependent
-processing calls. It uses installed operations; it is not model weights or a
-training loop. See [the execution guide](docs/guides/model-spec.md).
+**Recipe**: The former ModelSpec YAML declaration of processing calls.
+ModelSpec is disabled. Registered processing roles now describe ingestion,
+preprocessing and postprocessing; release integration is still open. See
+[release and inference](docs/contributing/design/release-inference.md).
 
 ### Raster structure
 
 Terms follow CF, xarray and cf-xarray. See
-[the CF structure reference](docs/contributing/reviews/2026-11-11-cf-structure-reference.md).
+[raster structure](docs/concepts/xarray-structure.md).
 
 **Variable**:
 Any named array of a Dataset: pixels, coordinates, bounds, the CRS. A netCDF or
@@ -146,27 +143,24 @@ the **grid extent** its pixels cover.
 The STAC Collection and extension URIs a Dataset retains in root attrs.
 
 **Observation properties**:
-One STAC property mapping per observation, on the `stac_properties`
-coordinate. **Common properties** are their intersection, computed on read.
+STAC values stored as coordinates marked `stac_property`. The accessor's
+`stac_properties` mapping identifies each STAC key's coordinate. Loading retains
+properties requested with `with_properties`.
 
 ### Sampling
 
 **Region**:
-One place a sample covers: founded by the smallest footprint, joined by every Item covering most of it; a large footprint, such as a radar swath, joins several.
-_Avoid_: tile, area, place
+A geometry and optional time interval, independent of pixel placement.
 
 **Slot**:
-One position on a shared timeline. Each selected collection independently
-contributes zero or more observations. With a frequency, slots are calendar
-intervals; without one, exact representative timestamps define positions.
-See [calendar sampling](docs/concepts/catalog-windows.md).
+One calendar interval in raster temporal sampling. First/last selection keeps
+one observation per slot; an empty slot excludes a window.
 
 **Window**:
-Consecutive slots of one place taken together as one sample, as pandas `rolling` takes consecutive rows.
-_Avoid_: frame, lookback, sequence
+Consecutive calendar slots of a prepared raster, returned by `.gs.sample`.
 
 **Chip**:
-One fixed-size pixel window of a prepared Dataset or DataArray. Chips slices spatial dimensions without choosing a CRS, resolution, or extent; predictions merge back onto the source scene's layout.
+One fixed-size pixel window of a prepared raster. `RasterChipper` cuts chips along the spatial dimensions without choosing a CRS, resolution, or extent; `RasterMerger` places predictions back by chip index.
 _Avoid_: tile, patch, crop
 
 **Composite**:

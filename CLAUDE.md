@@ -50,14 +50,22 @@ uv run pre-commit run --all-files
 src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
-├── model/        # what a release contains: chain, registry, spec, release; stages/ holds encoder/decoder/head/monolith
-└── ml/           # reusable training builders, criterion, metrics, transforms, callbacks, and CLI
+└── ml/           # model chains, components, processors, releases, and training support
+
+src/geosave/ml/
+├── factory.py    # BuildSpec and Registry: every name/class-path builder
+├── chain/        # ModelChain and @chain_step: how a built chain runs
+├── components/   # build_model, list_models, Published; encoder/decoder/head/monolith
+├── processing/   # Processor and its roles: ingestor, preprocessor, predictor, postprocessor
+├── release/      # ChainModel and load_processor (Transformers, Hugging Face Hub)
+└── builders/ criterion/ metrics/ transforms/ callbacks/ cli.py  # training support
 
 src/geosave/geodata/
-├── core/         # `gs` accessors, GeoRegion and Chips; raster/ (dataarray, dataset, datatree, chips), ctor/ (create_* constructors), vector/ (vector base, frame, catalog, sampling)
+├── core/         # concrete raster/vector accessors, conventions and GeoRegion
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
-├── io/           # readers and writers; storage.py turns every path or URL into a UPath
-├── stac/         # extensions/ per schema, catalog/item/asset/band metadata, search/
+├── io/           # raster/ (Dataset <-> file, codecs/), vector/ (GeoDataFrame <-> file); storage.py turns every path or URL into a UPath
+├── sampling/     # ChipLayout; RasterChipper/RasterMerger for rasters, TensorChipper/TensorMerger for batches in a Module step
+├── stac/         # search, ODC loading and stamps, catalog conversion, RasterStac publication
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
@@ -79,15 +87,17 @@ own variant-specific checks and traversal. Internal functions used across
 modules have plain names; underscore names are module-local. Supported public
 API is declared explicitly, not inferred from implementation filenames.
 
-Dependencies point one way: `geodata <- model <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called), and `model` does not import `ml`, so a release loads and preprocesses without the training stack.
+Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called). Inside `ml`, `factory <- chain <- components <- processing <- release`; this inference path never imports the training support (`builders`, `callbacks`, `cli`, ...).
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC metadata lives in `stac/catalog.py`, `item.py`, `asset.py`, and `band.py`.
+STAC table conversion lives in `stac/catalog.py`; publication in `raster.py`
+and `publish.py`; loading metadata in `stac/stamps/`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
-`stac.load_dataset` and `stac.load_datatree` load selected Items through ODC. Format
-readers/writers live in `io/formats/`, and `io/stac.py` owns raster asset I/O.
+`stac.load_dataset` and `stac.load_native_datasets` load selected Items through ODC. Format
+readers/writers live in `io/raster/` and `io/vector/`; `io/raster/codecs/` translates
+GeoSave's conventions to each format's and back.
 `GeoRegion` describes geometry/time; native `GeoBox` defines exact pixel placement.
 
 ## Design
@@ -137,28 +147,17 @@ LightningCLI    -> workspace entry point and configuration
 Logger          -> experiment logging
 ```
 
-A training setup is one LightningModule and the DataModule that feeds it, kept together in `ml/tasks/<head type>/<method>/`:
+A training setup is a project-owned LightningModule, DataModule and Dataset,
+kept in `modules/<task>/<method>/` in the generated workspace. Source templates
+live in `src/templates/tasks/<task>/<method>/`. The library's `ml/` holds reusable
+builders, criterion, metrics, transforms, callbacks and CLI support.
 
-```text
-ml/
-├── metrics/          # MulticlassMetrics, RegressionMetrics
-├── builders/         # criterion, optimizer, scheduler from configuration
-├── criterion/        # losses the library owns
-├── transforms/       # augmentation and mixing
-└── tasks/
-    └── segmentation/
-        ├── calibrate.py  # shared by every segmentation method
-        └── supervised/
-            ├── module.py # Module(LightningModule)
-            └── data.py   # DataModule(LightningDataModule)
-```
-
-Each package at the root of `ml/` owns one concern, and only `tasks/` imports
-the others. Each method's `data.py` declares the `Sample` its datasets return;
-torch Datasets are written per data source and passed in per split. Share code
-across head types only once two written modules repeat it.
-
-Generated workspaces compose GeoSave and Lightning APIs; they do not own library implementations.
+Each method's `data.py` declares its sample contract. Keep generated methods
+independent: editing one must not change another method's files. Each method's
+`processing.py` holds its `Preprocessor`, shared by its datasets, DataModule and
+a release's processor. Use the
+[contributor guidance](docs/contributing/agent-reference.md#machine-learning)
+for training and template work.
 
 ## Tests
 

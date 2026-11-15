@@ -1,8 +1,8 @@
 # Create and reopen a raster catalog
 
-Write three dated observations as TIFF assets, save their Item table, and
+Write three dated observations as COG assets, save their Item table, and
 reopen them as a raster time series. Use this when you need files indexed by
-observation and collection. For windows of one prepared image, use
+observation. For windows of one prepared image, use
 [chip reading and prediction merging](chips.md).
 
 **You need:** the base package. This synthetic example runs offline and writes
@@ -31,57 +31,48 @@ optical = xr.Dataset(
     {"red": (("time", "y", "x"), np.ones((3, 32, 32), dtype="uint16"))},
     coords={"time": dates},
 ).assign_coords(xr_coords(grid)).gs.write_nodata(0)
-tree = optical.gs.expand(id_format="{start:%Y%m%d}")
-[leaf.path for leaf in tree.leaves]
 ```
 
-```text
-['/default/20250101/red', '/default/20250201/red', '/default/20250301/red']
-```
-
-`expand` makes a STAC-shaped DataTree: collection → Item → asset. Each time
-step becomes an Item and each variable an asset with its own grid and metadata.
-This inspects metadata without computing pixels. Variables without the Item
-dimension are omitted. An explicit `id_format` chooses stable, unique Item names.
-
-The collection is `default` unless the Dataset carries `StacCollection` attrs,
-as a STAC-loaded Dataset does. For a derived product, supply a Collection
-whose identity, description and license describe that product before expanding.
-The automatically generated Collection is a minimal teaching default.
+The Dataset has three time positions on one grid. Each position becomes an
+Item and each variable an asset. The `time` dimension must exist; a scalar
+time coordinate alone does not provide an Item dimension.
 
 ## Write assets and save the table
 
 ```python
-items = tree.gs.to_catalog(root / "assets")
+items = optical.gs.to_catalog(root / "assets", id_format="{start:%Y%m%d}")
 path = items.gs.to_geoparquet(root / "catalog.parquet")
-items["id"].tolist(), items["collection"].unique().tolist()
+items["id"].tolist()
 ```
 
 ```text
-(['20250101', '20250201', '20250301'], ['default'])
+['20250101', '20250201', '20250301']
 ```
 
-`tree.gs.to_catalog` writes the pixels as COGs and returns a GeoDataFrame with
-one row per Item. Files follow the node paths, such as
-`assets/default/20250101/red.tif`. `to_geoparquet` saves the table separately.
-Pass `overwrite=True` to intentionally replace existing destinations.
+`Dataset.gs.to_catalog` writes COGs and returns one row per Item. Files land
+at `assets/20250101/red.tif`, for example. `id_format` must produce unique
+Item names. `to_geoparquet` saves the table separately. Pass `overwrite=True`
+to intentionally replace existing destinations.
 
 An Item describes an observation's footprint, date, properties and files.
-An asset's `href` points to its file; the table does not contain raster pixels.
-The GeoParquet writer stores Collection definitions and relative asset paths.
-Move the table and its asset folder together to retain those relationships.
+Its asset hrefs point to the pixels. The GeoParquet writer stores relative
+asset paths; move the table and asset folder together. If the source has
+Collection metadata, that definition travels with the Items and table.
+For a derived product, replace the source Collection with one describing
+that product before publication. This minimal example has no Collection.
 
-Dataset and DataArray `.gs.to_catalog()` are unavailable. Use the tree path
-shown above. `tree.gs.to_cog(folder)` writes the assets without returning Items.
+For several asset grids, use `stac.RasterStac.from_dataset` on each Dataset,
+merge the staged publications by Item id, then call `to_cog` and
+`stac.create_catalog`. See [STAC publication](../reference/stac.md#publication).
+Static variables are included in every Item and written repeatedly.
 
 ## Select and load observations
 
 ```python
 rows = gs.open_vector(path)
 selected = rows.loc[rows["id"].isin(["20250101", "20250301"])]
-with selected.gs.to_datatree() as loaded:
-    observations = loaded["default"].gs.combine()
-    means = observations.gs.mask_and_scale()["red"].mean(("y", "x")).compute()
+observations = selected.gs.to_dataset(geobox=grid, chunks={})
+means = observations.gs.mask_and_scale()["red"].mean(("y", "x")).compute()
 means.values.tolist()
 ```
 
@@ -89,31 +80,30 @@ means.values.tolist()
 [1.0, 1.0]
 ```
 
-`to_datatree` opens assets on their native grids. `combine` works on one
-**collection node**, merges its assets, and stacks Items along `time`.
-It requires matching CRS, resolution and pixel alignment; extents may differ,
-in which case the result spans their union. Different collection timelines
-remain separate. Consume lazy pixels before closing their source tree.
+`to_dataset` validates the selected Item rows and loads one collection through
+ODC. The supplied GeoBox chooses the exact output grid; `chunks={}` builds
+lazy pixel reads. Native `stac.load_dataset(selected.gs.to_items(), ...)`
+is the equivalent route for callers already working with PySTAC Items.
 
-For mixed grids, pass an exact destination before combining:
-`loaded.gs.reproject(grid)["default"].gs.combine()`.
-For several source tiles that need mosaicking into one observation, use
-[`stac.load_dataset(items, grid)`](stac.md#search-first-then-load-onto-a-chosen-grid).
+For several native grids, use `stac.load_native_datasets` to obtain
+`(crs, resolution, dataset)` groups. Loading does not construct a STAC tree.
+Choose resampling explicitly for assets that must move to a different grid.
 
 ## Combine tables and inspect metadata
 
 Use `geosave.geodata.stac.catalog.concat_catalogs` to combine compatible
 Item tables while preserving Collection definitions. Conflicting definitions
 raise. Tables read from different files currently cannot be concatenated
-this way, because relative asset hrefs have different bases.
+this way because relative asset hrefs have different bases.
 
 `rows.gs.collections` returns native PySTAC Collection copies.
-`rows.gs.to_items()` converts the rows to native Items, resolving asset hrefs.
-See [STAC search and loading](stac.md) for remote providers and native PySTAC inputs.
+`rows.gs.to_items()` converts rows to native Items, resolving asset hrefs.
+Request Item properties when loading, for example
+`with_properties=["eo:cloud_cover"]`; they become marked coordinates.
+See [STAC search and loading](stac.md) for remote providers.
 
 ## Sampling status
 
-`rows.gs.sample()`, `rows.gs.to_dataset()`, `row.gs.read_pixels()`, and
-`GeoSamples` currently raise `NotImplementedError` while their design is rebuilt.
-Select rows with GeoPandas and load them with `.gs.to_datatree()` as above.
-For prepared rasters, [Chips](chips.md) remains available independently.
+Catalog sampling and row-level `read_pixels` remain unavailable. Select rows
+with GeoPandas and load them with `.gs.to_dataset()` as above. For prepared
+rasters, use temporal `.gs.sample` and spatial [RasterChipper](chips.md) independently.

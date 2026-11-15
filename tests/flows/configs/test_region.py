@@ -57,7 +57,7 @@ def test_raster_region_uses_the_file_grid_and_time(tmp_path, grid):
         {"class": (("y", "x"), np.ones((4, 4), dtype="uint8"))},
         grid,
     ).assign_coords(time=instant)
-    path = io.formats.geotiff.write_cog(label, tmp_path / "label.tif").path
+    path = io.raster.geotiff.write_cog(label, tmp_path / "label.tif").path
 
     result, result_grid = (
         TypeAdapter(RegionConfig)

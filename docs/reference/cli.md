@@ -8,8 +8,7 @@ geosave publish --help
 ```
 
 These commands show the installed version's accepted inputs. Use the
-[workspace guide](../guides/workspaces.md) or
-[ingestion guide](../guides/workflows.md) for a complete activity.
+[workspace guide](../guides/workspaces.md) for a complete activity.
 
 ## Create a project
 

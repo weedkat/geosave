@@ -14,14 +14,15 @@ tests/                         Source owner
 │   │   ├── raster/            Native array, dataset and tree accessors
 │   │   │   ├── transform/     Spatial, temporal and pixel operations
 │   │   │   └── utils/         CF storage, statistics and tensor conversion
-│   │   └── vector/            Features, Item rows, catalogs and samples
+│   │   └── vector/            Features, Item rows and catalogs
 │   ├── features/              Derived imagery and masks
-│   ├── io/                    Opening, storage, paths and resource ownership
-│   │   └── formats/           File-format round trips
+│   ├── io/                    Opening, storage, GDAL environment and resource ownership
+│   │   ├── raster/            GeoTIFF, Zarr and NetCDF round trips and codecs
+│   │   └── vector/            GeoParquet, GeoJSON, GeoPackage and STAC GeoParquet
+│   ├── sampling/              Chip layout, RasterChipper and RasterMerger
 │   ├── stac/                  Item metadata, search, loading and publication
 │   ├── utils/                 Shared geographic and display utilities
 │   └── viz/                   Static plots and interactive exploration
-├── model/                     src/geosave/model/
 ├── ml/                        src/geosave/ml/
 ├── templates/tasks/           src/templates/tasks/ (recipe hierarchy)
 ├── cli/                       src/geosave/cli/
@@ -39,12 +40,12 @@ boundaries a caller crosses; they do not introduce a second directory hierarchy.
 | --- | --- | --- |
 | Describe and decode imagery | Packing, missing values, units, flags, display and geographic metadata retain their meaning without unintended reads. | [attrs](geodata/attrs/), [raster utilities](geodata/core/raster/utils/) |
 | Work with native rasters | Arrays retain band identity; datasets combine compatible variables; trees preserve independent grids and observation timelines. Conversion retains values and explicit dtype choices. | [raster accessors](geodata/core/raster/) |
-| Select and transform pixels | Cropping/chipping selects the right pixels and grid; reprojection matches the target; composites preserve coverage intervals; masks preserve missing-data semantics. Lazy operations defer reads. | [transforms](geodata/core/raster/transform/), chips and sampling in [raster](geodata/core/raster/) |
+| Select and transform pixels | Cropping/chipping selects the right pixels and grid; reprojection matches the target; composites preserve coverage intervals; masks preserve missing-data semantics. Lazy operations defer reads. | [transforms](geodata/core/raster/transform/), [sampling](geodata/sampling/), time windows in [raster utilities](geodata/core/raster/utils/) |
 | Select features and training samples | Geographic/time selection, positional sample membership and label rasterization yield the intended features and pixels on the requested grid. | [vector](geodata/core/vector/), [regions](geodata/core/) |
 | Derive imagery | Indices and cloud/shadow masks respect units, missing pixels and chunk boundaries. | [features](geodata/features/) |
 | Find and load observations | Search selects observations; native Items load their assets with the intended bands, grids, dates and acquisition properties. | [STAC](geodata/stac/), [catalog accessors](geodata/core/vector/) |
-| Save, reopen and move data | Writers preserve pixels and representable metadata; readers recover native objects; relative assets remain usable after relocation; invalid batches do not leave partial output. Credentials and resources reach their actual consumers. | [I/O](geodata/io/), [formats](geodata/io/formats/) |
-| Describe saved assets as Items | Published geometry, time and band metadata describe actual saved files. Raster accessor publication is currently paused; fixture-created Items do not establish a publication contract. | [STAC publication](geodata/stac/test_publish.py), [Item metadata](geodata/stac/test_item.py) |
+| Save, reopen and move data | Writers preserve pixels and representable metadata; readers recover native objects; relative assets remain usable after relocation; invalid batches do not leave partial output. Credentials and resources reach their actual consumers. | [I/O](geodata/io/), [raster formats](geodata/io/raster/), [vector formats](geodata/io/vector/) |
+| Describe saved assets as Items | Published geometry, time and band metadata describe actual saved files; fixture-created Items do not establish a publication contract. | [raster publication](geodata/stac/test_raster.py), [Item metadata](geodata/stac/test_publish.py), [Item tables](geodata/stac/test_catalog.py) |
 | Inspect and share data | Plots render correct classes/RGB and missing pixels; Explorer reads the selected viewport, handles interactions, releases subscriptions and exports usable snapshots. | [visualization](geodata/viz/) |
 
 Accessor persistence tests check the public entry point, return value and deferred
@@ -56,10 +57,10 @@ distinct failure at one of these boundaries.
 
 | Caller workflow | Protection that warrants coverage | Suites |
 | --- | --- | --- |
-| Assemble and execute a model | Native values, shapes and gradients flow through stages and chains; a recipe executes its selected dependency graph once. | [model](model/), [spec](model/spec/), [chain](model/chain/) |
+| Assemble and execute a model | Native values, shapes and gradients flow through stages and chains; a recipe executes its selected dependency graph once. | [components](ml/components/), [chain](ml/chain/), [factory](ml/test_factory.py) |
 | Train and evaluate | Builders create usable components; metrics measure the intended task; augmentation transforms images and targets together; callbacks expose predictions. | [ML](ml/) |
 | Generate and run a task recipe | Classification, segmentation, regression and pretraining retain their own target, loss, checkpoint and prediction semantics. | [templates](templates/tasks/) |
-| Release and reload a model | Saved configuration and weights reconstruct a usable model and its raster processing workflow. | [release](model/release/) |
+| Release and reload a model | Saved configuration and weights reconstruct a usable model; a saved processor rebuilds and predicts a raster as before saving. | [release](ml/release/), [processing](ml/processing/) |
 | Create a workspace | CLI output is usable and preserves user files; packaged templates can be discovered and instantiated. | [CLI](cli/), root packaging tests |
 | Orchestrate geospatial work | Flow inputs define the intended regions and label tables. | [flows](flows/) |
 | Follow a documented example | Consumer code still completes its real workflow through public APIs. | [examples](examples/) |
@@ -92,7 +93,6 @@ Markers describe execution needs, not architectural layers. Report failures,
 xfails, skipped checks and incomplete runs separately. A passing suite does not
 establish that its asserted use cases belong in the architecture.
 
-The [dated audit](../docs/contributing/test-audit.md) records cleanup decisions and
-verification results. [Architecture](../docs/contributing/architecture.md) records
+[Architecture](../docs/contributing/architecture.md) records
 current contracts; [open decisions](../docs/contributing/open-decisions.md) records
 unresolved designs.

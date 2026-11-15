@@ -54,7 +54,6 @@ Returns:
 Raises:
     ValueError: Unsupported format or incompatible backend option.
     TypeError: A sequence is supplied instead of one location.
-    NotImplementedError: SAFE product directories are not supported.
 """
     vector = """Open one vector file as a native GeoDataFrame.
 
@@ -83,35 +82,30 @@ Raises:
     for title, path, name, extra in [
         (
             "GeoTIFF / COG, JPEG2000 and PNG",
-            IO / "rasterio.py",
-            "RasterioOpenOptions",
+            IO / "raster/geotiff.py",
+            "GeoTIFFOpenOptions",
             "",
         ),
-        ("Zarr", IO / "formats/zarr.py", "ZarrOpenOptions", ""),
-        (
-            "NetCDF",
-            IO / "formats/netcdf.py",
-            "NetCDFOpenOptions",
-            '    engine: "netcdf4" (default) or "h5netcdf".\n',
-        ),
+        ("Zarr", IO / "raster/zarr.py", "ZarrOpenOptions", ""),
+        ("NetCDF", IO / "raster/netcdf.py", "NetCDFOpenOptions", ""),
     ]:
         raster += f"\n{title} options:\n{extra}{options(path, name)}\n"
-    for title, mod, name, extra in [
-        (
-            "GeoJSON",
-            "geojson",
-            "GeoJSONOpenOptions",
-            '    engine: "pyogrio" (default) or "fiona".\n',
-        ),
+    for title, path, name, extra in [
+        ("GeoJSON", IO / "vector/ogr.py", "OGROpenOptions", ""),
         (
             "GeoPackage",
-            "geopackage",
-            "GeoPackageOpenOptions",
-            '    engine: "pyogrio" (default) or "fiona".\n    layer: Layer name; None requires exactly one layer.\n',
+            IO / "vector/ogr.py",
+            "OGROpenOptions",
+            "    layer: Layer name; None requires exactly one layer.\n",
         ),
-        ("GeoParquet / STAC GeoParquet", "geoparquet", "GeoParquetOpenOptions", ""),
+        (
+            "GeoParquet / STAC GeoParquet",
+            IO / "vector/geoparquet.py",
+            "GeoParquetOpenOptions",
+            "",
+        ),
     ]:
-        vector += f"\n{title} options:\n{extra}{options(IO / ('formats/' + mod + '.py'), name)}\n"
+        vector += f"\n{title} options:\n{extra}{options(path, name)}\n"
     docs = {"open_raster": raster, "open_vector": vector}
     lines = source.splitlines(keepends=True)
     for node in reversed(ast.parse(source).body):

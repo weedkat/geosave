@@ -12,8 +12,8 @@ results you can use in the next lesson.
 | [0 · Explore and train](00_basics.ipynb) | Can these images and labels teach a model to recognize land cover? | A baseline prediction and training logs; optional per-class review. |
 | [1 · Compare models](01_model.ipynb) | What should I change when the baseline misses things? | A second training run and concrete experiments to compare. |
 | [2 · Build a dataset](02_sources.ipynb) | How do I find matching imagery for my labels and my forest? | Aligned training pairs, six forest observations, and catalogs. |
-| [3 · Train and predict](03_inputs.ipynb) | How do I turn those images into complete land-cover maps? | Dated forest maps, evaluation results, and the trained model. |
-| [4 · Keep the input recipe](04_recipe.ipynb) | How do I map the next observation without changing what the model sees? | A saved preparation recipe and an image/prediction pair for review. |
+| [3 · Train and predict](03_inputs.ipynb) | How do I turn those images into complete land-cover maps? | Dated forest maps, evaluation results, and a model release. |
+| [4 · Reuse the model](04_recipe.ipynb) | How do I map the next observation without changing what the model sees? | A check that the reloaded model reproduces the map, and an image/prediction pair for review. |
 
 Run them in order. Notebook 1 can reuse the downloaded teaching data without
 rerunning notebook 0; notebook 3 needs notebook 2's acquired files; notebook 4
@@ -70,14 +70,14 @@ themselves establish forest loss.
 | Folder | What it carries |
 | --- | --- |
 | `data/dynamic_world/` | Downloaded teaching images, labels, and class definitions |
-| `data/my_dataset/` | Notebook 2's acquired pairs and fixed split catalog |
+| `data/my_dataset/` | Notebook 2's image/label pairs, one Item each, and their split catalog |
 | `data/khdtk/` | The forest observations from notebook 2 |
 | `data/khdtk_pred/` | Notebook 3's dated land-cover maps and catalog |
-| `data/landcover/` | Notebook 3's trained architecture, weights, and classes; notebook 4 adds the input recipe and review maps |
+| `data/landcover/` | Notebook 3's model release (`config.json`, `model.safetensors`) and classes; notebook 4 adds the review pair |
 | `lightning_logs/` | Training curves and checkpoints for resuming experiments |
 
 Keep catalogs with the image folders their relative paths reference. Notebook 3
-loads its small collection before preparation. `Chips` reads windows on demand;
+loads its small collection before preparation. `gs.Chipper` reads windows on demand;
 merging predictions allocates full output maps. Prepare larger projects in batches.
 
 ## Where the project goes next

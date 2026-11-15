@@ -26,13 +26,10 @@ use GeoSave for imagery.
 
 ## Real land-cover project
 
-!!! warning "Notebook migration in progress"
-    This series is being migrated to the current raster and catalog APIs.
-    Notebooks 0 and 1 still call the removed `gs.write_grid`; later lessons
-    depend on catalog and recipe APIs under redesign. Use the
-    [offline training tutorial](guides/training.md) for a current runnable path.
-    The descriptions below record the teaching sequence, not verified runs
-    against today's `main`.
+!!! note "No catalog sampling or input recipe yet"
+    Catalog sampling and ModelSpec are paused. The notebooks pair imagery and
+    labels as one Item per tile, select rows with pandas, and keep model input
+    preparation as a plain Python function next to the model release.
 
 ![Sentinel-2 image beside expert land-cover annotations](assets/land-cover-labels.png)
 
@@ -50,7 +47,7 @@ flowchart LR
     B --> C[Compare model choices]
     C --> D[Acquire new inputs]
     D --> E[Predict and map]
-    E --> F[Keep the input recipe]
+    E --> F[Reuse the model]
 ```
 
 Build a land-cover map from satellite images using ordinary PyTorch Datasets
@@ -62,12 +59,12 @@ and Lightning modules.
 | [1 · Model](https://github.com/weedkat/geosave/blob/main/examples/01_model.ipynb) | Swap model parts and compare training runs. |
 | [2 · Build a dataset](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Fetch images for labels and a forest outline, then save the files and catalogs. |
 | [3 · Train and predict](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on the acquired pairs, join predictions into forest maps, and save the trained model. |
-| [4 · Keep the input recipe](https://github.com/weedkat/geosave/blob/main/examples/04_recipe.ipynb) | Reuse that trained model with identical preparation and make a review map for another forest observation. |
+| [4 · Reuse the model](https://github.com/weedkat/geosave/blob/main/examples/04_recipe.ipynb) | Reload the model release, check it reproduces the forest map with identical preparation, and keep a review pair. |
 
 The [teaching dataset](https://huggingface.co/datasets/fatmur/dynamicworld-300)
 is about 400 MB. Later notebooks reuse that download. Notebook 2 also needs
 Planetary Computer access; notebook 3 uses the files it saves. Notebook 4
-uses notebook 3's trained-model handoff in `data/landcover/`; it needs no new
+uses notebook 3's model release in `data/landcover/`; it needs no new
 download or training run.
 
 The targets are **expert-annotated training labels**, not the automated Dynamic

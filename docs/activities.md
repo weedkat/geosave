@@ -8,6 +8,7 @@ APIs; paused functionality is listed separately at the end.
 | I have… | I want… | Start here | Output |
 | --- | --- | --- | --- |
 | A small satellite scene | Calculate and save NDVI. | [First vegetation map](first-raster.md) | GeoTIFF and plot. |
+| A scene and areas of interest | Compare NDVI and valid coverage per area. | [Compare vegetation by area](guides/vegetation-zones.md) | GeoTIFF, polygons and CSV. |
 | An area and date range | Find remote imagery. | [Download imagery](guides/download-imagery.md) | Local GeoTIFF on a chosen grid. |
 | Existing raster files | Select pixels, calculate a feature and save. | [Prepare files](guides/ingest-files.md) | Georeferenced raster. |
 | Raster or vector data | Inspect locations and values. | [Explore on a map](guides/explore.md) | Interactive viewer. |
@@ -20,7 +21,7 @@ APIs; paused functionality is listed separately at the end.
 | I have… | I want… | Start here | Output |
 | --- | --- | --- | --- |
 | One image and label raster | Read training samples. | [Training chips](quickstart.md) | Pixel windows, input tensors and integer targets. |
-| A large image | Read overlapping windows and blend predictions. | [Chips and merging](guides/chips.md) | NumPy outputs placed on the source grid. |
+| A large image | Read overlapping windows and blend predictions. | [Chips and merging](guides/chips.md) | Merged DataArray on the source grid. |
 | Dated observations | Write assets and keep an index of them. | [Create a catalog](guides/catalogs-and-cuts.md) | TIFFs, Item table and reopened time series. |
 | Packed imagery | Decode physical values. | [Describe values](basics/attrs.md) | Floating values with missing pixels masked. |
 | A model needing consistent inputs | Reuse preparation at training and inference. | [Prepare model inputs](guides/model-inputs.md) | Named input tensors. |
@@ -34,6 +35,7 @@ APIs; paused functionality is listed separately at the end.
 | Attach a head to a pretrained encoder. | [Pretrained models](guides/pretrained.md) | Chain ready for task-specific training. |
 | Create an editable starting project. | [Lightning workspace](guides/workspaces.md) | Local Module, DataModule, Dataset and configuration. |
 | Save, load or publish a registered trained chain. | [Model releases](guides/release.md) | Construction data and trained weights. |
+| Predict a whole raster with a released model. | [Run with a processor](guides/release.md#run-the-model-with-a-processor) | Product Dataset on the source grid. |
 | Explore the real land-cover teaching project. | [Notebook series and migration status](examples.md#real-land-cover-project) | Project lessons; some notebooks need migration. |
 
 Your Dataset owns reading and preparing one sample. A DataLoader batches it;
@@ -45,7 +47,7 @@ See [data flow](concepts/data-flow.md) for how the stages fit together.
 ModelSpec, dependent geospatial workspace recipes, catalog sampling, catalog
 row pixel viewing, and vector rasterization are paused. They are not required
 for the file, chip, training and model workflows above. See
-[ModelSpec status](guides/model-spec.md) and [catalog availability](reference/catalog.md#unavailable-operations).
+[catalog availability](reference/catalog.md#unavailable-operations).
 
 For individual signatures, defaults and return values, use the
 [task-based API reference](reference/index.md).

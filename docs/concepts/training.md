@@ -78,13 +78,19 @@ repairs NaN/Inf inputs or filters evaluation using an input mask.
 Recipe-based DataModules are paused while ModelSpec is rebuilt. Use caller-owned
 DataLoaders and explicit preparation with the same band order and normalization
 at training and inference. `ImageAugmenter` remains available for synchronized
-tensor geometry. See [ModelSpec status](../guides/model-spec.md).
+tensor geometry.
 
 ## Change loss, optimizer, and metrics
 
-```python
+```python title="Adaptation example — inside a segmentation.supervised workspace"
+from modules.segmentation.supervised.module import Module
+
 module = Module(
-    model_chain={"model": {"name": "tiny_segmentation"}},
+    model_chain={
+        "encoder": {"name": "small_cnn", "init_args": {"in_channels": 4, "input_size": 256}},
+        "decoder": {"name": "unet"},
+        "head": {"name": "segmentation", "init_args": {"num_classes": 2}},
+    },
     ignore_index=255,
     criterion={"name": "cross_entropy", "init_args": {"ignore_index": 255}},
     optimizer={"name": "adamw", "init_args": {"lr": 0.001}},
@@ -92,8 +98,8 @@ module = Module(
 )
 ```
 
-This uses the registered model and segmentation `Module` from the training
-guide. Builder settings accept a registered `name` or an importable
+`model_chain` is a [`build_model`](../guides/models.md#use-a-built-in-stage)
+specification. Builder settings accept a registered `name` or an importable
 `class_path` with constructor `init_args`. Schedulers additionally carry
 Lightning settings such as `interval` and, for ReduceLROnPlateau, `monitor`.
 Optimizer groups can select named model stages, for example a lower learning
@@ -137,10 +143,23 @@ input band and instant. This is the current reconstruction contract; a complete
 MAE architecture and fine-tuning recipe are not supplied by selecting a head.
 See the [task API](../reference/training.md) when experimenting with this method.
 
+## Time and place of each sample
+
+A sample carries its grid and dates as `DataTree.gs.to_tensor` writes them:
+`transform`, `crs` and, when dated, `time`. The template Module passes them to
+the model with the pixels; a validation chip's `transform` is cut to the chip
+by `TensorChipper`. An encoder pretrained on location or dates, such as
+Prithvi or Clay, derives its own inputs from them; other encoders ignore them.
+
+Geometric augmentation moves pixels but not `transform`, so a training
+sample's place is the one it was read at.
+
 ## Calibrate segmentation confidence
 
-Prediction decoding is paused: `softmax_argmax` raises `NotImplementedError`,
-so `ThresholdCalibrator` cannot collect predictions pending redesign.
+Per-class confidence thresholds are part of the release's postprocessor
+configuration, not the trained model. After training, run
+`calibrate_thresholds` on the best checkpoint's validation predictions and put
+its result in the postprocessor's `init_args`. Calibration is in progress.
 
 `DensePredictionLogger` remains available for label and argmax panels to
 TensorBoard or MLflow. See [training tools](../reference/training-tools.md).

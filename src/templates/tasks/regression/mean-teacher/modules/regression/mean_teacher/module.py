@@ -10,7 +10,7 @@ from lightning.pytorch.core.optimizer import LightningOptimizer
 from torch.optim import Optimizer
 
 from . import supervised
-from geosave.model.chain import ModelChain
+from geosave.ml.chain import ModelChain
 
 from .data import TrainingBatch
 

@@ -54,6 +54,37 @@ def _pad_pixels[T: (xr.DataArray, xr.Dataset)](
     return data.isel(positions)
 
 
+def _widen_for_padding(
+    overlap: slice, width: tuple[int, int], length: int, mode: Padding
+) -> slice:
+    """Widen the pixels read along one axis to those a fill mode draws from.
+
+    Args:
+        overlap: The raster pixels the requested grid covers.
+        width: Pixels to fill before and after them.
+        length: Pixels of the raster along the axis.
+        mode: The fill mode.
+
+    Returns:
+        `overlap`, widened so padding it gives what padding the whole axis
+        would. Constant and edge fills need nothing more.
+    """
+    before, after = width
+    if mode == "wrap" and (before or after):
+        return slice(0, length)
+    if mode != "reflect":
+        return overlap
+
+    start = overlap.start
+    stop = overlap.stop
+    # Mirroring `n` pixels past an edge reads the `n` pixels inside it, and the edge.
+    if after:
+        start = min(start, max(0, length - 1 - after))
+    if before:
+        stop = max(stop, min(length, before + 1))
+    return slice(start, stop)
+
+
 def crop[T: (xr.DataArray, xr.Dataset)](
     raster: T, region: Region, *, mask: bool = True
 ) -> T:
@@ -94,13 +125,25 @@ def crop_to_grid[T: (xr.DataArray, xr.Dataset)](
 
     y, x = cast("tuple[str, str]", raster.gs.spatial_dims)
     height, width = geobox.shape
-    window = raster.isel({y: rows, x: cols})
     widths = {
         y: (inner_rows.start, height - inner_rows.stop),
         x: (inner_cols.start, width - inner_cols.stop),
     }
+    # Filling reads the raster beyond the overlap: a reflection mirrors the
+    # pixels inside the edge, and a wrap takes them from the far side.
+    read_rows = _widen_for_padding(rows, widths[y], source.shape.y, mode)
+    read_cols = _widen_for_padding(cols, widths[x], source.shape.x, mode)
+    window = raster.isel({y: read_rows, x: read_cols})
     window = window.drop_vars([y, x])
     padded = _pad_pixels(window, widths, mode, constant_value)
+    first_row = rows.start - read_rows.start
+    first_col = cols.start - read_cols.start
+    padded = padded.isel(
+        {
+            y: slice(first_row, first_row + height),
+            x: slice(first_col, first_col + width),
+        }
+    )
     selected = padded.assign_coords(xr_coords(geobox, dims=(y, x)))
     selected.encoding.pop("source", None)
     return selected.gs.clip_extent(geobox.extent)

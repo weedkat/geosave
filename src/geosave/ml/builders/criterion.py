@@ -1,37 +1,30 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from torch import nn
 
 from geosave.ml.criterion import ProbOhemCrossEntropy2d
-from geosave.model.factory import BuildSpec
+from geosave.ml.factory import BuildSpec, Registry
 
 
 class CriterionSpec(BuildSpec):
     """Configure a criterion module."""
 
 
-CRITERIA: dict[str, Callable[..., nn.Module]] = {
-    "CROSS_ENTROPY": nn.CrossEntropyLoss,
-    "OHEM": ProbOhemCrossEntropy2d,
-}
+CRITERIA = Registry(nn.Module)
+CRITERIA.register("cross_entropy")(nn.CrossEntropyLoss)
+CRITERIA.register("ohem")(ProbOhemCrossEntropy2d)
 
 
-def build_criterion(
-    spec: CriterionSpec | Mapping[str, Any],
-    registry: Mapping[str, Callable[..., nn.Module]] = CRITERIA,
-) -> nn.Module:
+def build_criterion(spec: CriterionSpec | Mapping[str, Any]) -> nn.Module:
     """Construct a criterion from a registered name or imported class.
 
     Args:
         spec: Criterion selector and constructor arguments.
-        registry: Named criterion factories.
 
     Returns:
         Configured criterion module.
     """
-    configured = CriterionSpec.model_validate(spec)
-    factory = configured.resolve(registry, nn.Module)
-    return factory(**configured.init_args)
+    return CRITERIA.build(CriterionSpec.model_validate(spec))

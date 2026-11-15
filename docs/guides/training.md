@@ -1,11 +1,10 @@
 # Train a model and map its predictions
 
-!!! tip "Looking for a real geospatial project?"
-    Start with the [land-cover notebooks](../examples.md#real-land-cover-project)
-    to train on real Sentinel-2 imagery and expert annotations. This page uses
-    synthetic data to check the training, checkpoint, and raster-export mechanics
-    offline; its accuracy is not a geospatial benchmark.
-
+!!! note "Synthetic data"
+    This page checks the training, checkpoint, and raster-export mechanics
+    offline; its accuracy is not a geospatial benchmark. The
+    [land-cover notebooks](../examples.md#real-land-cover-project) use real
+    Sentinel-2 imagery but are still being migrated to current APIs.
 
 Continue from [images to training chips](../quickstart.md): use the saved
 `training-scene.tif`, train a small segmentation model, and put predictions
@@ -25,31 +24,32 @@ import lightning as L
 import torch
 import xarray as xr
 import torch.nn.functional as F
-from odc.geo.xr import xr_coords
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 import geosave as gs
+from geosave.geodata import io
 
 L.seed_everything(7, workers=True)
 scene = gs.open_raster("training-scene.tif")
 
 class RasterDataset(Dataset):
     def __init__(self, scene):
-        self.chips = gs.Chips([scene[["red", "nir", "label"]]], size=32)
+        tree = xr.DataTree.from_dict({"scene": scene[["red", "nir", "label"]]})
+        self.chips = gs.RasterChipper([tree], size=32)
 
     def __len__(self):
         return len(self.chips)
 
     def __getitem__(self, index):
-        chip = self.chips[index].gs.to_numpy(dtype="float32")
+        chip = self.chips[index]["scene"].to_dataset().gs.to_numpy(dtype="float32")
         image = torch.from_numpy(chip[:2])
         target = torch.from_numpy(chip[2]).long()
         return image, target
 ```
 
 The Dataset owns pixel reads, band order, and label conversion. Each chip is a
-lazy Dataset, so time or location inputs for the model come from it too. It returns a
+lazy DataTree, whose `scene` Dataset supplies the pixels and grid. It returns a
 plain `(image, target)` tuple. Keep `scene` open until training and prediction
 finish: each sample reads its pixels on demand. This tutorial uses its own LightningModule;
 GeoSave's generated recipes declare their own sample contracts.
@@ -115,28 +115,26 @@ can learn richer patterns.
 ```python
 model.eval()
 
-def predictions():
-    for key in valid.chips:
-        chip = valid.chips[key].gs.to_numpy(dtype="float32")
-        image = torch.from_numpy(chip[:2])
-        with torch.inference_mode():
-            scores = model(image.unsqueeze(0))[0].numpy()
-        yield key, scores
+merger = gs.RasterMerger(valid.chips.layout)
+for index in range(len(valid.chips)):
+    image, _ = valid[index]
+    with torch.inference_mode():
+        scores = model(image.unsqueeze(0))[0].numpy()
+    merger.add(index, scores)
 
-pixels = valid.chips.merge(predictions())[0]
-source = valid.chips.xarray[0]
-scores = xr.DataArray(pixels, dims=("class", "y", "x")).assign_coords(xr_coords(source.gs.geobox))
-prediction = scores.argmax("class").astype("uint8").rename("prediction")
+scores = merger.merge(0)
+prediction = scores.argmax("band").astype("uint8").rename("prediction")
+
 from pathlib import Path
 
 Path("output").mkdir(parents=True, exist_ok=True)
-prediction.gs.to_cog("output/prediction.tif")
+io.write_cog(prediction.to_dataset(), "output/prediction.tif")
 prediction.gs.plot(cmap=["#263b50", "#65b98b"], xlabel="")
 ```
 
 The DataLoader added a batch dimension during training; here `unsqueeze(0)`
 adds one for inference. We merge class scores on the chip grid before choosing
-the winning class. `Chips.merge()` returns NumPy; `odc.geo.xr.xr_coords` places it on the
+the winning class. `RasterMerger.merge()` returns a DataArray on the
 validation region's grid, so
 `output/prediction.tif` can be opened in a GIS.
 
@@ -165,5 +163,5 @@ A checkpoint preserves training state and weights; it is different from a
 Follow the [real land-cover project](../examples.md) for satellite image/label
 pairs. Use [pretrained encoders](pretrained.md) when you are ready to fine-tune,
 and [workspaces](workspaces.md) for editable training recipes and configuration.
-The [model-input guide](model-spec.md) covers sharing preparation between
+The [model-input guide](model-inputs.md) covers sharing preparation between
 training and inference.

@@ -1,119 +1,92 @@
 # GeoSave
 
-GeoSave makes geospatial ML feel like normal Python through native ecosystem
-objects, preserved metadata and lazy execution. The project is in Alpha:
-replace obsolete designs rather than adding compatibility layers unless the
-user requires compatibility. Prioritize a sound design over a fast patch.
+GeoSave makes geospatial ML feel like normal Python: native ecosystem objects,
+preserved metadata, and lazy execution. The project is Alpha; replace obsolete
+designs rather than adding compatibility layers unless the user requires them.
 
-## Before changing behavior
+## Architecture and stack
 
-For API changes, refactors, dependency integration and performance work:
+- `src/geosave/geodata/`: raster/vector accessors, metadata, I/O, STAC and
+  visualization. Use xarray for rasters, GeoPandas for vectors, PySTAC for STAC,
+  and ODC for grids and raster loading.
+- `src/geosave/ml/`: model chains, components, processors, native releases
+  (Transformers and Hugging Face Hub) and reusable Lightning training support.
+- `src/geosave/cli/` and `src/templates/`: workspace generation and its source
+  templates. Generated `workspace/` files belong to the user.
+- `src/geosave_flows/`: Prefect orchestration through public GeoSave APIs.
 
-1. Establish the user's workflow: inputs, desired output and why the operation
-   exists. Read the relevant conversation, `docs/contributing/architecture.md`
-   and `docs/contributing/open-decisions.md`. Separate agreed requirements from
-   agent proposals.
-2. Trace the operation through callers, readers, native objects and consumers.
-   Inspect adjacent variants and identify who owns data, metadata and execution.
-   A referenced method is an entry point, not the boundary of the investigation.
-3. Check the dependency's public API, supported object types, parameters and
-   defaults in current documentation and installed source. Try the direct
-   native operation on the user's object in a throwaway spike before designing
-   a wrapper. Reproduce any limitation that would require a workaround.
-4. Review parameters, defaults, return values and caller needs together.
-   Legacy code and tests are evidence, not automatic requirements. Retain custom
-   behavior for an agreed use case or demonstrated correctness requirement.
-5. Before implementation, briefly show the proposed caller code, the verified
-   gap GeoSave must cover, and what existing machinery can be removed. Resolve
-   uncertainties that affect the design; use existing authorization rather
-   than repeatedly asking permission. Discussion requests remain discussion.
+Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`.
+Geodata imports must not load torch; the inference path of `ml` (chain,
+components, processing, release) must not import its training support;
+geosave must not import Prefect.
 
-For a routine edit with no behavior change, inspect the relevant context and
-make the bounded change; the full investigation above is unnecessary.
+## Working paradigm
 
-If implementation grows preparation/restoration pipelines, variant branches
-or helpers that merely relocate complexity, revisit the design. Test outcomes
-independently of the code shape. Passing tests alone do not validate an API.
-For performance claims, measure the resource at issue: small output and short
-runtime do not prove fewer source reads. Report evidence and conclusions
-briefly, without an internal reasoning transcript.
+- Use native operations first. Before adding a wrapper or workaround, check the
+  dependency's current public docs and installed source, try it on the relevant object,
+  and reproduce the gap GeoSave must cover.
+- Concrete accessors own their variants: DataArray owns one array, Dataset its
+  variables, DataTree its nodes. Base classes share identical behavior or declare
+  contracts; they do not dispatch by object type. Keep helpers with their owner.
+- Preserve CRS, coordinates, transform, nodata, dtype and variable identity.
+  Keep supported operations lazy; make pixel reads, writes, reprojection,
+  resampling and representation changes explicit.
+- Use readable steps, explicit intermediate values and concise names. Prefer
+  native objects or typed values; dictionaries suit open-ended metadata.
+  Remove duplicate mechanisms; helpers must simplify a named operation rather
+  than relocate complexity.
+- Preserve unrelated working-tree changes. Edit notebooks only when requested.
 
-## Implementation principles
+## Design and decision questions
 
-- Prefer xarray, GeoPandas, PySTAC, ODC and Lightning capabilities over parallel
-  GeoSave abstractions. A wrapper must own a necessary invariant the native
-  object cannot express. A dependency's internal loop does not justify our own.
-- Keep variant-specific behavior in its concrete accessor. DataArray owns one
-  array, Dataset its variables, and DataTree its nodes; use native Dataset/tree
-  operations where they already provide the required behavior. Base classes
-  may declare contracts or share identical behavior, not dispatch by object type.
-- Simplify by removing unnecessary cases and duplicate mechanisms. Keep required
-  correctness. Helpers should own a named operation with real reuse or clarity.
-  Some repetition is preferable to a harder-to-follow abstraction.
-- Use explicit loops and intermediate values; no nested comprehensions or clever
-  one-liners. Group each meaningful step with blank lines. Use concise names:
-  verbs for functions, values for variables. Tutorials follow the same standard.
-- Prefer native objects or typed values over dictionaries whose keys encode
-  structure. Dictionaries suit open-ended attrs/properties and dependency APIs.
-  Union types beyond optional values deserve scrutiny: retain them when the
-  behavior is genuinely the same, including native API contracts.
-- Preserve applicable CRS, coordinates, spatial dimensions, transform, nodata,
-  dtype and variable identity. Keep operations lazy where possible. Reprojection,
-  resampling, dtype/coordinate changes and eager computation are explicit.
-- Keep unrelated code and working-tree changes intact. Add no compatibility
-  aliases, duplicate execution paths or dependencies without a concrete need.
-  Ignore notebooks unless the user asks to work on them.
+For API changes, refactors and dependency or performance work, read
+[architecture](docs/contributing/architecture.md) and
+[open decisions](docs/contributing/open-decisions.md), then trace the relevant
+callers, native objects and consumers. Existing code, tests and agent proposals
+are evidence, not automatically agreed requirements.
 
-## Navigation and scoped guidance
+**Phase 1 — core flow and context:** Show a simplified caller snippet, sample
+data shape or diagram covering inputs, outputs, state ownership and connections
+to surrounding code. Settle these boundaries before asking about minor edge
+cases such as retries, empty-state wording, micro-validations or rare races.
+Raise a failure mode here only if it changes the core design.
 
-Read the linked sections before working in their scope:
+**Phase 2 — hardening:** Once the core flow and surrounding contracts are
+settled, address remaining failure modes, edge cases and polish.
 
-- Package boundaries, I/O, STAC or file placement:
-  [Structure](docs/contributing/agent-reference.md#structure) and
-  [architecture](docs/contributing/architecture.md). Verify maps against source.
-- Model, training, CLI-generated workspaces or templates:
-  [Machine Learning](docs/contributing/agent-reference.md#machine-learning).
-  `src/templates/` is the source; `workspace/` is consumer output.
-- Public API documentation:
-  [Public API and Docstrings](docs/contributing/agent-reference.md#public-api-and-docstrings).
-  Use concise Google-style docstrings and native-object examples.
-- Packaging, publishing or documentation builds:
-  [Release](docs/contributing/agent-reference.md#release).
+Resolve routine choices from the codebase and existing authorization. When a
+user decision is necessary, never ask a bare or open-ended question. Use all
+four parts, concisely:
 
-Dependencies point one way: `geodata <- model <- ml`, and
-`geosave <- geosave_flows`. Keep torch out of geodata imports, ML out of model,
-and Prefect out of geosave. Internal helpers stay with their owning package;
-supported public API is declared explicitly.
+1. **Problem and context:** What existing behavior triggers this decision, and
+   why does it matter?
+2. **Visual comparison:** Show viable Option A and Option B using simplified
+   code, data shapes or a diagram, including their surrounding connections.
+3. **Trade-offs:** List concrete pros and cons of each option across complexity,
+   coupling, maintainability and UX. Explain consequences in the current workflow,
+   not generic labels such as "simpler" or "more flexible". Where a dimension has
+   no meaningful difference, say so briefly rather than inventing a trade-off.
+4. **Recommendation:** Recommend one option and ask the user to confirm or
+   adjust it.
 
-## Validation
+Discussion requests remain discussion. Routine edits without behavior changes
+need only relevant context and the bounded edit, not a design review.
 
-`pyproject.toml` owns dependency and tool configuration. Tests mirror source.
+## Scoped guidance and verification
 
-```bash
-uv sync                         # dev group includes geosave[all]
-uv run pytest tests/path/to/test_file.py
-uv run pytest                   # full suite
-uv run pytest -m integration
-uv run pytest -m slow
-uv run ruff check .
-uv run pre-commit run --all-files
-```
+Read the relevant [contributor guidance](docs/contributing/agent-reference.md):
+[structure](docs/contributing/agent-reference.md#structure) for package/I/O/STAC
+work, [ML](docs/contributing/agent-reference.md#machine-learning) for training
+and templates, [API docs](docs/contributing/agent-reference.md#public-api-and-docstrings)
+for public documentation, and [release](docs/contributing/agent-reference.md#release)
+for packaging and publishing. Verify documented maps against source.
 
-Choose checks from changed user workflows and meaningful failure modes: wrong
-values/grids, lost metadata, eager reads, broken training or unusable artifacts.
-Persistence changes need round trips; laziness promises need execution checks.
-Each test must add distinct protection. Avoid tests for private structure,
-removed names, incidental defaults, exact export lists or dependency validation.
-Update tests for intentional contract changes rather than preserving obsolete
-behavior to satisfy them. Distinguish new failures, known failures, expected
-failures, skipped checks and incomplete runs when reporting results.
+`pyproject.toml` owns dependencies and tool configuration; tests mirror source.
+Validate changed workflows through observable values, grids, metadata and
+execution. Persistence needs round trips; laziness needs execution checks;
+performance claims need measurements of the resource at issue. Update obsolete
+tests rather than preserving obsolete behavior to satisfy them.
 
-## Communication and completion
-
-Show caller code or a small printed object before explaining a design. Scale
-explanation to the user's question; lengthy technical detail is not evidence
-of understanding. Keep obvious accessors short and comments about domain reasons.
-
-Before finishing, review the change against the requested outcome, including
-whether responsibilities and complexity improved. Update affected plans/docs.
-Report what changed, checks run, and breaking changes or remaining risks.
+Before finishing, check the requested outcome and update affected docs. Report
+changes, checks, breaking changes and remaining risks briefly. Distinguish
+failures, expected failures, skipped checks and incomplete runs.

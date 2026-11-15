@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from torch.optim import Optimizer
@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import (
     StepLR,
 )
 
-from geosave.model.factory import BuildSpec
+from geosave.ml.factory import BuildSpec, Registry
 
 
 class SchedulerSpec(BuildSpec):
@@ -37,31 +37,27 @@ class SchedulerSpec(BuildSpec):
     scheduler_name: str | None = None
 
 
-SCHEDULERS: dict[str, Callable[..., LRScheduler]] = {
-    "COSINE_ANNEALING": CosineAnnealingLR,
-    "REDUCE_ON_PLATEAU": ReduceLROnPlateau,
-    "STEP": StepLR,
-}
+SCHEDULERS = Registry(LRScheduler)
+SCHEDULERS.register("cosine_annealing")(CosineAnnealingLR)
+SCHEDULERS.register("reduce_on_plateau")(ReduceLROnPlateau)
+SCHEDULERS.register("step")(StepLR)
 
 
 def build_scheduler(
     spec: SchedulerSpec | Mapping[str, Any],
     optimizer: Optimizer,
-    registry: Mapping[str, Callable[..., LRScheduler]] = SCHEDULERS,
 ) -> dict[str, Any]:
     """Construct a scheduler and its Lightning configuration mapping.
 
     Args:
         spec: Scheduler selector, arguments, and Lightning metadata.
         optimizer: Optimizer controlled by the scheduler.
-        registry: Named scheduler factories.
 
     Returns:
         Lightning scheduler configuration.
     """
     configured = SchedulerSpec.model_validate(spec)
-    factory = configured.resolve(registry, LRScheduler)
-    scheduler = factory(optimizer, **configured.init_args)
+    scheduler = SCHEDULERS.build(configured, optimizer)
     metadata = configured.model_dump(
         include={"interval", "frequency", "monitor", "strict"},
         exclude_none=True,

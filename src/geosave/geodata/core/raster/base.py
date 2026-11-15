@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -25,7 +27,9 @@ if TYPE_CHECKING:
     from odc.geo import CRS, BoundingBox, Resolution, SomeCRS, SomeResolution
     from odc.geo.geobox import GeoBox
 
-    from geosave.geodata.utils.datetime import DateRange
+    from geosave.geodata.utils.datetime import DateRange, Freq
+
+    from .utils.windows import Keep
 
     from geosave.geodata.core.region import GeoRegion
 
@@ -54,6 +58,31 @@ class RasterStacProperties[DataT: xr.DataArray | xr.Dataset]:
             group = attrs.StacProperty.from_attrs(coord.attrs)
             found[group.name] = key
         return found
+
+    def read_stac_properties(self) -> dict[str, Any]:
+        """Read one Item's STAC property values from scalar marked coordinates.
+
+        Returns:
+            Each STAC property name mapped to its value. A missing value,
+            None or NaN, is left out, since JSON holds neither.
+
+        Raises:
+            ValueError: A property coordinate holds one value per Item; select
+                one Item first.
+
+        Examples:
+            >>> scene.isel(time=0).gs.read_stac_properties()
+            {'eo:cloud_cover': 12.5, 'platform': 'sentinel-2b'}
+        """
+        values: dict[str, Any] = {}
+        for property_name, coord_name in self.stac_properties.items():
+            value = self._data.coords[coord_name].item()
+            if value is None:
+                continue
+            if isinstance(value, float) and math.isnan(value):
+                continue
+            values[property_name] = value
+        return values
 
     def write_stac_property(
         self, name: str, values: Any, *, item_dim: str = TIME_COORDINATE
@@ -140,6 +169,52 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         if labels is None:
             return None
         return pd.DatetimeIndex(np.atleast_1d(labels.values))
+
+    def sample(
+        self,
+        freq: Freq,
+        *,
+        size: int = 1,
+        stride: int = 1,
+        keep: Keep = "last",
+    ) -> list[DataT]:
+        """Sample the time axis into windows of consecutive slots, lazily.
+
+        Each window is one model input in time: this raster at `size` slots
+        of length `freq` in a row. Cut it in space with `RasterChipper`.
+        A slot holding several observations keeps one of them; blend them
+        with `composite` first when that is wanted. A window holding an empty
+        slot is left out. Only the time labels are read.
+
+        Args:
+            freq: Length of one slot, as a pandas offset alias such as "MS".
+            size: Slots per window, the length of each window's time axis.
+            stride: Slots between the starts of consecutive windows.
+            keep: The observation a slot keeps when several fall in it.
+
+        Returns:
+            One raster per window, in time order; `start_datetime` and
+            `end_datetime` follow their time labels.
+
+        Raises:
+            ValueError: The raster has no datetime `time` dimension, `size`
+                or `stride` is below 1, or `keep` is unknown.
+
+        Examples:
+            >>> pairs = scene.gs.sample("MS", size=2, keep="last")
+            >>> pairs[0].time.dt.strftime("%m-%d").values.tolist()
+            ['06-28', '07-23']
+        """
+        from .utils.windows import window_times
+
+        times = self.times
+        if times is None or TIME_COORDINATE not in self._data.dims:
+            raise ValueError("sample needs a datetime `time` dimension")
+
+        windows = []
+        for positions in window_times(times, freq, size=size, stride=stride, keep=keep):
+            windows.append(self._data.isel({TIME_COORDINATE: positions}))
+        return windows
 
     def write_time_bounds(
         self,

@@ -24,14 +24,15 @@ demo/
 ├── modules/lightning/boilerplate/
 │   ├── module.py
 │   ├── data.py
-│   └── datasets.py
+│   ├── datasets.py
+│   └── README.md
 ├── configs/lightning-boilerplate.yaml
-├── artifacts/
-├── data/
-├── notebooks/
 ├── .env.example
 └── .gitignore
 ```
+
+The first `fit` creates `artifacts/lightning-boilerplate/version_0/` with the
+effective `config.yaml`, checkpoints and TensorBoard events.
 
 The starter creates deterministic synthetic samples and trains a small network.
 Its result checks the training setup; it is not a geospatial model benchmark.
@@ -46,8 +47,7 @@ Its result checks the training setup; it is not a geospatial model benchmark.
 | YAML config | Select class arguments and Trainer settings. |
 | `main.py` | Launch the LightningCLI-based training entry point. |
 
-Each run stores effective configuration under
-`artifacts/<model_name>/version_N/`. Record your GeoSave version and project
+Each run adds a new `version_N/` beside the first. Record your GeoSave version and project
 dependencies separately; generation does not create a manifest or lockfile.
 `main.py` does not automatically load `.env`; export settings before launch.
 

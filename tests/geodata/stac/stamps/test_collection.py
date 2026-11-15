@@ -3,6 +3,7 @@
 import json
 
 import pystac
+import pytest
 import xarray as xr
 
 from geosave.geodata.stac.stamps import LoadSource
@@ -27,8 +28,9 @@ def collection() -> pystac.Collection:
 def test_collection_and_extensions_are_stated() -> None:
     item = scene()
     item.stac_extensions.append(EO)
+    item.set_collection(collection())
 
-    out = stamp_collection(pixels("red"), LoadSource([item], collection()))
+    out = stamp_collection(pixels("red"), LoadSource([item]))
 
     assert out.gs.stac_collection.id == "local"
     assert out.gs.stac_collection.license == "CC-BY-4.0"
@@ -46,7 +48,24 @@ def test_extensions_are_listed_once() -> None:
 
 
 def test_an_empty_dataset_becomes_a_collection_node() -> None:
-    out = stamp_collection(xr.Dataset(), LoadSource([scene()], collection()))
+    item = scene()
+    item.set_collection(collection())
+
+    out = stamp_collection(xr.Dataset(), LoadSource([item]))
 
     assert out.gs.stac_collection.id == "local"
     assert not out.data_vars
+
+
+def test_items_without_a_collection_link_state_none() -> None:
+    out = stamp_collection(pixels("red"), LoadSource([scene()]))
+
+    assert out.gs.stac_collection is None
+
+
+def test_items_of_several_collections_are_refused() -> None:
+    first, second = scene("a"), scene("b")
+    first.collection_id, second.collection_id = "optical", "radar"
+
+    with pytest.raises(ValueError, match="several collections"):
+        stamp_collection(pixels("red"), LoadSource([first, second]))

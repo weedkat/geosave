@@ -8,12 +8,13 @@ import torch
 from torch.utils.data import Dataset
 
 from modules.regression import mean_teacher
-from tests.templates.tasks.segmentation.supervised.test_data import FLIP, _batch, _spec
+from tests.templates.tasks.segmentation.supervised.test_data import (
+    FLIP,
+    _batch,
+    _preprocessor,
+)
 from tests.templates.tasks.regression.supervised.test_data import Chips
 
-pytestmark = pytest.mark.skip(
-    reason="Template processing awaits the ModelSpec redesign."
-)
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
@@ -35,9 +36,12 @@ def test_strong_augmentations_cannot_move_geometry(tmp_path):
 
 def _training(tmp_path: Path, **options: object) -> mean_teacher.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
-    path = _spec().save(tmp_path / "model_spec.yaml")
     data = mean_teacher.DataModule(
-        spec=path, train=Chips(), val=Chips(), unlabeled=Scenes(), **options
+        preprocessor=_preprocessor(),
+        train=Chips(),
+        val=Chips(),
+        unlabeled=Scenes(),
+        **options,
     )
     data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
     return data

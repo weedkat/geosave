@@ -2,26 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime as dt
+from datetime import timezone
+
 import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
-from odc.geo.geobox import GeoBox
 from odc.geo.geom import BoundingBox
+from odc.geo.geobox import GeoBox
 
-from geosave.geodata import io, stac
+from geosave.geodata import io, open_raster, stac
+from geosave.geodata.features import ndvi
+from geosave.geodata.stac import StacQuery
+from geosave.geodata.stac.load import group_bands_by_grid, load_dataset
 from tests.conftest import build_dataset
 from tests.geodata.conftest import create_file_items
-
-from tests.conftest import write_cogs
-from datetime import datetime as dt
-from datetime import timezone
-import pystac
-import geosave.geodata  # noqa: F401  — registers the .gs accessor
-from geosave.geodata import open_raster
-from geosave.geodata.features import ndvi
-from geosave.geodata.stac.load import load_dataset
-from geosave.geodata.stac import StacQuery
 
 
 @pytest.fixture
@@ -33,11 +29,24 @@ def observation(tmp_path):
         {"red": (("y", "x"), np.arange(16, dtype="uint16").reshape(4, 4))}, grid
     )
     raster = raster.assign_coords(time=np.datetime64("2025-01-15"))
-    path = io.formats.geotiff.write_cog(raster, tmp_path / "red.tif")
+    path = io.raster.geotiff.write_cog(raster, tmp_path / "red.tif")
     item = next(create_file_items({"red": path}))
     item.collection_id = "local"
     item.properties["eo:cloud_cover"] = 20.0
     return item, raster
+
+
+def _add_coarse_asset(item, raster, tmp_path):
+    """Give the Item a second asset on a grid twice as coarse."""
+    coarse = build_dataset(
+        {"swir": (("y", "x"), np.full((2, 2), 7, dtype="uint16"))},
+        raster.gs.geobox.zoom_out(2),
+    )
+    coarse = coarse.assign_coords(time=np.datetime64("2025-01-15"))
+    path = io.raster.geotiff.write_cog(coarse, tmp_path / "swir.tif")
+    for key, asset in next(create_file_items({"swir": path})).assets.items():
+        item.add_asset(key, asset)
+    return coarse
 
 
 def test_properties_follow_fused_time_and_keep_common_attrs(observation):
@@ -50,159 +59,18 @@ def test_properties_follow_fused_time_and_keep_common_attrs(observation):
         [item, other],
         geobox=raster.gs.geobox,
         groupby="time",
-        with_properties=["eo:cloud_cover"],
+        chunks={},
+        with_properties=["eo:cloud_cover", {"key": "platform", "dtype": "str"}],
     )
-    # ODC fuses a requested property; the shared one is a scalar coordinate.
-    assert loaded["eo:cloud_cover"].values.tolist() == [30.0]
-    assert loaded["platform"].item() == "test"
-    assert "eo:cloud_cover" not in loaded.data_vars
+    # ODC's default fuser averages numbers and joins text of a fused step;
+    # the mark keeps the STAC key.
+    assert loaded["eo_cloud_cover"].values.tolist() == [30.0]
+    assert loaded["platform"].values.tolist() == ["test,test"]
+    assert not loaded.data_vars.keys() & {"eo_cloud_cover", "platform"}
     assert loaded.gs.stac_properties == {
-        "eo:cloud_cover": "eo:cloud_cover",
+        "eo:cloud_cover": "eo_cloud_cover",
         "platform": "platform",
     }
-
-
-def test_loader_rejects_mixed_collections_before_reading(observation):
-    item, raster = observation
-    other = item.clone()
-    other.collection_id = "other"
-    with pytest.raises(ValueError, match="one collection"):
-        stac.load_dataset([item, other], geobox=raster.gs.geobox)
-
-
-def _add_coarse_asset(item, raster, tmp_path):
-    """Give the Item a second asset on a grid twice as coarse."""
-    coarse = build_dataset(
-        {"swir": (("y", "x"), np.full((2, 2), 7, dtype="uint16"))},
-        raster.gs.geobox.zoom_out(2),
-    )
-    coarse = coarse.assign_coords(time=np.datetime64("2025-01-15"))
-    path = io.formats.geotiff.write_cog(coarse, tmp_path / "swir.tif")
-    for key, asset in next(create_file_items({"swir": path})).assets.items():
-        item.add_asset(key, asset)
-    return coarse
-
-
-def test_each_item_asset_is_one_node_on_its_stated_grid(observation, tmp_path):
-    item, raster = observation
-    coarse = _add_coarse_asset(item, raster, tmp_path)
-
-    tree = stac.load_datatree([item])
-
-    assert [leaf.path for leaf in tree.leaves] == [
-        f"/local/{item.id}/red",
-        f"/local/{item.id}/swir",
-    ]
-    assert tree[f"local/{item.id}/red"].gs.geobox == raster.gs.geobox
-    assert tree[f"local/{item.id}/swir"].gs.geobox == coarse.gs.geobox
-    np.testing.assert_array_equal(
-        tree[f"local/{item.id}/swir"].swir.values, coarse.swir.values
-    )
-
-
-def test_the_item_node_states_its_time_once_and_leaves_inherit_it(
-    observation, tmp_path
-):
-    item, raster = observation
-    _add_coarse_asset(item, raster, tmp_path)
-
-    tree = stac.load_datatree([item])
-
-    own = tree[f"local/{item.id}"].to_dataset(inherit=False)
-    assert own.time.values == np.datetime64("2025-01-15")
-    assert own["eo:cloud_cover"].item() == 20.0
-    assert "eo:cloud_cover" in own.gs.stac_properties
-    for leaf in tree[f"local/{item.id}"].leaves:
-        assert "time" not in leaf.to_dataset(inherit=False).coords
-        inherited = leaf.to_dataset(inherit="all_coords")
-        assert inherited.time.values == np.datetime64("2025-01-15")
-
-
-def test_the_item_node_states_its_period(observation):
-    june, july = _months(observation)
-
-    tree = stac.load_datatree([june, july])
-
-    node = tree["local/july"].to_dataset(inherit=False)
-    assert node.start_datetime.values == np.datetime64("2025-07-01")
-    assert node.end_datetime.values == np.datetime64("2025-08-01")
-
-
-def test_a_loaded_tree_round_trips_through_zarr(observation, tmp_path):
-    from geosave.geodata import open_raster
-
-    item, raster = observation
-    _add_coarse_asset(item, raster, tmp_path)
-    tree = stac.load_datatree([item]).compute()
-
-    store = tree.gs.to_zarr(tmp_path / "tree.zarr")
-
-    with open_raster(store) as restored:
-        assert restored.isomorphic(tree)
-        for leaf in tree.leaves:
-            back = restored[leaf.path].to_dataset(inherit="all_coords")
-            xr.testing.assert_equal(back, leaf.to_dataset(inherit="all_coords"))
-
-
-def test_items_on_different_grids_each_keep_their_own(observation, tmp_path):
-    item, raster = observation
-    east = GeoBox.from_bbox(
-        BoundingBox(500040, 5000000, 500080, 5000040, crs="EPSG:32633"),
-        resolution=10,
-    )
-    shifted = build_dataset(
-        {"red": (("y", "x"), np.ones((4, 4), "uint16"))}, east
-    ).assign_coords(time=np.datetime64("2025-01-16"))
-    other = next(
-        create_file_items(
-            {"red": io.formats.geotiff.write_cog(shifted, tmp_path / "east.tif")}
-        )
-    )
-    other.collection_id = item.collection_id
-
-    tree = stac.load_datatree([item, other])
-
-    assert tree[f"local/{item.id}/red"].gs.geobox == raster.gs.geobox
-    assert tree[f"local/{other.id}/red"].gs.geobox == east
-
-
-def test_collections_are_sibling_nodes_stating_their_collection(observation):
-    import pystac
-
-    from geosave.geodata import attrs
-
-    item, raster = observation
-    other = item.clone()
-    other.collection_id = "dem"
-    collection = pystac.Collection(
-        "local",
-        "Local reflectance",
-        pystac.Extent(
-            pystac.SpatialExtent([[0, 0, 1, 1]]), pystac.TemporalExtent([[None, None]])
-        ),
-    )
-
-    tree = stac.load_datatree([item, other], collections=[collection])
-
-    assert list(tree.children) == ["local", "dem"]
-    stated = attrs.StacCollection.from_attrs(tree["local"].attrs)
-    assert stated.collection["id"] == "local"
-
-
-def test_loading_a_tree_reads_no_pixels(observation, tmp_path):
-    import dask
-
-    from tests.geodata.conftest import _refuse
-
-    item, raster = observation
-    _add_coarse_asset(item, raster, tmp_path)
-
-    with dask.config.set(scheduler=_refuse):
-        tree = stac.load_datatree([item])
-
-    for leaf in tree.leaves:
-        for variable in leaf.data_vars.values():
-            assert isinstance(variable.data, da.Array)
 
 
 def test_signing_happens_at_load_without_mutating_items(observation):
@@ -217,7 +85,12 @@ def test_signing_happens_at_load_without_mutating_items(observation):
 
     loaded = stac.load_dataset([item], geobox=raster.gs.geobox, patch_url=sign)
     np.testing.assert_array_equal(loaded.red.values[0], raster.red.values)
-    assert urls == ["https://unsigned.test/red.tif"]
+    # ODC also patches its virtual property sources; only the asset is signed.
+    signed = []
+    for url in urls:
+        if not url.startswith("virtual://"):
+            signed.append(url)
+    assert signed == ["https://unsigned.test/red.tif"]
     assert item.assets["red"].href == "https://unsigned.test/red.tif"
 
 
@@ -231,135 +104,13 @@ def test_same_date_items_mosaic_by_default_and_stay_apart_by_id(observation):
     assert separate.sizes["time"] == 2
 
 
-def _period_item(observation, ident, start, end):
-    """Clone the observation as a composite Item covering [start, end)."""
-    entry, _ = observation
-    period = entry.clone()
-    period.id = ident
-    period.datetime = None
-    period.properties["datetime"] = None
-    period.properties.update(start_datetime=start, end_datetime=end)
-    return period
-
-
-def _months(observation):
-    june = _period_item(
-        observation, "june", "2025-06-01T00:00:00Z", "2025-07-01T00:00:00Z"
-    )
-    july = _period_item(
-        observation, "july", "2025-07-01T00:00:00Z", "2025-08-01T00:00:00Z"
-    )
-    return june, july
-
-
-def _days(values):
-    return np.array(values, dtype="datetime64[ns]")
-
-
-def test_composite_items_keep_their_own_periods_in_any_order(observation):
-    _, raster = observation
-    june, july = _months(observation)
-
-    loaded = stac.load_dataset([july, june], geobox=raster.gs.geobox, groupby="id")
-
-    for label, start in zip(
-        loaded.time.values, loaded.start_datetime.values, strict=True
-    ):
-        assert start == label  # ODC labels a composite at its start
-    ends = {
-        str(start)[:10]: str(end)[:10]
-        for start, end in zip(
-            loaded.start_datetime.values, loaded.end_datetime.values, strict=True
-        )
-    }
-    assert ends == {"2025-06-01": "2025-07-01", "2025-07-01": "2025-08-01"}
-
-
-def test_a_solar_day_label_covers_its_local_day(tmp_path):
-    from odc.geo.geom import BoundingBox as Box
-
-    # Jakarta, UTC+7: 03:12 and 03:13 UTC share local Jan 10; 18:00 UTC is Jan 11.
-    grid = GeoBox.from_bbox(
-        Box(106.8, -6.3, 106.81, -6.29, crs="EPSG:4326"), resolution=0.0025
-    )
-    items = []
-    for name, when in (
-        ("a", "2025-01-10T03:12"),
-        ("b", "2025-01-10T03:13"),
-        ("c", "2025-01-10T18:00"),
-    ):
-        raster = build_dataset(
-            {"red": (("y", "x"), np.ones(grid.shape, "uint16"))}, grid
-        ).assign_coords(time=np.datetime64(when))
-        path = io.formats.geotiff.write_cog(raster, tmp_path / f"{name}.tif")
-        entry = next(create_file_items({"red": path}))
-        entry.id = name
-        items.append(entry)
-
-    loaded = stac.load_dataset(items, grid, groupby="solar_day")
-
-    np.testing.assert_array_equal(
-        loaded.start_datetime.values,
-        _days(["2025-01-09T17:00", "2025-01-10T17:00"]),
-    )
-    np.testing.assert_array_equal(
-        loaded.end_datetime.values,
-        _days(["2025-01-10T17:00", "2025-01-11T17:00"]),
-    )
-
-
-def test_a_multi_band_asset_holds_one_variable_per_band(tmp_path):
-    grid = GeoBox.from_bbox(
-        BoundingBox(500000, 5000000, 500040, 5000040, crs="EPSG:32633"), resolution=10
-    )
-    pixels = {}
-    for value, name in enumerate(["red", "green", "blue"]):
-        pixels[name] = (("y", "x"), np.full(grid.shape, value, "uint16"))
-    rgb = build_dataset(pixels, grid).assign_coords(time=np.datetime64("2025-01-15"))
-    path = io.formats.geotiff.write_cog(rgb, tmp_path / "visual.tif")
-    item = next(create_file_items({"visual": path}))
-    item.collection_id = "local"
-
-    tree = stac.load_datatree([item])
-
-    node = tree[f"local/{item.id}/visual"]
-    assert list(node.data_vars) == ["red", "green", "blue"]
-    np.testing.assert_array_equal(node.blue.values, 2)
-
-
-def test_items_sharing_a_grid_load_together_and_keep_their_own_facts(observation):
-    item, raster = observation
-    later = item.clone()
-    later.id = "later"
-    later.datetime = item.datetime.replace(day=20)
-    later.properties["eo:cloud_cover"] = 40.0
-    tile = item.clone()
-    tile.id = "tile"
-    tile.properties["eo:cloud_cover"] = 60.0
-
-    tree = stac.load_datatree([item, later, tile])
-
-    covers = {}
-    for entry in (item, later, tile):
-        node = tree[f"local/{entry.id}"].to_dataset(inherit=False)
-        covers[entry.id] = node["eo:cloud_cover"].item()
-        leaf = tree[f"local/{entry.id}/red"].to_dataset(inherit="all_coords")
-        assert leaf.time.values == np.datetime64(
-            entry.datetime.replace(tzinfo=None), "ns"
-        )
-        np.testing.assert_array_equal(leaf.red.values, raster.red.values)
-    assert covers == {item.id: 20.0, "later": 40.0, "tile": 60.0}
-
-
 @pytest.mark.parametrize("fill", [-9999])
 def test_effective_nodata_follows_loaded_pixels(local_catalog, fill):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
     loaded = load_dataset(
         matched,
         geobox=grid,
-        collection=collection,
         **{**options, "dtype": "float32", "nodata": fill},
     )
 
@@ -385,13 +136,11 @@ def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_
     }
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args[0])):
-        raw = load_dataset(items, grid, **options)
-        physical = load_dataset(items, grid, mask_and_scale=True, **options)
-        deferred = raw.gs.mask_and_scale()
+        raw = load_dataset(items, geobox=grid, **options)
+        physical = raw.gs.mask_and_scale()
     if lazy:
         assert not tasks
         assert isinstance(physical.red.data, da.Array)
-    xr.testing.assert_identical(physical, deferred)
     xr.testing.assert_identical(physical, xr.decode_cf(raw, decode_coords="all"))
     xr.testing.assert_identical(physical.coords.to_dataset(), raw.coords.to_dataset())
     assert physical.gs.geobox == grid
@@ -412,10 +161,7 @@ def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_
 def test_aliases_resolve_each_multiband_asset_index(local_catalog):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
-    loaded = load_dataset(
-        matched, geobox=grid, collection=collection, **{**options, "chunks": None}
-    )
+    loaded = load_dataset(matched, geobox=grid, **{**options, "chunks": None})
 
     assert isinstance(loaded.red.data, np.ndarray)
     assert loaded.red.dims == ("time", "y", "x")
@@ -427,13 +173,12 @@ def test_aliases_resolve_each_multiband_asset_index(local_catalog):
     assert loaded.gs.mask_and_scale().nir.values[0, 1, 1] == pytest.approx(1.1)
 
 
-def test_a_load_carries_its_collection_and_the_properties_every_item_shares(
+def test_a_load_carries_its_collection_and_requested_properties(
     local_catalog,
 ) -> None:
 
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
     first = matched[0]
     first.properties.update(platform="sentinel-2a", constellation="sentinel-2")
     second = first.clone()
@@ -441,45 +186,19 @@ def test_a_load_carries_its_collection_and_the_properties_every_item_shares(
     second.properties["platform"] = "sentinel-2b"
     matched = [first, second]
 
-    loaded = load_dataset(matched, geobox=grid, collection=collection, **options)
+    loaded = load_dataset(
+        matched,
+        geobox=grid,
+        with_properties=[{"key": "constellation", "dtype": "str"}],
+        **options,
+    )
 
-    assert loaded.gs.stac_collection.id == collection.id
-    assert loaded.gs.stac_collection.license == collection.license
-    # One fused step: only what both Items state alike is a property.
-    assert loaded["constellation"].item() == "sentinel-2"
+    assert loaded.gs.stac_collection.id == client.collection("local").id
+    assert loaded.gs.stac_collection.license == client.collection("local").license
+    # Only requested properties load, one value per fused step.
+    assert loaded["constellation"].values.tolist() == ["sentinel-2,sentinel-2"]
     assert "platform" not in loaded.coords
     assert "title" not in loaded.attrs
-
-
-def _item(id: str, timestamp: dt, fields: dict[str, object]) -> pystac.Item:
-    item = pystac.Item(
-        id=id,
-        geometry=None,
-        bbox=None,
-        datetime=timestamp.replace(tzinfo=timezone.utc),
-        properties={},
-    )
-    item.add_asset(
-        "red",
-        pystac.Asset(
-            href=f"https://example.com/{id}.tif",
-            media_type=pystac.MediaType.GEOTIFF,
-            extra_fields={"raster:bands": [fields]},
-        ),
-    )
-    return item
-
-
-def _collection() -> pystac.Collection:
-    return pystac.Collection(
-        id="example",
-        description="Example collection",
-        extent=pystac.Extent(
-            pystac.SpatialExtent([[-180, -90, 180, 90]]),
-            pystac.TemporalExtent([[dt(2025, 1, 1, tzinfo=timezone.utc), None]]),
-        ),
-        license="CC-BY-4.0",
-    )
 
 
 @pytest.mark.parametrize("field,value", [("scale", 0.0002)])
@@ -514,8 +233,7 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
 def test_observations_to_prepared_index_to_reusable_dataset(local_catalog, tmp_path):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
-    raw = load_dataset(matched, geobox=grid, collection=collection, **options)
+    raw = load_dataset(matched, geobox=grid, **options)
     reflectance = raw.gs.mask_and_scale()
     derived = reflectance.assign(ndvi=ndvi(reflectance, nir="nir", red="red"))[["ndvi"]]
     composite = derived.median("time", keep_attrs=True)
@@ -534,36 +252,15 @@ def test_observations_to_prepared_index_to_reusable_dataset(local_catalog, tmp_p
     assert raw.red.values[0, 1, 1] == 2000
 
 
-def test_a_scene_states_the_period_its_item_states(local_catalog, tmp_path):
-
-    client, region, grid, options = local_catalog
-    matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
-    item = matched[0]
-    item.properties.update(
-        start_datetime="2025-01-01T00:00:00Z", end_datetime="2025-01-31T23:59:59Z"
-    )
-    matched = [item]
-    loaded = load_dataset(matched, geobox=grid, collection=collection, **options)
-    rebuilt = next(
-        create_file_items(write_cogs(loaded, tmp_path, format_paths="composite.tif"))
-    )
-    assert str(loaded.start_datetime.values[0])[:10] == "2025-01-01"
-    assert str(loaded.end_datetime.values[0])[:19] == "2025-01-31T23:59:59"
-    assert rebuilt.properties["start_datetime"].startswith("2025-01-01")
-    assert rebuilt.properties["end_datetime"].startswith("2025-01-31T23:59:59")
-
-
 def test_loaded_stac_metadata_is_interpretable_without_pixel_reads(local_catalog):
     from dask.callbacks import Callback
 
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    collection = client.collection("local")
     with Callback(
         pretask=lambda *_: pytest.fail("metadata inspection computed pixels")
     ):
-        loaded = load_dataset(matched, geobox=grid, collection=collection, **options)
+        loaded = load_dataset(matched, geobox=grid, **options)
         assert loaded.gs.spatial_dims == ("y", "x")
         assert loaded.gs.time_coordinate.name == "time"
         mappings = loaded.cf.grid_mappings
@@ -572,4 +269,130 @@ def test_loaded_stac_metadata_is_interpretable_without_pixel_reads(local_catalog
         assert loaded.red.gs.packing.scale_factor == 0.0001
         assert loaded.nir.gs.packing.scale_factor == 0.0002
         assert "nodata" not in loaded.red.attrs
-        assert loaded.gs.stac_collection.id == collection.id
+        assert loaded.gs.stac_collection.id == client.collection("local").id
+
+
+def test_like_copies_a_raster_grid(observation):
+    item, raster = observation
+
+    loaded = stac.load_dataset([item], like=raster, chunks={})
+
+    assert loaded.gs.geobox == raster.gs.geobox
+
+
+def test_a_step_states_the_period_of_the_items_it_fuses(observation, tmp_path):
+    item, raster = observation
+    item.properties.update(
+        start_datetime="2025-01-15T10:30:00Z", end_datetime="2025-01-15T10:30:40Z"
+    )
+    later = item.clone()
+    later.id = "later"
+    later.properties.update(
+        start_datetime="2025-01-15T10:31:00+00:00",
+        end_datetime="2025-01-15T10:31:40Z",
+    )
+
+    loaded = stac.load_dataset(
+        [item, later], geobox=raster.gs.geobox, groupby="solar_day", chunks={}
+    )
+
+    np.testing.assert_array_equal(
+        loaded.start_datetime, [np.datetime64("2025-01-15T10:30:00", "ns")]
+    )
+    np.testing.assert_array_equal(
+        loaded.end_datetime, [np.datetime64("2025-01-15T10:31:40", "ns")]
+    )
+    assert not loaded.data_vars.keys() & {"start_datetime", "end_datetime"}
+    reopened = open_raster(loaded.gs.to_netcdf(tmp_path / "period.nc"))
+    xr.testing.assert_equal(reopened.start_datetime, loaded.start_datetime)
+    xr.testing.assert_equal(reopened.end_datetime, loaded.end_datetime)
+
+
+def test_an_item_stating_only_datetime_spans_its_instant(observation):
+    item, raster = observation
+
+    loaded = stac.load_dataset([item], geobox=raster.gs.geobox, chunks={})
+
+    assert (loaded.start_datetime == loaded.time).all()
+    assert (loaded.end_datetime == loaded.time).all()
+
+
+def test_bands_group_by_the_grid_they_state_finest_first(observation, tmp_path):
+    item, raster = observation
+    coarse = _add_coarse_asset(item, raster, tmp_path)
+
+    groups = group_bands_by_grid([item])
+
+    fine = raster.gs.geobox
+    assert groups == (
+        (fine.crs, fine.resolution, ["red"]),
+        (coarse.gs.geobox.crs, coarse.gs.geobox.resolution, ["swir"]),
+    )
+
+
+def test_grouping_skips_the_bands_an_item_lacks(observation, tmp_path):
+    item, raster = observation
+    _add_coarse_asset(item, raster, tmp_path)
+    bare = item.clone()
+    del bare.assets["swir"]
+
+    groups = group_bands_by_grid([bare])
+
+    assert [bands for _, _, bands in groups] == [["red"]]
+
+
+def test_each_native_grid_loads_lazily_without_resampling(observation, tmp_path):
+    item, raster = observation
+    coarse = _add_coarse_asset(item, raster, tmp_path)
+
+    loaded = stac.load_native_datasets([item], chunks={})
+
+    (_, _, fine_ds), (_, _, coarse_ds) = loaded
+    assert fine_ds.gs.geobox == raster.gs.geobox
+    assert coarse_ds.gs.geobox == coarse.gs.geobox
+    assert list(coarse_ds.data_vars) == ["swir"]
+    assert isinstance(coarse_ds.swir.data, da.Array)
+    np.testing.assert_array_equal(coarse_ds.swir.isel(time=0), coarse.swir)
+
+
+def test_a_region_crops_each_native_grid_at_its_own_resolution(observation, tmp_path):
+    item, raster = observation
+    _add_coarse_asset(item, raster, tmp_path)
+    region = raster.gs.geobox[:2, :2].extent.to_crs("EPSG:4326")
+
+    loaded = stac.load_native_datasets([item], chunks={}, geopolygon=region)
+
+    resolutions = [native.gs.geobox.resolution.x for _, _, native in loaded]
+    assert resolutions == [10, 20]
+
+
+def test_property_requests_keep_numbers_exact_and_text_as_text():
+    import pystac
+
+    first = pystac.Item(
+        "first",
+        None,
+        None,
+        dt(2025, 6, 1, tzinfo=timezone.utc),
+        {
+            "eo:cloud_cover": 24.001125,
+            "platform": "sentinel-2b",
+            "start_datetime": "2025-06-01T00:00:00Z",
+            "end_datetime": "2025-06-01T00:05:00Z",
+            "view:valid": True,
+            "instruments": ["msi"],
+        },
+    )
+    second = pystac.Item(
+        "second",
+        None,
+        None,
+        dt(2025, 6, 2, tzinfo=timezone.utc),
+        {"eo:cloud_cover": 40, "sat:relative_orbit": 8},
+    )
+
+    assert stac.list_properties([first, second]) == [
+        {"key": "eo:cloud_cover", "dtype": "float64"},
+        {"key": "platform", "dtype": "str"},
+        {"key": "sat:relative_orbit", "dtype": "float64"},
+    ]

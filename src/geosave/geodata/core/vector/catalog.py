@@ -1,4 +1,4 @@
-"""Explore and persist spatial catalog records on native GeoDataFrames."""
+"""Place, draw, write and convert spatial records on native GeoDataFrames."""
 
 from __future__ import annotations
 
@@ -20,16 +20,14 @@ if TYPE_CHECKING:
     import pystac
     from typing_extensions import Unpack
     from upath import UPath
-    from geosave.geodata import DataTree, Dataset
+    from geosave.geodata import Dataset
     from geosave.geodata.io.storage import Location
-    from geosave.geodata.io.formats.geojson import GeoJSONWriteOptions
-    from geosave.geodata.io.formats.geopackage import GeoPackageWriteOptions
-    from geosave.geodata.io.formats.geoparquet import GeoParquetWriteOptions
+    from geosave.geodata.io.vector.ogr import OGRWriteOptions
+    from geosave.geodata.io.vector.geoparquet import GeoParquetWriteOptions
 
     from geosave.geodata.core.region import GeoRegion
+    from geosave.geodata.stac.load import StacLoadOptions
     from geosave.geodata.viz.explore import Explorer
-
-    from .samples import GeoSamples
 
 # A rule raises VectorValidationError when the table breaks it.
 type Rule = Callable[[gpd.GeoDataFrame], None]
@@ -135,19 +133,25 @@ def dated(rows: gpd.GeoDataFrame) -> None:
 
 
 class GeoCatalog:
-    """Place, draw, write and sample spatial records, including STAC Items.
+    """Place, draw and write spatial records, and convert STAC Item rows.
 
     Native GeoPandas masks select rows. Spatial operations request the geometry
-    and CRS guarantees they need through validate. The region combines geometry
-    and temporal coverage; sampling groups source rows without opening pixels.
+    and CRS guarantees they need through `validate`. The region combines
+    geometry and temporal coverage without opening assets.
 
-    Item conversion and raster loading additionally require STAC columns.
-    Collection definitions travel with rows in the stac-geoparquet attrs;
-    ordinary features need neither Item columns nor Collection metadata.
+    A table of STAC Items, as `stac.create_catalog` lays it out, additionally
+    converts back to Items and loads as a Dataset. Its Collection definitions
+    travel in `attrs["stac-geoparquet"]`; ordinary features need neither Item
+    columns nor Collection metadata.
 
     Raises:
         AttributeError: `data` is not a GeoDataFrame, or has no active
             geometry column.
+
+    Examples:
+        >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
+        >>> recent = catalog[catalog["datetime"] >= "2025-06-01"]
+        >>> scene = recent.gs.to_dataset(chunks={})
     """
 
     def __init__(self, data: pd.DataFrame) -> None:
@@ -309,11 +313,9 @@ class GeoCatalog:
         """Burn geometries or one property onto an exact grid.
 
         Raises:
-            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
+            NotImplementedError: Always, until rasterization is rebuilt.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__}.rasterize is being rebuilt with catalog-tree loading and publication"
-        )
+        raise NotImplementedError("rasterize is not rebuilt yet")
 
     @property
     def collections(self) -> dict[str, pystac.Collection]:
@@ -321,17 +323,17 @@ class GeoCatalog:
         import pystac
 
         footer = self._data.attrs.get(FOOTER_KEY, {})
-        collections = {}
-        for collection_id, fields in footer.get("collections", {}).items():
-            collections[collection_id] = pystac.Collection.from_dict(fields)
-        return collections
+        collections_by_id = {}
+        for collection_id, collection_dict in footer.get("collections", {}).items():
+            collections_by_id[collection_id] = pystac.Collection.from_dict(collection_dict)
+        return collections_by_id
 
     def to_geojson(
         self,
         path: Location,
         *,
         overwrite: bool = False,
-        **options: Unpack[GeoJSONWriteOptions],
+        **options: Unpack[OGRWriteOptions],
     ) -> UPath:
         """Write this vector as one GeoJSON file.
 
@@ -356,9 +358,9 @@ class GeoCatalog:
             >>> plots.gs.to_geojson("plots.geojson")
             PosixUPath('plots.geojson')
         """
-        from geosave.geodata.io.formats import geojson
+        from geosave.geodata.io.vector import ogr
 
-        return geojson.write_geojson(self._data, path, overwrite=overwrite, **options)
+        return ogr.write_geojson(self._data, path, overwrite=overwrite, **options)
 
     def to_geopackage(
         self,
@@ -366,7 +368,7 @@ class GeoCatalog:
         *,
         layer: str | None = None,
         overwrite: bool = False,
-        **options: Unpack[GeoPackageWriteOptions],
+        **options: Unpack[OGRWriteOptions],
     ) -> UPath:
         """Write this vector as one layer in a GeoPackage.
 
@@ -388,9 +390,9 @@ class GeoCatalog:
             >>> plots.gs.to_geopackage("survey.gpkg", layer="plots")
             PosixUPath('survey.gpkg')
         """
-        from geosave.geodata.io.formats import geopackage
+        from geosave.geodata.io.vector import ogr
 
-        return geopackage.write_geopackage(
+        return ogr.write_geopackage(
             self._data, path, layer=layer, overwrite=overwrite, **options
         )
 
@@ -432,64 +434,95 @@ class GeoCatalog:
             >>> plots.gs.to_geoparquet("plots.parquet", compression="zstd")
             PosixUPath('plots.parquet')
         """
-        from geosave.geodata.io.formats import geoparquet
+        from geosave.geodata.io.vector import geoparquet, stac_geoparquet
+        from geosave.geodata.stac.catalog import FOOTER_KEY
 
+        if FOOTER_KEY in self._data.attrs:
+            return stac_geoparquet.write_stac_geoparquet(
+                self._data,
+                path,
+                collections=collections,
+                overwrite=overwrite,
+                **options,
+            )
+        if collections is not None:
+            raise ValueError(
+                "Collection definitions require a catalog with STAC metadata"
+            )
         return geoparquet.write_geoparquet(
-            self._data, path, collections=collections, overwrite=overwrite, **options
+            self._data, path, overwrite=overwrite, **options
         )
 
-    def sample(self, *args: Any, **kwargs: Any) -> GeoSamples:
-        """Plan samples of the Items for training.
+    def to_dataset(self, **options: Unpack[StacLoadOptions]) -> Dataset:
+        """Load one collection's Item rows onto one grid, as `stac.load_dataset` does.
 
-        Raises:
-            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__}.sample is being rebuilt with catalog-tree loading and publication"
-        )
-
-    def to_datatree(self, **options: Any) -> DataTree:
-        """Load the Items lazily as a STAC tree: collection, Item, asset.
+        A shortcut for `stac.load_dataset(rows.gs.to_items(), ...)`, with its
+        default stamps. Use `stac.load_native_datasets` on the Items to keep
+        each native grid.
 
         Args:
-            **options: Forwarded to `stac.load_datatree`, such as `chunks` or `bands`.
+            **options: Options of `odc.stac.load`, such as `geobox`, `like`,
+                `chunks` and `with_properties`.
 
         Returns:
-            DataTree as `stac.load_datatree` builds it, with the table's
-            Collections on their collection nodes.
-
-        Examples:
-            >>> [leaf.path for leaf in rows.gs.to_datatree().leaves][:1]
-            ['/s2/20250601T103000_33UUU_52.5200_13.4050/B04']
-        """
-        from geosave.geodata.stac.load import load_datatree
-
-        tree = load_datatree(
-            self.to_items(), collections=list(self.collections.values()), **options
-        )
-        return cast("DataTree", tree)
-
-    def to_dataset(self, *args: Any, **kwargs: Any) -> Dataset:
-        """Load one collection's Items onto one grid.
+            Dataset with the rows' bands, period and Collection.
 
         Raises:
-            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__}.to_dataset is being rebuilt with catalog-tree loading and publication"
-        )
-
-    def to_items(self) -> list[pystac.Item]:
-        """Build the pystac Item each row states, in row order.
-
-        Returns:
-            One new Item per row, holding only the assets its row has, their
-            hrefs absolute.
+            VectorValidationError: The rows are not STAC Items, or name
+                several collections.
 
         Examples:
-            >>> [item.id for item in rows.iloc[[0]].gs.to_items()]
-            ['20250601T103000_33UUU_52.5200_13.4050']
+            >>> scene = catalog.gs.to_dataset(chunks={}, with_properties=["eo:cloud_cover"])
         """
-        from geosave.geodata.stac.catalog import to_items
+        from geosave.geodata.stac.load import load_dataset
 
-        return to_items(self._data)
+        self.validate(stac_items, one_collection)
+        dataset = load_dataset(self.to_items(), **options)
+        return cast("Dataset", dataset)
+
+    def to_items(self) -> list[pystac.Item]:
+        """Convert Item rows to native pystac Items, ready for `stac.load_dataset`.
+
+        The stac-geoparquet library decodes the rows. Asset hrefs a file
+        stored relative resolve against that file, and each Item links to
+        the Collection the table defines for it.
+
+        Returns:
+            One Item per row, in row order, with WGS84 geometry.
+
+        Raises:
+            VectorValidationError: The rows are not STAC Items.
+
+        Examples:
+            >>> scene = stac.load_dataset(catalog.gs.to_items(), chunks={})
+        """
+        import pyarrow as pa
+        from stac_geoparquet.arrow import stac_table_to_items
+
+        from geosave.geodata.stac.catalog import SOURCE_KEY, build_item
+
+        self.validate(stac_items)
+        if self._data.empty:
+            return []
+
+        wgs84_rows = self._data.to_crs("EPSG:4326")
+        if wgs84_rows.active_geometry_name != "geometry":
+            wgs84_rows = wgs84_rows.rename_geometry("geometry")
+        # stac-geoparquet reads each Item's bbox from a struct column, which
+        # the table does not keep. GeoPandas names bounds minx..maxy; the
+        # struct uses xmin..ymax.
+        bounds = wgs84_rows.geometry.bounds.rename(
+            columns={"minx": "xmin", "miny": "ymin", "maxx": "xmax", "maxy": "ymax"}
+        )
+        bbox_column = pd.Series(bounds.to_dict("records"), index=wgs84_rows.index)
+        arrow_table = pa.table(wgs84_rows.assign(bbox=bbox_column).to_arrow(index=False))
+
+        collections_by_id = self.collections
+        source_file = self._data.attrs.get(SOURCE_KEY)
+        items = []
+        for item_dict in stac_table_to_items(arrow_table):
+            item = build_item(
+                item_dict, source_file=source_file, collections_by_id=collections_by_id
+            )
+            items.append(item)
+        return items

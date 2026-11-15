@@ -40,7 +40,7 @@ initialized; train the model before using its predictions.
 
 Inputs use `(batch, band, y, x)` here. The model does not read raster metadata,
 mask nodata, reorder bands, or normalize values. Those belong to the
-[input preparation](model-spec.md) you run before the tensor call.
+[input preparation](model-inputs.md) you run before the tensor call.
 
 GeoSave models are ordinary PyTorch modules. You can call them directly, move
 them to a device, and put them inside a LightningModule.
@@ -52,7 +52,7 @@ through named values. An encoder extracts features; a head turns features into
 outputs.
 
 ```python
-from geosave.model.chain import ModelChain, chain_step
+from geosave.ml.chain import ModelChain, chain_step
 
 
 class Encoder(nn.Module):
@@ -122,7 +122,7 @@ configuration. Start with a built-in head to see this without downloading an
 encoder checkpoint.
 
 ```python
-from geosave.model import build_model
+from geosave.ml import build_model
 
 head = build_model({
     "head": {
@@ -146,7 +146,7 @@ features to one logit per class; class names stay with the label's legend.
 
 | Stage | Built-in names | Role |
 | --- | --- | --- |
-| `encoder` | `clay`, `dinov3`, `prithvi`, `prithvi_tl` | Extract image features |
+| `encoder` | `clay`, `dinov3`, `prithvi`, `prithvi_tl`, `small_cnn` | Extract image features; `small_cnn` is a small randomly initialized encoder for offline tests |
 | `decoder` | `dpt`, `unet` | Fuse a feature pyramid into a dense feature map |
 | `head` | `classification`, `regression`, `segmentation` | Produce task outputs |
 | `model` | `ibm_granite_biomass` | Run an end-to-end model |
@@ -165,7 +165,7 @@ weights and may require access to the checkpoint repository.
 width, to a later stage's constructor.
 
 ```python
-from geosave.model.chain import Published
+from geosave.ml.components.published import Published
 
 
 class SizedEncoder(Encoder):
@@ -220,10 +220,10 @@ constructed modules for exploration.
 To select your stage by a short `name`, as the built-ins are, register it:
 
 ```python
-from geosave.model.stages.registry import register_model
+from geosave.ml.components.registry import ENCODERS
 
 
-@register_model("encoder", "sized")
+@ENCODERS.register("sized")
 class SizedEncoder(Encoder):
     feature_channels: Published[int]
 
@@ -245,6 +245,6 @@ Import the module that registers it before building in another process;
 registration names a class, it does not package your code. A
 [release](release.md) requires stages selected by a registered `name`.
 
-Continue with [model inputs](model-spec.md) to turn raster bands into the
+Continue with [model inputs](model-inputs.md) to turn raster bands into the
 `image` tensor, then [training](training.md) to optimize the weights. To reuse
 a published encoder with a task-specific head, see [pretrained weights](pretrained.md).

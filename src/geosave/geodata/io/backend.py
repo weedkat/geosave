@@ -8,7 +8,7 @@ from typing import Any
 import xarray as xr
 from xarray.backends import BackendEntrypoint
 
-from .openers import open_raster
+from .openers import RASTER_TREE_OPENERS, find_opener, open_raster, open_raster_tree
 
 
 class GeoSaveBackendEntrypoint(BackendEntrypoint):
@@ -39,7 +39,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
 
         Args:
             filename_or_obj: One raster file or store. Open split files through
-                their Item catalog with rows.gs.to_datatree().
+                their Item catalog with stac.load_dataset(rows.gs.to_items(), ...).
             drop_variables: Variable name or names to leave out.
             **options: Read options the format's reader accepts, as
                 `mask_and_scale=True`.
@@ -49,9 +49,6 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         """
         options.setdefault("chunks", None)
         raster = open_raster(filename_or_obj, **options)
-        if isinstance(raster, xr.DataTree):
-            raster.close()
-            raise ValueError("source contains groups; use xr.open_datatree")
         if drop_variables is None:
             return raster
         result = raster.drop_vars(drop_variables)
@@ -65,7 +62,7 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
         drop_variables: str | Iterable[str] | None = None,
         **options: Any,
     ) -> xr.DataTree:
-        """Open what `open_raster` reads.
+        """Open a stored hierarchy, or a banded raster as a root-only tree.
 
         Args:
             filename_or_obj: One raster file or store, preserving stored groups.
@@ -76,9 +73,13 @@ class GeoSaveBackendEntrypoint(BackendEntrypoint):
             DataTree holding one group per raster.
         """
         options.setdefault("chunks", None)
+        try:
+            find_opener(filename_or_obj, RASTER_TREE_OPENERS)
+        except ValueError:
+            pass
+        else:
+            return open_raster_tree(filename_or_obj, **options)
         result = open_raster(filename_or_obj, **options)
-        if isinstance(result, xr.DataTree):
-            return result
         tree = xr.DataTree(result)
         tree.set_close(result.close)
         return tree

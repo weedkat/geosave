@@ -8,8 +8,6 @@ import xarray as xr
 
 from . import attrs, io
 from .core import (
-    Chips,
-    GeoSamples,
     GeoRegion,
     GeoCatalog,
     GeoDataArray,
@@ -17,8 +15,15 @@ from .core import (
     GeoDataTree,
     GeoCatalogItem,
 )
-from .io import open_raster, open_vector
-from geosave.geodata.io.rasterio import configure_gdal
+from .io import open_raster, open_raster_tree, open_vector
+from .sampling import (
+    ChipLayout,
+    RasterChipper,
+    RasterMerger,
+    TensorChipper,
+    TensorMerger,
+)
+from geosave.geodata.io.gdal_env import configure_gdal
 from .errors import RasterValidationError, VectorValidationError
 from .core.raster.utils.statistics import class_percent, statistics
 
@@ -94,8 +99,11 @@ def __dir__() -> list[str]:
 __all__ = [
     "RasterValidationError",
     "VectorValidationError",
-    "Chips",
-    "GeoSamples",
+    "ChipLayout",
+    "RasterChipper",
+    "RasterMerger",
+    "TensorChipper",
+    "TensorMerger",
     "attrs",
     "GeoRegion",
     "GeoDataArray",
@@ -115,6 +123,7 @@ __all__ = [
     "features",
     "io",
     "open_raster",
+    "open_raster_tree",
     "open_vector",
     "stac",
     "class_percent",

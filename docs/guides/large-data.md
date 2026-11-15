@@ -5,18 +5,15 @@ Crop a raster before reading its pixels:
 ```python
 import dask.array as da
 import geopandas as gpd
-from shapely.geometry import box
-
 import xarray as xr
+from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
+from shapely.geometry import box
 
 import geosave as gs
 
-from odc.geo.geobox import GeoBox
-
 grid = GeoBox.from_bbox(
-    (500000, 5000000, 502560, 5002560),
-    crs='EPSG:32633', resolution=10,
+    (500000, 5000000, 502560, 5002560), crs="EPSG:32633", resolution=10,
 )
 pixels = da.random.RandomState(0).randint(
     0, 3000, (256, 256), chunks=128
@@ -160,16 +157,16 @@ prepared.close()
 Writing computes the selected data and stores its chunks. To schedule a write
 yourself, assign `pending = cropped.gs.to_zarr(path, compute=False)`, then call
 `paths = pending.compute()`. Nothing reaches the destination until then.
-Tree `to_cog` and the NetCDF writers take `compute=False` too. Each returns
+The NetCDF writers and `io.write_cog` take `compute=False` too. Each returns
 one native Dask Delayed whose computed value matches the eager result.
-Array TIFF/COG methods instead forward to rioxarray: deferred pixels require
+DataArray `.gs.to_cog` instead forwards to rioxarray: deferred pixels require
 chunked data and a write lock, and the file header may be created immediately.
 See [native array export](../reference/io.md#saved-raster-files).
 
 ## Read one model input at a time
 
-[Chip reading and merging](chips.md) shows `gs.Chips([scene], size=256)`
-on a prepared raster. Construction reads no pixels; indexing builds lazy work
+[Chip reading and merging](chips.md) shows `gs.RasterChipper([tree], size=256)`
+on a prepared one-grid DataTree. Construction reads no pixels; indexing builds lazy work
 on the chip grid. Catalog sampling is currently unavailable and is not needed
 for this workflow.
 

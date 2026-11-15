@@ -49,9 +49,7 @@ grid = GeoBox.from_bbox(
     BoundingBox(*bbox, crs="EPSG:4326").to_crs("EPSG:32610"), resolution=10
 )
 scene = stac.load_dataset(
-    [item], grid,
-    bands=["red", "green", "blue", "nir"],
-    collection=client.collection("sentinel-2-l2a"),
+    [item], geobox=grid, bands=["red", "green", "blue", "nir"], chunks={},
 ).isel(time=0)
 # Earth Search's COG conversion has already applied the offset for this Item.
 if item.properties.get("earthsearch:boa_offset_applied"):
@@ -62,8 +60,9 @@ scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 ```
 
 The result is an xarray Dataset on a 10 metre UTM grid. Selecting `time=0`
-removes the one-date axis. Loading builds lazy reads; plotting retrieves the
-pixels needed for the view. The requested bounds are snapped to the output
+removes the one-date axis. `chunks={}` builds lazy reads; plotting retrieves
+the pixels needed for the view. The loader takes band metadata and the
+Collection from the Item itself, so no search is repeated. The requested bounds are snapped to the output
 pixel grid. Preview the image before using it: a low scene-wide cloud score
 does not guarantee a clear crop.
 
@@ -79,20 +78,22 @@ so check the product and provider metadata when changing sources.
 ```python
 from pathlib import Path
 
+from geosave.geodata import io
+
 path = Path("imagery/scene.tif")
 path.parent.mkdir(parents=True, exist_ok=True)
-scene.gs.to_array().gs.to_cog(path)
+io.write_cog(scene, path)
 local = gs.open_raster(path)
 list(local.data_vars)
 ```
 
 ```text
-['band_1', 'band_2', 'band_3', 'band_4']
+['red', 'green', 'blue', 'nir']
 ```
 
-`imagery/scene.tif` contains the selected region and four bands, with their grid
-and value metadata. The write performs the actual pixel reads needed to save
-it. Pass `overwrite=True` to intentionally replace an earlier result.
+`imagery/scene.tif` contains the selected region and four named bands, with
+their grid and value metadata. The write performs the actual pixel reads
+needed to save it. Pass `overwrite=True` to intentionally replace an earlier result.
 
 ```python
 local.close()

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from dask.callbacks import Callback
 
-from geosave.geodata.io.formats.geotiff import write_cog
+from geosave.geodata.io.raster.geotiff import write_cog
 from geosave.geodata.viz.explore import RasterLayer
 
 
@@ -319,7 +319,7 @@ def test_returning_to_a_zoom_reuses_pixels_within_budget(monkeypatch):
 def test_multiband_item_viewport_uses_the_loaded_band_names(tmp_path):
     from datetime import UTC, datetime
 
-    from geosave.geodata.io.formats.geotiff import write_cog
+    from geosave.geodata.io.raster.geotiff import write_cog
     from geosave.geodata.stac.catalog import create_catalog
     from tests.geodata.conftest import create_file_items
     from tests.geodata.conftest import build_raster
@@ -352,7 +352,7 @@ def test_multiband_item_viewport_uses_the_loaded_band_names(tmp_path):
 
 def test_dataset_viewport_keeps_calculations_on_file_pixels(tmp_path):
     from geosave.geodata.io import open_raster
-    from geosave.geodata.io.formats.geotiff import write_cog
+    from geosave.geodata.io.raster.geotiff import write_cog
     from tests.geodata.conftest import build_raster
 
     source = build_raster()[["red"]]

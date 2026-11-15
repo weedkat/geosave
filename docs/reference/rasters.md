@@ -11,14 +11,13 @@ array = scene.gs.to_array()
 wrapped = array.to_dataset(name="image")  # Native wrapping keeps all dimensions.
 bands = array.gs.to_dataset()  # Split the labelled "band" dimension.
 
-tree = rows.gs.to_datatree()
-scene = tree.gs.reproject(grid)["optical"].gs.combine()  # Items along time.
+scene = stac.load_dataset(rows.gs.to_items(), geobox=grid, chunks={})
+tree = xr.DataTree.from_dict({"optical": scene})
 ```
 
 Raster conversion preserves pixels and does not choose an output grid; align
 mixed grids with `tree.gs.reproject` first. Native tree constructors keep
-attrs on the Datasets supplied at each explicit path. Catalog-row
-`gs.to_datatree()` remains the reader that opens raster assets.
+attrs on the Datasets supplied at each explicit path. Catalog Items load through `stac.load_dataset`.
 
 Stacking requires matching CF pixel meaning: units (including whether stated),
 packing, unsigned interpretation, flags, validity ranges, calendars and cell
@@ -65,12 +64,7 @@ A monthly bin label is not necessarily the first contributing observation.
 declarations, falling back to the conventional `time` name. A declared `date`
 coordinate keeps its name through time selection and STAC stamping.
 
-```text
-scene.gs.variables          data variable names
-scene.gs.grid_mapping_coords  the scalar coordinates carrying the CRS (spatial_ref)
-```
-
-GeoSave's readers and ODC hold the grid mapping as a coordinate; after a plain
+`scene.gs.variables` lists the data variable names. GeoSave's readers and ODC hold the grid mapping as a coordinate; after a plain
 `xr.open_dataset`, make it one with `ds.set_coords("spatial_ref")`. CF
 structure GeoSave does not model, such as spatial bounds or cell measures,
 stays as ordinary variables: read it with `.cf`, and recompute or drop it
@@ -131,12 +125,12 @@ series = xr.concat(
 compatible rasters before combining them. Native concat's default attrs policy
 is `override`.
 
-For trees, combine a collection on compatible grids before applying temporal
-operations. Individual assets expose inherited Item coordinates with
-`.to_dataset(inherit="all_coords")`:
+For trees, select the Dataset at a caller-defined node before applying temporal
+operations. Use `.to_dataset(inherit="all_coords")` when all inherited
+coordinates are needed:
 
 ```python
-observations = tree["optical"].gs.combine()
+observations = tree["optical"].to_dataset()
 monthly = observations.gs.mask_and_scale().gs.composite("MS", "mean")
 january = monthly.sel(time="2025-01")
 ```
@@ -151,12 +145,12 @@ the accessor of that object.
 ```python
 from geosave.geodata.core.raster.dataarray import compatible_resampling, decoded
 from geosave.geodata.core.raster.dataset import same_pixel_meaning
-from geosave.geodata.core.raster.datatree import same_grid, stac_catalog
+from geosave.geodata.core.raster.datatree import same_grid, same_geobox
 
 band.gs.validate()                       # a georeferenced grid
 band.gs.validate(decoded)                # and no active CF packing
 scene.gs.validate(same_pixel_meaning)    # one packing, flags and units across variables
-tree.gs.validate(same_grid, stac_catalog)   # every node georeferenced, one grid, STAC layout
+tree.gs.validate(same_geobox)           # every raster node on the identical GeoBox
 band.gs.validate(compatible_resampling("mean"))  # class codes need nearest, mode, first or last
 ```
 
@@ -165,8 +159,8 @@ band.gs.validate(compatible_resampling("mean"))  # class codes need nearest, mod
 | `dataarray.decoded` | no active CF packing | `composite` |
 | `dataarray.compatible_resampling(method)` | class codes resampled only by nearest, mode, first or last | `reproject`, `composite` |
 | `dataset.same_pixel_meaning` | one packing, flags and units across variables | `to_array`, `to_numpy` |
-| `datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | `combine` |
-| `datatree.stac_catalog` | collection/Item/asset layout, with data only on assets | tree `to_cog` |
+| `datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | explicit validation |
+| `datatree.same_geobox` | identical CRS, transform and shape across raster nodes | `RasterChipper`, tree tensor conversion |
 
 A rule that needs an operation's argument is built from it:
 `compatible_resampling(method)` returns the rule that the band's values allow

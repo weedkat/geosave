@@ -19,6 +19,7 @@ June 27, 2025. It contains four bands on a 10 metre grid.
 
 ```python
 import geosave as gs
+from geosave.geodata import io
 
 scene = gs.open_raster("sample-scene.tif")
 list(scene.data_vars), (scene.sizes["y"], scene.sizes["x"])
@@ -63,18 +64,19 @@ from pathlib import Path
 
 path = Path("output/ndvi.tif")
 path.parent.mkdir(parents=True, exist_ok=True)
-ndvi.gs.to_cog(path)
+io.write_cog(ndvi.to_dataset(), path, overwrite=True)
 result = gs.open_raster(path)
 list(result.data_vars), result.gs.geobox == scene.gs.geobox
 ```
 
 ```text
-(['band_1'], True)
+(['ndvi'], True)
 ```
 
 The Cloud Optimized GeoTIFF at `output/ndvi.tif` keeps the source pixel grid.
 You can open it in QGIS or another Python process. Writing computes the result.
-Array exports follow native rioxarray behavior: existing destinations are replaced.
+`io.write_cog` preserves the variable name. `overwrite=True` explicitly replaces
+an existing tutorial output.
 
 ```python
 result.close()

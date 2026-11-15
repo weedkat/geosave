@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import Field
 from torch import nn
 from torch.optim import Adagrad, Adam, AdamW, Optimizer, RMSprop, SGD
 
-from geosave.model.factory import BuildSpec
+from geosave.ml.factory import BuildSpec, Registry
 
 
 class OptimizerSpec(BuildSpec):
@@ -23,26 +23,23 @@ class OptimizerSpec(BuildSpec):
     groups: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
-OPTIMIZERS: dict[str, Callable[..., Optimizer]] = {
-    "ADAMW": AdamW,
-    "ADAM": Adam,
-    "SGD": SGD,
-    "RMSPROP": RMSprop,
-    "ADAGRAD": Adagrad,
-}
+OPTIMIZERS = Registry(Optimizer)
+OPTIMIZERS.register("adamw")(AdamW)
+OPTIMIZERS.register("adam")(Adam)
+OPTIMIZERS.register("sgd")(SGD)
+OPTIMIZERS.register("rmsprop")(RMSprop)
+OPTIMIZERS.register("adagrad")(Adagrad)
 
 
 def build_optimizer(
     spec: OptimizerSpec | Mapping[str, Any],
     model: nn.Module,
-    registry: Mapping[str, Callable[..., Optimizer]] = OPTIMIZERS,
 ) -> Optimizer:
     """Construct an optimizer over a model's trainable parameters.
 
     Args:
         spec: Optimizer selector, arguments, and direct-child group options.
         model: Module whose parameters will be optimized.
-        registry: Named optimizer factories.
 
     Returns:
         Configured optimizer.
@@ -91,5 +88,4 @@ def build_optimizer(
     if not parameter_groups:
         raise ValueError("Cannot build an optimizer without trainable parameters")
 
-    factory = configured.resolve(registry, Optimizer)
-    return factory(parameter_groups, **configured.init_args)
+    return OPTIMIZERS.build(configured, parameter_groups)

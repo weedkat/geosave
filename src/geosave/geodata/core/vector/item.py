@@ -2,31 +2,34 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
+
+import geopandas as gpd
 import pandas as pd
 from shapely.geometry.base import BaseGeometry
 
 
 if TYPE_CHECKING:
     import pystac
-    from geosave.geodata import Dataset, DataTree
+    from geosave.geodata import Dataset
     from geosave.geodata.core.region import GeoRegion
     from geosave.geodata.core.vector.catalog import Rule
 
 
 class GeoCatalogItem:
-    """Read one spatial catalog record, optionally holding STAC assets.
+    """Read one spatial catalog record, optionally a STAC Item row.
 
     A Series represents a record when it carries a geometry field. It does
-    not inherit its parent GeoDataFrame's CRS. STAC conversion and raster
-    loading require the additional Item fields.
+    not inherit its parent GeoDataFrame's CRS, so a STAC row is read as WGS84;
+    select a one-row GeoDataFrame to keep another CRS.
 
     Args:
         row: Spatial record with a `geometry` field; STAC records use WGS84.
 
     Examples:
-        >>> row = items.iloc[0]
+        >>> row = catalog.iloc[0]
         >>> row.gs.region.timespan
         (datetime.datetime(2024, 3, 8, 0, 0), datetime.datetime(2024, 3, 8, 0, 0))
+        >>> scene = stac.load_dataset([row.gs.to_item()], chunks={})
     """
 
     def __init__(self, row: pd.Series) -> None:
@@ -48,30 +51,28 @@ class GeoCatalogItem:
             VectorValidationError: A rule is broken.
 
         Examples:
-            >>> rows.iloc[0].gs.validate(stac_items)
+            >>> catalog.iloc[0].gs.validate(stac_items)
         """
-        import geopandas as gpd
-
-        rows = gpd.GeoDataFrame([self._row], geometry="geometry")
-        rows.attrs = self._row.attrs
+        one_row_catalog = gpd.GeoDataFrame([self._row], geometry="geometry")
+        # pandas carries the table's attrs onto each of its rows.
+        one_row_catalog.attrs = self._row.attrs
         for rule in rules:
-            rule(rows)
+            rule(one_row_catalog)
 
     @property
     def region(self) -> GeoRegion:
-        """Return STAC geometry and time without opening assets.
+        """Return the Item's footprint and time without opening assets.
 
-        A standalone STAC row must use WGS84. For projected or generic rows,
-        select a one-row GeoDataFrame to retain its CRS and use its gs.region.
+        Raises:
+            VectorValidationError: The geometry is broken, or the record is
+                not a STAC Item row.
         """
         from geosave.geodata.core.region import GeoRegion
-        from geosave.geodata.core.vector.utils.time import read_timespan
-        from geosave.geodata.stac.catalog import to_item
-
         from geosave.geodata.core.vector.catalog import valid_geometry
+        from geosave.geodata.core.vector.utils.time import read_timespan
 
         self.validate(valid_geometry)
-        item = to_item(self._row)
+        item = self.to_item()
         return GeoRegion.from_geometry(
             cast("dict[str, Any]", item.geometry),
             timespan=read_timespan(
@@ -82,46 +83,52 @@ class GeoCatalogItem:
         )
 
     def to_item(self) -> pystac.Item:
-        """Build the pystac Item this row states, its asset hrefs absolute.
-
-        Raises:
-            VectorValidationError: The record lacks the STAC Item fields.
-        """
-        from geosave.geodata.stac.catalog import to_item
-
-        return to_item(self._row)
-
-    def read_pixels(self, *args: Any, **kwargs: Any) -> Dataset:
-        """Read the row's pixels onto a grid.
-
-        Raises:
-            NotImplementedError: Always, while it is being rebuilt with catalog-tree loading and publication.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__}.read_pixels is being rebuilt with catalog-tree loading and publication"
-        )
-
-    def to_datatree(self, **options: Any) -> DataTree:
-        """Load the Item lazily as a STAC tree: collection, Item, asset.
-
-        Args:
-            **options: Forwarded to `stac.load_datatree`, such as `chunks` or `bands`.
+        """Convert this Item row to a native pystac Item, as `catalog.gs.to_items` does.
 
         Returns:
-            DataTree as a one-row catalog loads, with its Collection on the
-            collection node.
+            The Item, with absolute asset hrefs and its Collection linked
+            where the table defines it.
+
+        Raises:
+            VectorValidationError: The record is not a STAC Item row.
+
+        Examples:
+            >>> catalog.iloc[0].gs.to_item().id
+            '20250601T103000'
         """
         import pystac
+        import shapely
+        from stac_geoparquet import to_dict
 
-        from geosave.geodata.stac.catalog import FOOTER_KEY
-        from geosave.geodata.stac.load import load_datatree
+        from geosave.geodata.core.vector.catalog import stac_items
+        from geosave.geodata.stac.catalog import FOOTER_KEY, SOURCE_KEY, build_item
 
-        item = self.to_item()
-        # pandas carries the table's footer onto each of its rows.
-        stored = self._row.attrs.get(FOOTER_KEY, {}).get("collections", {})
-        collections = []
-        if item.collection_id in stored:
-            collections.append(pystac.Collection.from_dict(stored[item.collection_id]))
-        return cast(
-            "DataTree", load_datatree([item], collections=collections, **options)
+        self.validate(stac_items)
+        item_dict = to_dict(self._row.to_dict())
+        # The table keeps no bbox column; the geometry states it.
+        item_dict["bbox"] = shapely.bounds(self._row["geometry"]).tolist()
+
+        # pandas carries the table's attrs onto each of its rows.
+        footer = self._row.attrs.get(FOOTER_KEY, {})
+        collections_by_id = {}
+        for collection_id, collection_dict in footer.get("collections", {}).items():
+            collections_by_id[collection_id] = pystac.Collection.from_dict(collection_dict)
+        return build_item(
+            item_dict,
+            source_file=self._row.attrs.get(SOURCE_KEY),
+            collections_by_id=collections_by_id,
+        )
+
+    def read_pixels(self, *args: Any, **kwargs: Any) -> Dataset:
+        """Read the row's pixels onto a grid from the overview that fits it.
+
+        The explorer's viewport reads need it. Load whole Items with
+        `stac.load_dataset([row.gs.to_item()], ...)` instead.
+
+        Raises:
+            NotImplementedError: Always, until the overview-aware reader is rebuilt.
+        """
+        raise NotImplementedError(
+            "read_pixels awaits the overview-aware reader; load whole Items "
+            "with stac.load_dataset([row.gs.to_item()], ...)"
         )

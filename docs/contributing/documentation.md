@@ -131,13 +131,18 @@ the architecture or open-decisions page. Record current limitations in [open dec
 ## Protect the first successful workflow
 
 `python scripts/check_doc_examples.py` executes the plain Python fences in the
-landing page, raster/value/vector/I/O basics, file ingestion, chip reading,
-catalog publication, input preparation, and training tutorials in a temporary
-directory. It checks lazy arrays, saved pixel values and grids, tensor shapes,
+landing page, first vegetation map, zone comparison, raster/value/vector/I/O
+basics, file ingestion, chip reading, catalog publication, input preparation,
+and training tutorials in a temporary directory; `PAGES` in the script is the
+list. It checks lazy arrays, saved pixel values and grids, tensor shapes,
 and predictions before/after checkpoint loading. It also checks catalog
 publication/loading and metadata-decoding examples; a build alone does not
 exercise those calls. Titled Python fences are
 explicit adaptation snippets requiring user data; they are not executed.
+
+The release guide is not in `PAGES` because one fence pushes to the Hub. After
+changing it or `model/processing.py`, run its other fences by hand and compare
+the reloaded processor's prediction with the original.
 
 Use `--figures` to refresh the static tutorial figures from actual outputs,
 and `--network` to also exercise public Earth Search acquisition. Network

@@ -1,61 +1,85 @@
-"""Describe a STAC tree's Items and Collections as pystac objects."""
+"""Build native STAC Items from a region and the rasters of its assets."""
 
 from __future__ import annotations
 
-from typing import Any, Self
+from datetime import UTC
+from typing import TYPE_CHECKING, Any, Self
 
 import pystac
 import xarray as xr
+from pystac.utils import datetime_to_str
 
-import geosave.geodata.attrs as attrs
-
+from geosave.geodata.core.conventions import END_DATETIME, START_DATETIME
 from geosave.geodata.stac.extensions import eo, projection
 from geosave.geodata.stac.extensions import raster as raster_extension
 
+if TYPE_CHECKING:
+    from geosave.geodata.core.region import GeoRegion
+
 
 class StacItem(pystac.Item):
-    """A pystac Item built from a STAC tree's Item node, with assets added from rasters.
+    """A pystac Item built from a region, with assets added from rasters.
 
     It is a `pystac.Item` everywhere: `clone`, `from_dict`, extensions and
     validation keep working, and `add_asset` adds any other asset.
+    `RasterStac.to_cog` builds one per staged Item.
 
     Examples:
-        >>> item = StacItem.from_datatree(tree["s2/20250601T000000_33UUU_..."], collection="s2")
-        >>> item.add_raster_asset("red", red, "s3://bucket/s2/.../red.tif")
-        <Asset href=s3://bucket/s2/.../red.tif>
+        >>> item = StacItem.from_region(scene.gs.region, id="20250601")
+        >>> item.add_raster_asset("red", red, "s3://bucket/s2/20250601/red.tif")
+        <Asset href=s3://bucket/s2/20250601/red.tif>
     """
 
     @classmethod
-    def from_datatree(
+    def from_region(
         cls,
-        item: xr.DataTree,
+        region: GeoRegion,
         *,
-        id: str | None = None,
-        collection: str | None = None,
+        id: str,
         properties: dict[str, Any] | None = None,
-        geometry: dict[str, Any] | None = None,
-        stac_extensions: list[str] | None = None,
     ) -> Self:
-        """Create the Item an Item node states, without assets.
+        """Create the Item covering a region, without assets.
+
+        The region's extent, in WGS84, is the footprint. An instant becomes
+        the Item datetime; a longer timespan becomes `start_datetime` and
+        `end_datetime`, with no datetime.
 
         Args:
-            item: Item node of a STAC tree.
-            id: Item id; None takes the node's name.
-            collection: Id of the Collection the Item belongs to.
-            properties: Item properties, over the node's marked property coordinates.
-            geometry: GeoJSON footprint in WGS84; None takes the union of the
-                node's assets' grids.
-            stac_extensions: Schema URIs to declare beside those its assets add.
+            region: Extent and timespan, as `.gs.region` of a raster or of a
+                staged Item node gives them.
+            id: Item id.
+            properties: STAC properties to state beside the time.
 
         Returns:
-            Item with the node's time, properties and footprint; add assets
-            with `add_raster_asset`.
+            Item without assets; add them with `add_raster_asset`.
 
         Raises:
-            NotImplementedError: Always, while publication is rebuilt.
+            ValueError: The region is timeless.
+
+        Examples:
+            >>> StacItem.from_region(scene.gs.region, id="20250601").datetime
+            datetime.datetime(2025, 6, 1, 10, 30, tzinfo=datetime.timezone.utc)
         """
-        raise NotImplementedError(
-            "STAC publication is being rebuilt on coordinates marked stac_property"
+        if region.timespan is None:
+            raise ValueError(f"Item {id!r} needs a region with a timespan")
+        start, end = region.timespan
+        start = start.replace(tzinfo=UTC)
+        end = end.replace(tzinfo=UTC)
+
+        item_properties = dict(properties or {})
+        item_datetime = start
+        if start != end:
+            item_datetime = None
+            item_properties[START_DATETIME] = datetime_to_str(start)
+            item_properties[END_DATETIME] = datetime_to_str(end)
+
+        footprint = region.extent.to_crs("EPSG:4326")
+        return cls(
+            id=id,
+            geometry=footprint.json,
+            bbox=list(footprint.boundingbox),
+            datetime=item_datetime,
+            properties=item_properties,
         )
 
     def add_raster_asset(
@@ -87,6 +111,10 @@ class StacItem(pystac.Item):
 
         Returns:
             The asset; the Item declares each extension it uses.
+
+        Examples:
+            >>> item.add_raster_asset("red", red, "s3://bucket/red.tif").extra_fields["proj:shape"]
+            [2, 2]
         """
         if title is None and len(raster.data_vars) == 1:
             title = next(iter(raster.data_vars.values())).attrs.get("long_name")
@@ -102,37 +130,13 @@ class StacItem(pystac.Item):
         if with_proj:
             projection.write_asset(asset, raster.odc.geobox)
         if with_raster:
-            bands = []
+            raster_bands = []
             for variable in raster.data_vars.values():
-                bands.append(raster_extension.build_band(variable))
-            raster_extension.write_asset(asset, bands)
+                raster_bands.append(raster_extension.build_band(variable))
+            raster_extension.write_asset(asset, raster_bands)
         if with_eo:
-            spectra = []
+            eo_bands = []
             for variable in raster.data_vars.values():
-                spectra.append(eo.build_band(variable))
-            eo.write_asset(asset, spectra)
+                eo_bands.append(eo.build_band(variable))
+            eo.write_asset(asset, eo_bands)
         return asset
-
-
-def create_stac_collection(
-    collection: xr.DataTree, items: list[pystac.Item]
-) -> pystac.Collection:
-    """Create the Collection a collection node states, or a minimal one over its Items.
-
-    Args:
-        collection: Collection node of a STAC tree; its name is the Collection id.
-        items: The Collection's Items, whose extents a minimal Collection spans.
-
-    Returns:
-        The stated Collection, as its `StacCollection` attrs hold it, else one
-        whose extent covers `items`.
-    """
-    stated = attrs.StacCollection.from_attrs(collection.attrs)
-    if stated is not None and stated.collection is not None:
-        return pystac.Collection.from_dict(stated.collection)
-
-    return pystac.Collection(
-        id=str(collection.name),
-        description=f"Items of {collection.name}",
-        extent=pystac.Extent.from_items(items),
-    )

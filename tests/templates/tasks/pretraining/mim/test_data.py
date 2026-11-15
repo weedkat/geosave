@@ -2,20 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 from torch.utils.data import Dataset
 
 from modules.pretraining import mim
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    NORMALIZE,
     _batch,
-    _spec,
-)
-
-pytestmark = pytest.mark.skip(
-    reason="Template processing awaits the ModelSpec redesign."
+    _preprocessor,
 )
 
 
@@ -33,8 +27,12 @@ class Chips(Dataset[mim.Sample]):
 
 def _data(tmp_path, training: bool, **options: object) -> mim.DataModule:
     """Build only the batch pipelines."""
-    path = _spec(transforms=NORMALIZE).save(tmp_path / "model_spec.yaml")
-    data = mim.DataModule(spec=path, train=Chips(), val=Chips(), **options)
+    data = mim.DataModule(
+        preprocessor=_preprocessor(standardize=True),
+        train=Chips(),
+        val=Chips(),
+        **options,
+    )
     data.trainer = SimpleNamespace(training=training)  # type: ignore[assignment]
     return data
 

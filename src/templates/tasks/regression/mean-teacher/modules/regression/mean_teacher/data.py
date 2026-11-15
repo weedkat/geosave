@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import torch
@@ -8,7 +7,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from . import supervised
 from geosave.ml.transforms import DataKey, ImageAugmenter
-from geosave.model.spec import ModelSpec
 
 type Inputs = dict[str, torch.Tensor]
 
@@ -29,7 +27,7 @@ class Views(TypedDict):
     """An unlabeled batch finished as two views of the same pixels.
 
     Attributes:
-        weak: Batched named tensors after the labeled augmentations and spec
+        weak: Batched named tensors after the labeled augmentations and normalization
             transforms. Pixel inputs end in `(band, y, x)` with a batch axis.
         strong: Batched named tensors with additional photometric perturbations
             of the same pixel geometry. Context tensors pass through unchanged.
@@ -73,7 +71,8 @@ class DataModule(supervised.DataModule):
     keep the same pixels in place.
 
     Args:
-        spec: Recipe, or its file, with `from_tensor` and `normalized` calls.
+        preprocessor: Preprocessor by registered `name` or `class_path`, with
+            `init_args`; its `normalize` runs on every batch.
         pixels: Names of tensors that share augmentation and normalization.
         train: Labeled training dataset returning a `supervised.Sample`.
         val: Validation dataset returning a `supervised.Sample`.
@@ -91,7 +90,7 @@ class DataModule(supervised.DataModule):
         data:
           class_path: modules.regression.mean_teacher.DataModule
           init_args:
-            spec: configs/regression-mean-teacher/model_spec.yaml
+            preprocessor: {class_path: modules.regression.mean_teacher.processing.Reflectance}
             train: {class_path: my_project.Biomass, init_args: {split: train}}
             val: {class_path: my_project.Biomass, init_args: {split: val}}
             unlabeled: {class_path: my_project.Scenes}
@@ -101,7 +100,7 @@ class DataModule(supervised.DataModule):
 
     def __init__(
         self,
-        spec: str | Path | ModelSpec,
+        preprocessor: dict[str, Any],
         train: supervised.SampleDataset,
         val: supervised.SampleDataset,
         unlabeled: UnlabeledDataset,
@@ -115,7 +114,7 @@ class DataModule(supervised.DataModule):
         pixels: tuple[str, ...] = ("image",),
     ) -> None:
         super().__init__(
-            spec,
+            preprocessor,
             train,
             val,
             test=test,

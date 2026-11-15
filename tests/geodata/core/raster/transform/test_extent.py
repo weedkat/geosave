@@ -63,7 +63,7 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
 
     assert tuple(cropped.children) == ("optical", "dem")
     assert cropped.gs.geobox.shape == (3, 3)
-    assert cropped["dem"].gs.combine().height.isel(time=0).values.tolist() == [
+    assert cropped["dem"].to_dataset().height.isel(time=0).values.tolist() == [
         [1, 0, 0],
         [1, 1, 0],
         [1, 1, 1],
@@ -132,9 +132,11 @@ def _scene(times: int = 2):
     return band.to_dataset().gs.write_extent(band.gs.geobox.extent)
 
 
-@pytest.mark.parametrize("mode", ["constant", "reflect"])
-@pytest.mark.parametrize("window", [(-1, -2, 3, 3), (1, 1, 2, 2), (2, 3, 4, 4)])
-def test_crop_to_grid_matches_numpy_tile_padding_lazily(mode, window):
+@pytest.mark.parametrize("mode", ["constant", "edge", "reflect", "wrap"])
+@pytest.mark.parametrize(
+    "window", [(-1, -2, 3, 3), (1, 1, 2, 2), (2, 3, 4, 4), (-3, -3, 10, 10), (3, 0, 4, 4)]
+)
+def test_crop_to_grid_pads_as_numpy_pads_the_whole_raster_lazily(mode, window):
     scene = _scene()
     top, left, height, width = window
     grid = scene.gs.geobox.translate_pix(left, top).crop((height, width))
@@ -142,17 +144,17 @@ def test_crop_to_grid_matches_numpy_tile_padding_lazily(mode, window):
         chip = scene.gs.crop_to_grid(grid, mode=mode, constant_value=7)
     assert isinstance(chip.red.data, da.Array)
     assert chip.gs.geobox == grid
-    values = scene.red.values
-    inside = values[:, max(top, 0) : top + height, max(left, 0) : left + width]
-    widths = (
-        (0, 0),
-        (max(-top, 0), max(top + height - 4, 0)),
-        (max(-left, 0), max(left + width - 4, 0)),
-    )
+
+    # Pad the whole 4 x 4 raster generously, then take the window from it.
+    margin = 12
+    widths = ((0, 0), (margin, margin), (margin, margin))
     if mode == "constant":
-        expected = np.pad(inside, widths, mode=mode, constant_values=7)
+        whole = np.pad(scene.red.values, widths, mode=mode, constant_values=7)
     else:
-        expected = np.pad(inside, widths, mode=mode)
+        whole = np.pad(scene.red.values, widths, mode=mode)
+    first_row = top + margin
+    first_col = left + margin
+    expected = whole[:, first_row : first_row + height, first_col : first_col + width]
     np.testing.assert_array_equal(chip.red.values, expected)
     assert chip.red.dtype == np.uint16
 

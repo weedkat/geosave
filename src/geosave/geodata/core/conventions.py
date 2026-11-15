@@ -61,50 +61,58 @@ Where each part lives, in memory and in a file::
 
 Who writes the cells::
 
-    one STAC Item per label            its start_datetime / end_datetime
-    groupby="solar_day" mosaic         the local solar day it covers
+    stac.load_dataset                  its Items' earliest start to latest end;
+                                       an Item stating only `datetime`, that instant
     gs.composite(freq)                 the resample bin
     gs.write_time_bounds("MS")         one freq step per label
     a cell ends where the next starts (CF convention)
 
-STAC metadata keeps its own shape beside it::
+STAC Item properties are coordinates, marked by a `stac_property` attr that
+holds the property's STAC key. The mark, not the name, makes a coordinate a
+property: ODC names `eo:cloud_cover` as `eo_cloud_cover`, or as the request's
+`name` says, and a rename keeps the mark::
 
-    scene.coords["eo:cloud_cover"]          one coordinate per Item property, scalar
-                                            when shared, attr stac_property = its key
-    scene.attrs["stac_collection"]          JSON Collection
+    >>> scene = stac.load_dataset(
+    ...     items, geobox=grid, groupby="id", chunks={},
+    ...     with_properties=[{"key": "eo:cloud_cover", "dtype": "float64"},
+    ...                      {"key": "platform", "dtype": "str"}],
+    ... )
+    >>> scene
+    <xarray.Dataset> Size: 188B
+    Dimensions:         (y: 2, x: 3, time: 2)
+    Coordinates:
+      * y               (y) float64 16B 5e+06 5e+06
+      * x               (x) float64 24B 5e+05 5e+05 5e+05
+      * time            (time) datetime64[ns] 16B 2025-06-01 2025-07-01
+        eo_cloud_cover  (time) float64 16B 12.5 40.0
+        platform        (time) <U11 88B 'sentinel-2b' 'sentinel-2b'
+        spatial_ref     int32 4B 32633
+    Data variables:
+        red             (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
+    Attributes:
+        stac_extensions:  ["https://stac-extensions.github.io/projection/v2.0.0/s...
+    >>> scene["eo_cloud_cover"].attrs
+    {'units': '1', 'stac_property': 'eo:cloud_cover'}
+    >>> scene.gs.stac_properties
+    {'eo:cloud_cover': 'eo_cloud_cover', 'platform': 'platform'}
+
+Who writes each property::
+
+    with_properties=[...]       ODC loads it as a (time,) data variable, one
+                                value per step (fused Items: numbers averaged,
+                                text joined with ","); the "properties" stamp
+                                moves it to a coordinate and marks it
+    gs.write_stac_property      a (time,) or scalar coordinate, by hand
+
+The Collection and the schemas the properties need are Dataset attrs::
+
+    scene.attrs["stac_collection"]          JSON Collection, without links
     scene.attrs["stac_extensions"]          JSON extension schema URIs
 
-A STAC tree is a DataTree shaped as STAC: catalog, collection, Item,
-asset. Each level holds the STAC metadata of its object, and a node
-inherits its ancestors' coordinates; attrs are not inherited::
-
-    /                          catalog      nothing of its own
-    └── /sentinel-2-l2a        collection   attrs   stac_collection, stac_extensions
-        ├── /20250601T...      Item         attrs   the Dataset's other attrs (title, ...)
-        │   │                               coords  time, start_datetime, end_datetime,
-        │   │                                       one scalar coord per property
-        │   ├── /B04           asset        vars    B04 (y, x)  attrs: CF packing, flags
-        │   │                               coords  y, x, spatial_ref: its own grid
-        │   └── /SCL           asset        vars    SCL (y, x) on another grid
-        └── /20250606T...      Item
-    ├── /labels                collection   another layer, on its own timeline
-
-Rules:
-
-    data              only on assets, the leaves, each at level 3
-    collections       side by side at level 1, one layer each
-    node names        collection id ("default" when none is stated), the
-                      Item id, the asset key; each node path is a file path
-    one asset         one variable, with its own attrs and grid
-    grid              on each asset, as STAC's proj:* is; Items may cover
-                      different extents of one grid
-    Item properties   scalar coords on the Item node, so combining Items lays
-                      them out as (time,) coords, as on a Dataset
-
-``ds.gs.expand(item_dim)`` builds the tree from one collection's Dataset;
-``tree["<collection>"].gs.combine(assets)`` returns it. The tree rules
-``stac_catalog``, ``stac_collection``, ``same_grid``, ``same_geobox`` and
-``same_pixel_meaning`` live in ``core.raster.datatree``.
+DataTree keeps its native, caller-defined hierarchy. General raster helpers
+operate on raster-bearing nodes, including parents. The STAC-specific tree
+layout is documented by ``stac.raster.RasterStac``; it is not a general
+DataTree convention. The tree stages publication only; Items load back as Datasets.
 
 Channels stacked in one DataArray span ``band``. Layouts ODC does not
 recognize, such as a weather model's rotated pole, are renamed by the caller.
@@ -129,7 +137,7 @@ END_DATETIME = "end_datetime"
 # The collection node of Items that name no collection, in a STAC-shaped tree.
 DEFAULT_COLLECTION = "default"
 
-# How `expand` names an Item: its start, its MGRS square and its centroid, so
+# How RasterStac.from_dataset names an Item: its start, its MGRS square and its centroid, so
 # Items of one collection over many regions and dates stay unique and sort by
 # time. Fields are those of `GeoRegion.format`.
 ITEM_ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{mgrs}_{lat:.4f}_{lon:.4f}"

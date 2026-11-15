@@ -53,7 +53,6 @@ import geosave.geodata.attrs as attrs
 from geosave.geodata.errors import RasterValidationError
 from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
-    DEFAULT_COLLECTION,
     ITEM_ID_FORMAT,
     TIME_COORDINATE,
 )
@@ -80,11 +79,12 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
     from odc.geo import SomeCRS
 
-    from geosave.geodata import DataArray, Dataset, DataTree
+    from geosave.geodata import DataArray, Dataset
     from dask.delayed import Delayed
     from upath import UPath
-    from geosave.geodata.io.formats.netcdf import NetCDFWriteOptions
-    from geosave.geodata.io.formats.zarr import ZarrWriteOptions
+    from geosave.geodata.io.raster.geotiff import COGWriteOptions
+    from geosave.geodata.io.raster.netcdf import NetCDFWriteOptions
+    from geosave.geodata.io.raster.zarr import ZarrWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
@@ -261,6 +261,19 @@ class GeoDataset(
         if stated is None or stated.collection is None:
             return None
         return pystac.Collection.from_dict(stated.collection)
+
+    @property
+    def stac_extensions(self) -> list[str]:
+        """Read the STAC extension schema URIs this raster declares; empty where none.
+
+        Examples:
+            >>> stac.load_dataset(items, geobox=grid).gs.stac_extensions
+            ['https://stac-extensions.github.io/eo/v1.1.0/schema.json']
+        """
+        stated = attrs.StacCollection.from_attrs(self._data.attrs)
+        if stated is None or stated.extensions is None:
+            return []
+        return list(stated.extensions)
 
     @property
     def acdd(self) -> attrs.ACDD | None:
@@ -727,99 +740,17 @@ class GeoDataset(
                 columns[name] = class_percent([band])
         return pd.DataFrame(columns)
 
-    def expand(
-        self, item_dim: str = TIME_COORDINATE, id_format: str = ITEM_ID_FORMAT
-    ) -> DataTree:
-        """Expand a collection's Dataset into a STAC tree: collection, an Item per step, an asset per variable.
-
-            /                          catalog
-            └── /sentinel-2-l2a        collection   StacCollection attrs
-                ├── /20250601T..._33UUU_...  Item   the Dataset's other attrs; coords along item_dim
-                │   ├── /red           asset        one variable with its attrs and its grid
-                │   └── /nir           asset
-
-        The collection is named by its `StacCollection` id, else ``"default"``.
-        An Item is named by its id, formatted from its region: its period and
-        place, as `GeoRegion.format` reads them. The id is the Item's name in
-        every catalog the tree is published to. A variable without `item_dim`
-        belongs to no Item and is left out.
-
-        Args:
-            item_dim: Dimension whose steps become Items.
-            id_format: Item id template over `GeoRegion.format` fields, such as
-                ``"s2_{start:%Y%m%d}_{mgrs}"``.
-
-        Returns:
-            Lazy tree of ``{collection}/{item id}/{variable}`` leaves.
-
-        Raises:
-            KeyError: The Dataset has no `item_dim`.
-            ValueError: An Item lacks a field the format names, or two Items
-                format to one id.
-
-        Examples:
-            >>> [leaf.path for leaf in scene.gs.expand().leaves][:2]
-            ['/sentinel-2-l2a/20250601T103000_33UUU_52.5200_13.4050/red', ...]
-        """
-        raster = self._data
-        count = raster.sizes[item_dim]
-
-        # A variable without the Item dim belongs to no Item, so no asset holds it.
-        raster = raster.drop_vars(list(raster.drop_dims(item_dim).data_vars))
-
-        # Collection: the STAC Collection alone, named by its id; the grid
-        # belongs to each asset.
-        collection = xr.Dataset()
-        collection_id = DEFAULT_COLLECTION
-        stated_collection = attrs.StacCollection.from_attrs(raster.attrs)
-        if stated_collection is not None:
-            collection = attrs.stamp_attrs(collection, stated_collection)
-            if stated_collection.collection is not None:
-                collection_id = stated_collection.collection["id"]
-        nodes: dict[str, xr.Dataset] = {"/": xr.Dataset(), collection_id: collection}
-
-        # The other Dataset attrs describe every Item alike.
-        item_attrs = attrs.clear_attrs(raster, attrs.StacCollection).attrs
-
-        # Coordinates along the Item dim describe one Item each.
-        item_coords = []
-        for name, coord in raster.coords.items():
-            if item_dim in coord.dims:
-                item_coords.append(name)
-
-        for index in range(count):
-            observation = raster.isel({item_dim: index})
-            item = observation.gs.region.format(id_format)
-            # from_dict would overwrite a repeated node.
-            if f"{collection_id}/{item}" in nodes:
-                raise ValueError(
-                    f"two Items format to the id {item!r}; give expand an "
-                    "id_format that tells them apart"
-                )
-
-            # Item: its coordinates, now scalar, and the Dataset's other attrs.
-            coords = {name: observation[name].variable for name in item_coords}
-            nodes[f"{collection_id}/{item}"] = xr.Dataset(
-                coords=coords, attrs=item_attrs
-            )
-
-            # Asset: one variable with its own attrs and its grid; it inherits
-            # the Item's coordinates.
-            for name in observation.data_vars:
-                nodes[f"{collection_id}/{item}/{name}"] = (
-                    observation[[name]].drop_vars(item_coords).drop_attrs(deep=False)
-                )
-
-        return cast("DataTree", xr.DataTree.from_dict(nodes))
-
     def to_array(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Stack variables lazily along `band`, in their existing order.
 
         Native `Dataset.to_array` stacks, broadcasting dims and promoting
         dtypes as xarray does. Stacked pixels share one meaning, so every
-        variable must state the same `CFPacking`, `CFFlags` and units. As
-        natively, the stack keeps the Dataset attrs and drops variable attrs,
-        except packing and flags, which the pixels need to keep their meaning.
+        variable must state the same `CFPacking`, `CFFlags` and units, which
+        the stack keeps in its attrs; a storage recipe in encoding every
+        variable shares stays in the stack's encoding. As natively, the stack
+        keeps the Dataset attrs. Each variable's other attrs become coords
+        along `dim`, as stacked STAC bands carry `wavelength`, so
+        `to_dataset` returns them to their variables.
 
         Args:
             dim: Name of the stacking dimension, as in native `to_array`.
@@ -849,13 +780,42 @@ class GeoDataset(
         spatial = cast("tuple[str, str]", self.spatial_dims)
         array = self._data.to_array(dim=dim).transpose(..., dim, *spatial)
 
-        # Native stacking drops variable attrs. Packing and flags are checked equal
-        # and kept, since without them a stacked pixel would mean another number.
+        # Native stacking drops variable attrs. Packing, flags and units are
+        # checked equal and kept, since without them a stacked pixel would
+        # mean another number.
         first = self._data[self.variables[0]]
         if first.gs.packing is not None:
             array = attrs.stamp_attrs(array, first.gs.packing)
         if first.gs.flags is not None:
             array = attrs.stamp_attrs(array, first.gs.flags)
+        if "units" in first.attrs:
+            array.attrs["units"] = first.attrs["units"]
+
+        # Decoded pixels keep their storage recipe in encoding; a recipe every
+        # variable shares stays with the stack, so a writer packs them again.
+        recipes = []
+        for name in self.variables:
+            encoding = self._data[name].encoding
+            recipe = {}
+            for key in (*attrs.CFPacking.KEYS, "dtype", "_Unsigned"):
+                if key in encoding:
+                    recipe[key] = encoding[key]
+            recipes.append(recipe)
+        if all(recipe == recipes[0] for recipe in recipes):
+            array.encoding = recipes[0]
+
+        meaning = {*attrs.CFPacking.KEYS, *attrs.CFFlags.KEYS, "units"}
+        labels: dict[str, np.ndarray] = {}
+        for index, name in enumerate(self.variables):
+            for key, value in self._data[name].attrs.items():
+                if key in meaning:
+                    continue
+                if key not in labels:
+                    labels[key] = np.full(len(self.variables), None, dtype=object)
+                labels[key][index] = value
+        array = array.assign_coords(
+            {key: (dim, values) for key, values in labels.items()}
+        )
         return cast("DataArray", array)
 
     def explore(
@@ -1019,36 +979,74 @@ class GeoDataset(
         return cast("Dataset", decoded)
 
     def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
+        """STAC Item publication is being rebuilt as `the pending RasterStac publication interface`.
 
         Raises:
             NotImplementedError: Always, until publication is rebuilt.
         """
         raise NotImplementedError(
-            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
+            "STAC publication is being rebuilt as the pending RasterStac publication interface"
         )
 
-    def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
-        """STAC catalog publication is being rebuilt as `ds.gs.expand().gs.to_catalog(path)`.
+    def to_catalog(
+        self,
+        path: Location,
+        *,
+        item_dim: str = TIME_COORDINATE,
+        id_format: str = ITEM_ID_FORMAT,
+        overwrite: bool = False,
+        storage_options: StorageOptions | None = None,
+        **options: Unpack[COGWriteOptions],
+    ) -> GeoDataFrame:
+        """Publish one COG per variable and Item, and return their catalog.
+
+        A shortcut for `RasterStac.from_dataset(ds).to_cog(path)` followed by
+        `stac.create_catalog`. Stage rasters on several grids with
+        `RasterStac.merge` instead.
+
+        Args:
+            path: Folder or URL prefix to publish under.
+            item_dim: Dimension holding one Item per position.
+            id_format: GeoRegion.format template for each Item id.
+            overwrite: Replace existing files when true.
+            storage_options: Options for the filesystem a URL names.
+            **options: COG creation options, passed to GDAL unchanged.
+
+        Returns:
+            Item table, one row per Item, carrying the Collection when the
+            Dataset states one; write it with `.gs.to_geoparquet`.
 
         Raises:
-            NotImplementedError: Always, until publication is rebuilt.
+            KeyError: `item_dim` is absent.
+            FileExistsError: A file exists and `overwrite` is false.
+            ValueError: Two positions format to the same Item id.
+
+        Examples:
+            >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
+            >>> catalog.gs.to_geoparquet("s3://bucket/s2/catalog.parquet")
         """
-        raise NotImplementedError(
-            "STAC publication is being rebuilt as ds.gs.expand().gs.to_catalog(path)"
+        from geosave.geodata.stac.catalog import create_catalog
+        from geosave.geodata.stac.raster import RasterStac
+
+        staged = RasterStac.from_dataset(
+            self._data, item_dim=item_dim, id_format=id_format
         )
+        items = staged.to_cog(
+            path, overwrite=overwrite, storage_options=storage_options, **options
+        )
+        return create_catalog(items)
 
     def to_cog(self, path: Location, **options: Any) -> list[UPath]:
         """A Dataset is not COG-shaped: a COG holds one instant of one grid.
 
-        Publish ``ds.gs.expand().gs.to_catalog(path)`` for one file per asset,
+        Publish with ``ds.gs.to_catalog(path)`` for one file per asset,
         or ``array.gs.to_cog(path)`` for one array.
 
         Raises:
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "a Dataset is not COG-shaped; publish ds.gs.expand().gs.to_catalog(path) "
+            "a Dataset is not COG-shaped; publish with Dataset.gs.to_catalog(path) "
             "or DataArray.gs.to_cog(path)"
         )
 
@@ -1082,7 +1080,7 @@ class GeoDataset(
         Examples:
             >>> ds.gs.to_zarr("scene.zarr")
         """
-        from geosave.geodata.io.formats import zarr
+        from geosave.geodata.io.raster import zarr
 
         return zarr.write_zarr(
             self._data,
@@ -1123,7 +1121,7 @@ class GeoDataset(
         Examples:
             >>> ds.gs.to_netcdf("scene.nc")
         """
-        from geosave.geodata.io.formats import netcdf
+        from geosave.geodata.io.raster import netcdf
 
         return netcdf.write_netcdf(
             self._data,

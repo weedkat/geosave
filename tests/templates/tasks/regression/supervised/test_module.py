@@ -7,11 +7,11 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from modules.regression import supervised
-from geosave.model.chain import chain_step
+from geosave.ml.chain import chain_step
 from tests.templates.tasks.regression.supervised.test_data import Chips as Values
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    _spec,
+    _preprocessor,
 )
 
 
@@ -168,10 +168,14 @@ class SparseValues(Dataset[supervised.Sample]):
         }
 
 
-@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = supervised.DataModule(
-        _spec(), Values(), Values(), augmentations=FLIP, batch_size=2, num_workers=0
+        _preprocessor(),
+        Values(),
+        Values(),
+        augmentations=FLIP,
+        batch_size=2,
+        num_workers=0,
     )
     module = supervised.Module(model_chain=STAGES)
     trainer = Trainer(

@@ -17,16 +17,16 @@ and PyTorch Lightning**, while keeping geographic information attached.
 With the [sample scene](first-raster.md#open-the-sample), a vegetation map is:
 
 ```python
-import geosave as gs
-
-scene = gs.open_raster("sample-scene.tif")
-ndvi = gs.features.ndvi(
-    scene, nir="nir", red="red"
-).rename("ndvi")
 from pathlib import Path
 
+import geosave as gs
+from geosave.geodata import io
+
+scene = gs.open_raster("sample-scene.tif")
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+
 Path("output").mkdir(parents=True, exist_ok=True)
-ndvi.gs.to_cog("output/ndvi.tif")
+io.write_cog(ndvi.to_dataset(), "output/ndvi.tif", overwrite=True)
 ```
 
 `scene` is an xarray Dataset. Select bands with `scene[["red", "nir"]]`, use
@@ -80,6 +80,13 @@ Copernicus Sentinel data (2025). [Run this example](first-raster.md).*
     imagery and labels. Export predictions as maps.
 
     [Train and map predictions →](guides/training.md)
+
+-   **Release and run a model**
+
+    Save a trained model with the processor that prepares its input, then
+    reload it and predict a raster file on its own grid.
+
+    [Save and publish a model →](guides/release.md)
 
 </div>
 

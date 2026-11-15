@@ -6,9 +6,11 @@ from pathlib import Path
 
 import dask
 import dask.array as da
+import numpy as np
+import pytest
 import xarray as xr
 
-from geosave.geodata import open_raster
+from geosave.geodata import open_raster_tree
 from tests.conftest import build_tree
 from tests.geodata.conftest import build_raster
 
@@ -31,15 +33,43 @@ def test_the_engine_stays_lazy_and_forwards_reader_options(tmp_path: Path) -> No
     decoded.close()
 
 
-def test_the_engine_opens_a_tree_as_a_tree(tmp_path: Path) -> None:
+@pytest.mark.parametrize("suffix", [".zarr", ".nc"])
+def test_the_engine_opens_a_tree_as_a_tree(tmp_path: Path, suffix: str) -> None:
     sample = build_tree(
         {"optical": build_raster(times=2), "dem": build_raster(times=1)}
     )
-    store = sample.gs.to_zarr(tmp_path / "s0.zarr")
+    writer = sample.gs.to_zarr if suffix == ".zarr" else sample.gs.to_netcdf
+    store = writer(tmp_path / f"s0{suffix}")
 
     with xr.open_datatree(store, engine="geosave") as opened:
-        assert opened.identical(open_raster(store))
+        with open_raster_tree(store) as expected:
+            assert opened.identical(expected)
         assert sorted(opened.children) == ["dem", "optical"]
+
+
+@pytest.mark.parametrize("suffix", [".zarr", ".nc"])
+def test_the_engine_opens_one_group_as_a_dataset(tmp_path, suffix):
+    source = build_raster(times=2)
+    sample = build_tree({"scene": source})
+    writer = sample.gs.to_zarr if suffix == ".zarr" else sample.gs.to_netcdf
+    store = writer(tmp_path / f"archive{suffix}")
+
+    with xr.open_dataset(store, engine="geosave", group="scene") as opened:
+        xr.testing.assert_equal(opened, source)
+    with xr.open_dataset(store, engine="geosave") as root:
+        assert not root.data_vars
+
+
+def test_the_engine_opens_a_banded_file_as_a_root_only_tree(tmp_path):
+    from geosave.geodata.io import write_cog
+
+    source = build_raster()
+    path = write_cog(source, tmp_path / "scene.tif")
+
+    with xr.open_datatree(path, engine="geosave") as opened:
+        assert opened.groups == ("/",)
+        assert opened.gs.geobox == source.gs.geobox
+        np.testing.assert_array_equal(opened.to_dataset().red, source.red)
 
 
 def test_the_engine_claims_no_file_unasked(tmp_path: Path) -> None:

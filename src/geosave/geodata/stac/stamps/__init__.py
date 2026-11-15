@@ -7,10 +7,10 @@ one wrote. Each stamp registers itself with `@register_stamp` where it is
 defined; importing this package imports those modules.
 
 Examples:
-    >>> scene = stac.load_dataset(items, grid, stamps=[*DEFAULT_STAMPS, "sentinel_2"])
+    >>> scene = stac.load_dataset(items, geobox=grid, stamps=[*DEFAULT_STAMPS, "sentinel_2"])
 """
 
-from . import bands, collection, properties  # noqa: F401  register their stamps
+from . import bands, collection  # noqa: F401  register their stamps
 from .registry import STAMPS, check_stamps, register_stamp, run_stamps
 from .source import LoadSource, Stamp
 
@@ -20,7 +20,6 @@ DEFAULT_STAMPS = (
     "classification",
     "rgb",
     "title",
-    "properties",
     "collection",
 )
 

@@ -11,8 +11,6 @@ related to your next operation; you do not need all of them before using GeoSave
 | [Lazy execution](lazy-data.md) | Which calls build a graph, and which read or write pixels? |
 | [Storage and file layouts](storage.md) | Which suffixes, file templates, tree layouts and remote options exist? |
 | [The interactive explorer](explorer.md) | How do layers, catalogs and large rasters behave on the map? |
-| [Catalogs and windows](catalog-windows.md) | What does a table row describe, and how does it find its pixels? |
-| [Model input contracts](model-inputs.md) | How do band order, units, missing values, context, and tensor layout fit together? |
 | [Training contracts](training.md) | What must a Dataset return, and how do loss, targets, augmentation, and metrics behave? |
 
 Use the [API reference](../reference/index.md) for argument details. Package

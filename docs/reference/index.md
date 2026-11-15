@@ -15,13 +15,14 @@ GeoPandas objects; their own methods retain upstream behavior.
 | Decode nodata, scale and offset | `.gs.mask_and_scale()`. [Value metadata](../basics/attrs.md#decode-stored-measurements) |
 | Calculate NDVI or another index | `gs.features.ndvi(...)`. [Features and masks](features.md) |
 | Convert selected bands to arrays or tensors | `.gs.to_numpy`, `.gs.to_tensor`. [Dataset conversion](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.to_numpy) |
-| Read chips or merge predictions | `gs.Chips`, `chips.merge`. [Chips](chips.md) |
+| Window time, cut chips or merge predictions | `.gs.sample`, `gs.RasterChipper`, `gs.RasterMerger`. [Chips](chips.md) |
 | Reduce observations into calendar bins | `.gs.composite`. [Composites](rasters.md#composites-and-time-selection) |
-| Save rasters and schedule writes | `.gs.to_cog`, `.gs.to_zarr`, `.gs.to_netcdf`. [Writer returns](io.md#saved-raster-files) |
-| Search observations or load STAC Items | `gs.StacClient`, `stac.load_dataset`, `stac.load_datatree`. [STAC](stac.md) |
-| Publish a dated Dataset | `.gs.expand()` then tree `.gs.to_catalog(...)`. [Catalog operations](catalog.md) |
-| Build a model from stages | `geosave.model.build_model`. [Chains and registry](model-chain.md) |
-| Save and load model weights | `GeoSaveModel`. [Releases](model-release.md) |
+| Save rasters and schedule writes | `io.write_cog`, `.gs.to_zarr`, `.gs.to_netcdf`. [Writer returns](io.md#saved-raster-files) |
+| Search observations or load STAC Items | `gs.StacClient`, `stac.load_dataset`, `stac.group_bands_by_grid`. [STAC](stac.md) |
+| Publish a dated Dataset | `Dataset.gs.to_catalog(...)`. [Catalog operations](catalog.md) |
+| Build a model from stages | `geosave.ml.build_model`. [Chains and registry](model-chain.md) |
+| Save and load model weights | `ChainModel`. [Releases](model-release.md) |
+| Predict a raster with a released model | `Processor`, `build_processor`, `load_processor`, `ChipPredictor`. [Processors](model-release.md#processors) |
 
 ## Look up methods for your object
 
@@ -33,7 +34,7 @@ are separate. Inherited GeoSave methods are included on each accessor page.
 | Area | APIs |
 | --- | --- |
 | [Data](geodata.md) | Accessors, readers, writers, features, metadata and STAC. |
-| [Models](model.md) | Chains, stages and native releases. |
+| [Models](model-chain.md) | Chains, [stages](model-stages.md) and native [releases](model-release.md). |
 | [Training](ml.md) | Losses, metrics, transforms, callbacks and Lightning tools. |
 | [CLI](cli.md) | Workspace commands and generated files. |
 | [Optional flows](workflow.md) | Prefect helpers and current availability. |

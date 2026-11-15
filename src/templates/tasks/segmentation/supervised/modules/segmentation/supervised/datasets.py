@@ -1,6 +1,6 @@
 """Read explicitly paired image and label rasters for this project."""
 
-from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -8,7 +8,8 @@ import xarray as xr
 from torch.utils.data import Dataset
 
 import geosave as gs
-from geosave.model.spec import ModelSpec
+from geosave.ml.factory import BuildSpec
+from geosave.ml.processing.roles import PREPROCESSORS
 
 from .data import Sample
 
@@ -16,13 +17,14 @@ from .data import Sample
 class RasterDataset(Dataset[Sample]):
     """Read one selected observation and its aligned class labels per index.
 
-    This project's recipe accepts `raster` and prepares native reflectance.
+    The preprocessor prepares each image raster, as the release's processor will.
     Files must already cover the desired chip; no sampling or alignment is implicit.
 
     Args:
         images: Image files, in sample order. Paths and URLs use GeoSave I/O.
         targets: Single-band label files in the corresponding order.
-        spec: Processing recipe, or its YAML file.
+        preprocessor: Preprocessor by registered `name` or `class_path`, with
+            `init_args`; its `preprocess` runs on every raster read.
         num_classes: Number of classes, with IDs from zero to this value minus one.
         ignore_index: Label excluded from loss and metrics; also used for nodata.
 
@@ -35,7 +37,7 @@ class RasterDataset(Dataset[Sample]):
         self,
         images: list[str],
         targets: list[str],
-        spec: str | Path | ModelSpec,
+        preprocessor: dict[str, Any],
         num_classes: int,
         ignore_index: int = 255,
     ) -> None:
@@ -47,7 +49,7 @@ class RasterDataset(Dataset[Sample]):
             )
         self.images = list(images)
         self.targets = list(targets)
-        self.spec = spec if isinstance(spec, ModelSpec) else ModelSpec.load(spec)
+        self.preprocessor = PREPROCESSORS.build(BuildSpec.model_validate(preprocessor))
         self.num_classes = num_classes
         self.ignore_index = ignore_index
 
@@ -65,10 +67,7 @@ class RasterDataset(Dataset[Sample]):
                 raise ValueError(
                     "select one raster from each hierarchy before training"
                 )
-            prepared = self.spec.run(
-                entry="from_raster", output=["prepared", "encoded"], raster=image
-            )
-            reference = prepared["prepared"]
+            reference = self.preprocessor.preprocess(image)
             if labels.gs.geobox is None or labels.gs.geobox != reference.gs.geobox:
                 raise ValueError(
                     "image and target must have the same grid; align explicitly"
@@ -95,12 +94,22 @@ class RasterDataset(Dataset[Sample]):
             target = torch.from_numpy(
                 np.where(missing, self.ignore_index, pixels).astype("int64")
             )
-            inputs = {"image": prepared["encoded"]}
+            # The tree's tensors carry the grid that places the pixels.
+            tensors = xr.DataTree.from_dict({"image": reference}).gs.to_tensor()
+            inputs = {"image": tensors["image"].float()}
             for name in inputs:
                 if not torch.isfinite(inputs[name]).all():
                     raise ValueError(
-                        f"{name} must be finite; declare a nodata policy in the recipe"
+                        f"{name} must be finite; declare a nodata policy in the preprocessor"
                     )
                 if inputs[name].shape[-2:] != target.shape:
                     raise ValueError("image tensor and target must cover the same grid")
-            return {"inputs": inputs, "target": target}
+            sample: Sample = {
+                "inputs": inputs,
+                "target": target,
+                "transform": tensors["transform"],
+                "crs": tensors["crs"],
+            }
+            if "time" in tensors:
+                sample["time"] = tensors["time"]
+            return sample

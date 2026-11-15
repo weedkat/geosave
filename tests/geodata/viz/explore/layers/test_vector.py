@@ -159,7 +159,7 @@ def test_catalog_display_aligns_every_grid_onto_the_finest_node(tmp_path, shifte
         {"height": (("y", "x"), np.full(grid.shape, 7, dtype="uint16"))}
     )
     coarse = coarse.pipe(place, grid).gs.write_nodata(0)
-    from geosave.geodata.io.formats.geotiff import write_cog
+    from geosave.geodata.io.raster.geotiff import write_cog
     from geosave.geodata.stac.catalog import create_catalog
     from tests.geodata.conftest import create_file_items
 

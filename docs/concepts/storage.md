@@ -7,55 +7,55 @@ See [Read and save data](../basics/io.md) for working round trips and
 
 | Reader | Recognized suffixes |
 | --- | --- |
-| Raster | `.tif`, `.tiff`, `.jp2`, `.png`, `.zarr`, `.nc`, `.nc4`, `.cdf`, `.safe` |
+| Raster | `.tif`, `.tiff`, `.jp2`, `.png`, `.zarr`, `.nc`, `.nc4`, `.cdf` |
 | Vector | `.parquet`, `.geoparquet`, `.geojson`, `.json`, `.gpkg` |
 
-Suffix matching is case-insensitive. The whole-product SAFE reader is
-unavailable; open individual `.jp2` files instead. A PNG can open without
-georeferencing, but spatial operations still require a locatable grid.
+Suffix matching is case-insensitive; a URL's query string is ignored. For a
+Sentinel-2 SAFE product, open its individual `.jp2` files. A PNG can open
+without georeferencing, but spatial operations still require a locatable grid.
 Unsupported suffixes raise ValueError; use a format reader directly when needed.
 
 ## One image file or a tree of assets
 
-A DataArray writes one explicit TIFF path:
+Select one instant on one grid, then write named bands to one TIFF:
 
 ```python title="Adaptation example — use one selected observation"
 from pathlib import Path
 
-path = Path("output/red.tif")
-path.parent.mkdir(parents=True, exist_ok=True)
-scene["red"].isel(time=0).gs.to_cog(path)
-from pathlib import Path
+from geosave.geodata import io
 
 path = Path("output/image.tif")
 path.parent.mkdir(parents=True, exist_ok=True)
-scene[["red", "nir"]].isel(time=0).gs.to_array().gs.to_cog(path)
+io.write_cog(scene[["red", "nir"]].isel(time=0), path)
 ```
 
-For geospatial publication, select one instant on one grid before exporting.
-Native rioxarray writes a third array dimension as bands. A band array needs compatible pixel
-meaning across its bands. For different band metadata or several dates, use
-a STAC tree of separate assets:
+`io.write_cog` keeps each variable's name and value metadata as a band. The
+bands of one file need compatible pixel meaning. `scene["red"].gs.to_cog(path)`
+writes a single DataArray through native rioxarray. For different band
+metadata or several dates, use a staged STAC publication of separate assets:
 
 ```python title="Adaptation example — use a Dataset with a time dimension"
-tree = observations.gs.expand(id_format="{start:%Y%m%d}")
-files = tree.gs.to_cog("output/assets")
+from geosave.geodata import stac
+
+staged = stac.RasterStac.from_dataset(observations, id_format="{start:%Y%m%d}")
+items = staged.to_cog("output/assets")
 ```
 
-The tree names the files: `/default/20250101/red` becomes
-`output/assets/default/20250101/red.tif`. `id_format` controls Item names;
-Collection and asset names come from the tree. The writer does not accept
-file path templates. Returned paths are the files written by that call.
-`tree.gs.to_catalog(...)` writes the same assets and returns their Item table.
-See [catalog publication](../guides/catalogs-and-cuts.md).
+An asset at `/20250101/red` becomes `output/assets/20250101/red.tif`.
+`id_format` controls Item names; variable names identify assets. `to_cog`
+returns native Items describing the written files. For an Item table in one
+step, use `observations.gs.to_catalog("output/assets")` and save it separately
+with `.gs.to_geoparquet`. See [catalog publication](../guides/catalogs-and-cuts.md).
 
 ## Multidimensional stores
 
 Zarr and NetCDF write a Dataset or DataTree as one destination. Trees retain
 one group per node; they are not split into separate files. `gs.open_raster`
-returns a DataTree when the store has child groups and a Dataset otherwise.
-Ordinary xarray trees can have arbitrary named groups; GeoSave's STAC combine
-and asset-publication methods require the collection/Item/asset layout.
+returns a Dataset for the root group, or the group selected by `group=`.
+`gs.open_raster_tree` returns the complete hierarchy as a DataTree, even for
+a root-only store. Neither opener merges groups or selects a child implicitly.
+Ordinary xarray trees have caller-defined groups. `RasterStac` owns the
+Item/asset layout used for COG publication separately.
 
 NetCDF stores observation cells as a CF bounds variable; readers restore
 `start_datetime` and `end_datetime`. Zarr stores those coordinates directly.
@@ -83,11 +83,10 @@ GeoPackage writes stage a local temporary file before uploading. Remote NetCDF,
 GeoJSON, and GeoPackage reads download a temporary copy; NetCDF retains it until
 the returned object closes.
 
-For remote TIFFs, supplying `storage_options` currently downloads the whole
-file to temporary storage before opening it. The resulting pixels can be lazy,
-but that does not make the download a windowed read. Without these options,
-Rasterio uses GDAL's URL handling and configured environment, which can read
-COG ranges. Choose that path when bounded remote reads matter:
+For remote TIFFs, filesystem options use Rasterio's filesystem opener.
+Without those options, supported URLs use GDAL's URL handling and configured
+environment. Both can read windows; actual transferred bytes depend on the
+file layout and storage backend. Configure GDAL credentials when using its URL path:
 
 <!-- CREDENTIALS: AWS S3 bucket and access keys -->
 ```python

@@ -5,19 +5,20 @@ from dataclasses import dataclass
 
 import pystac
 import xarray as xr
+from odc.stac.model import PropertyLoadRequest
 
 
 @dataclass(frozen=True)
 class LoadSource:
-    """The Items and Collection one load read.
+    """The Items and property requests of one load.
 
     Attributes:
-        items: Items that were loaded.
-        collection: Collection the Items belong to, if known.
+        items: Items that were loaded; each links to its Collection.
+        properties: The `with_properties` requests, as ODC normalized them.
     """
 
     items: Sequence[pystac.Item]
-    collection: pystac.Collection | None = None
+    properties: Sequence[PropertyLoadRequest] = ()
 
 
 type Stamp = Callable[[xr.Dataset, LoadSource], xr.Dataset]

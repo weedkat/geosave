@@ -1,7 +1,7 @@
 # Training configuration and utilities
 
 Task modules and data modules use these builders and transforms. Add logging
-and calibration callbacks through Trainer. See [Train a model](../guides/training.md).
+through Trainer. See [Train a model](../guides/training.md).
 
 ## Optimizer, scheduler, and loss builders
 
@@ -52,14 +52,10 @@ and calibration callbacks through Trainer. See [Train a model](../guides/trainin
 
 ## Threshold calibration
 
-Prediction decoding is paused: `softmax_argmax` raises `NotImplementedError`.
-Calibration that calls it is unavailable pending redesign.
+Thresholds are postprocessor configuration, not model state. Calibration is in
+progress: `calibrate_thresholds` raises `NotImplementedError`.
 
-::: geosave.ml.callbacks.calibrate
-    options:
-      members:
-        - ThresholdCalibrator
-        - softmax_argmax
+::: geosave.ml.processing.thresholds.calibrate_thresholds
 
 ## Workspace entry point
 

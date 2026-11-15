@@ -9,7 +9,6 @@ from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
 import geosave  # noqa: F401  registers the .gs accessors
-from geosave.model.spec import ModelSpec
 
 
 def sample_raster() -> xr.Dataset:
@@ -38,9 +37,10 @@ def main() -> None:
     """Prepare lazy reflectance and compute only to display the sample pixels."""
     workspace = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(workspace))
-    spec = ModelSpec.load(workspace / "configs/segmentation-supervised/model_spec.yaml")
-    results = spec.run(entry="from_raster", output="prepared", raster=sample_raster())
-    print(results.compute())
+    from modules.segmentation.supervised.processing import Reflectance
+
+    prepared = Reflectance().preprocess(sample_raster())
+    print(prepared.compute())
 
 
 if __name__ == "__main__":

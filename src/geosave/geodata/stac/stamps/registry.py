@@ -14,8 +14,8 @@ def register_stamp(name: str) -> Callable[[Stamp], Stamp]:
 
     Examples:
         >>> @register_stamp("dw_source")
-        ... def stamp_dw_source(loaded, source):
-        ...     return loaded.gs.write_stac_property("dw:source", "experts")
+        ... def stamp_dw_source(ds, source):
+        ...     return ds.gs.write_stac_property("dw:source", "experts")
 
     Raises:
         ValueError: The name is taken.
@@ -30,30 +30,26 @@ def register_stamp(name: str) -> Callable[[Stamp], Stamp]:
     return register
 
 
-def check_stamps(names: Sequence[str]) -> None:
+def check_stamps(stamps: Sequence[str]) -> None:
     """Refuse names no stamp is registered under, before anything is loaded.
 
     Raises:
         KeyError: A name is unknown; the message lists the registered names.
     """
     unknown = []
-    for name in names:
+    for name in stamps:
         if name not in STAMPS:
             unknown.append(name)
     if unknown:
         raise KeyError(f"unknown stamps {unknown}; registered: {sorted(STAMPS)}")
 
 
-def run_stamps(
-    loaded: xr.Dataset, source: LoadSource, names: Sequence[str]
-) -> xr.Dataset:
+def run_stamps(ds: xr.Dataset, source: LoadSource, stamps: Sequence[str]) -> xr.Dataset:
     """Apply the named stamps in order; a later stamp overrides an earlier one.
 
     Raises:
-        KeyError: A name is unknown; no stamp runs.
+        KeyError: A name is unknown.
     """
-    check_stamps(names)
-
-    for name in names:
-        loaded = STAMPS[name](loaded, source)
-    return loaded
+    for name in stamps:
+        ds = STAMPS[name](ds, source)
+    return ds

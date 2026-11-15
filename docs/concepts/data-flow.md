@@ -1,15 +1,17 @@
 # How the library works
 
 ```python
+from pathlib import Path
+
 import geosave as gs
+from geosave.geodata import io
 
 scene = gs.open_raster("sample-scene.tif")
 patch = scene[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
 ndvi = gs.features.ndvi(patch, nir="nir", red="red").rename("ndvi")
-from pathlib import Path
 
 Path("output").mkdir(parents=True, exist_ok=True)
-ndvi.gs.to_cog("output/ndvi.tif")
+io.write_cog(ndvi.to_dataset(), "output/ndvi.tif")
 scene.close()
 ```
 
@@ -24,7 +26,7 @@ xarray and GeoPandas objects.
 | --- | --- | --- |
 | One band or array | DataArray | Values with named axes, coordinates and attrs. |
 | Bands on a shared grid | Dataset | Named variables on shared coordinates. |
-| Several observations or grids | DataTree | Datasets in a hierarchy. STAC operations use collection/Item/asset nodes. |
+| Several observations or grids | DataTree | Datasets in a caller-defined hierarchy; each node can have its own grid. |
 | Features or STAC Items | GeoDataFrame | Geometry and attributes; Item assets point to files. |
 
 `gs.Dataset`, `gs.DataArray`, and `gs.DataTree` are the native xarray types.
@@ -38,11 +40,10 @@ be explicit. See [metadata](metadata.md) before combining packed imagery.
 | --- | --- | --- |
 | Describe a place and time | `GeoRegion` | Geometry, CRS and optional period, without a pixel grid. |
 | Discover observations | `StacClient.search` | Item table, without raster pixels. |
-| Load on an exact grid | `stac.load_dataset(items, grid)` | Dataset on the supplied GeoBox. |
-| Retain native asset grids | `rows.gs.to_datatree()` | STAC-shaped DataTree. |
-| Combine one collection | `tree["collection"].gs.combine()` | Dataset along time, requiring compatible grids. |
-| Read model-sized windows | `Chips([scene], size=256)` | Lazy raster windows; explicit conversion reads pixels. |
-| Publish dated raster assets | `scene.gs.expand().gs.to_catalog(folder)` | Written TIFFs and an Item table. |
+| Load on an exact grid | `stac.load_dataset(items, geobox=grid)` | Dataset on the supplied GeoBox. |
+| Retain native asset grids | `stac.load_native_datasets(items)` | One `(crs, resolution, Dataset)` per native grid. |
+| Read model-sized windows | `RasterChipper([tree], size=256)` | Lazy raster windows; explicit conversion reads pixels. |
+| Publish dated raster assets | `scene.gs.to_catalog(folder)` | Written TIFFs and an Item table. |
 
 Catalog sampling is currently unavailable. Select observations with GeoPandas
 or select dates on a prepared Dataset. [Catalogs](../guides/catalogs-and-cuts.md)
@@ -60,18 +61,20 @@ flowchart LR
     samples --> batches[DataLoader: batches]
     batches --> training[LightningModule + Trainer]
     training --> checkpoint[Training checkpoint]
-    training --> release[Model release]
+    training --> release[Model release + processor]
+    release --> product[Prediction raster on the source grid]
 ```
 
-Your Dataset owns reads, band order, target codes and split selection. Chips
-is optional. A DataModule can organize loaders and device-side transforms;
+Your Dataset owns reads, band order, target codes and split selection. RasterChipper
+is optional; it cuts prepared one-grid DataTrees. A DataModule can organize loaders and device-side transforms;
 the LightningModule owns loss and metrics, and Trainer runs the loop.
 Start with the [offline training tutorial](../guides/training.md).
 
-Prepare inputs in explicit project functions and reproduce that preparation
-at inference. ModelSpec and dependent geospatial workspace workflows are
-paused. A native model release saves registered construction and weights,
-without an executable preparation recipe. See [model inputs](model-inputs.md)
-and [releases](../guides/release.md).
+Prepare inputs with the same code at training and inference. A native model
+release saves registered stage construction and weights, and optionally a
+processor: registered ingest, preparation and decoding classes that run the
+model chip by chip over a raster. See [model inputs](../guides/model-inputs.md)
+and [releases](../guides/release.md#run-the-model-with-a-processor).
+ModelSpec and dependent geospatial workspace workflows are paused.
 
 Package ownership belongs in [the contributor architecture](../contributing/architecture.md).

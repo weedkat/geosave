@@ -6,7 +6,6 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from geosave.geodata.core.raster.datatree import stac_catalog
 from geosave.geodata import (
     attrs,
     open_raster,
@@ -346,149 +345,6 @@ def _item_ids(scene: xr.Dataset) -> list[str]:
     return ids
 
 
-def test_a_scene_expands_into_one_item_per_time_and_one_leaf_per_variable():
-    scene = _split_scene()
-
-    tree = scene.gs.expand()
-
-    first, second = _item_ids(scene)
-    # A Dataset stating no Collection lands under the default collection.
-    assert [leaf.path for leaf in tree.leaves] == [
-        f"/default/{first}/red",
-        f"/default/{first}/nir",
-        f"/default/{second}/red",
-        f"/default/{second}/nir",
-    ]
-    tree.gs.validate(stac_catalog)
-
-
-def test_a_variable_without_time_is_left_out():
-    scene = _split_scene()
-    scene = scene.assign(height=scene.red.isel(time=0, drop=True))
-
-    tree = scene.gs.expand()
-
-    for leaf in tree.leaves:
-        assert leaf.name != "height"
-
-
-def test_coordinates_and_attrs_go_to_their_stac_level():
-    collection = attrs.StacCollection(collection={"id": "s2"})
-    scene = _split_scene().assign_attrs(collection.to_attrs())
-
-    tree = scene.gs.expand()
-
-    # Catalog: nothing of its own.
-    assert not tree.to_dataset(inherit=False).variables
-    assert not tree.attrs
-
-    # Collection: the STAC Collection alone, named by its id.
-    top = tree["s2"].to_dataset(inherit=False)
-    assert not top.coords
-    assert top.attrs == collection.to_attrs()
-
-    # Item: its coordinates along time, and the Dataset's other attrs.
-    item = tree["s2"][_item_ids(scene)[1]].to_dataset(inherit=False)
-    assert set(item.coords) == {
-        "time",
-        "start_datetime",
-        "end_datetime",
-        "eo:cloud_cover",
-    }
-    assert item.time.values == scene.time.values[1]
-    assert item.attrs == {"title": "Two passes"}
-
-    # Asset: one variable with its own attrs and its grid.
-    for leaf in tree.leaves:
-        asset = leaf.to_dataset(inherit=False)
-        assert set(asset.coords) == {"y", "x", "spatial_ref"}
-        assert asset.spatial_ref.attrs == scene.spatial_ref.attrs
-        assert not asset.attrs
-
-
-def test_items_are_named_by_their_start_and_place():
-    tree = _split_scene().gs.expand()
-
-    assert list(tree["default"].children) == [
-        "20250601T000000_49LEL_-9.0465_111.0001",
-        "20250602T000000_49LEL_-9.0465_111.0001",
-    ]
-
-
-def test_items_are_named_by_a_given_id_format():
-    tree = _split_scene().gs.expand(id_format="s2_{start:%Y%m%d}_{mgrs}")
-
-    assert list(tree["default"].children) == ["s2_20250601_49LEL", "s2_20250602_49LEL"]
-
-
-def test_two_items_formatting_to_one_id_are_refused():
-    with pytest.raises(ValueError, match="two Items format to the id"):
-        _split_scene().gs.expand(id_format="{mgrs}")
-
-
-def test_expanding_then_combining_gives_the_identical_scene():
-    scene = _split_scene()
-
-    restored = scene.gs.expand()["default"].gs.combine()
-
-    xr.testing.assert_identical(restored, scene)
-
-
-def test_combine_refuses_an_asset_whose_packing_changes_between_items():
-    from geosave.geodata.errors import RasterValidationError
-
-    scene = build_raster(times=2, packed=True)
-    tree = scene.gs.expand()
-    first, second = tree["default"].children
-    tree[f"default/{second}/red"]["red"].attrs["add_offset"] = -0.1
-
-    with pytest.raises(RasterValidationError, match="another CF packing"):
-        tree["default"].gs.combine()
-
-
-def test_a_dataset_without_the_item_dim_is_refused():
-    with pytest.raises(KeyError, match="time"):
-        build_raster().gs.expand()
-
-
-def test_a_dim_without_time_needs_an_id_format_it_can_fill():
-    scene = (
-        _split_scene().rename(time="date").drop_vars(["start_datetime", "end_datetime"])
-    )
-
-    # Ids are formatted from the region, whose period only `time` states.
-    with pytest.raises(ValueError, match="no 'start'"):
-        scene.gs.expand("date")
-
-
-def test_a_round_trip_keeps_packing_encoding():
-    scene = build_raster(times=2, packed=True)
-
-    restored = scene.gs.expand()["default"].gs.combine()
-
-    assert restored.red.encoding.get("scale_factor") == scene.red.encoding.get(
-        "scale_factor"
-    )
-    assert restored.red.attrs == scene.red.attrs
-
-
-def test_splitting_reads_no_pixels():
-    import dask
-    import dask.array as da
-
-    from tests.geodata.conftest import _refuse
-
-    scene = _split_scene()
-    for name in scene.data_vars:
-        scene[name] = scene[name].copy(data=da.from_array(scene[name].values))
-
-    with dask.config.set(scheduler=_refuse):
-        tree = scene.gs.expand()
-
-    for leaf in tree.leaves:
-        assert hasattr(leaf.to_dataset()[leaf.name].data, "dask")
-
-
 def test_decode_matches_native_cf_and_is_idempotent():
     source = build_raster(packed=True).chunk({"x": 1, "y": 1})
     source.red.attrs.update(scale_factor=0.0001, add_offset=-0.1)
@@ -531,3 +387,43 @@ def test_extent_survives_band_selection_without_changing_pixels(city):
     assert cleared.gs.region.extent == source.gs.geobox.extent
     assert cleared.red.gs.region.extent == source.gs.geobox.extent
     assert written.gs.region.extent == city
+
+
+def test_catalog_publishes_one_cog_per_variable_and_item_and_loads_back(tmp_path):
+    from geosave.geodata import stac
+
+    scene = build_raster(times=2, packed=True)
+    scene = scene.gs.write_stac_property("eo:cloud_cover", [10.0, 40.0])
+
+    catalog = scene.gs.to_catalog(tmp_path, id_format="{start:%Y%m%d}")
+
+    assert catalog["id"].tolist() == ["20250601", "20250602"]
+    assert catalog["eo:cloud_cover"].tolist() == [10.0, 40.0]
+    assert (tmp_path / "20250602" / "nir.tif").exists()
+    items = catalog.gs.to_items()
+    loaded = stac.load_dataset(items, chunks={}, like=scene)
+    for name in scene.data_vars:
+        np.testing.assert_array_equal(loaded[name].values, scene[name].values)
+    with pytest.raises(FileExistsError):
+        scene.gs.to_catalog(tmp_path, id_format="{start:%Y%m%d}")
+
+
+def test_one_item_reads_its_property_values_and_declared_extensions():
+    from geosave.geodata import attrs
+
+    schema = "https://stac-extensions.github.io/eo/v1.1.0/schema.json"
+    scene = build_raster(times=2)
+    scene = scene.gs.write_stac_property("eo:cloud_cover", [12.5, float("nan")])
+    scene = scene.gs.write_stac_property("platform", "sentinel-2b")
+    scene = attrs.stamp_attrs(scene, attrs.StacCollection(extensions=[schema]))
+
+    assert scene.isel(time=0).gs.read_stac_properties() == {
+        "eo:cloud_cover": 12.5,
+        "platform": "sentinel-2b",
+    }
+    # A missing value is left out.
+    assert scene.isel(time=1).gs.read_stac_properties() == {"platform": "sentinel-2b"}
+    with pytest.raises(ValueError):
+        scene.gs.read_stac_properties()
+    assert scene.gs.stac_extensions == [schema]
+    assert build_raster().gs.stac_extensions == []

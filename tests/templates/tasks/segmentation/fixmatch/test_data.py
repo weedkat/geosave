@@ -12,12 +12,9 @@ from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
     Chips,
     _batch,
-    _spec,
+    _preprocessor,
 )
 
-pytestmark = pytest.mark.skip(
-    reason="Template processing awaits the ModelSpec redesign."
-)
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
@@ -39,17 +36,21 @@ def test_strong_augmentations_cannot_move_geometry(tmp_path):
 
 def _training(tmp_path: Path, **options: object) -> fixmatch.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
-    path = _spec().save(tmp_path / "model_spec.yaml")
     data = fixmatch.DataModule(
-        spec=path, train=Chips(), val=Chips(), unlabeled=Scenes(), **options
+        preprocessor=_preprocessor(),
+        train=Chips(),
+        val=Chips(),
+        unlabeled=Scenes(),
+        **options,
     )
     data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
     return data
 
 
 def _unlabeled(times: int = 0) -> fixmatch.Unlabeled:
-    batch = _batch(times)
-    return {"inputs": batch["inputs"]}
+    inputs = dict(_batch(times)["inputs"])
+    inputs["location_coords"] = torch.ones(2, 2)
+    return {"inputs": inputs}
 
 
 def test_strong_views_perturb_the_weak_view_without_moving_it(tmp_path) -> None:

@@ -51,16 +51,26 @@ model:
     metrics:
     - iou.macro
     - f1.macro
+    predictor:
+      name: chips
+      init_args:
+        size: 224
+        stride: 192
+        mode: reflect
+        window: hann
+        batch_size: 8
 data:
   class_path: modules.segmentation.supervised.data.DataModule
   init_args:
-    spec: configs/segmentation-supervised/model_spec.yaml
+    preprocessor:
+      class_path: modules.segmentation.supervised.processing.Reflectance
     train:
       class_path: modules.segmentation.supervised.datasets.RasterDataset
       init_args:
         images: [data/train/image.tif]
         targets: [data/train/label.tif]
-        spec: configs/segmentation-supervised/model_spec.yaml
+        preprocessor:
+          class_path: modules.segmentation.supervised.processing.Reflectance
         num_classes: 2
         ignore_index: 255
     val:
@@ -68,12 +78,14 @@ data:
       init_args:
         images: [data/val/image.tif]
         targets: [data/val/label.tif]
-        spec: configs/segmentation-supervised/model_spec.yaml
+        preprocessor:
+          class_path: modules.segmentation.supervised.processing.Reflectance
         num_classes: 2
         ignore_index: 255
     ignore_index: 255
     size: 224
     batch_size: 8
+    eval_batch_size: 1
     num_workers: 4
     augmentations:
     - name: RandomHorizontalFlip

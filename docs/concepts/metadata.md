@@ -109,8 +109,7 @@ the new declaration must retain nodata.
 An undecoded read (`mask_and_scale=False`) retains DN with CF attrs. A decoded
 read retains the storage recipe in encoding. Writers save either representation
 without applying scaling twice. STAC loading retains DN by default and translates published band metadata into
-attrs. Use `load_dataset(..., mask_and_scale=True)` to decode immediately, or
-call `.gs.mask_and_scale()` on the loaded Dataset afterward. Before loading,
+attrs. Call `.gs.mask_and_scale()` on the loaded Dataset to decode. Before loading,
 GeoSave rejects selected source bands with different effective scales or offsets.
 ODC may still remap different source nodata codes to one output fill value.
 
@@ -154,19 +153,19 @@ Metadata support varies by format, so verify a round trip for the properties
 your workflow needs. See the [attrs reference](../reference/attrs.md) and
 [read and write guide](../basics/io.md).
 
-A raster loaded from STAC carries its STAC metadata in two named places.
-The root `StacCollection` attrs hold the Collection and the Items' extension
-schemas. The `stac_properties` coordinate along `time` holds one dict
-per observation, stored as JSON text in netCDF and Zarr: the properties every loaded Item shares, plus those requested
-with `with_properties`.
-`to_catalog` builds each Item's properties from these records; no other
-coordinate becomes a property. Dates, `proj:*` and band fields always come
-from the raster's own coordinates, grid and attrs.
+A raster loaded from STAC carries Collection metadata in root attrs and
+requested Item properties in coordinates marked with `stac_property`.
+`gs.stac_properties` maps STAC keys to those coordinate names; ODC may spell
+`eo:cloud_cover` as `eo_cloud_cover`. Request properties explicitly with
+`with_properties` when loading. Item extension schemas live in `stac_extensions`.
+
+Publication reads marked coordinates for Item properties. Dates, `proj:*` and
+band fields come from the raster's time coordinates, grid and variable attrs.
+Unmarked Dataset attrs do not automatically become Item properties. A shared
+scalar property publishes in every Item and reloads along the time dimension.
 
 ```text
 source                                   cell of the label
-Item with start/end, one label per Item  the Item's start_datetime, end_datetime
-groupby="solar_day" mosaic               the local solar day, e.g. [01-09 17:00, 01-10 17:00) UTC
 .gs.composite(freq="1MS", ...)           the resample bin, e.g. [Jan 1, Feb 1)
 .gs.write_time_bounds("MS")              one freq step per label
 ```

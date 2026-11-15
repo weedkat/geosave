@@ -13,6 +13,7 @@ from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 
 import geosave as gs
+from geosave.geodata import io
 
 root = Path(tempfile.mkdtemp())
 grid = GeoBox.from_bbox(
@@ -22,48 +23,47 @@ pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
 scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid))
 scene = scene.gs.write_nodata(0)
 path = root / "scene.tif"
-scene["red"].gs.to_cog(path)
+io.write_cog(scene, path)
 reopened = gs.open_raster(path)
 list(reopened.data_vars), reopened.gs.geobox == scene.gs.geobox
 ```
 
 ```text
-(['band_1'], True)
+(['red'], True)
 ```
 
 ```python
-np.array_equal(reopened["band_1"].values, pixels), reopened["band_1"].gs.nodata
+np.array_equal(reopened["red"].values, pixels), reopened["red"].gs.nodata
 ```
 
 ```text
 (True, 0)
 ```
 
-Array `to_cog` delegates to `.rio.to_raster(driver="COG")` and normally
-returns `None`. Keep the destination path yourself. Native writes replace an
-existing file. Opening a TIFF returns a Dataset with one variable per band;
-without GeoSave publication metadata those variables use `band_1`, `band_2`, etc.
+`io.write_cog` returns the destination UPath and preserves variable names as
+band metadata. It refuses an existing file unless `overwrite=True` is passed.
+Opening a TIFF returns a Dataset with one variable per band; external TIFFs
+without GeoSave identity tags use `band_1`, `band_2`, etc.
 
 ## Several bands in one TIFF
 
-For bands on one grid with compatible units, class metadata and packing, use
-`scene[["red", "nir"]].gs.to_array().gs.to_cog("image.tif")`. Select one
-observation before writing a time series. Stacking retains shared band
-metadata; it cannot preserve different per-band declarations in one array.
+For bands on one grid, use `io.write_cog(scene[["red", "nir"]], "image.tif")`.
+Variables keep their names and band metadata; the TIFF shares one stored dtype,
+nodata value and pixel grid. Select one observation before writing a time series.
 
-To keep bands with different metadata in separate files, use
-[tree publication](../guides/catalogs-and-cuts.md). Dataset `.gs.to_cog()` is
-unavailable; explicitly choose a band array, a tree of assets, or another format.
+For dated observations or assets on different grids, use
+[catalog publication](../guides/catalogs-and-cuts.md). Dataset `.gs.to_cog()`
+remains unavailable; the explicit format writer handles one file.
 
 ## Choose a format
 
 | Data and goal | Write | Return value |
 | --- | --- | --- |
-| One band or compatible band array at one instant | `array.gs.to_cog("image.tif")` | Native result (normally `None`) |
+| Named bands on one grid at one instant | `io.write_cog(dataset, "image.tif")` | One file `UPath` |
 | Dataset or DataTree, including multiple dates | `raster.gs.to_zarr("scene.zarr")` | One store `UPath` |
 | Dataset or DataTree in one scientific file | `raster.gs.to_netcdf("scene.nc")` | One file `UPath` |
-| One TIFF per asset of a STAC tree | `tree.gs.to_cog("assets")` | List of file UPaths |
-| TIFF assets plus an Item table | `tree.gs.to_catalog("assets")` | GeoDataFrame |
+| One COG per staged asset | `staged.to_cog("assets")` on `RasterStac` | Native Items |
+| COG assets plus an Item table | `dataset.gs.to_catalog("assets")` | GeoDataFrame |
 | Vector features or STAC Item table | `rows.gs.to_geoparquet("rows.parquet")` | One file `UPath` |
 
 The [I/O reference](../reference/io.md#saved-raster-files) lists deferred-write
@@ -85,8 +85,10 @@ zarr_scene.gs.geobox == grid, netcdf_scene.gs.geobox == grid
 ```
 
 Zarr stores chunked arrays; NetCDF stores scientific arrays in one file.
-DataTree writers preserve groups. `gs.open_raster` returns a DataTree for a
-store with child groups and a Dataset for a root-only store.
+DataTree writers preserve groups. `gs.open_raster` always returns a Dataset:
+the root group by default, or a selected group with `group="scene"`.
+Use `gs.open_raster_tree(store)` to read the whole hierarchy as a DataTree,
+including a root-only tree when there are no child groups.
 
 Raster readers select their format from the suffix. The default `chunks={}`
 uses Dask arrays; `chunks=None` uses backend indexing without Dask. Opening

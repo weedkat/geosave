@@ -1,48 +1,78 @@
 # STAC discovery, loading, and publication
 
 Use `StacClient` and `StacQuery` to choose observations, then load their pixels
-on a supplied grid or retain each asset's native grid in a DataTree.
+on a supplied grid, or use `load_native_datasets` for native grids.
 See [Search and load STAC data](../guides/stac.md) for examples.
 
 ## Search and loading
 
 ::: geosave.geodata.stac
     options:
-      members: [StacClient, StacQuery, StacTable, StacLoadOptions, load_dataset, load_datatree, create_catalog]
+      members: [StacClient, StacQuery, StacTable, StacLoadOptions, load_dataset, load_native_datasets, group_bands_by_grid, list_properties, create_catalog]
 
 ## Publication
 
-`Dataset.gs.expand()` builds a collection/Item/asset tree.
-`tree.gs.to_catalog(folder)` writes assets and returns an Item table.
-[Catalog operations](catalog.md) explains publication, persistence, and availability.
+`RasterStac` holds a prescribed Item/asset tree and native Collection metadata.
+`RasterStac.from_dataset(scene)` splits each time position into an Item and
+its variables into asset Datasets, without computing pixels. Collection
+metadata comes from the source attrs. Grouping and variable selection use native xarray. Static variables remain
+in each group. Time and marked STAC property coordinates live on Item nodes and inherit
+into assets. Item attrs retain `stac_extensions`; Collection metadata lives
+on the wrapper. Spatial coordinates, band attrs, and encoding stay on assets.
+Assets wrap individual DataArrays as Datasets. Variable attrs and encoding
+are preserved; source Dataset attrs are not copied onto assets.
+
+```python
+opened = stac.RasterStac.from_dataset(scene, id_format="{start:%Y%m%d}")
+red = opened.tree["20250601/red"].to_dataset(inherit="all_coords")
+```
+
+`item_dim` defaults to `"time"` and must exist on the Dataset.
+
+The tree stages a publication; it is not a loading format. `merge` joins a
+raster on another grid into the same Items, `to_cog` writes one COG per asset
+and returns the Items, and `create_catalog` lays them out as a table.
+`Dataset.gs.to_catalog(path)` does all three for one grid. Published Items
+load back as Datasets.
+
+```python
+staged = stac.RasterStac.from_dataset(bands_10m).merge(
+    stac.RasterStac.from_dataset(bands_20m)
+)
+items = staged.to_cog("s3://bucket/s2")      # <root>/<item id>/<asset>.tif
+catalog = stac.create_catalog(items)
+catalog.gs.to_geoparquet("s3://bucket/s2/catalog.parquet")
+
+for crs, resolution, native in stac.load_native_datasets(
+    catalog.gs.to_items(), chunks={}, with_properties=stac.list_properties(items)
+):
+    ...
+```
+
+::: geosave.geodata.stac.raster.RasterStac
+
+`StacItem.from_region` builds one Item from a `GeoRegion`; `add_raster_asset`
+states one file's grid and bands.
 
 ::: geosave.geodata.stac.publish.StacItem
 
-::: geosave.geodata.stac.publish.create_stac_collection
 
 ## Collection and observation metadata
 
-Collection metadata belongs to collection nodes or Dataset root attrs.
-Observation properties belong to Item coordinates or a Dataset's
-`stac_properties` coordinate. Band declarations stay on the asset's variables.
-See [metadata rules](../concepts/metadata.md).
+Collection metadata belongs to `RasterStac.collection` or Dataset root attrs.
+Observation properties belong to coordinates marked with `stac_property`;
+`gs.stac_properties` maps STAC keys to their coordinate names. Band declarations
+stay on asset variables. See [metadata rules](../concepts/metadata.md).
 
 ::: geosave.geodata.attrs.StacCollection
 
-::: geosave.geodata.stac.item
-    options:
-      members: [ItemTime, normalize_time, create_item, select_item_properties, read_timespan, read_instant, TIMELESS]
-
-::: geosave.geodata.stac.raster
-    options:
-      members: [encode_properties, decode_properties, stamp_item_time, stamp_item_properties, build_stac_metadata]
+Loading stamps live in `stac/stamps/`: Collection, band, source and property
+stamps translate Item metadata onto the loaded Dataset.
 
 ## Band and extension translation
 
 These lower-level APIs translate native PySTAC values and xarray attrs.
 Use accessor methods for everyday metadata edits.
-
-::: geosave.geodata.stac.band
 
 ::: geosave.geodata.stac.extensions.projection
     options:

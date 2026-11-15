@@ -6,9 +6,9 @@ Check each constructor before selecting a model.
 
 ## Encoders
 
-::: geosave.model.stages.encoder.DINOv3
+::: geosave.ml.components.encoder.DINOv3
 
-::: geosave.model.stages.encoder.Prithvi
+::: geosave.ml.components.encoder.Prithvi
     options:
       inherited_members:
         - __init__
@@ -17,7 +17,7 @@ Check each constructor before selecting a model.
         - pyramid_strides
         - input_size
 
-::: geosave.model.stages.encoder.PrithviTL
+::: geosave.ml.components.encoder.PrithviTL
     options:
       inherited_members:
         - forward
@@ -25,37 +25,31 @@ Check each constructor before selecting a model.
         - pyramid_strides
         - input_size
 
-::: geosave.model.stages.encoder.Clay
+::: geosave.ml.components.encoder.Clay
 
-## Prithvi context
+## Time and place from the grid entries
 
-::: geosave.model.stages.encoder.prithvi
-    options:
-      members:
-        - temporal_coords
-        - location_coords
-        - model_context
+Encoders pretrained on location or dates read them from the batch's
+`transform`, `crs` and `time`, as `DataTree.gs.to_tensor` writes them, and
+derive their own inputs in `forward_pyramid`. Other encoders ignore them.
 
-## Clay context
+::: geosave.ml.components.encoder.grid
 
-::: geosave.model.stages.encoder.clay
-    options:
-      members:
-        - time
-        - latlon
-        - model_context
+::: geosave.ml.components.encoder.prithvi.temporal_coords
+
+::: geosave.ml.components.encoder.clay.week_and_hour
 
 ## Decoders
 
-::: geosave.model.stages.decoder
+::: geosave.ml.components.decoder
 
 ## Heads
 
-::: geosave.model.stages.head.ClassificationHead
+::: geosave.ml.components.head.ClassificationHead
 
-::: geosave.model.stages.head.DenseHead
+::: geosave.ml.components.head.DenseHead
 
-::: geosave.model.stages.head.RegressionHead
+::: geosave.ml.components.head.RegressionHead
     options:
       inherited_members:
         - __init__
@@ -63,7 +57,7 @@ Check each constructor before selecting a model.
         - forward_logits
         - feature_channels
 
-::: geosave.model.stages.head.SegmentationHead
+::: geosave.ml.components.head.SegmentationHead
     options:
       inherited_members:
         - __init__
@@ -73,4 +67,4 @@ Check each constructor before selecting a model.
 
 ## Complete models
 
-::: geosave.model.stages.monolith
+::: geosave.ml.components.monolith

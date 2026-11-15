@@ -2,20 +2,19 @@
 
 Each format reaches storage through the UPath: pyarrow through `path.fs`,
 Zarr through `str(path)` and `path.storage_options`, readers through
-`path.open()`, GDAL through `io.rasterio`. Writers that need random access to
-their file (HDF5, GDAL, SQLite) write a local file that `stage_file` puts in
-place. No code asks whether a path is local; a local path is a UPath on the
-local filesystem.
+`path.open()`, GDAL through Rasterio filesystem openers. Writers that need
+random access unavailable on their destination write a local file through
+`stage_file`, the one place that asks a filesystem whether it is local.
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from os import PathLike
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from upath import UPath
 from upath.types.storage_options import (
@@ -27,6 +26,9 @@ from upath.types.storage_options import (
     MemoryStorageOptions,
     S3StorageOptions,
 )
+
+if TYPE_CHECKING:
+    from dask.delayed import Delayed
 
 # The filesystems a catalog or raster commonly lives on, typed as upath states them.
 type StorageOptions = (
@@ -95,32 +97,77 @@ def check_destination(path: UPath, suffixes: Sequence[str], *, overwrite: bool) 
         raise ValueError(
             f"destination {path.name!r} must end in one of {list(suffixes)}"
         )
+    refuse_existing(path, overwrite=overwrite)
+
+
+def refuse_existing(path: UPath, *, overwrite: bool) -> None:
+    """Refuse a destination that exists, unless it may be replaced.
+
+    A deferred write calls this again when computed, since the destination
+    may have appeared after it was first checked.
+
+    Args:
+        path: Destination of one file or store.
+        overwrite: Allow an existing destination.
+
+    Raises:
+        FileExistsError: The destination exists and `overwrite` is false.
+    """
     if not overwrite and path.exists():
         raise FileExistsError(f"{path} exists; pass overwrite=True to replace it")
 
 
 @contextmanager
 def stage_file(path: UPath) -> Generator[Path]:
-    """Yield a local file to write, put at `path` when the block ends without error.
+    """Yield a local file to write, which ends up at `path`.
 
-    A writer that seeks back into its file, as HDF5, GDAL and SQLite do,
-    cannot write an object store's forward-only stream, so it writes here.
+    A writer that seeks back into its file or reopens it by name, as HDF5,
+    GDAL and SQLite do, cannot write an object store's forward-only stream.
+    A local destination is written in place; any other is written in a
+    temporary folder and put at `path` when the block ends without error.
 
     Args:
         path: Destination of the finished file.
 
     Yields:
-        Local path in a temporary folder, named as `path`.
+        Local path named as `path`.
 
     Examples:
         >>> with stage_file(create_upath("s3://bucket/scene.nc")) as local:
         ...     ds.to_netcdf(local)
     """
+    create_parent(path)
+    if getattr(path.fs, "local_file", False):
+        yield Path(path.path)
+        return
     with TemporaryDirectory() as folder:
         local = Path(folder) / path.name
         yield local
-        create_parent(path)
         path.fs.put_file(str(local), path.path)
+
+
+def defer[Written](write: Callable[[], Written], *, compute: bool) -> Written | Delayed:
+    """Run a checked write now, or hand it back as one Dask task.
+
+    The write is passed whole, so a raster's lazy arrays stay out of the
+    graph's dependencies and are computed by the write itself.
+
+    Args:
+        write: The write, taking no arguments and returning what it wrote.
+        compute: False returns one `dask.Delayed` running `write` when computed.
+
+    Returns:
+        What `write` returns, or the delayed call of it.
+
+    Examples:
+        >>> defer(partial(store, raster, path), compute=False).compute()
+        UPath('/abs/scene.zarr')
+    """
+    if compute:
+        return write()
+    from dask.delayed import delayed
+
+    return delayed(write)()
 
 
 def create_parent(path: UPath) -> None:

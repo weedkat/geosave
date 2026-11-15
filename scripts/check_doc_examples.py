@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGES = (
     "index.md",
     "first-raster.md",
+    "guides/vegetation-zones.md",
     "basics/rasters.md",
     "basics/attrs.md",
     "basics/io.md",
@@ -64,6 +65,13 @@ def check_result(page: str, values: dict) -> None:
             np.testing.assert_allclose(
                 saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
             )
+    elif page == "guides/vegetation-zones.md":
+        summary = values["summary"]
+        assert summary.index.tolist() == ["West", "East"]
+        assert (summary["coverage"] > 0.9).all()
+        with gs.open_raster("output/vegetation-zones/ndvi.tif") as saved:
+            assert saved.gs.geobox == values["scene"].gs.geobox
+            assert np.isnan(saved.ndvi.gs.nodata)
     elif page == "basics/rasters.md":
         with gs.open_raster("output/ndvi.tif") as saved:
             assert saved.ndvi.shape == (128, 128)

@@ -72,27 +72,27 @@ def read_band(item: pystac.Item, name: str) -> dict[str, Any]:
 
 
 def write_band_attrs(
-    loaded: xr.Dataset, source: LoadSource, read: BandReader
+    ds: xr.Dataset, source: LoadSource, read: BandReader
 ) -> xr.Dataset:
     """Write, per loaded variable, the attrs every Item states alike for its band.
 
     Args:
-        loaded: Dataset returned by the ODC load.
+        ds: Dataset returned by the ODC load.
         source: Items that were loaded.
         read: Reads the attrs one Item states for the band loaded as a name.
 
     Returns:
-        `loaded` with the agreed attrs added; the variable's own attrs win.
+        `ds` with the agreed attrs added; the variable's own attrs win.
     """
     stamped = {}
-    for name, variable in loaded.data_vars.items():
+    for name, variable in ds.data_vars.items():
         stated = []
         for item in source.items:
             stated.append(xr.Dataset(attrs=dict(read(item, str(name)))))
         agreed = xr.merge(stated, combine_attrs="drop_conflicts").attrs
 
         stamped[name] = variable.assign_attrs({**agreed, **variable.attrs})
-    return loaded.assign(stamped)
+    return ds.assign(stamped)
 
 
 def read_packing(item: pystac.Item, name: str) -> raster.RasterAttrs:
@@ -128,16 +128,16 @@ def check_packing(name: str, items: Sequence[pystac.Item]) -> None:
 
 
 @register_stamp("raster")
-def stamp_raster(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+def stamp_raster(ds: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """Write each band's packing and units, and declare the fill ODC cast.
 
     Raises:
         ValueError: Items pack a loaded band with different scale or offset.
     """
-    for name in loaded.data_vars:
+    for name in ds.data_vars:
         check_packing(str(name), source.items)
 
-    stamped = write_band_attrs(loaded, source, read_packing)
+    stamped = write_band_attrs(ds, source, read_packing)
 
     # The declaration must match the fill ODC cast into the output dtype.
     declared = {}
@@ -158,9 +158,9 @@ def read_spectrum(item: pystac.Item, name: str) -> eo.SpectralAttrs:
 
 
 @register_stamp("eo")
-def stamp_eo(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+def stamp_eo(ds: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """Write each band's common name, wavelength, width and description."""
-    return write_band_attrs(loaded, source, read_spectrum)
+    return write_band_attrs(ds, source, read_spectrum)
 
 
 def read_legend(item: pystac.Item, name: str) -> classification.ClassificationAttrs:
@@ -169,9 +169,9 @@ def read_legend(item: pystac.Item, name: str) -> classification.ClassificationAt
 
 
 @register_stamp("classification")
-def stamp_classification(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+def stamp_classification(ds: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """Write each band's class values, names and colour hints."""
-    return write_band_attrs(loaded, source, read_legend)
+    return write_band_attrs(ds, source, read_legend)
 
 
 def read_title(item: pystac.Item, name: str) -> dict[str, str]:
@@ -194,9 +194,9 @@ def read_title(item: pystac.Item, name: str) -> dict[str, str]:
 
 
 @register_stamp("title")
-def stamp_title(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+def stamp_title(ds: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """Name each band after its asset's title, where the asset holds only that band."""
-    return write_band_attrs(loaded, source, read_title)
+    return write_band_attrs(ds, source, read_title)
 
 
 def read_colour(item: pystac.Item, name: str) -> str | None:
@@ -206,14 +206,14 @@ def read_colour(item: pystac.Item, name: str) -> str | None:
 
 
 @register_stamp("rgb")
-def stamp_rgb(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
+def stamp_rgb(ds: xr.Dataset, source: LoadSource) -> xr.Dataset:
     """State the true-colour composite the bands' common names give.
 
     The first band named for each colour is used; a band the Items name
     differently names none. Nothing is written without red, green and blue.
     """
     names_by_colour: dict[str, str] = {}
-    for name in loaded.data_vars:
+    for name in ds.data_vars:
         colours = set()
         for item in source.items:
             colour = read_colour(item, str(name))
@@ -227,7 +227,7 @@ def stamp_rgb(loaded: xr.Dataset, source: LoadSource) -> xr.Dataset:
             names_by_colour.setdefault(colour, str(name))
 
     if len(names_by_colour) < 3:
-        return loaded
-    return loaded.gs.write_rgb(
+        return ds
+    return ds.gs.write_rgb(
         names_by_colour["red"], names_by_colour["green"], names_by_colour["blue"]
     )

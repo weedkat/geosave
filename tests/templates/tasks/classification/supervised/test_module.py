@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import pytest
 import torch
 from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from modules.classification import supervised
-from geosave.model.chain import chain_step
+from geosave.ml.chain import chain_step
 from tests.templates.tasks.classification.supervised.test_data import Chips as Classes
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    _spec,
+    _preprocessor,
 )
 
 
@@ -76,10 +75,14 @@ def test_lightning_fits_validates_and_tests(tmp_path) -> None:
     assert 0.0 <= result[0]["test_accuracy_macro"] <= 1.0
 
 
-@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = supervised.DataModule(
-        _spec(), Classes(), Classes(), augmentations=FLIP, batch_size=2, num_workers=0
+        _preprocessor(),
+        Classes(),
+        Classes(),
+        augmentations=FLIP,
+        batch_size=2,
+        num_workers=0,
     )
     module = supervised.Module(model_chain=STAGES)
     trainer = Trainer(

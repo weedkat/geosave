@@ -30,18 +30,21 @@ nav = [
     ] },
     { "How-to guides" = [
         { "Find your task" = "activities.md" },
-        { "Ingest existing files" = "guides/ingest-files.md" },
-        { "Search and load STAC data" = "guides/stac.md" },
-        { "Align labels with imagery" = "guides/align-rasters.md" },
-        { "Read chips and merge predictions" = "guides/chips.md" },
-        { "Create and reopen a raster catalog" = "guides/catalogs-and-cuts.md" },
-        { "Lazy raster processing" = "guides/large-data.md" },
-        { "Build a model" = "guides/models.md" },
-        { "Build from pretrained" = "guides/pretrained.md" },
-        { "Prepare model inputs" = "guides/model-inputs.md" },
-        { "Save and publish a model" = "guides/release.md" },
-        { "Create a training workspace" = "guides/workspaces.md" },
-        { "Optional ingestion flows" = "guides/workflows.md" },
+        { "Prepare data" = [
+            { "Ingest existing files" = "guides/ingest-files.md" },
+            { "Search and load STAC data" = "guides/stac.md" },
+            { "Align labels with imagery" = "guides/align-rasters.md" },
+            { "Create and reopen a raster catalog" = "guides/catalogs-and-cuts.md" },
+            { "Lazy raster processing" = "guides/large-data.md" },
+            { "Read chips and merge predictions" = "guides/chips.md" },
+        ] },
+        { "Models and training" = [
+            { "Build a model" = "guides/models.md" },
+            { "Build from pretrained" = "guides/pretrained.md" },
+            { "Prepare model inputs" = "guides/model-inputs.md" },
+            { "Create a training workspace" = "guides/workspaces.md" },
+            { "Release and run a model" = "guides/release.md" },
+        ] },
     ] },
     { "Concepts" = [
         { "Overview" = "concepts/index.md" },
@@ -52,8 +55,6 @@ nav = [
         { "Lazy execution" = "concepts/lazy-data.md" },
         { "Storage and file layouts" = "concepts/storage.md" },
         { "Explorer controls and behavior" = "concepts/explorer.md" },
-        { "Catalogs and windows" = "concepts/catalog-windows.md" },
-        { "Model input contracts" = "concepts/model-inputs.md" },
         { "Training contracts" = "concepts/training.md" },
     ] },
     { "Help" = [
@@ -81,11 +82,9 @@ nav = [
             { "Errors and warnings" = "reference/errors.md" },
         ] },
         { "Models" = [
-            { "Overview" = "reference/model.md" },
             { "Chains and registry" = "reference/model-chain.md" },
             { "Encoders, decoders, and heads" = "reference/model-stages.md" },
-            { "ModelSpec status" = "reference/model-spec.md" },
-            { "Releases" = "reference/model-release.md" },
+            { "Releases and processors" = "reference/model-release.md" },
         ] },
         { "Training" = [
             { "Overview" = "reference/ml.md" },
@@ -106,8 +105,10 @@ nav = [
         { "Architecture" = "contributing/architecture.md" },
         { "Maintain the documentation" = "contributing/documentation.md" },
         { "Open decisions" = "contributing/open-decisions.md" },
-        { "ModelSpec redesign status" = "guides/model-spec.md" },
-        { "Design: catalog to training" = "contributing/design/catalog-to-training.md" },
+        { "Design: direction" = "contributing/design/direction.md" },
+        { "Design: publish and load" = "contributing/design/publish-load.md" },
+        { "Design: samples and chips" = "contributing/design/samples-chips.md" },
+        { "Design: release and inference" = "contributing/design/release-inference.md" },
     ] },
 ]
 

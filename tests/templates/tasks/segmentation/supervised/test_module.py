@@ -12,10 +12,16 @@ from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.cli import GeosaveCLI
 from modules.segmentation import supervised
-from geosave.model.chain import chain_step
+from affine import Affine
+from odc.geo.geobox import GeoBox
+
+from geosave.geodata.sampling import ChipLayout
+from geosave.ml.chain import chain_step
 from tests.templates.tasks.segmentation.supervised.test_data import (
+    CRS,
     FLIP,
-    _spec,
+    TRANSFORM,
+    _preprocessor,
 )
 from tests.templates.tasks.segmentation.supervised.test_data import (
     Chips as Labels,
@@ -68,12 +74,29 @@ def stages() -> dict[str, dict[str, object]]:
     }
 
 
+def build_module(model_chain, **changes) -> supervised.Module:
+    """Return a Module with every argument stated, as the YAML config states it."""
+    arguments = {
+        "model_chain": model_chain,
+        "ignore_index": 255,
+        "criterion": {"name": "cross_entropy", "init_args": {"ignore_index": 255}},
+        "optimizer": {"name": "adamw", "init_args": {"lr": 1e-3}},
+        "lr_scheduler": None,
+        "metrics": ["iou.macro"],
+        "predictor": {"name": "chips", "init_args": {"size": 2}},
+    }
+    arguments.update(changes)
+    return supervised.Module(**arguments)
+
+
 def test_ignored_targets_produce_zero_loss_and_no_metric_update(stages):
-    task = supervised.Module(model_chain=stages)
+    task = build_module(stages)
     task.configure_model()
     batch = {
         "inputs": {"image": torch.ones(1, 2, 2, 2)},
         "target": torch.full((1, 2, 2), 255, dtype=torch.long),
+        "transform": TRANSFORM[None],
+        "crs": [CRS],
     }
 
     loss = task.training_step(batch, 0)
@@ -95,26 +118,24 @@ class UncountedModel(nn.Module):
 
 
 def test_the_last_stage_states_the_class_count() -> None:
-    task = supervised.Module(
-        model_chain={
+    task = build_module(
+        {
             "model": {
                 "class_path": f"{__name__}.SegmentationModel",
                 "init_args": {"num_classes": 3},
             }
         },
-        class_thresholds=[0.2, 0.4, 0.6],
     )
 
     task.configure_model()
 
     assert task.num_classes == 3
-    assert task.class_thresholds.tolist() == pytest.approx([0.2, 0.4, 0.6])
     assert len(task.val_metrics) > 0
 
 
 def test_optimizer_keeps_direct_chain_parameters_in_default_group(stages):
-    task = supervised.Module(
-        model_chain=stages,
+    task = build_module(
+        stages,
         optimizer={
             "class_path": "torch.optim.SGD",
             "init_args": {"lr": 0.1},
@@ -145,9 +166,7 @@ def test_optimizer_keeps_direct_chain_parameters_in_default_group(stages):
 def test_forward_preserves_prepared_inputs_and_routes_context(
     stages: dict[str, dict[str, object]],
 ) -> None:
-    task = supervised.Module(
-        model_chain=stages,
-    )
+    task = build_module(stages)
     task.configure_model()
     image = torch.tensor([[[[0.0, 1000.0], [2000.0, 3000.0]]] * 2], dtype=torch.float64)
     original = image.clone()
@@ -163,9 +182,7 @@ def test_forward_preserves_prepared_inputs_and_routes_context(
 def test_steps_accept_sample_batches(
     stages: dict[str, dict[str, object]],
 ) -> None:
-    task = supervised.Module(
-        model_chain=stages,
-    )
+    task = build_module(stages)
     task.configure_model()
     image = torch.tensor([[[[3.0, 0.0], [0.0, 3.0]], [[0.0, 3.0], [3.0, 0.0]]]])
     target = torch.tensor([[[0, 1], [1, 0]]])
@@ -174,6 +191,8 @@ def test_steps_accept_sample_batches(
         {
             "inputs": {"image": image},
             "target": target,
+            "transform": TRANSFORM[None],
+            "crs": [CRS],
         },
         0,
     )
@@ -185,8 +204,8 @@ def test_steps_accept_sample_batches(
 def test_training_and_checkpoint_reload_preserve_construction(
     stages: dict[str, dict[str, object]], tmp_path: Path
 ) -> None:
-    task = supervised.Module(
-        model_chain=stages,
+    task = build_module(
+        stages,
         ignore_index=-1,
         optimizer={"class_path": "torch.optim.SGD", "init_args": {"lr": 0.1}},
         criterion={
@@ -206,6 +225,8 @@ def test_training_and_checkpoint_reload_preserve_construction(
                 {
                     "inputs": {"image": image, "offset": torch.tensor(0.0)},
                     "target": torch.tensor([[0, 1], [1, 0]]),
+                    "transform": TRANSFORM,
+                    "crs": CRS,
                 }
             ]
         ),
@@ -256,6 +277,8 @@ def test_lightning_cli_parses_nested_construction_specs(
             "model": {
                 "model_chain": stages,
                 "ignore_index": -1,
+                "metrics": ["iou.macro"],
+                "predictor": {"name": "chips", "init_args": {"size": 2}},
                 "criterion": {
                     "class_path": "torch.nn.CrossEntropyLoss",
                     "init_args": {"ignore_index": -1},
@@ -297,7 +320,7 @@ def test_lightning_cli_parses_nested_construction_specs(
 
 def _evaluation(stages, tmp_path):
     """Return a module, two chips whose second band leads by 1.0, and a trainer."""
-    task = supervised.Module(model_chain=stages)
+    task = build_module(stages)
     image = torch.stack([torch.zeros(2, 2), torch.ones(2, 2)])
     loader = DataLoader(
         Samples(
@@ -305,6 +328,8 @@ def _evaluation(stages, tmp_path):
                 {
                     "inputs": {"image": image},
                     "target": torch.tensor([[label, label], [label, 255]]),
+                    "transform": TRANSFORM,
+                    "crs": CRS,
                 }
                 for label in (0, 1)
             ]
@@ -336,10 +361,99 @@ def test_validation_scores_chips_over_their_known_labels(stages, tmp_path):
     assert validation[0]["val_iou_macro"] == pytest.approx(0.25)
 
 
+@pytest.mark.parametrize("mode", ["reflect", "drop"])
+def test_validation_chips_and_merges_scenes_larger_than_a_chip(stages, tmp_path, mode):
+    # The image is the one-hot label, so the identity model predicts it exactly.
+    labels = torch.tensor([[0, 0, 1, 1, 1]] * 5)
+    image = torch.nn.functional.one_hot(labels, 2).permute(2, 0, 1).float() * 4
+    scene = {
+        "inputs": {"image": image},
+        "target": labels,
+        "transform": TRANSFORM,
+        "crs": CRS,
+    }
+    task = build_module(
+        stages,
+        predictor={"name": "chips", "init_args": {"size": 2, "mode": mode}},
+    )
+    trainer = Trainer(
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+
+    loader = DataLoader(Samples([scene]), batch_size=1)
+    validation = trainer.validate(task, dataloaders=loader, verbose=False)
+
+    # "drop" leaves the last row and column unpredicted; they are not scored.
+    assert validation[0]["val_iou_macro"] == pytest.approx(1.0)
+    assert validation[0]["val_loss"] < 0.05
+
+
+class GridModel(nn.Module):
+    """A stage that declares the grid entries, as a location-aware encoder does."""
+
+    grids: list[GeoBox] = []
+
+    def __init__(self, num_classes: int) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.factor = nn.Parameter(torch.tensor(1.0))
+
+    @chain_step(head=True)
+    def logits(
+        self, image: torch.Tensor, transform: torch.Tensor, crs: list[str]
+    ) -> torch.Tensor:
+        for coefficients, code in zip(transform.tolist(), crs, strict=True):
+            GridModel.grids.append(
+                GeoBox(image.shape[-2:], Affine(*coefficients), code)
+            )
+        return image * self.factor
+
+
+def test_a_stage_reading_the_grid_receives_each_chips_own(tmp_path):
+    GridModel.grids.clear()
+    scene = {
+        "inputs": {"image": torch.zeros(2, 4, 4)},
+        "target": torch.zeros(4, 4, dtype=torch.long),
+        "transform": TRANSFORM,
+        "crs": CRS,
+    }
+    task = build_module(
+        {
+            "model": {
+                "class_path": f"{__name__}.GridModel",
+                "init_args": {"num_classes": 2},
+            }
+        }
+    )
+    trainer = Trainer(
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+
+    trainer.validate(task, dataloaders=DataLoader(Samples([scene])), verbose=False)
+
+    scene_grid = GeoBox((4, 4), Affine(*TRANSFORM.tolist()), CRS)
+    layout = ChipLayout([scene_grid], size=2)
+    expected = []
+    for index in range(len(layout)):
+        expected.append(layout.geobox(index))
+    assert GridModel.grids == expected
+
+
 def test_predict_returns_logits_for_chips_without_labels(stages, tmp_path):
     task, _, trainer = _evaluation(stages, tmp_path)
     image = torch.stack([torch.zeros(2, 2), torch.ones(2, 2)])
-    loader = DataLoader(Samples([{"inputs": {"image": image}}] * 3), batch_size=2)
+    sample = {"inputs": {"image": image}, "transform": TRANSFORM, "crs": CRS}
+    loader = DataLoader(Samples([sample] * 3), batch_size=2)
 
     batches = trainer.predict(task, dataloaders=loader)
 
@@ -354,15 +468,21 @@ class SparseLabels(Dataset[supervised.Sample]):
         return {
             "inputs": {"image": torch.ones(2, 2, 2)},
             "target": torch.full((2, 2), 255 if index == 0 else 0, dtype=torch.long),
+            "transform": TRANSFORM,
+            "crs": CRS,
         }
 
 
-@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path, stages):
     data = supervised.DataModule(
-        _spec(), Labels(), Labels(), augmentations=FLIP, batch_size=2, num_workers=0
+        _preprocessor(),
+        Labels(),
+        Labels(),
+        augmentations=FLIP,
+        batch_size=2,
+        num_workers=0,
     )
-    module = supervised.Module(model_chain=stages)
+    module = build_module(stages)
     trainer = Trainer(
         accelerator="cpu",
         fast_dev_run=True,
@@ -375,7 +495,7 @@ def test_trainer_consumes_model_ready_samples(tmp_path, stages):
     trainer.fit(module, datamodule=data)
     assert trainer.global_step == 1
     assert torch.isfinite(trainer.callback_metrics["train_loss"])
-    assert set(Labels()[0]) == {"inputs", "target"}
+    assert set(Labels()[0]) == {"inputs", "target", "transform", "crs"}
 
 
 @pytest.mark.slow
@@ -395,7 +515,7 @@ def test_distributed_metrics_include_ranks_without_known_targets(tmp_path, stage
         default_root_dir=tmp_path,
     )
     trainer.fit(
-        supervised.Module(model_chain=stages),
+        build_module(stages),
         train_dataloaders=DataLoader(SparseLabels(), batch_size=1, shuffle=False),
         val_dataloaders=DataLoader(SparseLabels(), batch_size=1, shuffle=False),
     )

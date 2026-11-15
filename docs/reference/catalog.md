@@ -9,21 +9,21 @@ an offline example.
 ## Publish and load pixels
 
 ```python title="Adaptation example — use your dated Dataset"
-rows = observations.gs.expand().gs.to_catalog("assets")
+rows = observations.gs.to_catalog("assets")
 path = rows.gs.to_geoparquet("catalog.parquet")
-with gs.open_vector(path).gs.to_datatree() as tree:
-    scene = tree["default"].gs.combine()
-    result = scene.gs.mask_and_scale().mean("time").compute()
+scene = gs.open_vector(path).gs.to_dataset(geobox=observations.gs.geobox, chunks={})
+result = scene.gs.mask_and_scale().mean("time").compute()
 ```
 
-`expand` needs an Item dimension, `time` by default. Tree publication writes
-one COG per asset at `folder/collection/Item/asset.tif` and returns one row per
-Item. Save the table separately. Dataset/DataArray `.gs.to_catalog()` and
-`.gs.to_item()` are unavailable.
+Dataset publication needs an Item dimension, `time` by default. It writes
+one COG per variable and Item at `folder/Item/asset.tif` and returns an Item
+table. Save the table separately. For assets on several grids, stage them
+with `RasterStac.from_dataset(...).merge(...)`; see [STAC publication](stac.md#publication).
+DataArray `.gs.to_catalog()` and raster `.gs.to_item()` remain unavailable.
 
-Loading returns the same collection/Item/asset layout on native asset grids.
-Combine a **collection node**; resample mixed grids onto an exact GeoBox first.
-Collection metadata and Item properties remain separate from band metadata.
+Loading returns a Dataset on the chosen grid. Use `stac.load_native_datasets`
+to keep each native grid. Collection metadata, marked Item property coordinates
+and band metadata remain separate.
 
 ## Select and validate records
 
@@ -67,18 +67,18 @@ whose relative asset hrefs have different bases.
 
 ::: geosave.geodata.core.vector.catalog.GeoCatalog
     options:
-      members: [validate, collections, to_items, to_datatree, to_geoparquet]
+      members: [validate, collections, to_items, to_dataset, to_geoparquet]
 
 ::: geosave.geodata.core.vector.item.GeoCatalogItem
     options:
-      members: [validate, region, to_item, to_datatree]
+      members: [validate, region, to_item, read_pixels]
 
 ## Unavailable operations
 
-`sample`, `GeoSamples`, `to_dataset`, `read_pixels`, and vector `rasterize`
-raise `NotImplementedError` while sampling and catalog pixel access are rebuilt.
-Use GeoPandas selection and `.gs.to_datatree()` for current reads;
-[Chips](chips.md) works with prepared rasters independently.
+Row `read_pixels` and vector `rasterize` raise `NotImplementedError` until
+they are rebuilt. Load Item rows with `rows.gs.to_dataset(...)` or
+`stac.load_dataset(rows.gs.to_items(), ...)`; [chips](chips.md) are cut from
+prepared rasters with `gs.RasterChipper`.
 
 ## GeoParquet options
 

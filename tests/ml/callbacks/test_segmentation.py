@@ -13,8 +13,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.callbacks.segmentation import DensePredictionLogger
 from modules.segmentation import supervised
-from geosave.ml.callbacks.calibrate import ThresholdCalibrator
-from geosave.model.chain import chain_step
+from tests.templates.tasks.segmentation.supervised.test_data import CRS, TRANSFORM
+from geosave.ml.chain import chain_step
 
 
 class SegmentationModel(nn.Module):
@@ -55,6 +55,8 @@ class Samples(Dataset):
         return {
             "inputs": {"image": torch.ones(2, 4, 4)},
             "target": torch.zeros(4, 4, dtype=torch.long),
+            "transform": TRANSFORM,
+            "crs": CRS,
         }
 
 
@@ -66,6 +68,8 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
                 "init_args": {"num_classes": 2},
             }
         },
+        ignore_index=255,
+        criterion={"name": "cross_entropy", "init_args": {"ignore_index": 255}},
         optimizer={"class_path": "torch.optim.SGD", "init_args": {"lr": 0.1}},
         lr_scheduler={
             "class_path": "torch.optim.lr_scheduler.ReduceLROnPlateau",
@@ -73,6 +77,8 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
             "monitor": "val_loss",
             "interval": "epoch",
         },
+        metrics=["iou.macro"],
+        predictor={"name": "chips", "init_args": {"size": 4}},
     )
     observer = ValidationObserver()
     image_logger = DensePredictionLogger({0: "#000000"})
@@ -101,7 +107,6 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
     callbacks = getattr(trainer, "callbacks")
     assert observer in callbacks
     assert image_logger in callbacks
-    assert not any(isinstance(cb, ThresholdCalibrator) for cb in callbacks)
     assert len(observer.labels) == 1
     torch.testing.assert_close(
         observer.labels[0], torch.zeros(1, 4, 4, dtype=torch.long)

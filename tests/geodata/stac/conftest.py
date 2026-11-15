@@ -32,7 +32,7 @@ def entry(collection="optical"):
 
 def create_native_item(tmp_path, name="scene"):
     source = build_raster(times=1).isel(time=0)
-    saved = io.formats.geotiff.write_cog(source, tmp_path / f"{name}.tif")
+    saved = io.raster.geotiff.write_cog(source, tmp_path / f"{name}.tif")
     item = raster_item(
         {"reflectance": (saved, source)},
         id=name,
@@ -127,5 +127,5 @@ def local_catalog(tmp_path):
         tmp_path / "local.parquet", collections=[collection]
     )
     client = stac.StacClient.open(path)
-    options = dict(bands=["red", "nir"], groupby="time")
+    options = dict(bands=["red", "nir"], groupby="time", chunks={})
     return client, region, grid, options

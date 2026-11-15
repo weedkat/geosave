@@ -3,11 +3,12 @@ Storage options:
     installed filesystem backend's defaults and credential discovery. Install
     the corresponding fsspec backend for cloud protocols. These are synchronous
     openers: leave asynchronous=False. protocol and chain_parser are forbidden.
-    NetCDF, GeoJSON and GeoPackage download remote files; NetCDF retains its
-    temporary copy until close(). Zarr and GeoParquet use filesystem reads.
-    Rasterio downloads a temporary file when storage_options are supplied; without
-    options it uses GDAL's URL handling and configured environment. HF bucket
-    URLs without options use the existing S3 gateway configuration.
+    Every format reads through the UPath's filesystem: NetCDF, GeoJSON and
+    GeoPackage from an open file handle, Zarr and GeoParquet by filesystem
+    reads. A GDAL raster given storage_options is read through the filesystem
+    as Rasterio's opener; without options GDAL reads the URL itself, with the
+    environment configure_gdal sets. HF bucket URLs without options go through
+    the S3 gateway that environment names.
 
     Common filesystem keys (where supported by the selected backend):
         use_listings_cache (bool): Cache directory listings.

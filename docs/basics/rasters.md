@@ -4,6 +4,7 @@ Open the [sample scene](../first-raster.md#open-the-sample) and select two bands
 
 ```python
 import geosave as gs
+from geosave.geodata import io
 
 scene = gs.open_raster("sample-scene.tif")
 image = scene[["red", "nir"]]
@@ -77,20 +78,18 @@ from pathlib import Path
 
 path = Path("output/ndvi.tif")
 path.parent.mkdir(parents=True, exist_ok=True)
-ndvi.gs.to_cog(path)
+io.write_cog(ndvi.to_dataset(), path, overwrite=True)
 result = gs.open_raster(path)
 list(result.data_vars), result.gs.geobox == patch.gs.geobox
 ```
 
 ```text
-(['band_1'], True)
+(['ndvi'], True)
 ```
 
-A Cloud Optimized GeoTIFF preserves this result's grid. Native array export
-does not add GeoSave variable identity tags, so the reader uses `band_1`.
-Writing computes the result and replaces an existing destination.
-For several compatible bands in one TIFF, convert the selected Dataset to a
-band array first: `image.gs.to_array().gs.to_cog("output/image.tif")`.
+The Dataset writer preserves the result's grid and variable name. Writing
+computes pixels; `overwrite=True` replaces the earlier tutorial output.
+For several named bands in one TIFF, use `io.write_cog(image, "output/image.tif")`.
 [Read and save data](io.md) explains other formats and return values.
 
 ```python

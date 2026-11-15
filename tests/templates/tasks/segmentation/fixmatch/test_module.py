@@ -13,7 +13,7 @@ from tests.templates.tasks.segmentation.fixmatch.test_data import (
 )
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    _spec,
+    _preprocessor,
 )
 from tests.templates.tasks.segmentation.supervised.test_data import (
     Chips as Labels,
@@ -114,10 +114,9 @@ def test_lightning_fits_a_few_steps(tmp_path) -> None:
     )
 
 
-@pytest.mark.skip(reason="Template processing awaits the ModelSpec redesign.")
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = fixmatch.DataModule(
-        _spec(),
+        _preprocessor(),
         Labels(),
         Labels(),
         augmentations=FLIP,
@@ -138,4 +137,4 @@ def test_trainer_consumes_model_ready_samples(tmp_path):
     trainer.fit(module, datamodule=data)
     assert trainer.global_step == 1
     assert torch.isfinite(trainer.callback_metrics["train_loss"])
-    assert set(Labels()[0]) == {"inputs", "target"}
+    assert set(Labels()[0]) == {"inputs", "target", "transform", "crs"}

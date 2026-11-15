@@ -85,7 +85,7 @@ its result still needs checking for the selected resampling method.
 
 ## Read chips on demand
 
-`gs.Chips([scene], size=256)` plans tile layouts without computing pixels.
+`gs.RasterChipper([tree], size=256)` plans windows over a prepared one-grid DataTree without computing pixels.
 `chips[0]` returns one lazy window; computing it reads that window, and
 repeated reads can read it again. Keep the source open until all dependent
 reads finish. Storage chunks and upstream transforms may require more work than
@@ -97,11 +97,11 @@ for batching and output rules.
 
 ## Schedule a write explicitly
 
-Array `to_cog` and raster `to_zarr` / `to_netcdf` accept `compute=False`.
+`io.write_cog` and raster `to_zarr` / `to_netcdf` accept `compute=False`.
 Each returns one native Dask Delayed. For example,
 `scene.gs.to_zarr("scene.zarr", compute=False).compute()` writes the store and
-returns its UPath. Array `to_cog` yields one UPath; tree `to_cog` yields a list.
-Tree Zarr and NetCDF writes yield one store path, retaining groups.
+returns its UPath. Tree Zarr and NetCDF writes yield one store path, retaining
+groups. DataArray `.gs.to_cog` forwards `compute=False` to rioxarray instead.
 No write reaches the destination before the delayed job runs.
 See [writer return values](../reference/io.md#saved-raster-files).
 

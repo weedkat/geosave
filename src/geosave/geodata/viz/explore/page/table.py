@@ -147,7 +147,7 @@ class AttributeTable(pn.ui.Tabulator):
         # its finest stated grid to keep the most detail; reads stay lazy.
         (parsed,) = odc.stac.parse_items([row.gs.to_item()])
         finest = parsed.geoboxes()[0]
-        scene = self.data.iloc[[position]].gs.to_dataset(finest)
+        scene = self.data.iloc[[position]].gs.to_dataset(geobox=finest, chunks={})
         return RasterLayer(scene, row=row, name=title)
 
     @param.depends("raster_rows", watch=True)
