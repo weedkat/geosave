@@ -1,29 +1,24 @@
 # Basics
 
-A raster is an image whose pixels have locations; its bands hold measurements
-such as red light or elevation. A vector describes shapes, such as field
-boundaries. GeoSave works with both as ordinary Python objects, so start with
-[Your first vegetation map](../first-raster.md).
+Start with a small real image. Learn one operation at a time, then combine
+the pieces in your own project.
 
-| Guide | You will learn | Result |
-| --- | --- | --- |
-| [Raster data](rasters.md) | Create, select, calculate and plot bands. | Image, band or group. |
-| [Describe raster values](attrs.md) | Tell missing pixels, scaling and class codes apart. | Values with explicit meaning. |
-| [Read and save data](io.md) | Pick a reader and writer for a file. | Python objects; files. |
-| [Vector data](vectors.md) | Create, select and save spatial features. | GeoDataFrame and GeoParquet. |
+| Step | You will do |
+| --- | --- |
+| [Install GeoSave](install.md) | Choose the base package or ML extras. |
+| [Your first vegetation map](first-raster.md) | Open, plot, calculate NDVI and save. |
+| [Raster data](rasters.md) | Choose bands for a vegetation map. |
+| [Vector data](vectors.md) | Work with features in a GeoDataFrame. |
+| [Describe values](attrs.md) | Read nodata, scaling and class labels. |
+| [Read and save data](io.md) | Choose a format and reopen its output. |
+| [Images to training chips](training-chips.md) | Keep imagery and labels named through tensor conversion. |
+| [Explore a map](explore.md) | Inspect raster and vector layers interactively. |
 
-```python
-import geosave as gs
+GeoSave adds `.gs` methods to native xarray and GeoPandas objects. Ordinary
+selection, arithmetic and other ecosystem operations remain available.
+The [visual xarray guide](../concepts/xarray-structure.md) explains Dataset,
+DataArray, dimensions and coordinate labels with inspectable examples.
 
-scene = gs.open_raster("scene.tif")      # xarray Dataset, one variable per band
-red = scene["red"]                       # xarray DataArray
-patch = scene.isel(y=slice(0, 256), x=slice(0, 256))
-```
-
-`.gs` methods are added to native xarray and GeoPandas objects, so normal
-xarray and GeoPandas code keeps working. Reading defers pixel work; selecting
-bands and a region first keeps it small.
-
-Next: [activities](../activities.md) for complete tasks, or
-[Concepts](../concepts/index.md) for the rules behind the examples (lazy
-execution, storage layouts, the interactive explorer).
+Continue with [Advanced](../advanced/index.md) for larger workflows,
+[Concepts](../concepts/index.md) for behavior, or [API Reference](../reference/index.md)
+for exact arguments. [Examples](../examples.md) shows complete small tasks.

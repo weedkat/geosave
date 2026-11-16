@@ -5,7 +5,6 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from terratorch.models.backbones.clay_v15.model import Encoder
 
-from geosave.ml.components.encoder.grid import locate_centres, read_dates
 from geosave.ml.components.registry import ENCODERS
 from geosave.ml.chain import chain_step
 from geosave.ml.components.published import Published
@@ -179,36 +178,14 @@ def build_clay(
     return encoder
 
 
-def week_and_hour(time: torch.Tensor) -> torch.Tensor:
-    """Encode each sample's acquisition time as ISO week and hour.
-
-    Args:
-        time: int64 nanoseconds since 1970 shaped `(batch, 1)`.
-
-    Returns:
-        float32 `(batch, 2)` on the device of `time`.
-
-    Raises:
-        ValueError: A sample holds more than one frame.
-    """
-    values = []
-    for dates in read_dates(time):
-        if len(dates) != 1:
-            raise ValueError(
-                "Clay requires one time label; select a single frame first"
-            )
-        when = dates[0]
-        values.append([when.isocalendar().week, when.hour])
-    return torch.tensor(values, dtype=torch.float32, device=time.device)
-
-
 @ENCODERS.register("clay")
 class Clay(nn.Module):
     """Clay v1.5 encoder conditioned on band wavelengths and geographic context.
 
     Supply prepared image tensors, ordered wavelengths in micrometres, and GSD
-    in metres. `forward_pyramid` reads time and location from the batch's
-    `transform`, `crs` and `time`; `forward` takes Clay's own inputs.
+    in metres. `forward_pyramid` reads location and time from the batch's
+    `centroid`, `week` and `hour`, as `DataTree.gs.to_tensor(context=...)`
+    writes them; `forward` takes Clay's own inputs.
     """
 
     pyramid_channels: Published[list[int]]
@@ -377,26 +354,27 @@ class Clay(nn.Module):
     def forward_pyramid(
         self,
         image: torch.Tensor,
-        transform: torch.Tensor | None = None,
-        crs: list[str] | None = None,
-        time: torch.Tensor | None = None,
+        centroid: torch.Tensor | None = None,
+        week: torch.Tensor | None = None,
+        hour: torch.Tensor | None = None,
     ) -> tuple[list[torch.Tensor], list[torch.Tensor | None]]:
         """Extract multi-scale intermediate features from the ViT.
 
-        Clay's own inputs are derived here: the grid centre's latitude and
-        longitude from `transform` and `crs`, the ISO week and hour from `time`.
-
         Args:
             image: (B, C, H, W) input tensor, C == this instance's `in_channels`.
-            transform: float64 `(B, 6)` affine coefficients of each grid, or
-                None, with `crs`, for no location signal.
-            crs: Each sample's CRS, as `"EPSG:<code>"` or WKT.
-            time: int64 `(B, 1)` nanoseconds since 1970, or None for no time
-                signal.
+            centroid: `(B, 2)` latitude and longitude of each grid's centre, or
+                None for no location signal.
+            week: `(B, 1)` ISO week of each sample's one frame, or None, with
+                `hour`, for no time signal.
+            hour: `(B, 1)` hour of each sample's one frame.
 
         Returns:
             (pyramid, prefix_tokens) — list of per-level (B, D, H, W) feature
             maps, list of per-level (B, 1, D) CLS tokens.
+
+        Raises:
+            ValueError: Only one of `week` and `hour` is given, or a sample
+                holds more than one frame.
         """
         target_modules = {
             self.encoder.transformer.get_submodule(f"layers.{i}.1"): i
@@ -412,11 +390,17 @@ class Clay(nn.Module):
             )  # ff(x) + x, true post-residual value
 
         latlon = None
-        if transform is not None and crs is not None:
-            latlon = locate_centres(transform, crs, tuple(image.shape[-2:]))
+        if centroid is not None:
+            latlon = centroid.float()
+        if (week is None) != (hour is None):
+            raise ValueError("Clay reads time from `week` and `hour` together")
         week_hour = None
-        if time is not None:
-            week_hour = week_and_hour(time)
+        if week is not None and hour is not None:
+            if week.shape[1] != 1:
+                raise ValueError(
+                    "Clay requires one time label; select a single frame first"
+                )
+            week_hour = torch.stack([week[:, 0], hour[:, 0]], dim=-1).float()
 
         hooks = [module.register_forward_hook(hook) for module in target_modules]
         try:

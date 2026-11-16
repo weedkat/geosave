@@ -15,7 +15,6 @@ from tests.templates.tasks.segmentation.supervised.test_data import (
     _preprocessor,
 )
 
-
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
 

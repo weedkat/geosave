@@ -15,6 +15,8 @@ from geosave.geodata.core.conventions import TIME_COORDINATE
 from geosave.geodata.errors import RasterValidationError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import geopandas as gpd
     import torch
     from odc.geo import SomeCRS, SomeResolution
@@ -334,75 +336,59 @@ class GeoDataTree(GeoRaster["DataTree"]):
             windows.append(cast("DataTree", window))
         return windows
 
-    def to_tensor(self) -> dict[str, torch.Tensor | str]:
-        """Convert every raster node to a tensor, with the grid and times that place them.
+    def to_tensor(
+        self, *, grid: bool = False, context: Sequence[str] = ()
+    ) -> dict[str, torch.Tensor]:
+        """Convert every raster node to a tensor named by its path, with the grid and context.
 
-        Each node becomes one tensor laid out as `Dataset.gs.to_tensor`, keeping
-        its own dtype. The shared GeoBox travels beside them, so a prediction
-        made from the tensors can be placed without the tree. The default
-        DataLoader collation batches every entry.
+        Each node becomes one tensor laid out as `Dataset.gs.to_numpy`,
+        keeping its own dtype. The default DataLoader collation batches every
+        entry, and a model chain takes each by name.
+
+        Args:
+            grid: Add `transform` and `crs`, which place the pixels, so a
+                prediction can be placed without the tree and a scene can be
+                chipped by `TensorChipper`.
+            context: Names in `TENSOR_CONTEXT` whose readers add one entry each,
+                such as `"centroid"` or `"day_of_year"`.
 
         Returns:
             {
                 "<node path>": tensor shaped `(*axes, band, y, x)`,
                 "transform": float64 tensor of the six affine coefficients,
-                "crs": "EPSG:<code>", or WKT for a CRS without a code,
-                "time": int64 nanoseconds since 1970 of each frame, in the
-                    dated nodes' axis order, present when a node is dated,
+                "crs": int64 EPSG code,
+                "<context name>": the reader's tensor,
             }
 
         Raises:
             RasterValidationError: The tree holds no raster, or its rasters
                 sit on several GeoBoxes.
-            ValueError: A node is named `transform`, `crs` or `time`, a
-                node's variables differ in dtype or dimensions, or dated nodes
-                hold different time labels.
+            KeyError: A context name is not in `TENSOR_CONTEXT`.
+            ValueError: A node takes the name of an entry, a node's variables
+                differ in dtype or dimensions, the CRS has no EPSG code, or a
+                reader refuses the tree.
 
         Examples:
-            >>> sample = xr.DataTree.from_dict({"image": chip, "label": mask}).gs.to_tensor()
-            >>> sample["image"].shape, sample["crs"]
-            (torch.Size([2, 3, 256, 256]), 'EPSG:32633')
-            >>> GeoBox(sample["image"].shape[-2:], Affine(*sample["transform"]), sample["crs"])
+            >>> sample = tree.gs.to_tensor(grid=True, context=["centroid"])
+            >>> sample["image"].shape, sample["crs"], sample["centroid"]
+            (torch.Size([2, 3, 256, 256]), tensor(32633), tensor([51.0000, 11.0000]))
+            >>> GeoBox(sample["image"].shape[-2:], Affine(*sample["transform"]), int(sample["crs"]))
         """
-        # Imported here so that importing geodata never pays for torch.
-        import torch
+        from .utils.context import build_sample
+        from .utils.tensor import as_tensor
 
         self.validate(same_geobox)
-        geobox = self.geobox
-        if geobox is None or geobox.crs is None:
+        if self.geobox is None:
             raise RasterValidationError("The tree holds no georeferenced raster.")
 
-        tensors: dict[str, torch.Tensor | str] = {}
+        layers = {}
         for node in self._data.subtree:
             if not node.data_vars:
                 continue
             node_path = node.relative_to(self._data)
-            if node_path in ("transform", "crs", "time"):
-                raise ValueError(f"Node {node_path!r} takes the name of a grid entry")
-            tensors[node_path] = node.to_dataset(inherit="all_coords").gs.to_tensor()
-
-        tensors["transform"] = torch.tensor(geobox.transform[:6], dtype=torch.float64)
-        if geobox.crs.epsg is not None:
-            tensors["crs"] = f"EPSG:{geobox.crs.epsg}"
-        else:
-            tensors["crs"] = geobox.crs.to_wkt()
-        # One timeline in axis order, so `time[i]` dates frame `i` of every node.
-        times = None
-        for node in self._data.subtree:
-            node_times = node.to_dataset(inherit=False).gs.times
-            if node_times is None:
-                continue
-            if times is None:
-                times = node_times
-            elif not node_times.equals(times):
-                raise ValueError(
-                    f"node {node.path!r} has its own time labels; tensors need "
-                    "every dated node on one timeline"
-                )
-        if times is not None:
-            # `asi8` counts in the index's own unit; the contract is nanoseconds.
-            tensors["time"] = torch.as_tensor(times.as_unit("ns").asi8.copy())
-        return tensors
+            raster = node.to_dataset(inherit="all_coords")
+            layers[node_path] = as_tensor(raster.gs.to_numpy, None)
+        return build_sample(layers, self._data, grid=grid, context=context)
 
     def reproject(
         self,

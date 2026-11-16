@@ -12,11 +12,11 @@ Group selection follows native xarray semantics. To include coordinates inherite
 from parent nodes, open the tree and use `to_dataset(inherit="all_coords")`.
 
 ```python
-with gs.open_raster("archive.nc", group="scene") as raster:
-    pixels = raster["red"].compute()
+raster = gs.open_raster("archive.nc", group='scene')
+pixels = raster["red"].compute()
 
-with gs.open_raster_tree("archive.nc") as tree:
-    pixels = tree["scene"].to_dataset(inherit="all_coords")["red"].compute()
+tree = gs.open_raster_tree("archive.nc")
+pixels = tree["scene"].to_dataset(inherit="all_coords")["red"].compute()
 ```
 
 ## Forwarded options
@@ -129,6 +129,8 @@ GDAL environment; its explicit options document the corresponding variables.
         - open_zarr_tree
         - write_zarr
         - write_zarr_tree
+        - create_zarr
+        - write_zarr_region
         - ZarrOpenOptions
         - ZarrWriteOptions
         - ZarrChunkSpec
@@ -206,7 +208,6 @@ GeoJSON is WGS84 by specification and has no slot for `attrs`.
         - refuse_existing
         - stage_file
         - defer
-
 
 ## Load selected STAC Items
 

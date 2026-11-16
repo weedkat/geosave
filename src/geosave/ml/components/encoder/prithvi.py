@@ -7,28 +7,9 @@ import torch.nn as nn
 from terratorch.models.backbones.prithvi_mae import PrithviViT
 from terratorch.registry import BACKBONE_REGISTRY
 
-from geosave.ml.components.encoder.grid import locate_centres, read_dates
 from geosave.ml.components.registry import ENCODERS
 from geosave.ml.chain import chain_step
 from geosave.ml.components.published import Published
-
-
-def temporal_coords(time: torch.Tensor) -> torch.Tensor:
-    """Encode each sample's frame dates as year and zero-indexed day of year.
-
-    Args:
-        time: int64 nanoseconds since 1970 shaped `(batch, time)`.
-
-    Returns:
-        float32 `(batch, time, 2)` on the device of `time`.
-    """
-    coordinates = []
-    for dates in read_dates(time):
-        frames = []
-        for when in dates:
-            frames.append([when.year, when.dayofyear - 1])
-        coordinates.append(frames)
-    return torch.tensor(coordinates, dtype=torch.float32, device=time.device)
 
 
 class _Prithvi(nn.Module):
@@ -180,8 +161,9 @@ class Prithvi(_Prithvi):
 class PrithviTL(_Prithvi):
     """Prithvi encoder conditioned on acquisition time and geographic location.
 
-    It reads them from the batch's `transform`, `crs` and `time`.
-    `forward_pyramid` accepts the tensors after DataLoader collation.
+    It reads them from the batch's `centroid`, `year` and `day_of_year`, as
+    `DataTree.gs.to_tensor(context=["centroid", "year", "day_of_year"])`
+    writes them, after DataLoader collation.
     """
 
     MODEL_SPECS: dict[str, dict] = {
@@ -250,33 +232,31 @@ class PrithviTL(_Prithvi):
     def forward_pyramid(
         self,
         image: torch.Tensor,
-        transform: torch.Tensor,
-        crs: list[str],
-        time: torch.Tensor,
+        centroid: torch.Tensor,
+        year: torch.Tensor,
+        day_of_year: torch.Tensor,
     ) -> tuple[list[torch.Tensor], list[torch.Tensor | None]]:
         """Extract multi-scale intermediate features, conditioned on time/location.
 
-        The pretrained model's inputs are derived here: the grid centre's
-        latitude/longitude from `transform` and `crs`, and each frame's year
-        and zero-indexed day of year from `time`.
-
         Args:
             image: (B, C, H, W) or (B, T, C, H, W) prepared pixels.
-            transform: float64 `(B, 6)` affine coefficients of each grid.
-            crs: Each sample's CRS, as `"EPSG:<code>"` or WKT.
-            time: int64 `(B, T)` nanoseconds since 1970 of each frame.
+            centroid: `(B, 2)` latitude and longitude of each grid's centre.
+            year: `(B, T)` year of each frame.
+            day_of_year: `(B, T)` day of year of each frame, from 1.
 
         Returns:
             (pyramid, prefix_tokens) — list of per-level (B, C, H, W) feature
             maps, list of per-level (B, 1, C) CLS tokens.
 
         Examples:
-            >>> sample = xr.DataTree.from_dict({"image": chip}).gs.to_tensor()
+            >>> tree = xr.DataTree.from_dict({"image": chip})
+            >>> sample = tree.gs.to_tensor(context=["centroid", "year", "day_of_year"])
             >>> batch = default_collate([sample])
             >>> pyramid, _ = PrithviTL().forward_pyramid(**batch)
         """
-        temporal = temporal_coords(time)
-        location = locate_centres(transform, crs, tuple(image.shape[-2:]))
+        # The pretrained model counts days from zero.
+        temporal = torch.stack([year, day_of_year - 1], dim=-1).float()
+        location = centroid.float()
         if image.ndim == 5:
             image = image.transpose(1, 2)  # (B, T, C, H, W) -> (B, C, T, H, W)
         features = self.model.forward_features(  # list[depth] of (B, 1+N_patches, embed_dim), CLS at idx 0 # type: ignore

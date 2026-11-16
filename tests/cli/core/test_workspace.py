@@ -14,8 +14,8 @@ def test_lightning_boilerplate_runs_one_train_and_validation_batch(tmp_path):
     create_workspace(tmp_path)
     add_task(tmp_path, "lightning", "boilerplate")
     script = """
-from modules.lightning.boilerplate.data import DataModule
-from modules.lightning.boilerplate.module import Module
+from modules.boilerplate.data import DataModule
+from modules.boilerplate.module import Module
 from geosave.ml.cli import GeosaveCLI
 
 cli = GeosaveCLI(
@@ -50,7 +50,7 @@ def test_walkthrough_runs_without_model_or_external_service(tmp_path):
     add_task(tmp_path, "segmentation", "supervised")
 
     result = subprocess.run(
-        [sys.executable, "scripts/segmentation/supervised/prepare_example.py"],
+        [sys.executable, "scripts/supervised/prepare_example.py"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -66,12 +66,15 @@ def test_walkthrough_runs_without_model_or_external_service(tmp_path):
 def test_every_recipe_instantiates_from_its_generated_config(tmp_path):
     from geosave.cli.core.templates import get_methods
 
-    create_workspace(tmp_path)
+    projects = []
     count = 0
     for task in get_tasks():
+        project = tmp_path / task
+        create_workspace(project)
         for method in get_methods(task):
-            add_task(tmp_path, task, method)
+            add_task(project, task, method)
             count += 1
+        projects.append(project)
     script = """
 from pathlib import Path
 import yaml
@@ -93,15 +96,18 @@ for path in sorted(Path('configs').glob('*.yaml')):
     assert type(cli.datamodule).__module__.startswith('modules.')
     print(path.name)
 """
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
-    assert result.returncode == 0, result.stderr
-    assert len(result.stdout.strip().splitlines()) == count
+    outputs = []
+    for project in projects:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.extend(result.stdout.strip().splitlines())
+    assert len(outputs) == count
 
 
 @pytest.mark.slow
@@ -114,7 +120,7 @@ import torch
 from torch.utils.data import DataLoader
 from lightning.pytorch import Trainer
 from transformers import AutoModel
-from modules.segmentation.supervised.module import Module
+from modules.supervised.module import Module
 from geosave.ml.release import ChainModel
 
 module = Module(
@@ -126,7 +132,7 @@ module = Module(
     optimizer={'name': 'adamw', 'init_args': {'lr': 1e-3}},
     lr_scheduler=None,
     metrics=['iou.macro'],
-    predictor={'name': 'chips', 'init_args': {'size': 4}},
+    predictor={'name': 'dense', 'init_args': {'size': 4}},
 )
 inputs = torch.arange(32, dtype=torch.float32).reshape(2, 4, 4) / 32
 grid = {'transform': torch.tensor([1.0, 0, 0, 0, -1, 0], dtype=torch.float64), 'crs': 'EPSG:32749'}

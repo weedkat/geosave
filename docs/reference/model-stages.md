@@ -27,17 +27,13 @@ Check each constructor before selecting a model.
 
 ::: geosave.ml.components.encoder.Clay
 
-## Time and place from the grid entries
+## Time and place as context entries
 
-Encoders pretrained on location or dates read them from the batch's
-`transform`, `crs` and `time`, as `DataTree.gs.to_tensor` writes them, and
-derive their own inputs in `forward_pyramid`. Other encoders ignore them.
+Encoders pretrained on location or dates take them by name, such as
+`centroid` and `day_of_year`, as `.gs.to_tensor(context=[...])` writes them.
+Other encoders ignore them.
 
-::: geosave.ml.components.encoder.grid
-
-::: geosave.ml.components.encoder.prithvi.temporal_coords
-
-::: geosave.ml.components.encoder.clay.week_and_hour
+::: geosave.geodata.core.raster.utils.context
 
 ## Decoders
 

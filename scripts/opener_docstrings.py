@@ -30,11 +30,13 @@ def options(path: Path, name: str) -> str:
 def generate() -> str:
     source = (IO / "openers.py").read_text()
     storage = (ROOT / "scripts/references/storage-options.txt").read_text().rstrip()
-    raster = """Open one raster file, preserving its stored group hierarchy.
+    raster = """Open one raster file or one stored group as a Dataset.
 
 Args:
     source: Path, URL, or UPath ending in .tif, .tiff, .jp2, .png, .zarr,
         .nc, .nc4, or .cdf. Signed URL queries are preserved.
+    group: Zarr or NetCDF group path; None opens the root group.
+        Child groups are not opened. Other formats do not accept a group.
     chunks: Dask chunk sizes: {} (default) uses backend-preferred chunks,
         "auto" uses Dask's target sizes, an integer or dimension mapping
         requests sizes, and None uses backend lazy indexing without Dask.
@@ -47,9 +49,9 @@ Args:
         use the installed backend's defaults unless explicitly stated.
 
 Returns:
-    Dataset for a banded file or root-only store; DataTree when a Zarr or
-    NetCDF store has child groups, even one child. Close the returned object
-    to release handles and temporary downloads. Opening does not reproject.
+    Dataset for the file or selected group. Use `open_raster_tree` to open
+    a Zarr or NetCDF hierarchy. Close the result to release handles.
+    Opening does not reproject.
 
 Raises:
     ValueError: Unsupported format or incompatible backend option.
@@ -73,7 +75,8 @@ Args:
 
 Returns:
     GeoDataFrame retaining the file's CRS. STAC GeoParquet footer metadata
-    is restored in attrs and catalog asset hrefs become absolute.
+    is restored in attrs. Catalog asset hrefs are absolute; one a file
+    stores relative is resolved against that file.
 
 Raises:
     ValueError: Unsupported format, ambiguous GeoPackage layer, or invalid filter.

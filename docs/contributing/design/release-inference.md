@@ -1,54 +1,99 @@
 # Release and inference
 
-Updated against library source on 2026-11-15. Processors are implemented and
+Updated against library source on 2026-11-16. Pipelines are implemented and
 stored in releases; this page records that contract and what remains open.
 See [samples and chips](samples-chips.md) for chip placement and merging, and
-the user guide [Release and run a model](../../guides/release.md) for a runnable
+the user guide [Release and run a model](../../advanced/release.md) for a runnable
 example.
 
 ## Current contract
 
-Two registries in `model/processing.py`:
+`ml/processing/raster/` owns raster inference. Each role package has a
+`base.py` with its abstract role and Registry; implementations register by name.
+`RasterPipeline`, the orchestrator of inference, is built directly from its
+sub-processors, without a registry of its own:
 
 ```text
-sub-processors   register_processing(role, name)   one Protocol per role
-processors       register_processor(name)          hold the model and its sub-processors
+ingestion/       RasterIngestor       INGESTORS       sentinel2_l2a
+preprocessing/   RasterPreprocessor   PREPROCESSORS   dense
+prediction/      RasterPredictor      PREDICTORS      dense
+postprocessing/  RasterPostprocessor  POSTPROCESSORS segmentation, regression
+pipeline.py      RasterPipeline
 ```
 
-| Role | Methods | Owns |
+Every sub-processor is entered by `__call__`:
+
+| Role | Call | Owns |
 | --- | --- | --- |
-| ingestor | `ingest(region) -> list[Dataset]` | acquiring the rasters of a region, for inference only |
-| preprocessor | `preprocess(raster) -> Dataset`, `normalize(image) -> Tensor` | band selection and decoding (lazy, whole raster) and batch standardization; shared by training and inference |
-| postprocessor | `postprocess(logits: DataArray) -> Dataset` | decoding merged `(band, y, x)` output on its grid |
-| processor | `predict_region`, `predict_path`, `predict_raster` | running the model over what the caller has |
+| ingestor | `ingestor(region) -> list[DataTree]` | acquiring one source tree per observation, for inference only |
+| preprocessor | `preprocessor(rasters) -> sample` | the model-ready sample: named inputs on one grid, lazy, standardized; other nodes, such as a mask, are for the postprocessor |
+| predictor | `predictor(model, sample) -> output` | chipping prepared inputs, deriving requested context, running batches and merging model output; the output is the model's values, undecoded and unmasked |
+| postprocessor | `postprocessor(output, sample) -> product` | decoding, masking and building the product: a raster Dataset for per-pixel tasks (with the sample's time and optional mask), a GeoDataFrame for a task whose results are shapes |
+| pipeline | `predict(rasters)`, `predict_to_zarr(rasters, destination, chunks)` | running the model over raw rasters; the caller runs `pipeline.ingestor` |
 
-`model/dense_chips.py` holds the one library processor, `dense_chips`:
+The contract between sub-processors is declared, not validated by a separate
+class. Each `__call__` carries `@chain_step()`: its annotated parameters name
+the values it takes, its returned variable names the value it hands on, and
+its docstring states that value in detail.
 
-```text
-raster ─preprocess─▶ image ─Chipper─▶ chips ─normalize─▶ model(image=batch) ─ChipMerger─▶ logits ─postprocess─▶ product
+```python title="A sub-processor declares what it takes and returns"
+class DensePredictor(RasterPredictor):
+    @chain_step()
+    def __call__(self, model: nn.Module, sample: xr.DataTree) -> xr.DataArray:
+        ...
+        return output
 ```
 
-`build_processing(role, spec)` and `build_processor(spec, model)` construct
-from `BuildSpec`; an argument named after a role is itself a nested
-`{name, init_args}`. Each built object's `spec` records its selector and every
-constructor argument, defaults included.
+```text
+pipeline supplies    rasters, model
+preprocessor         rasters        -> sample
+predictor            model, sample  -> output
+postprocessor        output, sample -> product
+```
+
+`RasterPipeline` refuses, when constructed, a sub-processor without a declared
+step, one that takes a value no earlier step returns, and one that takes a
+value as another type than it is returned as. Each value's outer type is
+checked again as it is handed over. Raw rasters are not validated: the
+release's model card states the rasters a model takes.
+
+The `dense` predictor serves segmentation and regression:
+
+```text
+rasters DataTree → preprocess (standardized) → sample DataTree
+    → RasterChipper → to_tensor(context=...) → model(**inputs)
+    → RasterMerger → merged DataArray → postprocess → product Dataset
+```
+
+A release reads each sub-processor's spec from the sub-processor itself:
+`Registry.read_spec(built)` returns its registered name or class path with
+every constructor argument, read from attributes of the same names. There is
+no separate spec object, so the pipeline that was run is the one released.
+`chunks` is an argument of `predict_to_zarr`, not stored.
 
 ```python title="What a release stores and rebuilds"
-processor = build_processor(spec, chain)
-GeoSaveModel.from_chain(chain, processor).save_pretrained("release")
-# config.json: stages=[...], processor={"name": "dense_chips", "init_args": {
-#     "ingestor": {...}, "preprocessor": {...}, "postprocessor": {...},
-#     "size": 256, "stride": 192, "mode": "reflect", "window": "hann", "batch_size": 8}}
-processor = load_processor("release")   # model in eval mode, processor rebuilt around it
+pipeline = RasterPipeline(
+    chain,
+    preprocessor=DensePreprocessor(bands=["B04", "B08"]),
+    predictor=DensePredictor(size=256),
+    postprocessor=SegmentationPostprocessor(classes, colors),
+)
+ChainModel.from_pipeline(pipeline).save_pretrained("release")
+# config.json: stages=[...],
+#     "preprocessor": {"name": "dense", "init_args": {...}},
+#     "predictor": {"name": "dense", "init_args": {...}},
+#     "postprocessor": {"name": "segmentation", "init_args": {...}},
+#     "ingestor": null
+model = AutoModel.from_pretrained("release")   # the model alone, a ChainModel
+pipeline = load_pipeline("release")            # pipeline.model is the native ModelChain, in eval mode
 ```
 
-`ARTIFACT_FORMAT_VERSION` is 2; loading rejects other versions and a different
-GeoSave version. A release without a processor still loads as a model;
-`load_processor` raises `ValueError` for it. The library registers no
-ingestor, preprocessor or postprocessor; projects do, and must import the
-registering module before `load_processor`. `workspace/dynamicworld`
-(`modules/processing.py`, `scripts/publish.py`, `scripts/predict_region.py`)
-runs the full path: train, release, predict a region.
+`ARTIFACT_FORMAT_VERSION` is 4; loading rejects other format versions and warns
+for a different GeoSave version. Missing/unexpected weight keys are rejected.
+A release without a pipeline still loads as a model; `load_pipeline` raises
+`ValueError` for it. A chain's components must be library-registered. A
+library sub-processor is stored by name; a project's own is stored by class
+path and rebuilds wherever the project's code is installed.
 
 The ModelSpec declaration, its graph executor and the plain-function registry
 sketches are superseded by these classes.
@@ -57,27 +102,29 @@ sketches are superseded by these classes.
 
 | Kind | Chip output | Merged, then | Published as |
 | --- | --- | --- | --- |
-| segmentation | logits | argmax; optional per-class thresholds from calibration | uint8, `CFFlags` from classes/colors, nodata 255 |
+| segmentation | logits | argmax | uint8, `CFFlags` from classes/colors, nodata 255 |
 | regression | values | — | float32, units, NaN nodata |
-| detection | boxes, scores, classes | NMS across chip overlaps | GeoDataFrame |
-| classification | logits | — | GeoDataFrame per chip footprint |
+| detection (future) | boxes, scores, classes | NMS across chip overlaps | GeoDataFrame |
+| classification (future) | logits | — | GeoDataFrame per chip footprint |
 
-Postprocessors implement these decodings; `dense_chips` covers the two dense
-rows. Merging logits before argmax is what makes overlap blending meaningful.
-`softmax_argmax` still raises, so the calibration callback depending on it is
-unavailable.
+The built-in postprocessors cover the two dense rows. Merging logits before
+argmax makes overlap blending meaningful. `calibrate_thresholds` remains a
+stub; thresholds and a matching decoder are future work.
 
 ## Open
 
 | Question | Notes |
 | --- | --- |
-| Named or stacked inputs | `dense_chips` calls `model(image=batch)` only. Prithvi-TL and Clay also need time/location context; S1 + S2 early fusion wants one tensor |
-| Model context | derive `temporal_coords`/`latlon` from the chip's `transform`, `crs`, `time`, or keep `model_context(raster)` per encoder |
-| Normalization statistics | measured on the prepared data and passed as preprocessor arguments, or typed by hand |
+| Different statistics per input | `DensePredictor` supports named pixel inputs and requested context; each preprocessor standardizes its own nodes, so inputs can differ; the old shared `normalize` served every pixel input |
+| Context after augmentation | `TENSOR_CONTEXT` reads chip context at tensor conversion; training geometry transforms do not recompute it |
+| Normalization statistics | projects measure them on training data and pass them as preprocessor arguments; recording their provenance remains project-owned |
 | Missing steps or sources | zero-fill with a validity input, or drop the sample; must match between training and inference |
 | How a time step is filled | first, least cloudy, composite; see [sample rows](samples-chips.md#sample-rows) |
-| Offline inference | preload ingest, preprocessing and chips into a store, then predict from it; may change the processor's method suite |
-| Implementation availability | a release names classes, it does not ship code; a project's registry module must be importable where it loads |
-| Whole-scene evaluation | training uses random crops; validation could run `predict_raster` and score merged scenes |
+| Offline stores | project-owned optimization; no processor preload/store API |
+| Whole-scene evaluation | supervised-segmentation template has tensor chipping/merging, but its flat/nested sample migration is incomplete |
 | Vector outputs | detection, instances and chip classification need their own processors and merge rules |
-| Memory | `ChipMerger` holds full output accumulators; very large rasters need streaming writes |
+| Memory | processor chunks limit score accumulation; decoded chunks still assemble a complete product in memory, so streaming writes remain open |
+
+Keep data snapshots, experiments and inference artifacts in
+[three repositories](../../mlops/index.md); data and training
+commit links in the model card are currently written by the project.

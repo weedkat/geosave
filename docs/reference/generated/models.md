@@ -131,10 +131,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.encoder.clay.week_and_hour
-    options:
-      show_root_full_path: true
-
 ::: geosave.ml.components.encoder.dinov3.DINOv3
     options:
       show_root_full_path: true
@@ -149,14 +145,6 @@ fields appear as attributes, including their annotated types and defaults.
         - forward_pyramid
 
 ::: geosave.ml.components.encoder.dinov3.MODEL_SPECS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.encoder.grid.locate_centres
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.encoder.grid.read_dates
     options:
       show_root_full_path: true
 
@@ -203,10 +191,6 @@ fields appear as attributes, including their annotated types and defaults.
         - out_indices
         - model
         - forward
-
-::: geosave.ml.components.encoder.prithvi.temporal_coords
-    options:
-      show_root_full_path: true
 
 ::: geosave.ml.components.encoder.small_cnn.SmallCNN
     options:
@@ -344,50 +328,138 @@ fields appear as attributes, including their annotated types and defaults.
         - resolve
         - import_class
         - get_spec
+        - read_spec
         - build
 
 ::: geosave.ml.factory.bind_init_args
     options:
       show_root_full_path: true
 
-::: geosave.ml.processing.ingestors.COLLECTION
+::: geosave.ml.processing.raster.ingestion.base.INGESTORS
     options:
       show_root_full_path: true
 
-::: geosave.ml.processing.ingestors.Sentinel2Ingestor
+::: geosave.ml.processing.raster.ingestion.base.RasterIngestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - ingest_to_zarr
+
+::: geosave.ml.processing.raster.ingestion.sentinel2.COLLECTION
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.ingestion.sentinel2.Sentinel2Ingestor
     options:
       show_root_full_path: true
       filters: []
       members:
         - bands
         - resolution
+        - name
         - client
         - search_items
-        - ingest
         - ingest_grid
+        - ingest_to_zarr
+      inherited_members:
+        - ingest_to_zarr
 
-::: geosave.ml.processing.ingestors.drop_superseded
+::: geosave.ml.processing.raster.ingestion.sentinel2.drop_superseded
     options:
       show_root_full_path: true
 
-::: geosave.ml.processing.ingestors.read_esa_packing
+::: geosave.ml.processing.raster.ingestion.sentinel2.read_esa_packing
     options:
       show_root_full_path: true
 
-::: geosave.ml.processing.postprocessors.ClassMap
+::: geosave.ml.processing.raster.pipeline.RasterPipeline
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+        - preprocessor
+        - predictor
+        - postprocessor
+        - ingestor
+        - predict
+        - predict_to_zarr
+        - preprocess
+        - predict_sample
+
+::: geosave.ml.processing.raster.pipeline.SUPPLIED
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.pipeline.check_steps
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.pipeline.find_step
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.pipeline.run_step
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.postprocessing.base.POSTPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.postprocessing.base.RasterPostprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.processing.raster.postprocessing.dense.NO_PREDICTION
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.postprocessing.dense.RegressionPostprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - names
+        - units
+        - mask
+
+::: geosave.ml.processing.raster.postprocessing.dense.SegmentationPostprocessor
     options:
       show_root_full_path: true
       filters: []
       members:
         - classes
         - colors
-        - postprocess
+        - mask
 
-::: geosave.ml.processing.postprocessors.NO_PREDICTION
+::: geosave.ml.processing.raster.postprocessing.dense.copy_scalar_coords
     options:
       show_root_full_path: true
 
-::: geosave.ml.processing.predictors.ChipPredictor
+::: geosave.ml.processing.raster.postprocessing.dense.mask_product
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.postprocessing.thresholds.calibrate_thresholds
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.prediction.base.PREDICTORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.prediction.base.RasterPredictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - measure_chips
+
+::: geosave.ml.processing.raster.prediction.dense.DensePredictor
     options:
       show_root_full_path: true
       filters: []
@@ -397,97 +469,31 @@ fields appear as attributes, including their annotated types and defaults.
         - mode
         - window
         - batch_size
-        - predict
+        - context
+        - nodes
+        - measure_chips
 
-::: geosave.ml.processing.preprocessors.Reflectance
+::: geosave.ml.processing.raster.preprocessing.base.PREPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.raster.preprocessing.base.RasterPreprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.processing.raster.preprocessing.dense.DensePreprocessor
     options:
       show_root_full_path: true
       filters: []
       members:
         - bands
+        - decode
+        - fill
         - mean
         - std
-        - preprocess
-        - normalize
-
-::: geosave.ml.processing.processor.Processor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - model
-        - ingestor
-        - preprocessor
-        - predictor
-        - postprocessor
-        - spec
-        - predict_region
-        - predict_path
-        - predict_raster
-        - forward
-
-::: geosave.ml.processing.processor.ProcessorSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - ingestor
-        - preprocessor
-        - predictor
-        - postprocessor
-
-::: geosave.ml.processing.processor.build_processor
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.roles.INGESTORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.roles.Ingestor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - ingest
-
-::: geosave.ml.processing.roles.POSTPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.roles.PREDICTORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.roles.PREPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.roles.Postprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - postprocess
-
-::: geosave.ml.processing.roles.Predictor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - predict
-
-::: geosave.ml.processing.roles.Preprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - preprocess
-        - normalize
-
-::: geosave.ml.processing.thresholds.calibrate_thresholds
-    options:
-      show_root_full_path: true
+        - name
 
 ::: geosave.ml.release.huggingface.ARTIFACT_FORMAT_VERSION
     options:
@@ -500,7 +506,10 @@ fields appear as attributes, including their annotated types and defaults.
       members:
         - model_type
         - stages
-        - processor
+        - preprocessor
+        - predictor
+        - postprocessor
+        - ingestor
         - format_version
         - geosave_version
 
@@ -513,7 +522,7 @@ fields appear as attributes, including their annotated types and defaults.
         - base_model_prefix
         - chain
         - from_chain
-        - from_processor
+        - from_pipeline
         - wrap
         - forward
 
@@ -529,6 +538,14 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.ml.release.huggingface.load_processor
+::: geosave.ml.release.huggingface.load_pipeline
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.release.huggingface.read_deployable_spec
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.release.huggingface.read_stages
     options:
       show_root_full_path: true

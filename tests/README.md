@@ -62,7 +62,7 @@ distinct failure at one of these boundaries.
 | Generate and run a task recipe | Classification, segmentation, regression and pretraining retain their own target, loss, checkpoint and prediction semantics. | [templates](templates/tasks/) |
 | Release and reload a model | Saved configuration and weights reconstruct a usable model; a saved processor rebuilds and predicts a raster as before saving. | [release](ml/release/), [processing](ml/processing/) |
 | Create a workspace | CLI output is usable and preserves user files; packaged templates can be discovered and instantiated. | [CLI](cli/), root packaging tests |
-| Orchestrate geospatial work | Flow inputs define the intended regions and label tables. | [flows](flows/) |
+| Orchestrate geospatial work | A flow predicts a configured region with a released pipeline and records its tasks. | [flows](flows/) |
 | Follow a documented example | Consumer code still completes its real workflow through public APIs. | [examples](examples/) |
 | Import only the needed layer | Geodata does not pull in training dependencies; model and orchestration boundaries remain usable independently. | Root import and layering tests |
 

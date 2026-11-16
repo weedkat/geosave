@@ -7,16 +7,15 @@ import geosave as gs
 from geosave.geodata import io
 
 scene = gs.open_raster("sample-scene.tif")
-patch = scene[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
-ndvi = gs.features.ndvi(patch, nir="nir", red="red").rename("ndvi")
+image = scene[["red", "nir"]]
+ndvi = gs.features.ndvi(image, nir="nir", red="red").rename("ndvi")
 
 Path("output").mkdir(parents=True, exist_ok=True)
 io.write_cog(ndvi.to_dataset(), "output/ndvi.tif")
-scene.close()
 ```
 
-With the [sample scene](../first-raster.md), this is a complete workflow:
-open, select, calculate, save. `scene` and `patch` are native xarray Datasets;
+With the [sample scene](../basics/first-raster.md), this is a complete workflow:
+open, select, calculate, save. `scene` and `image` are native xarray Datasets;
 `ndvi` is a DataArray. Importing GeoSave registers `.gs` accessors on native
 xarray and GeoPandas objects.
 
@@ -46,11 +45,10 @@ be explicit. See [metadata](metadata.md) before combining packed imagery.
 | Publish dated raster assets | `scene.gs.to_catalog(folder)` | Written TIFFs and an Item table. |
 
 Catalog sampling is currently unavailable. Select observations with GeoPandas
-or select dates on a prepared Dataset. [Catalogs](../guides/catalogs-and-cuts.md)
-and [chips](../guides/chips.md) work independently.
+or select dates on a prepared Dataset. [Catalogs](../advanced/raster-catalog.md)
+and [chips](../advanced/overlapping-chips.md) work independently.
 
-Keep file-backed sources open until dependent work finishes. Lazy execution
-delays pixel work; it does not guarantee small downloads or bounded peak memory.
+Lazy execution delays pixel work; it does not guarantee small downloads or bounded peak memory.
 See [lazy execution](lazy-data.md) and [remote storage](storage.md#use-remote-storage).
 
 ## Add training when you need a model
@@ -61,20 +59,25 @@ flowchart LR
     samples --> batches[DataLoader: batches]
     batches --> training[LightningModule + Trainer]
     training --> checkpoint[Training checkpoint]
-    training --> release[Model release + processor]
+    training --> release[Model release + pipeline]
     release --> product[Prediction raster on the source grid]
 ```
 
 Your Dataset owns reads, band order, target codes and split selection. RasterChipper
 is optional; it cuts prepared one-grid DataTrees. A DataModule can organize loaders and device-side transforms;
 the LightningModule owns loss and metrics, and Trainer runs the loop.
-Start with the [offline training tutorial](../guides/training.md).
+Start with the [Lightning training guide](../advanced/training.md).
 
 Prepare inputs with the same code at training and inference. A native model
 release saves registered stage construction and weights, and optionally a
-processor: registered ingest, preparation and decoding classes that run the
-model chip by chip over a raster. See [model inputs](../guides/model-inputs.md)
-and [releases](../guides/release.md#run-the-model-with-a-processor).
-ModelSpec and dependent geospatial workspace workflows are paused.
+pipeline: ingest, preparation, prediction and decoding classes that run the
+model chip by chip over a raster. See [model inputs](../advanced/model-inputs.md)
+and [releases](../advanced/release.md#run-with-a-raster-pipeline).
+ModelSpec is unavailable. Generated recipes now use explicit preprocessors;
+their Dataset and integration readiness varies. See
+[workspace method status](../reference/training.md).
+
+For a real project, version [data, experiments and model releases](../mlops/index.md)
+separately and link their immutable revisions.
 
 Package ownership belongs in [the contributor architecture](../contributing/architecture.md).

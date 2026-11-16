@@ -154,3 +154,16 @@ def test_search_results_retain_definitions_for_publication(catalog, tmp_path):
 
     found.attrs["stac-geoparquet"]["collections"]["forest"]["license"] = "other"
     assert client.collection("forest").license == "CC-BY-4.0"
+
+
+def test_a_table_without_collections_is_searched(tmp_path) -> None:
+    from tests.geodata.stac.conftest import entry
+
+    path = create_catalog([entry(collection=None)]).gs.to_geoparquet(
+        tmp_path / "plain.parquet"
+    )
+    table = StacClient.open(path)
+
+    assert table.collections() == set()
+    assert [item.id for item in table.search_items({})] == ["one"]
+    assert table.search({})["id"].tolist() == ["one"]

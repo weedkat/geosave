@@ -6,7 +6,7 @@ import asyncio
 from functools import partial
 from typing import TYPE_CHECKING
 
-from geosave.geodata.core.vector.catalog import stac_items
+from geosave.geodata.stac.catalog import stac_items
 from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 import pandas as pd

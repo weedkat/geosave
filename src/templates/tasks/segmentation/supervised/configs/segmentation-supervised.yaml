@@ -52,7 +52,7 @@ model:
     - iou.macro
     - f1.macro
     predictor:
-      name: chips
+      name: dense
       init_args:
         size: 224
         stride: 192

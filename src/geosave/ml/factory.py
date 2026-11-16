@@ -4,7 +4,7 @@
         │ Registry.resolve   name or class path ──▶ constructor
         │ Registry.get_spec  every constructor argument written out
         ▼ Registry.build     constructor(*args, **init_args)
-    object
+    object ──Registry.read_spec──▶ BuildSpec that builds it again
 
 Each configurable kind (encoders, predictors, optimizers, ...) has one
 `Registry`; its owner declares it beside the classes it holds.
@@ -201,12 +201,62 @@ class Registry[T](Mapping[str, Callable[..., T]]):
             TypeError: An argument does not fit the constructor.
 
         Examples:
-            >>> PREDICTORS.get_spec(BuildSpec(name="chips", init_args={"size": 256}))
+            >>> PREDICTORS.get_spec(BuildSpec(name="dense", init_args={"size": 256}))
             BuildSpec(name='chips', class_path=None, init_args={'size': 256,
             'stride': None, 'mode': 'reflect', 'window': 'hann', 'batch_size': 8})
         """
         init_args = bind_init_args(self.resolve(spec), spec.init_args)
         return spec.model_copy(update={"init_args": init_args})
+
+    def read_spec(self, built: T) -> BuildSpec:
+        """Return the spec that builds an object again, read from the object.
+
+        The object's class must keep each constructor argument in an
+        attribute of the same name, as scikit-learn estimators do; the
+        attributes then state every argument, defaults included.
+
+        Args:
+            built: Object of this registry's base type.
+
+        Returns:
+            Spec selecting the class by its registered name, or by its class
+            path when it is not registered.
+
+        Raises:
+            TypeError: The object is not a `base`, or keeps no attribute for
+                one of its constructor arguments.
+
+        Examples:
+            >>> PREDICTORS.read_spec(DensePredictor(size=256))
+            BuildSpec(name='dense', class_path=None, init_args={'size': 256,
+            'stride': None, 'mode': 'reflect', 'window': 'hann', 'batch_size': 8,
+            'context': [], 'nodes': None})
+        """
+        cls = type(built)
+        self.check_base(cls)
+
+        init_args: dict[str, Any] = {}
+        for name, parameter in inspect.signature(cls).parameters.items():
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                continue
+            if not hasattr(built, name):
+                raise TypeError(
+                    f"{cls.__qualname__} keeps no attribute {name!r}; store each "
+                    f"constructor argument under its own name to release it"
+                )
+
+            value = deepcopy(getattr(built, name))
+            # Arguments caught by `**kwargs` are written under their own names.
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                init_args.update(value)
+            else:
+                init_args[name] = value
+
+        for name, factory in self.items():
+            if factory is cls:
+                return BuildSpec(name=name, init_args=init_args)
+        class_path = f"{cls.__module__}.{cls.__qualname__}"
+        return BuildSpec(class_path=class_path, init_args=init_args)
 
     def build(self, spec: BuildSpec, *args: object) -> T:
         """Construct the selected object.

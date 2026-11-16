@@ -37,7 +37,7 @@ def test_create_with_explicit_recipe(tmp_path, monkeypatch, task, method):
     result = CliRunner().invoke(app, ["create", "demo", "-t", task, "-m", method])
     assert result.exit_code == 0, result.output
     root = tmp_path / "demo"
-    package = root / "modules" / task / method.replace("-", "_")
+    package = root / "modules" / method.replace("-", "_")
     for name in ("module.py", "data.py", "datasets.py"):
         assert (package / name).is_file()
     assert (root / f"configs/{task}-{method}.yaml").is_file()
@@ -58,7 +58,7 @@ def test_create_prompts_task_then_method(tmp_path, monkeypatch):
     assert len(prompts) == 2
     assert "task" in prompts[0].lower()
     assert "method" in prompts[1].lower()
-    assert (tmp_path / "demo/modules/segmentation/fixmatch/module.py").is_file()
+    assert (tmp_path / "demo/modules/fixmatch/module.py").is_file()
 
 
 @pytest.mark.parametrize(
@@ -92,7 +92,7 @@ def test_add_preserves_existing_implementation_and_startup(workspace):
     runner = CliRunner()
     result = runner.invoke(app, ["add-task", "-t", "segmentation", "-m", "supervised"])
     assert result.exit_code == 0, result.output
-    module = workspace / "modules/segmentation/supervised/module.py"
+    module = workspace / "modules/supervised/module.py"
     module.write_text("user_code = True\n")
     (workspace / "main.py").write_text("user_startup = True\n")
     result = runner.invoke(app, ["add-task", "-t", "segmentation", "-m", "fixmatch"])
@@ -107,7 +107,7 @@ def test_duplicate_recipe_leaves_files_untouched(workspace):
     runner = CliRunner()
     options = ["add-task", "-t", "segmentation", "-m", "supervised"]
     assert runner.invoke(app, options).exit_code == 0
-    module = workspace / "modules/segmentation/supervised/module.py"
+    module = workspace / "modules/supervised/module.py"
     module.write_text("mine = True\n")
     result = runner.invoke(app, options)
     assert result.exit_code == 2
@@ -122,3 +122,35 @@ def test_add_requires_workspace(tmp_path, monkeypatch):
     )
     assert result.exit_code == 2
     assert not (tmp_path / "configs").exists()
+
+
+def test_project_rejects_another_task_without_writing(workspace):
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app, ["add-task", "-t", "segmentation", "-m", "supervised"]
+        ).exit_code
+        == 0
+    )
+    before = sorted(path.relative_to(workspace) for path in workspace.rglob("*"))
+    result = runner.invoke(app, ["add-task", "-t", "regression", "-m", "supervised"])
+    assert result.exit_code == 2
+    assert "separate project" in result.output
+    assert (
+        sorted(path.relative_to(workspace) for path in workspace.rglob("*")) == before
+    )
+    assert "task: segmentation" in (workspace / "project.yaml").read_text()
+    assert "segmentation" in (workspace / "README.md").read_text()
+
+
+def test_add_method_uses_declared_task(workspace):
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app, ["add-task", "-t", "segmentation", "-m", "supervised"]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(app, ["add-task", "-m", "fixmatch"])
+    assert result.exit_code == 0, result.output
+    assert (workspace / "modules/fixmatch/module.py").exists()

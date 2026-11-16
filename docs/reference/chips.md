@@ -8,8 +8,8 @@ chipper = gs.RasterChipper(windows, size=256, stride=224)         # space: chips
 merger = gs.RasterMerger(chipper.layout, window="hann")              # back: predictions by chip index
 
 for index in range(len(chipper)):
-    sample = chipper[index].gs.to_tensor()
-    # {"image": (time, band, y, x), "label": ..., "transform": (6,), "crs": "EPSG:...", "time": (time,)}
+    sample = chipper[index].gs.to_tensor(grid=True, context=["centroid"])
+    # {"image": (time, band, y, x), "label": ..., "transform": (6,), "crs": (), "centroid": (2,)}
     merger.add(index, predict(sample))                      # (band, y, x)
 
 classes = merger.merge(0).argmax("band")                    # raster 0, on its own grid
@@ -39,7 +39,7 @@ LightningModule step, whose batch is a scene larger than the model's input,
 the tensor pair chips and merges the same way: same `ChipLayout`, same window.
 
 ```python
-chipper = gs.TensorChipper(batch, pixels=["inputs/image"], size=224, stride=192)
+chipper = gs.TensorChipper(batch, pixels=["image"], size=224, stride=192)
 merger = gs.TensorMerger(chipper.layout, window="hann")
 
 for start in range(0, len(chipper), 8):
@@ -48,7 +48,7 @@ for start in range(0, len(chipper), 8):
     for index in indices:
         chips.append(chipper[index])        # batch structure, transform cut to the chip
     chips = default_collate(chips)
-    for index, logits in zip(indices, model(**chips["inputs"])):
+    for index, logits in zip(indices, model(**chips)):
         merger.add(index, logits)            # (band, size, size)
 
 logits = merger.merge()                      # (batch, band, y, x), NaN where uncovered

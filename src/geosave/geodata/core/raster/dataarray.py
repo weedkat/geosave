@@ -604,26 +604,42 @@ class GeoDataArray(
         pixels = self._data.transpose(..., *spatial).values
         return pixels if dtype is None else pixels.astype(dtype)
 
-    def to_tensor(self, *, dtype: str | torch.dtype | None = None) -> torch.Tensor:
-        """Read this band as one model-input tensor, laid out as `to_numpy`.
+    def to_tensor(
+        self,
+        name: str,
+        *,
+        dtype: str | torch.dtype | None = None,
+        grid: bool = False,
+        context: Sequence[str] = (),
+    ) -> dict[str, torch.Tensor]:
+        """Read this band as one layer tensor named `name`, with the grid and context.
 
         Args:
+            name: Key of the layer, the input name a model chain takes it by.
             dtype: Torch dtype or its string name. None keeps the pixel dtype.
+            grid: Add `transform` and `crs`, as `DataTree.gs.to_tensor` does.
+            context: Names in `TENSOR_CONTEXT` whose readers add one entry each.
 
         Returns:
-            Tensor shaped `(*axes, band, y, x)`, or `(*axes, y, x)` where this
-            band spans no `band` axis.
+            {name: tensor shaped as `to_numpy`, `(*axes, y, x)`, plus the grid
+            and context entries asked for}.
 
         Raises:
-            ValueError: A dtype name is unknown.
+            KeyError: A context name is not in `TENSOR_CONTEXT`.
+            ValueError: A dtype name is unknown, `name` takes the name of an
+                entry, or the CRS has no EPSG code.
             TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
                 dtype has no tensor equivalent.
 
         Examples:
-            >>> ds["ndvi"].gs.to_tensor(dtype="float32").shape
+            >>> ds["ndvi"].gs.to_tensor("ndvi", dtype="float32")["ndvi"].shape
             torch.Size([2, 256, 256])
         """
-        return as_tensor(self.to_numpy, dtype)
+        from .utils.context import build_sample
+
+        layers = {name: as_tensor(self.to_numpy, dtype)}
+        tree = xr.DataTree.from_dict({name: self._data.to_dataset(name=name)})
+        return build_sample(layers, tree, grid=grid, context=context)
 
     def mask_and_scale(self) -> DataArray:
         """Decode CF packing with xarray, keeping coordinates and lazy pixels.

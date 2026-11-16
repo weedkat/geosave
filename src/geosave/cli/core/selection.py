@@ -7,7 +7,7 @@ import typer
 
 from .prompts import prompt_select
 from .templates import get_methods, get_tasks, read_method_description
-from .workspace import has_method
+from .workspace import has_method, project_task
 
 
 def select_method(
@@ -27,6 +27,13 @@ def select_method(
     Raises:
         typer.BadParameter: A selection is invalid or already exists.
     """
+    selected = project_task(root)
+    if selected is not None:
+        if task is not None and task != selected:
+            raise typer.BadParameter(
+                f"This project owns {selected!r}; create a separate project for {task!r}."
+            )
+        task = selected
     tasks = get_tasks()
     if allow_blank:
         tasks.insert(0, "blank")

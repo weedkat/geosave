@@ -1,6 +1,6 @@
 # Direction: architecture, contracts and data flow
 
-Updated against library source on 2026-11-15. Implemented contracts live in
+Updated against library source on 2026-11-16. Implemented contracts live in
 [architecture](../architecture.md). This page retains design questions and
 rationale; proposed APIs are not promises of available behavior. Details:
 [publish and load](publish-load.md), [samples and chips](samples-chips.md),
@@ -23,14 +23,14 @@ explore ─▶ operate ─▶ prepare ─▶ train ─▶ release ─▶ predict
 ```text
 provider STAC -> Item rows -> ODC Dataset -> preparation -> one-grid DataTree
 Dataset -> RasterStac -> COGs + Item rows -> GeoParquet
-prepared tree -> temporal windows -> Chipper -> project Sample -> DataLoader -> Module
-region or raster -> processor (ingest, preprocess, Chipper, model, ChipMerger, postprocess) -> product Dataset
+prepared tree -> temporal windows -> RasterChipper -> project Sample -> DataLoader -> Module
+region or raster -> processor (ingest, preprocess, RasterChipper, model, RasterMerger, postprocess) -> product Dataset
 ```
 
 Native Item rows, Datasets, DataTrees and task-owned sample dictionaries cross
 these boundaries. `ChipLayout` records the raster and placement of each chip;
 GeoBoxes state exact grids. A release stores the processor that runs its
-model; the `chips` predictor is the library-owned prediction loop.
+model; the `dense` predictor is the library-owned prediction loop.
 
 ## 3. Workflow, stage by stage
 
@@ -40,12 +40,12 @@ model; the `chips` predictor is the library-owned prediction loop.
 | Load | `rows.gs.to_dataset(geobox=grid, chunks={})` or `stac.load_dataset(items, ...)` | native-grid return shape remains a design question |
 | Open and operate | native xarray, raster accessors, features and visualization | see G1–G9 |
 | Publish | `ds.gs.to_catalog(path)`; `RasterStac` for several grids | identity and metadata limitations in publish-load |
-| Cut and merge | `Chipper([tree])`, `ChipMerger(chipper.layout)` | streaming output, vector outputs |
+| Cut and merge | `RasterChipper([tree])`, `RasterMerger(chipper.layout)` | streaming output, vector outputs |
 | Plan sample rows | project pandas operations | persisted sample-catalog contract |
 | Store | project preparation | store invalidation and record identity |
-| Train | project Dataset, DataModule, Module and LightningCLI | replace ModelSpec-dependent template data layers |
-| Release | stages, weights and processor (`GeoSaveModel.from_chain(chain, processor)`) | model context and named inputs in the processor |
-| Predict | `load_processor(repo).predict_region / predict_path / predict_raster` | catalog orchestration, offline inference, vector outputs |
+| Train | project Dataset, DataModule, Module and LightningCLI | implement placeholder Datasets and finish template sample integration |
+| Release | `ChainModel.from_chain(chain)` or `ChainModel.from_pipeline(pipeline)` | project-owned data/experiment lineage |
+| Predict | `load_pipeline(repo).predict(rasters) / predict_to_zarr(rasters, destination)` | catalog orchestration, streaming output and vector outputs |
 
 ## 4. Design groups
 
@@ -64,8 +64,8 @@ worth arguing, and flags (coupling, complexity, bugs).
   accessor; (b) a wrapper class owning the Dataset. Both lose native objects
   in user code; not suggested.
 - **Flags**:
-  - 26 methods exist on both `GeoDataset` and `GeoDataArray` (34 and 37
-    public members). Accepted so far: no type branches, one concrete type per
+  - Many methods exist on both `GeoDataset` and `GeoDataArray`.
+    Accepted so far: no type branches, one concrete type per
     function. Discuss whether persistence (`to_zarr`, `to_netcdf`, `to_cog`)
     and viz (`plot`, `explore`) belong on both, or only on Dataset.
   - The accessor reaches `io`, `viz` and `stac` through lazy imports. That is
@@ -99,14 +99,15 @@ worth arguing, and flags (coupling, complexity, bugs).
     docstring (about 200 lines). The typed per-format functions
     (`open_geotiff`, `open_zarr`, `open_netcdf`) already exist; `open_raster`
     could accept only what all formats share.
-  - `codecs/gdal.py` is the largest module here (583 lines, 30 functions):
-    the GeoTIFF tag translation. Cohesive, but the first place to look when
+  - `codecs/gdal.py` owns substantial GeoTIFF metadata translation.
+    It is the first place to look when
     GeoTIFF round trips break.
 
-### G4 Catalog: Item rows (`core/vector`, `stac/catalog.py`, `stac/search`)
+### G4 Catalog: Item rows (`core/vector`, `stac/catalog/`, `stac/search`)
 
 - **Contract**: STAC Items ⇄ GeoDataFrame rows, Collections in
-  `attrs["stac-geoparquet"]`; hrefs relative in the file, absolute in memory.
+  `attrs["stac-geoparquet"]`; asset hrefs are absolute in the table and in
+  the file, and a relative one is resolved once, on read.
   Selection is plain pandas. A table states what it guarantees through rules:
   `rows.gs.validate(stac_items, one_collection, dated)`.
 - **Pattern**: accessor + rule functions; `StacQuery` frozen dataclass as a
@@ -119,11 +120,11 @@ worth arguing, and flags (coupling, complexity, bugs).
     members by convention. A `Protocol` would state it; today nothing does.
   - `search(query: StacQuery | SearchParams)`: a union parameter serving two
     callers.
-  - Collections and the href base (`attrs["source"]`) ride in pandas `attrs`,
-    which `merge`, `gpd.sjoin` and a `concat` of differing frames drop
-    (checked). `concat_catalogs` exists because of this, and sample planning
-    (G10) joins rows, so it must carry the Collections across itself. Making hrefs absolute at read removes
-    `attrs["source"]` ([publish-load](publish-load.md), gap 9).
+  - Collections ride in pandas `attrs`, which `merge`, `gpd.sjoin` and a
+    `concat` of differing frames drop (checked). `concat_catalogs` exists
+    because of this, and sample planning (G10) joins rows, so it must carry
+    the Collections across itself. Hrefs are absolute, so a dropped footer
+    loses Collection links only.
   - Catalog sampling, row `read_pixels` and vector `rasterize` remain unavailable.
     `to_dataset` is implemented; `to_datatree` and `GeoSamples` are removed.
 
@@ -211,12 +212,11 @@ worth arguing, and flags (coupling, complexity, bugs).
   | Spectral profile at a point | `identify` values in band order with `EOBand` wavelengths on x | `hv.Curve` |
   | Histogram of the view | pixels already read for the view | `hv.Histogram` |
   | Sample and prediction review | sample rows and prediction rows are Item rows, so they already draw as footprints; catalog pixel view returns with W2 | existing `VectorLayer` |
-  | Static export | `Map.snapshot` exists; saving without a kernel is open | `hv.save` |
+  | Static export (implemented) | `Explorer.snapshot()` and Export map produce a standalone current view; new raster detail still requires Python | `hv.save(..., resources="inline")` |
 
 - **Flags**:
-  - `RasterLayer` (571 lines) owns reading, the pixel-window cache, stretch,
-    styling and legend; its `__init__` is the most branched function in the
-    library (22 branches). A point series reads differently from a view
+  - `RasterLayer` owns reading, the pixel-window cache, stretch,
+    styling and legend. A point series reads differently from a view
     (all times, one pixel), so reading and caching should separate from
     display state before `read_series` is added.
   - Catalog pixel viewing is paused on `row.gs.read_pixels` (7 tests
@@ -229,8 +229,8 @@ worth arguing, and flags (coupling, complexity, bugs).
 - **Contract**: Item rows + spec → **sample rows**: Item rows whose `proj:*`
   state the chip GeoBox, whose period is the time window, and whose
   properties list the source Items per time step.
-- **Pattern**: `ChipLayout` owns grids and chip indices; `Chipper` cuts trees
-  and `ChipMerger` reconstructs by the same layout. Proposed catalog planning
+- **Pattern**: `ChipLayout` owns grids and chip indices; `RasterChipper` cuts trees
+  and `RasterMerger` reconstructs by the same layout. Proposed catalog planning
   uses pandas (`sjoin`, `Grouper`); "meaningful" is a
   filter over measured columns (`valid_fraction`, class counts, `split`).
 - **Alternatives**: torchgeo-style samplers over an R-tree index (random
@@ -242,8 +242,9 @@ worth arguing, and flags (coupling, complexity, bugs).
 
 ### G11 The Sample and data loading ([samples-chips](samples-chips.md))
 
-- **Contract**: sample row → `Sample` dict (Settled 2026-11-14): tensors +
-  `transform` float64 (6,), `crs` code, `time` int64 ns. Collates with
+- **Contract**: tree tensor conversion → named tensor dict: pixel tensors,
+  optional `transform` float64 (6,), `crs` int64 EPSG code and explicitly
+  requested `TENSOR_CONTEXT` entries. Collates with
   torch's default; the GeoBox rebuilds from the batch.
 - **Pattern**: TypedDict per task; one torch Dataset per data source,
   project-owned; the store (LitData) is an optimization holding the same
@@ -251,9 +252,11 @@ worth arguing, and flags (coupling, complexity, bugs).
 - **Alternatives**: a Sample dataclass (does not collate); carrying only a
   row index (every consumer needs the table); torchgeo's `GeoDataset`
   (brings its own CRS/bounds indexing parallel to ODC).
-- **Open**: where model context (time and location encodings) is computed.
+- **Current**: `TENSOR_CONTEXT` computes requested time/location entries from
+  the raster at tensor conversion. Geometry-changing augmentation does not
+  update that context; see [training contracts](../../concepts/training.md).
 
-### G12 Model construction (`model/stages`, `model/chain`)
+### G12 Model construction (`ml/components`, `ml/chain`)
 
 - **Contract**: a mapping of stage specs → `ModelChain` (`nn.Module`) with
   named inputs: `model(image=..., temporal_coords=...)`.
@@ -269,7 +272,7 @@ worth arguing, and flags (coupling, complexity, bugs).
     (`chain/step.py`). It is the cleverest mechanism in the library;
     `outputs=(...)` on the decorator already states the same thing
     explicitly and could be required.
-  - `chain/` is 800 lines for routing. Worth it only if models with optional
+  - `chain/` owns routing. Worth it only if models with optional
     context and several inputs are a goal. They are (Prithvi-TL, Clay,
     S1 + S2), so keep, but simplify discovery.
   - Detection has no head or stage yet; `ImageAugmenter` already handles
@@ -286,28 +289,29 @@ worth arguing, and flags (coupling, complexity, bugs).
   Module, DataModule and Dataset. Source templates are copied into the project.
 
 - **Flags**:
-  - Templates copy whole Modules per method (segmentation supervised and
-    fixmatch each carry a 301-line module; regression twice 230). Deliberate
+  - Templates copy whole Modules per method. Deliberate
     ("editing one method must not change another"), but the methods drift
-    apart. Except segmentation supervised, their `data.py` still imports the
-    disabled `ModelSpec`: import succeeds, constructing the DataModule raises
-    `NotImplementedError`.
-  - `softmax_argmax` raises; the calibrate callback depends on it.
-  - Template normalization and decoding need migration to registered
-    preprocessors and postprocessors (G14), as `workspace/dynamicworld` does.
+    apart. DataModules now build explicit preprocessors; most Datasets remain
+    placeholders. Supervised segmentation's flat Dataset/DataModule samples
+    do not yet match its Module's nested inputs.
+  - Threshold calibration is a stub.
+  - Most publication scripts still combine training archives with releases;
+    supervised segmentation supports separate repositories. See
+    [recipe status](../../reference/training.md).
 
 ### G14 Release, processing and inference ([release-inference](release-inference.md))
 
-- **Implemented**: sub-processor roles (`register_processing`) and processors
-  (`register_processor`) in `model/processing.py`; the `dense_chips` processor;
-  `GeoSaveConfig.processor` stores the processor's resolved spec
-  (`ARTIFACT_FORMAT_VERSION` 2) and `load_processor` rebuilds it around the
-  loaded model. The ModelSpec declaration and function-registry sketches are
-  superseded.
-- **Pattern**: registry + factory by role (strategy objects behind Protocols);
-  the processor is a template method over them.
-- **Open**: named inputs and model context beyond `image`; missing steps and
-  sources; normalization statistics; offline inference from a store.
+- **Implemented**: `ml/processing/raster` owns one abstract role and Registry per
+  role plus `RasterPipeline`. `ChainConfig` stores each sub-processor's
+  spec (`ARTIFACT_FORMAT_VERSION` 4); `load_pipeline` rebuilds
+  them around the model. The dense predictor supports named pixel inputs and
+  requested time/location context. The ModelSpec declaration, main processor
+  registry and plain-function sketches are superseded.
+- **Pattern**: registry + factory by role (strategy objects behind abstract roles);
+  the pipeline runs them in order and checks the values handed between them.
+- **Open**: different normalization per input, missing steps/sources, context
+  after augmentation and streaming decoded products. Projects own statistics
+  provenance and experiment/data revision links.
 
 ### G15 Outputs per task
 
@@ -331,7 +335,8 @@ worth arguing, and flags (coupling, complexity, bugs).
 
 ### G16 Package boundaries (cross-cutting)
 
-- **Settled**: `geodata ← model ← ml`; `geosave ← geosave_flows`; no torch at
+- **Settled**: `geodata ← ml`; `geosave ← geosave_flows`; inference inside
+  `ml` does not import training support; no torch at
   `geodata` import; tested in `tests/test_layering.py`.
 - **Flag**: inside `geodata` nothing is declared. Top-level imports form
   cycles (`io ↔ stac`, `core.vector → stac → core`), broken only by lazy
@@ -345,10 +350,11 @@ worth arguing, and flags (coupling, complexity, bugs).
 - **Contract**: a flow takes a validated config and produces one catalog
   (Settled 2026-10-30). A workspace is generated project code that composes
   library APIs.
-- **Pattern**: Prefect tasks as thin wrappers; Pydantic configs
+- **Pattern**: plain `@flow`/`@task` functions over a pipeline; Pydantic configs
   (`ConfigModel`, region configs); template copying for workspaces.
-- **Flag**: `geosave_flows` holds only label reading and region configs.
-  Ingest, prepare and predict flows arrive with W1, W7, W10.
+- **Current**: `geosave_flows` holds the `predict_region` flow and its region
+  configs. `monitor` and label reading were removed 2026-11-16.
+  Broader preparation/catalog orchestration remains project-owned.
 
 ## 5. Pattern summary
 
@@ -385,17 +391,17 @@ their obsolete implementation checklists have been retired.
 | W1–W3: publication/load | Item identity, loss boundaries and native-grid return shape; see publish-load |
 | W4: dense chips | streaming accumulation and other output kinds |
 | W5–W7: samples/store | task-owned sample contracts, sample rows, record identity and invalidation |
-| W8: release | implemented: processor stored and rebuilt; open: named inputs and context |
-| W9–W10: prediction | calibration (`softmax_argmax`), vector outputs, catalog and offline orchestration |
-| W11: templates | replace ModelSpec-dependent data layers |
+| W8: release | processor, named inputs and context implemented; open: lineage records and differing normalization per input |
+| W9–W10: prediction | threshold calibration, vector outputs, streaming output and catalog orchestration |
+| W11: templates | implement placeholder Datasets and align flat/nested sample contracts |
 | W12: Explorer | catalog pixel reads, reading/display ownership, time series tools |
 | W13: architecture | decide and test dependency direction inside geodata |
 
 ## 7. Code still on old designs
 
-Source templates other than `segmentation/supervised` still reference
-ModelSpec, and example notebooks 0–4 predate the current raster, chip and
-catalog APIs. `workspace/dynamicworld` already uses processors end to end;
+Source templates now use preprocessors, but their integration and data adapters
+still need work. Example notebooks 1, 3 and 4 reference removed model/chip
+APIs; the notebook suite has not been rerun for this documentation review.
 `workspace/gedi-biomass` still calls the removed `gs.Chips`. See
 [open decisions](../open-decisions.md#template-and-notebook-migrations).
 
@@ -417,8 +423,8 @@ are not performance claims for the current implementation.
 ## 9. Questions to settle first
 
 1. Item identity: carried as a coordinate, formatted, or both (G6)?
-2. How does a processor supply model context (time, location) beside `image` (G14)?
-3. One stacked input tensor or one named tensor per source (G14)?
+2. How should context change after geometric augmentation (G14)?
+3. How should different pixel inputs select different normalization (G14)?
 4. How a time step is filled when several Items fall in it, and whether the
    release states it (G10)?
 5. Should publication accept scalar-time or timeless rasters (G6)? Static

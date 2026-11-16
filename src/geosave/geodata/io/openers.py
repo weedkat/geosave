@@ -337,7 +337,8 @@ def open_vector(
 
     Returns:
         GeoDataFrame retaining the file's CRS. STAC GeoParquet footer metadata
-        is restored in attrs and catalog asset hrefs become absolute.
+        is restored in attrs. Catalog asset hrefs are absolute; one a file
+        stores relative is resolved against that file.
 
     Raises:
         ValueError: Unsupported format, ambiguous GeoPackage layer, or invalid filter.

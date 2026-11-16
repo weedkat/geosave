@@ -401,6 +401,7 @@ class RasterLayer(Layer):
     def _read_pixels(self, geobox: GeoBox) -> xr.Dataset:
         """Read the shown bands onto `geobox`: from the row's files, or computed."""
         if self.row is None:
+            import sys, time; print("PROBE geobox", geobox.shape, geobox.resolution, "src", dict(self.data.sizes), time.strftime("%X"), file=sys.stderr, flush=True)
             shown = self.select_shown_bands()
             variables = {}
             for name in shown.gs.variables:

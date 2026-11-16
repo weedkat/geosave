@@ -3,35 +3,70 @@
 ```bash
 uv sync
 uv run python scripts/api_reference.py
+uv run python scripts/opener_docstrings.py --check
 uv run python scripts/check_doc_examples.py
 uv run zensical build
 uv run python scripts/api_reference.py --check --site site
 ```
 
-The first command installs the development tools. The generator refreshes
+The first command installs the development tools. The API generator refreshes
 the [public API index](../reference/public-api.md) and its contract pages.
 Zensical renders guides and the mkdocstrings reference to `site/`.
 The final command verifies that the generated Markdown matches the source
 and every inventoried symbol has a rendered heading.
 
-Preview locally with `uv run zensical serve`. Building the docs does not
-publish them; the existing GitHub Pages workflow owns publication.
+`scripts/opener_docstrings.py` generates IDE-readable reader docstrings from
+its opener contracts and typed format options. If its check fails, correct the
+generator contract first, then run it without `--check`; regenerating an
+outdated contract can restore stale behavior descriptions.
+
+## Automatic API reference
+
+[`scripts/api_reference.py`](https://github.com/weedkat/geosave/blob/main/scripts/api_reference.py)
+scans `src/geosave` and `src/geosave_flows` with Griffe, without importing
+runtime dependencies. It writes the symbol index and four contract pages;
+Zensical renders their signatures and docstrings from source.
+
+| Script option | Checks |
+| --- | --- |
+| No option | Regenerate the five Markdown files. |
+| `--check` | Fail when generated files are stale. |
+| `--check --site site` | Also check rendered symbol/member headings after building. |
+| `--check --audit` | Report annotation/docstring gaps; audit findings are informational. |
+
+The scan excludes tests, examples, private modules/names, CLI implementations,
+workspace templates, selected internal modules and upstream classes. See
+`inventory()` for exact rules. Edit source docstrings, then regenerate;
+the generator does not verify behavior. Guides remain authored documentation.
+
+Preview with `uv run zensical serve`. GitHub Pages publication uses the
+existing docs workflow, which runs freshness, example, build and coverage checks.
 
 ## Write for the reader's next step
 
 | Section | Reader's question | Include |
 | --- | --- | --- |
 | Home | What makes this useful to me? | Concrete benefits and one small example. |
-| Basics | What are these objects and how do I start? | Small native objects, visible results, a few new concepts at a time. |
-| How-to guides | How do I solve this problem? | Starting input, runnable steps, resulting object or artifact, next step. |
+| Basics | What can I run first, and what are these objects? | Short steps, native objects, code followed by output. |
+| Advanced | How do I combine operations for a larger task? | Starting input, runnable steps, resulting object or artifact. |
 | Concepts | Why does it behave this way? | Data flow, invariants, laziness, shape and metadata rules. |
 | API reference | Exactly what can I pass and what comes back? | Signatures, fields, defaults, return values, errors, examples. |
+| MLOps | How do I reproduce and release a model? | Data and experiment versions, evaluation, three repositories and release lineage. |
+| Examples | What can I build, and what will it produce? | Small complete tasks, previews, prerequisites and project status. |
+| Contributing | Where is the library heading? | Direction, current focus, open decisions and contribution steps. |
 | Common questions | Where is the answer to a recurring question? | A direct answer and a link to its full guide. |
 
 Introduce optional orchestration and project generation only in the activities
 that need them. Start ordinary file and model examples with native Python APIs.
 Use the library's existing objects and dependencies; a guide should not invent
 an adapter to make a proposed workflow appear supported.
+Use direct assignments such as `scene = gs.open_raster(...)` in walkthroughs.
+Keep reader context managers and cleanup boilerplate out of the lesson unless
+file lifetime is the topic.
+
+Concise does not mean unexplained. Say why the operation is needed, introduce
+a new object when it enters the workflow, and explain how to read its output.
+Keep the context needed to adapt the example; move exhaustive options to reference.
 
 ## Make examples useful outside GeoSave
 
@@ -54,17 +89,15 @@ useful for offline mechanics, but label them clearly and keep the real-data
 project easy to find. Keep maps and tables close to the code that creates them.
 A source-code tour belongs in contributor documentation, not the first lesson.
 
+Place each result directly below its code: a printed value, native object
+display, plot or explorer screenshot. Capture plots from the actual `.gs.plot`
+result and explorers from a running browser. Start tutorials from small real
+files; put synthetic data construction in an explicit advanced example.
+MLOps recommends a reproducible workflow; users choose their own project layout.
+
 ## Keep API inputs and outputs accurate
 
-The inventory uses Griffe, already installed with mkdocstrings, to read source
-without importing the training stack or contacting services. It includes
-explicit exports and public definitions, deduplicates reexports, and documents
-GeoSave-owned class members. Native ecosystem classes retain their upstream
-reference. Command-line inputs are documented through command guides and
-their actual `--help` output.
-
-The generated contract pages use standard mkdocstrings directives rather than
-copied signatures. Public APIs need concise Google-style docstrings:
+Public APIs need concise Google-style docstrings:
 
 ```python
 def select_raster(self, raster: xr.Dataset) -> xr.Dataset:
@@ -132,17 +165,21 @@ the architecture or open-decisions page. Record current limitations in [open dec
 
 `python scripts/check_doc_examples.py` executes the plain Python fences in the
 landing page, first vegetation map, zone comparison, raster/value/vector/I/O
-basics, file ingestion, chip reading, catalog publication, input preparation,
-and training tutorials in a temporary directory; `PAGES` in the script is the
-list. It checks lazy arrays, saved pixel values and grids, tensor shapes,
-and predictions before/after checkpoint loading. It also checks catalog
+basics, cropping, large-data processing, chip reading, catalog publication,
+model construction, input preparation and related concepts in a temporary
+directory; `PAGES` in the script is the list. It checks lazy arrays, saved pixel
+values and grids, tensor shapes, and release prediction round trips. It also checks catalog
 publication/loading and metadata-decoding examples; a build alone does not
 exercise those calls. Titled Python fences are
 explicit adaptation snippets requiring user data; they are not executed.
 
-The release guide is not in `PAGES` because one fence pushes to the Hub. After
-changing it or `model/processing.py`, run its other fences by hand and compare
-the reloaded processor's prediction with the original.
+The Lightning workspace uses shell commands, so validate its one-epoch fit
+separately. The Python-fence checker does not execute that training run.
+
+The release guide's offline fences are in `PAGES`. They save and reload a chain
+and processor locally, then compare predictions, grids, dtype, nodata and class
+metadata. Its Hub upload fence has a title and requires explicit credentials;
+the offline checker does not publish anything.
 
 Use `--figures` to refresh the static tutorial figures from actual outputs,
 and `--network` to also exercise public Earth Search acquisition. Network
@@ -159,3 +196,6 @@ Before publishing navigation or layout changes, inspect desktop and narrow
 mobile views in both themes, follow the main entry links, and check local
 links and image assets in the rendered site. A site build does not verify
 visual layout or example behavior.
+
+The [newcomer review](documentation-review.md) records layout criticism,
+changes and remaining gaps.

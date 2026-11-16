@@ -232,6 +232,19 @@ def test_to_cog_without_a_collection_leaves_items_unlinked(tmp_path):
     assert items[0].links == []
 
 
+def test_a_given_collection_replaces_the_one_the_dataset_states(tmp_path):
+    source = create_test_collection("optical", description="Optical")
+    scene = attrs.stamp_attrs(
+        build_raster(times=1), attrs.StacCollection(collection=source.to_dict())
+    )
+    derived = create_test_collection("water", description="Water maps")
+
+    staged = RasterStac.from_dataset(scene, collection=derived)
+
+    assert staged.collection.id == "water"
+    assert RasterStac.from_dataset(scene).collection.id == "optical"
+
+
 def test_to_cog_refuses_existing_files_unless_overwriting(tmp_path):
     staged = RasterStac.from_dataset(build_raster(times=1), id_format="{start:%Y%m%d}")
     staged.to_cog(tmp_path)

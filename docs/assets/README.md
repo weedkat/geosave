@@ -26,26 +26,55 @@ one small download. Its date and source are fixed; it is not current imagery.
 file. `explorer.png` shows the running GeoSave viewer with the same file and no
 basemap. Color stretches are for display only.
 
-## Training figures
+## Training pair
 
-`training-chips.png` and `training-result.png` come from the synthetic data and
-CPU model in the [chip](../quickstart.md) and [training](../guides/training.md)
-tutorials. They are teaching examples, not real land-cover labels or evidence
-of model quality on satellite imagery.
+[training-image.tif](training-image.tif) and
+[training-labels.tif](training-labels.tif) are aligned 256 × 256 crops of
+`dw_-100.2161543359_20.1295348778-20190130.tif` from the teaching dataset's
+training split. Both use the first 256 rows and columns of the same tile.
+The grid is EPSG:32614 at 10 metres.
 
-To reproduce the tutorial outputs and static figures from a source checkout:
+- Imagery: B04/B03/B02/B08 renamed and ordered as `red`, `green`, `blue`, `nir`.
+  Stored uint16 values retain scale `0.0001`, offset `0` and nodata `0`.
+- Labels: expert reference classes from `classes.yaml`, stored as uint8,
+  with codes 0–9 and nodata `255`. Class names and colors are embedded.
+- Source snapshot: `fatmur/dynamicworld-300@5e65026ad47e1f02f9a48a3efee1028db3bb0d1a`.
+- Source: Tait et al. (2021),
+  [Dynamic World training dataset](https://doi.org/10.1594/PANGAEA.933475),
+  [teaching subset](https://huggingface.co/datasets/fatmur/dynamicworld-300),
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+Contains modified Copernicus Sentinel data (2019). These are expert annotations,
+not model predictions. The teaching subset remaps the source annotation codes
+into its own zero-based class scheme.
+
+## Tutorial figures
+
+`home-preview.png`, `first-raster-rgb.png`, `first-raster-ndvi.png`,
+`cropped-ndvi.png`, `training-image.png`, `training-labels.png` and
+`overlapping-chip.png` are saved from the actual GeoSave plot objects in the
+guides. Reproduce them from a source checkout:
 
 ```bash
 uv run python scripts/check_doc_examples.py --figures
 ```
 
-The explorer screenshot is a browser capture of `guides/explore.md` using the
-bundled sample. Keep its visible controls consistent with the running viewer.
+`explorer.png` and `explorer-comparison.png` are browser captures of the
+running viewer from [map exploration](../basics/explore.md). Keep the controls
+consistent with the running viewer when refreshing screenshots.
+
+## Xarray object displays
+
+`xarray-dataarray.html` and `xarray-dataset.html` are the native notebook
+displays of the objects in [xarray structure](../concepts/xarray-structure.md).
+Their expandable sections work without a Python server. `xarray-index.svg`
+illustrates the same array's coordinate-to-position lookup. Refresh all three
+with the `--figures` command above.
 
 ## Zone comparison
 
 `vegetation-zones.png` shows the same sample with the two zones of
-[the zone comparison](../guides/vegetation-zones.md). Its polygons are
+[the zone comparison](../advanced/vegetation-zones.md). Its polygons are
 illustrative image halves, not field boundaries. It was rendered by a script
 that is not in the repository; redraw it from that guide's `ndvi` and `zones`
 if the example changes.

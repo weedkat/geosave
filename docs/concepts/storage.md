@@ -45,7 +45,7 @@ An asset at `/20250101/red` becomes `output/assets/20250101/red.tif`.
 `id_format` controls Item names; variable names identify assets. `to_cog`
 returns native Items describing the written files. For an Item table in one
 step, use `observations.gs.to_catalog("output/assets")` and save it separately
-with `.gs.to_geoparquet`. See [catalog publication](../guides/catalogs-and-cuts.md).
+with `.gs.to_geoparquet`. See [catalog publication](../advanced/raster-catalog.md).
 
 ## Multidimensional stores
 
@@ -79,9 +79,10 @@ remote = gs.open_raster(store, storage_options=options, chunks={})
 ```
 
 Zarr and GeoParquet use filesystem-backed access. COG, NetCDF, GeoJSON, and
-GeoPackage writes stage a local temporary file before uploading. Remote NetCDF,
-GeoJSON, and GeoPackage reads download a temporary copy; NetCDF retains it until
-the returned object closes.
+GeoPackage writes stage a local temporary file before uploading. NetCDF reads
+keep a filesystem file handle open until the returned object closes.
+GeoJSON and GeoPackage readers pass file handles to GeoPandas; buffering and
+transferred bytes depend on the filesystem and native backend.
 
 For remote TIFFs, filesystem options use Rasterio's filesystem opener.
 Without those options, supported URLs use GDAL's URL handling and configured

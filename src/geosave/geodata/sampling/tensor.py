@@ -35,15 +35,16 @@ class TensorChipper:
     A chip sample keeps the batch's structure without its batch axis, as a
     Dataset returns a sample: the `pixels` entries are cut to the chip,
     `transform` becomes the chip's, and every other entry is the chip's own
-    sample's, such as `crs`, `time` or a context tensor. Collate chip samples
-    with `torch.utils.data.default_collate`.
+    sample's, such as `crs` or a context tensor. Context read from the
+    scene, such as `centroid`, stays the scene's. Collate chip samples with
+    `torch.utils.data.default_collate`.
 
     Args:
         batch: Collated samples on one grid shape, with `transform` shaped
-            `(batch, 6)` and one `crs` per sample, as `DataTree.gs.to_tensor`
-            writes them.
+            `(batch, 6)` and `crs` shaped `(batch,)`, as
+            `DataTree.gs.to_tensor(grid=True)` writes them.
         pixels: Paths of the tensors to cut, `/` joining nested keys, such as
-            `"inputs/image"`. Each ends in `(y, x)` on the samples' grid.
+            `"image"`. Each ends in `(y, x)` on the samples' grid.
         size: Chip height and width in pixels.
         stride: Pixels between chip starts; None takes `size`.
         mode: How chips meet the grid's edge, as `RasterChipper` takes it.
@@ -53,9 +54,9 @@ class TensorChipper:
         ValueError: `pixels` is empty or its tensors differ in grid shape.
 
     Examples:
-        >>> chipper = TensorChipper(batch, pixels=["inputs/image"], size=224, stride=192)
+        >>> chipper = TensorChipper(batch, pixels=["image"], size=224, stride=192)
         >>> chips = default_collate([chipper[0], chipper[1]])
-        >>> chips["inputs"]["image"].shape, chips["transform"].shape
+        >>> chips["image"].shape, chips["transform"].shape
         (torch.Size([2, 4, 224, 224]), torch.Size([2, 6]))
     """
 
@@ -78,8 +79,8 @@ class TensorChipper:
 
         shape = tuple(_read_path(batch, pixels[0]).shape[-2:])
         geoboxes = []
-        for transform, crs in zip(batch["transform"], batch["crs"], strict=True):
-            geoboxes.append(GeoBox(shape, Affine(*transform.tolist()), crs))
+        for transform, epsg in zip(batch["transform"], batch["crs"], strict=True):
+            geoboxes.append(GeoBox(shape, Affine(*transform.tolist()), int(epsg)))
         self.layout = ChipLayout(geoboxes, size=size, stride=stride, mode=mode)
 
         # Pad once so every chip lies inside; "shift" and "drop" chips already do.

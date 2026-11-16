@@ -1,8 +1,8 @@
-"""STAC GeoParquet codec: an Item table as Items and footer Collections.
+"""STAC GeoParquet codec: an Item table as Arrow rows and footer Collections.
 
 The stac-geoparquet library writes the Arrow table and its footer. This
-module translates GeoSave's item table to the Items and Collection
-definitions it takes; `geoparquet.open_geoparquet` reads the file back.
+module hands it GeoSave's item table and the Collection definitions its rows
+name; `geoparquet.open_geoparquet` reads the file back.
 """
 
 from __future__ import annotations
@@ -12,17 +12,21 @@ from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import orjson
-import pystac
-from stac_geoparquet.arrow import parse_stac_items_to_arrow, to_parquet
+from stac_geoparquet.arrow import to_parquet
 
 from geosave.geodata.io import storage
 from geosave.geodata.io.vector import geoparquet
 from geosave.geodata.stac.catalog import (
     FOOTER_KEY,
     merge_collections,
+    read_collections,
+    stac_collections,
+    stac_items,
+    to_arrow,
 )
 
 if TYPE_CHECKING:
+    import pystac
     from upath import UPath
 
     from geosave.geodata.io.storage import Location, StorageOptions
@@ -39,10 +43,11 @@ def write_stac_geoparquet(
 ) -> UPath:
     """Write an item table as one stac-geoparquet file.
 
-    Selected by `rows.gs.to_geoparquet` from its catalog metadata. Asset
-    hrefs are stored relative to the file, so a table and its assets move
-    together. The table's Collections, reconciled with any supplied
-    definitions, go in the file's footer metadata with their extents as given.
+    Selected by `rows.gs.to_geoparquet` from its catalog metadata. Rows are
+    written as they are, with their absolute asset hrefs, so any
+    stac-geoparquet reader locates the assets. The table's Collections,
+    reconciled with any supplied definitions, go in the file's footer
+    metadata with their extents as given.
 
     Args:
         rows: Item table, as `create_catalog` or `open_vector` returns it.
@@ -65,23 +70,22 @@ def write_stac_geoparquet(
         >>> write_stac_geoparquet(catalog, "data/forest.parquet")
         PosixUPath('data/forest.parquet')
     """
-    from geosave.geodata.core.vector.catalog import stac_items
-
-    rows.gs.validate(stac_items)
+    stac_items(rows)
     definitions = merge_stated_collections(rows, collections)
     parquet_options = resolve_parquet_options(**write_options)
     row_group_size = parquet_options.pop("row_group_size", None)
     destination = storage.create_upath(path, storage_options)
     storage.check_destination(destination, geoparquet.SUFFIXES, overwrite=overwrite)
 
-    items = to_relative_items(rows, destination)
+    named = set()
+    if "collection" in rows:
+        named = set(rows["collection"].dropna())
     stored = {}
-    for collection_id, collection in select_referenced(items, definitions).items():
-        stored[collection_id] = collection.to_dict(transform_hrefs=False)
-    records = []
-    for item in items:
-        records.append(item.to_dict(include_self_link=False, transform_hrefs=False))
-    table = parse_stac_items_to_arrow(records, drop_invalid_properties=False).read_all()
+    for collection_id, collection in definitions.items():
+        if collection_id in named:
+            stored[collection_id] = collection.to_dict(transform_hrefs=False)
+
+    table = to_arrow(rows)
     # The dependency writes each Arrow batch as a row group; keep its footer encoder.
     batches = table
     if row_group_size is not None:
@@ -118,15 +122,13 @@ def merge_stated_collections(
         ValueError: The table's catalog metadata is malformed, two
             definitions of one id conflict, or a row names an undefined one.
     """
-    from geosave.geodata.core.vector.catalog import stac_collections
-
     footer = rows.attrs.get(FOOTER_KEY)
     if not isinstance(footer, Mapping):
         raise ValueError("catalog stac-geoparquet metadata must be a mapping")
     if not isinstance(footer.get("collections", {}), Mapping):
         raise ValueError("catalog metadata collections must be a mapping")
 
-    stated = list(rows.gs.collections.values())
+    stated = list(read_collections(rows.attrs).values())
     stated.extend(collections or ())
     definitions = merge_collections(stated)
     fields = {}
@@ -134,7 +136,7 @@ def merge_stated_collections(
         fields[collection_id] = collection.to_dict(transform_hrefs=False)
     merged = rows.copy()
     merged.attrs[FOOTER_KEY] = {**footer, "collections": fields}
-    merged.gs.validate(stac_collections)
+    stac_collections(merged)
     return definitions
 
 
@@ -196,54 +198,6 @@ def resolve_parquet_options(**write_options: Any) -> dict[str, Any]:
     return options
 
 
-def to_relative_items(rows: gpd.GeoDataFrame, destination: UPath) -> list[pystac.Item]:
-    """Build the table's Items with asset hrefs relative to the file written.
-
-    A table and its assets then move together.
-
-    Args:
-        rows: Item table.
-        destination: The Parquet file about to be written.
-
-    Returns:
-        One Item per row, without collection links that name no document.
-    """
-    location = str(destination.absolute())
-    items = rows.gs.to_items()
-    for item in items:
-        item.set_self_href(location)
-        item.make_asset_hrefs_relative()
-        link = item.get_single_link(pystac.RelType.COLLECTION)
-        if link is not None and link.get_href() is None:
-            # The footer carries the definition; no JSON document URL is invented.
-            item.remove_links(pystac.RelType.COLLECTION)
-    return items
-
-
-def select_referenced(
-    items: list[pystac.Item], definitions: Mapping[str, pystac.Collection]
-) -> dict[str, pystac.Collection]:
-    """Keep the Collections an Item names, with their supplied extents.
-
-    Args:
-        items: The Items written.
-        definitions: Collections keyed by id.
-
-    Returns:
-        {
-            "<collection id>": its definition, for ids an Item names,
-        }
-    """
-    referenced = set()
-    for item in items:
-        referenced.add(item.collection_id)
-    selected = {}
-    for collection_id, collection in definitions.items():
-        if collection_id in referenced:
-            selected[collection_id] = collection
-    return selected
-
-
 def parse_collections(value: bytes | str) -> dict[str, pystac.Collection]:
     """Decode the Collections one file's `stac-geoparquet` metadata states.
 
@@ -259,8 +213,4 @@ def parse_collections(value: bytes | str) -> dict[str, pystac.Collection]:
         >>> parse_collections(b'{"version": "1.0.0"}')
         {}
     """
-    stored = orjson.loads(value).get("collections", {})
-    return {
-        collection_id: pystac.Collection.from_dict(fields)
-        for collection_id, fields in stored.items()
-    }
+    return read_collections({FOOTER_KEY: orjson.loads(value)})

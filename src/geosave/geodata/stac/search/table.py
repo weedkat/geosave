@@ -109,9 +109,11 @@ class StacTable:
         items = []
         for fields in self._duckdb.search(self._location, **params):
             item = pystac.Item.from_dict(fields)
-            # A table stores asset hrefs relative to itself.
+            # A table another writer stored may state hrefs relative to itself.
+            # It locates the assets; it is not the Item's own document.
             item.set_self_href(self._location)
             item.make_asset_hrefs_absolute()
+            item.set_self_href(None)
             # The Item links to its Collection, as a searched API Item does.
             if item.collection_id in collections:
                 item.set_collection(collections[item.collection_id])
@@ -158,6 +160,14 @@ class StacTable:
 
     def _derived_collections(self) -> dict[str, pystac.Collection]:
         """Read the Collections rustac derives from the rows' `collection` ids."""
+        # The spec makes the column optional; rustac fails on a table without it.
+        columns = self._duckdb.query_to_table(
+            "SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet(?)) "
+            "WHERE column_name = 'collection'",
+            [self._location],
+        )
+        if pa.table(columns).num_rows == 0:
+            return {}
         return {
             fields["id"]: pystac.Collection.from_dict(fields)
             for fields in self._duckdb.get_collections(self._location)

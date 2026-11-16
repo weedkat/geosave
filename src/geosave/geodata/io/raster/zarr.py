@@ -10,7 +10,12 @@ from collections.abc import Hashable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypedDict, Unpack, cast
 
+import dask.array
+import numpy as np
 import xarray as xr
+import zarr
+from odc.geo.geobox import GeoBox
+from odc.geo.xr import xr_coords
 from upath import UPath
 from xarray.core.types import T_Chunks
 
@@ -78,7 +83,8 @@ class ZarrWriteOptions(TypedDict, total=False):
     """Optional xarray behavior supported when writing Zarr.
 
     Layout options are absent on purpose: a store holds one raster at its
-    root, in the Zarr format this writer fixes. `region` is absent because this writer fixes `mode`, which it forbids.
+    root, in the Zarr format this writer fixes. `region` is absent because this writer fixes `mode`, which it forbids;
+    `write_zarr_region` writes a piece into an existing store.
 
     Omitted keys use xarray or Zarr defaults, except `consolidated=False`.
     GeoSave writes Zarr format 3 and supplies per-variable fill encodings.
@@ -330,6 +336,129 @@ def write_zarr_tree(
         **write_options,
     )
     return storage.defer(write, compute=compute)
+
+
+def create_zarr(
+    raster: xr.Dataset,
+    geobox: GeoBox,
+    destination: Location,
+    *,
+    chunks: int,
+    overwrite: bool = False,
+    storage_options: StorageOptions | None = None,
+) -> UPath:
+    """Create an empty Zarr store for a raster like `raster` on a larger grid.
+
+    The store states the variables, dtypes, attrs and scalar coordinates of
+    `raster` on `geobox` and holds no pixels; `write_zarr_region` fills it
+    piece by piece. A pixel never written reads as its variable's fill value.
+
+    Args:
+        raster: One piece of the raster, such as its first chunk; its
+            variables end in the `y` and `x` dimensions.
+        geobox: Grid of the whole raster.
+        destination: Output path, fsspec URL, or UPath carrying its
+            `storage_options`, ending in `.zarr`.
+        chunks: Height and width in pixels of a stored chunk.
+        overwrite: Replace an existing destination when true.
+        storage_options: Options for the filesystem a URL names.
+
+    Returns:
+        Path of the store.
+
+    Raises:
+        FileExistsError: The destination exists and overwrite is false.
+        ValueError: The destination does not end in `.zarr`.
+
+    Examples:
+        >>> store = create_zarr(first, scene.gs.geobox, "product.zarr", chunks=2048)
+        >>> write_zarr_region(first, store)
+    """
+    store = storage.create_upath(destination, storage_options)
+    storage.check_destination(store, SUFFIXES, overwrite=overwrite)
+
+    height, width = geobox.shape
+    whole = xr.Dataset(coords=xr_coords(geobox, always_yx=True), attrs=raster.attrs)
+    # The axes are stated as the piece states them, over the whole grid.
+    whole["y"].attrs = dict(raster["y"].attrs)
+    whole["x"].attrs = dict(raster["x"].attrs)
+    for name, coord in raster.coords.items():
+        if coord.ndim == 0 and name not in whole.coords:
+            whole = whole.assign_coords({name: coord})
+
+    for name, variable in raster.data_vars.items():
+        shape = (*variable.shape[:-2], height, width)
+        stored_chunks = (*variable.shape[:-2], chunks, chunks)
+        # Lazy and never computed: only the array's shape and dtype are stored.
+        pixels = dask.array.zeros(shape, dtype=variable.dtype, chunks=stored_chunks)
+        whole[name] = (variable.dims, pixels, variable.attrs)
+
+    encoded = codecs.encode_dataset(whole, CODECS)
+    encoded.to_zarr(
+        str(store),
+        mode="w" if overwrite else "w-",
+        zarr_format=_ZARR_FORMAT,
+        storage_options=dict(store.storage_options) or None,
+        consolidated=False,
+        compute=False,
+    )
+    return store.absolute()
+
+
+def write_zarr_region(
+    raster: xr.Dataset,
+    store: Location,
+    *,
+    storage_options: StorageOptions | None = None,
+) -> None:
+    """Write a piece of a raster into its place in an existing Zarr store.
+
+    The piece is placed by its `y` and `x` coordinates, which must be a run
+    of the store's. Only pixels are written, as they are: the store keeps
+    the attrs, packing and coordinates `create_zarr` gave it.
+
+    Args:
+        raster: Piece of the stored raster, with the store's variables in
+            their stored dtype.
+        store: Store made by `create_zarr`.
+        storage_options: Options for the filesystem a URL names.
+
+    Raises:
+        KeyError: The piece's coordinates are not a run of the store's.
+
+    Examples:
+        >>> write_zarr_region(chunk, "product.zarr")
+    """
+    path = storage.create_upath(store, storage_options)
+    group = zarr.open_group(
+        str(path),
+        mode="r+",
+        zarr_format=_ZARR_FORMAT,
+        storage_options=dict(path.storage_options) or None,
+    )
+    rows = find_run(np.asarray(group["y"][:]), raster["y"].values, "y")
+    columns = find_run(np.asarray(group["x"][:]), raster["x"].values, "x")
+
+    for name, variable in raster.data_vars.items():
+        # xarray would pack the pixels again by the store's scale and offset.
+        group[str(name)][..., rows, columns] = np.asarray(variable.data)
+
+
+def find_run(stored: np.ndarray, piece: np.ndarray, axis: str) -> slice:
+    """Locate a piece's coordinates as one unbroken run of a store's.
+
+    Raises:
+        KeyError: The piece does not lie on the store's coordinates.
+    """
+    starts = np.flatnonzero(stored == piece[0])
+    if starts.size == 0:
+        raise KeyError(f"the piece's first {axis} is not a coordinate of the store")
+
+    start = int(starts[0])
+    stop = start + piece.size
+    if not np.array_equal(stored[start:stop], piece):
+        raise KeyError(f"the piece's {axis} coordinates are not a run of the store's")
+    return slice(start, stop)
 
 
 def _store(

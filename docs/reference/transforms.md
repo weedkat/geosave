@@ -26,7 +26,7 @@ decoded = clear.gs.mask_and_scale()
 
 Crop and mask need a declared nodata value or explicit fill. Class metadata
 prevents reprojection with blending kernels. For aligned imagery and labels,
-use the [two-file alignment recipe](../guides/align-rasters.md).
+use the [two-file alignment recipe](../advanced/align-rasters.md).
 
 An exact GeoBox fixes CRS, resolution, shape and placement. Passing only a CRS
 lets each source derive its own output grid. Native `.pad()` does not rebuild

@@ -10,7 +10,6 @@ import textwrap
 import types
 from typing import Any, ParamSpec, TypeVar, Union, get_args, get_origin, get_type_hints
 
-from torch import nn
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -87,11 +86,12 @@ class Step:
         """Return whether the method produces a terminal result."""
         return not self.outputs
 
-    def invoke(self, module: nn.Module, context: Mapping[str, object]) -> object:
-        """Call a module method with its declared inputs and validate its result.
+    def invoke(self, module: object, context: Mapping[str, object]) -> object:
+        """Call an object's method with its declared inputs and validate its result.
 
         Args:
-            module: Module containing the declared method.
+            module: Object containing the declared method: a chain's module,
+                or a pipeline's sub-processor.
             context: Available values by name. Missing optional values use defaults.
 
         Returns:
@@ -113,7 +113,7 @@ class Step:
             kwargs[name] = value
 
         # Calling the module preserves PyTorch hooks when its step is forward.
-        method = module if self.name == "forward" else getattr(module, self.name)
+        method = getattr(module, "__call__" if self.name == "forward" else self.name)
         result = method(**kwargs)
         if self.head:
             assert self.result_type is not None

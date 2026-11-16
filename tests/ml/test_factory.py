@@ -46,6 +46,36 @@ def test_get_spec_writes_out_defaults_and_keyword_options():
     assert (rebuilt.channels, rebuilt.options) == (8, {"scale": 0.5})
 
 
+def test_read_spec_states_how_to_build_an_object_again():
+    registry = Registry(nn.Module)
+    registry.register("tiny")(Encoder)
+    built = Encoder(8, scale=0.5)
+
+    spec = registry.read_spec(built)
+
+    assert spec == BuildSpec(
+        name="tiny", init_args={"channels": 8, "depth": 2, "scale": 0.5}
+    )
+    rebuilt = registry.build(spec)
+    assert (rebuilt.channels, rebuilt.depth, rebuilt.options) == (8, 2, {"scale": 0.5})
+
+
+def test_read_spec_selects_an_unregistered_class_by_its_path():
+    spec = Registry(nn.Module).read_spec(Encoder(8))
+
+    assert spec.name is None
+    assert spec.class_path == f"{__name__}.Encoder"
+
+
+def test_read_spec_refuses_a_class_that_drops_a_constructor_argument():
+    class Forgetful(nn.Module):
+        def __init__(self, channels: int) -> None:
+            super().__init__()
+
+    with pytest.raises(TypeError, match="Forgetful keeps no attribute 'channels'"):
+        Registry(nn.Module).read_spec(Forgetful(8))
+
+
 def test_build_passes_run_time_values_positionally():
     registry = Registry(object)
     registry.register("pair")(lambda first, second=0: (first, second))

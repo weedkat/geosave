@@ -167,3 +167,53 @@ def test_zarr_stores_cells_as_start_and_end_coordinates(tmp_path):
     for name in ("time", "start_datetime", "end_datetime"):
         np.testing.assert_array_equal(back[name].values, raster[name].values)
     assert "time_bounds" not in back.variables
+
+
+def test_a_store_filled_by_regions_equals_the_raster_written_whole(tmp_path):
+    whole = build_raster(packed=True)
+    height, width = whole.gs.geobox.shape
+    middle = height // 2
+
+    store = zarr.create_zarr(
+        whole.isel(y=slice(0, middle)),
+        whole.gs.geobox,
+        tmp_path / "pieces.zarr",
+        chunks=middle,
+    )
+    zarr.write_zarr_region(whole.isel(y=slice(0, middle)), store)
+    zarr.write_zarr_region(whole.isel(y=slice(middle, height)), store)
+
+    expected = zarr.open_zarr(zarr.write_zarr(whole, tmp_path / "whole.zarr"))
+    restored = zarr.open_zarr(store)
+    xr.testing.assert_identical(restored.compute(), expected.compute())
+    assert restored.gs.geobox == whole.gs.geobox
+    assert restored.red.encoding["chunks"] == (middle, middle)
+
+
+def test_a_region_never_written_reads_as_nodata(tmp_path):
+    whole = build_raster(packed=True)
+    top = whole.isel(y=slice(0, 2))
+
+    store = zarr.create_zarr(top, whole.gs.geobox, tmp_path / "pieces.zarr", chunks=2)
+    zarr.write_zarr_region(top, store)
+
+    restored = zarr.open_zarr(store)
+    assert (restored.red.values[2:] == restored.red.gs.nodata).all()
+    assert (restored.red.values[:2] == whole.red.values[:2]).all()
+
+
+def test_a_region_off_the_stores_grid_is_refused(tmp_path):
+    whole = build_raster(packed=True)
+    store = zarr.create_zarr(whole, whole.gs.geobox, tmp_path / "pieces.zarr", chunks=4)
+    shifted = whole.assign_coords(y=whole.y + 1.0)
+
+    with pytest.raises(KeyError):
+        zarr.write_zarr_region(shifted, store)
+
+
+def test_creating_a_store_guards_an_existing_one(tmp_path):
+    whole = build_raster(packed=True)
+    zarr.create_zarr(whole, whole.gs.geobox, tmp_path / "pieces.zarr", chunks=4)
+
+    with pytest.raises(FileExistsError):
+        zarr.create_zarr(whole, whole.gs.geobox, tmp_path / "pieces.zarr", chunks=4)

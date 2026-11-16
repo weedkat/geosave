@@ -61,7 +61,7 @@ def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
     assert isinstance(restored, ChainModel)
     assert not restored.training
     assert list(restored.chain.stage_specs) == ["head"]
-    assert config["format_version"] == 2
+    assert config["format_version"] == 4
     assert config["geosave_version"] == __version__
     assert "auto_map" not in config
     torch.testing.assert_close(
@@ -232,7 +232,8 @@ def test_transformers_reload_runs_on_prithvi_context(
     samples = []
     for column in range(2):
         chip = scene.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
-        samples.append(xr.DataTree.from_dict({"image": chip}).gs.to_tensor())
+        tree = xr.DataTree.from_dict({"image": chip})
+        samples.append(tree.gs.to_tensor(context=["centroid", "year", "day_of_year"]))
     inputs = default_collate(samples)
     torch.testing.assert_close(
         restored(**inputs),

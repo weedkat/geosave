@@ -221,50 +221,49 @@ def test_a_tree_converts_to_tensors_that_carry_their_grid():
     mask = (build_raster()[["red"]] > 1500).astype("uint8").rename(red="cover")
     tree = xr.DataTree.from_dict({"image": scene, "label": mask})
 
-    sample = tree.gs.to_tensor()
+    sample = tree.gs.to_tensor(grid=True)
 
-    assert list(sample) == ["image", "label", "transform", "crs", "time"]
+    assert list(sample) == ["image", "label", "transform", "crs"]
     assert sample["image"].shape == (2, 2, 2, 2)
     assert sample["image"].dtype == torch.float32
     assert sample["label"].shape == (1, 2, 2)
     assert sample["label"].dtype == torch.uint8
-    assert sample["crs"] == "EPSG:32749"
-    assert sample["time"].tolist() == scene.time.values.astype("int64").tolist()
-    grid = GeoBox(sample["image"].shape[-2:], Affine(*sample["transform"].tolist()), sample["crs"])
+    assert sample["crs"].item() == 32749
+    grid = GeoBox(
+        sample["image"].shape[-2:], Affine(*sample["transform"].tolist()), int(sample["crs"])
+    )
     assert grid == scene.gs.geobox
 
     batch = torch.utils.data.default_collate([sample, sample])
     assert batch["image"].shape == (2, 2, 2, 2, 2)
     assert batch["transform"].shape == (2, 6)
-    assert batch["crs"] == ["EPSG:32749", "EPSG:32749"]
+    assert batch["crs"].tolist() == [32749, 32749]
 
 
-def test_tensor_times_are_nanoseconds_whatever_the_stored_unit():
-    pytest.importorskip("torch")
-    import pandas as pd
-
-    scene = build_raster(times=2)
-    coarse_times = scene.time.values.astype("datetime64[s]")
-    scene = scene.assign_coords(time=coarse_times)
-
-    sample = xr.DataTree.from_dict({"image": scene}).gs.to_tensor()
-
-    restored = pd.to_datetime(sample["time"].numpy())
-    assert restored.equals(pd.DatetimeIndex(coarse_times).as_unit("ns"))
-
-
-def test_tensor_times_follow_the_frames_and_one_timeline():
+def test_tensors_carry_only_the_pixels_unless_asked():
     pytest.importorskip("torch")
 
+    sample = xr.DataTree.from_dict({"image": build_raster(times=2)}).gs.to_tensor()
+
+    assert list(sample) == ["image"]
+
+
+def test_context_names_add_their_readers_tensors():
+    torch = pytest.importorskip("torch")
+    from geosave.geodata import TENSOR_CONTEXT
+
     scene = build_raster(times=2)
-    reversed_scene = scene.isel(time=[1, 0])
+    tree = xr.DataTree.from_dict({"image": scene})
 
-    sample = xr.DataTree.from_dict({"image": reversed_scene}).gs.to_tensor()
+    sample = tree.gs.to_tensor(context=["year", "centroid"])
 
-    expected = reversed_scene.time.values.astype("datetime64[ns]").astype("int64")
-    assert sample["time"].tolist() == expected.tolist()
-    with pytest.raises(ValueError, match="one timeline"):
-        xr.DataTree.from_dict({"a": scene, "b": reversed_scene}).gs.to_tensor()
+    assert list(sample) == ["image", "year", "centroid"]
+    torch.testing.assert_close(sample["centroid"], TENSOR_CONTEXT["centroid"](tree))
+    with pytest.raises(KeyError, match="Unknown context"):
+        tree.gs.to_tensor(context=["elevation"])
+
+
+CUSTOM_CRS = "+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=1,2,3 +units=m"
 
 
 def test_tensors_need_one_grid_and_free_entry_names():
@@ -277,8 +276,10 @@ def test_tensors_need_one_grid_and_free_entry_names():
         xr.DataTree.from_dict({"image": scene, "coarse": coarse}).gs.to_tensor()
     with pytest.raises(RasterValidationError):
         xr.DataTree().gs.to_tensor()
-    with pytest.raises(ValueError, match="grid entry"):
-        xr.DataTree.from_dict({"crs": scene}).gs.to_tensor()
-
-    timeless = xr.DataTree.from_dict({"image": scene}).gs.to_tensor()
-    assert "time" not in timeless
+    with pytest.raises(ValueError, match="EPSG code"):
+        tree = xr.DataTree.from_dict({"image": build_raster(crs=CUSTOM_CRS)})
+        tree.gs.to_tensor(grid=True)
+    with pytest.raises(ValueError, match="name of an entry"):
+        xr.DataTree.from_dict({"crs": scene}).gs.to_tensor(grid=True)
+    with pytest.raises(ValueError, match="name of an entry"):
+        xr.DataTree.from_dict({"centroid": scene}).gs.to_tensor(context=["centroid"])

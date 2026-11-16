@@ -3,7 +3,7 @@
 A catalog is a GeoDataFrame of STAC Item records. The same `.gs` accessor also
 handles ordinary vector features. Item operations check the columns they need;
 an accessor's type alone does not certify STAC compliance.
-See [Create and reopen a raster catalog](../guides/catalogs-and-cuts.md) for
+See [Create and reopen a raster catalog](../advanced/raster-catalog.md) for
 an offline example.
 
 ## Publish and load pixels
@@ -15,7 +15,10 @@ scene = gs.open_vector(path).gs.to_dataset(geobox=observations.gs.geobox, chunks
 result = scene.gs.mask_and_scale().mean("time").compute()
 ```
 
-Dataset publication needs an Item dimension, `time` by default. It writes
+Dataset publication needs an Item dimension, `time` by default. The Items
+join the Collection `stac.load_dataset` stamped on the Dataset, the
+`collection=` given for a derived raster, or none: STAC GeoParquet makes
+the Collection optional. It writes
 one COG per variable and Item at `folder/Item/asset.tif` and returns an Item
 table. Save the table separately. For assets on several grids, stage them
 with `RasterStac.from_dataset(...).merge(...)`; see [STAC publication](stac.md#publication).
@@ -31,7 +34,8 @@ Select rows with GeoPandas masks. Selection geometry must use the frame's CRS.
 A Series does not inherit that CRS; retain a one-row frame when it matters.
 
 ```python title="Adaptation example — use your catalog and region"
-from geosave.geodata.core.vector.catalog import dated, stac_collections, stac_items, valid_geometry
+from geosave.geodata.core.vector.catalog import dated, valid_geometry
+from geosave.geodata.stac.catalog import stac_collections, stac_items
 
 shape = region.extent.to_crs(catalog.crs).geom
 selected = catalog.loc[catalog.geometry.intersects(shape)]
@@ -57,11 +61,12 @@ suitability of pixels.
 `.gs.to_geoparquet` selects STAC encoding from the table's `stac-geoparquet`
 metadata; ordinary features use GeoPandas encoding. Invalid catalog metadata
 raises instead of silently falling back to features. Collection definitions
-are retained and asset hrefs are stored relative to the table.
+are retained. Asset hrefs are absolute, in the table and in the file; a file
+another writer stored with relative hrefs is resolved against its own
+location as it is read.
 
 `concat_catalogs` preserves compatible Collection definitions and rejects
-conflicts. It currently refuses tables read from different source files,
-whose relative asset hrefs have different bases.
+conflicts.
 
 ::: geosave.geodata.stac.catalog.concat_catalogs
 

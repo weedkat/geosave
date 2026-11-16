@@ -1,7 +1,7 @@
 # Model chains and registry
 
 A ModelChain is a PyTorch module that passes named values between stages.
-See [Build a model](../guides/models.md) for examples before writing custom stages.
+See [Build a model](../advanced/models.md) for examples before writing custom stages.
 
 ## Composition
 

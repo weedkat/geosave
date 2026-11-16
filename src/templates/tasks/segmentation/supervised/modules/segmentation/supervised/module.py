@@ -12,8 +12,8 @@ from geosave.ml.metrics import MulticlassMetrics
 from geosave.ml.chain import ModelChain
 from geosave.ml.components.build import build_model
 from geosave.ml.factory import BuildSpec
-from geosave.ml.processing.predictors import ChipPredictor
-from geosave.ml.processing.roles import PREDICTORS
+from geosave.ml.processing.raster.prediction.dense import DensePredictor
+from geosave.ml.processing.raster.prediction.base import PREDICTORS
 
 from .data import Sample
 
@@ -23,7 +23,7 @@ class Module(LightningModule):
 
     Validation and test batches hold whole scenes. `TensorChipper` cuts them
     into chips and `TensorMerger` merges the logits back, with the chip
-    settings of the release's `ChipPredictor`, so the steps score what a
+    settings of the release's `DensePredictor`, so the steps score what a
     release predicts, every scene pixel once. Every argument is required, so
     the YAML config states the whole setup.
 
@@ -39,12 +39,12 @@ class Module(LightningModule):
             metadata such as `interval`. None keeps the learning rate constant.
         metrics: Metric names in dot notation, such as `iou.macro`.
         predictor: The release's chip predictor by name or class_path with
-            init_args, such as `{name: chips, init_args: {size: 224}}`.
+            init_args, such as `{name: dense, init_args: {size: 224}}`.
             Validation and test chip and merge with its settings.
 
     Raises:
         ValueError: The criterion ignores another index than `ignore_index`.
-        TypeError: The predictor is not a `ChipPredictor`.
+        TypeError: The predictor is not a `DensePredictor`.
 
     Examples:
         # LightningCLI YAML:
@@ -60,7 +60,7 @@ class Module(LightningModule):
             optimizer: {name: adamw, init_args: {lr: 0.001}}
             lr_scheduler: null
             metrics: [iou.macro, f1.macro]
-            predictor: {name: chips, init_args: {size: 224, stride: 192}}
+            predictor: {name: dense, init_args: {size: 224, stride: 192}}
     """
 
     model: ModelChain
@@ -93,8 +93,8 @@ class Module(LightningModule):
         self.scheduler_spec = lr_scheduler
         self.metric_names = metrics
         built = PREDICTORS.build(BuildSpec.model_validate(predictor))
-        if not isinstance(built, ChipPredictor):
-            raise TypeError("validation chips with a ChipPredictor's settings")
+        if not isinstance(built, DensePredictor):
+            raise TypeError("validation chips with a DensePredictor's settings")
         self.predictor = built
 
     def configure_model(self) -> None:

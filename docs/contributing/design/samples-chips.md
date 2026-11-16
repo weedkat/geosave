@@ -35,8 +35,8 @@ catalog. Reprojection, resampling and mosaicking stay ODC's.
 ```python title="Adaptation example — use prepared imagery and labels on one grid"
 tree = xr.DataTree.from_dict({"image": scene, "label": labels})
 windows = tree.gs.sample("MS", size=2, keep="last")
-chipper = gs.Chipper(windows, size=256, stride=224)
-merger = gs.ChipMerger(chipper.layout, window="hann")
+chipper = gs.RasterChipper(windows, size=256, stride=224)
+merger = gs.RasterMerger(chipper.layout, window="hann")
 for index in range(len(chipper)):
     sample = chipper[index].gs.to_tensor()
     merger.add(index, predict(sample))  # NumPy (band, 256, 256)
@@ -44,7 +44,7 @@ merged = merger.merge(0)                # DataArray on raster 0's grid
 ```
 
 `ChipLayout` owns input GeoBoxes, chip offsets, stride and edge placement.
-`Chipper` holds one-grid DataTrees and cuts them lazily. `ChipMerger` owns
+`RasterChipper` holds one-grid DataTrees and cuts them lazily. `RasterMerger` owns
 accumulators and shares the layout. The integer chip index preserves source
 identity even when two rasters have the same grid; its location is available
 through `chipper.layout.locate(index)`.
@@ -73,7 +73,7 @@ slot selection and point-centred chip placement remain future work.
 | chip classification | `(class,)` | GeoDataFrame, one row per chip footprint | none |
 
 In a release, a registered postprocessor performs the decoding and
-the `chips` predictor the dense reconstruction; see [release and inference](release-inference.md).
+the `dense` predictor the dense reconstruction; see [release and inference](release-inference.md).
 Dense results can be converted to dated Datasets and published through `Dataset.gs.to_catalog`;
 vector results write through `.gs.to_geoparquet`.
 
@@ -84,29 +84,32 @@ with a list collate function since box counts differ. `rows.gs.rasterize`
 
 ## The Sample
 
-Task-owned sample shape proposed on 2026-11-14. The library's tree tensor
-conversion supplies named node tensors plus grid/time metadata; projects
-choose input and target names and retain chip indices for merging.
+Tree tensor conversion supplies named pixel tensors and, when requested,
+grid and context entries. Each method owns its sample type; integration is
+still being migrated between flat and nested samples in templates. Projects
+retain chip indices for merging. For example:
 
 ```python
 class Sample(TypedDict):          # declared in each method's data.py
     image: Tensor                 # (time, band, y, x) or (band, y, x)
     target: Tensor                # task-specific
-    transform: np.ndarray         # float64 (6,): the chip GeoBox affine
-    crs: str                      # "EPSG:32633", as proj:code spells it
-    time: np.ndarray              # int64 ns since epoch, one per time step
+    transform: Tensor             # float64 (6,): the chip GeoBox affine
+    crs: Tensor                   # int64 EPSG code
+    centroid: Tensor              # optional requested context: latitude, longitude
+    year: Tensor                  # optional requested context: one per frame
+    day_of_year: Tensor           # optional requested context: one per frame
 ```
 
 ```python
 # anywhere after collation
-grid = GeoBox(batch["image"].shape[-2:], Affine(*batch["transform"][i].tolist()), batch["crs"][i])
+grid = GeoBox(batch["image"].shape[-2:], Affine(*batch["transform"][i].tolist()), int(batch["crs"][i]))
 ```
 
 | Fact (checked) | Consequence |
 | --- | --- |
 | `default_collate` stacks a float64 `(6,)` array to a float64 `(batch, 6)` tensor; the GeoBox rebuilt from the batch equals the original | no custom collate for dense tasks |
 | float32 resolves 0.5 m at UTM northings | `transform` is never cast with the pixels |
-| `str(crs)` is 2 kB of WKT | store the code; `projection.build_fields(grid)["proj:code"]` already spells it |
+| tensor grid conversion stores an int64 EPSG code | no WKT strings in collated samples; a CRS without an EPSG code is rejected |
 | a dataclass does not collate | the Sample is a TypedDict, a plain dict at runtime |
 
 Rules:
@@ -116,13 +119,11 @@ Rules:
 - Geometric augmentation (flip, rotate) makes `transform` wrong. It runs in
   training only, on the GPU in the DataModule, where no georeferenced output
   is written. Validation, test and predict batches keep their grid.
-- Model context (Prithvi `temporal_coords`/`location_coords`, Clay
-  `time`/`latlon`) is derived from `transform`, `crs` and `time`. Today
-  `model_context(raster)` in each encoder module reads it from an xarray
-  chip. Open: keep that (computed in the torch Dataset before the labels are
-  stripped) or compute from the Sample fields in the DataModule, which also
-  works from a stored record and keeps the store model-agnostic. Suggested:
-  the second.
+- `TENSOR_CONTEXT` readers derive requested entries such as `centroid`,
+  `year`, `day_of_year`, `week` and `hour` from the actual raster at tensor
+  conversion. `DensePredictor` reads them per chip. TensorChipper adjusts
+  the chip transform but retains existing context; deciding when to
+  recompute location after augmentation remains open.
 
 ## Sample rows
 

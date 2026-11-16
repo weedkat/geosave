@@ -56,8 +56,8 @@ src/geosave/ml/
 ├── factory.py    # BuildSpec and Registry: every name/class-path builder
 ├── chain/        # ModelChain and @chain_step: how a built chain runs
 ├── components/   # build_model, list_models, Published; encoder/decoder/head/monolith
-├── processing/   # Processor and its roles: ingestor, preprocessor, predictor, postprocessor
-├── release/      # ChainModel and load_processor (Transformers, Hugging Face Hub)
+├── processing/   # RasterPipeline and its sub-processors: ingestor, preprocessor, predictor, postprocessor
+├── release/      # ChainModel and load_pipeline (Transformers, Hugging Face Hub)
 └── builders/ criterion/ metrics/ transforms/ callbacks/ cli.py  # training support
 
 src/geosave/geodata/
@@ -68,7 +68,7 @@ src/geosave/geodata/
 ├── stac/         # search, ODC loading and stamps, catalog conversion, RasterStac publication
 └── features/     # spectral indices and masks
 
-src/geosave_flows/  # Prefect flows using geosave; installed with the `flows` extra
+src/geosave_flows/  # Prefect flows that run a released pipeline; installed with the `flows` extra
 src/templates/      # source for generated workspaces; bundled CLI resources
 
 tests/            # mirrors src/geosave; tests/flows mirrors src/geosave_flows
@@ -91,7 +91,7 @@ Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`; `ge
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC table conversion lives in `stac/catalog.py`; publication in `raster.py`
+STAC table conversion lives in `stac/catalog/` (layout, hrefs, collections, rules, items); publication in `raster.py`
 and `publish.py`; loading metadata in `stac/stamps/`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;

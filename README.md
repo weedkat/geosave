@@ -9,7 +9,7 @@ results back into usable maps.
 
 [Documentation](https://weedkat.github.io/geosave-engine/) ·
 [Examples](https://github.com/weedkat/geosave/tree/main/examples) ·
-[Installation](https://weedkat.github.io/geosave-engine/install/)
+[Installation](https://weedkat.github.io/geosave-engine/basics/install/)
 
 ![Sentinel-2 imagery and vegetation index near Davis, California](https://raw.githubusercontent.com/weedkat/geosave/main/docs/assets/vegetation.jpg)
 
@@ -32,9 +32,9 @@ GeoSave is **Alpha**: APIs are evolving. These examples track `main`.
 
 Python **3.12+**. Choose a source:
 
-**Stable · PyPI** — the release command is `python -m pip install geosave`.
-A public release was not yet available on 6 November 2026; use a preview below
-until one is published.
+**Published releases · [PyPI](https://pypi.org/project/geosave/)** — install an
+available release with `python -m pip install geosave`. These Alpha docs track
+`main`; use the source installation below for the closest API match.
 
 **Test build · [TestPyPI](https://test.pypi.org/project/geosave/)**
 
@@ -55,7 +55,7 @@ python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosav
 
 Use `geosave[ml] @` for training or `geosave[all] @` for every extra.
 Replace `main` with a commit SHA to pin an experiment. See the
-[installation guide](https://weedkat.github.io/geosave-engine/install/) for
+[installation guide](https://weedkat.github.io/geosave-engine/basics/install/) for
 extras, development setup, and version checks.
 
 ## Make a vegetation map
@@ -85,9 +85,9 @@ land near Davis, California. `ndvi` decodes the bands' nodata and scale before
 calculating. An index shows spectral variation; one scene does not establish
 crop health, drought, or change.
 
-Follow the [vegetation tutorial](https://weedkat.github.io/geosave-engine/first-raster/)
+Follow the [vegetation tutorial](https://weedkat.github.io/geosave-engine/basics/first-raster/)
 for the map and interpretation, or the
-[zone comparison](https://weedkat.github.io/geosave-engine/guides/vegetation-zones/)
+[zone comparison](https://weedkat.github.io/geosave-engine/advanced/vegetation-zones/)
 to summarize NDVI and valid coverage for two areas in a CSV.
 
 ## Follow a land-cover project
@@ -97,14 +97,18 @@ uses real Sentinel-2 imagery and expert-annotated labels: inspect class balance,
 train a baseline, acquire new imagery for existing labels, then predict and
 export maps for a forest area. Tiles are split before making training chips.
 The teaching download is about 400 MB; the short runs demonstrate a workflow,
-not a validated operational model.
+not a validated operational model. Parts of the notebooks still use removed
+APIs; check the [migration notice](https://weedkat.github.io/geosave-engine/examples/#real-land-cover-project)
+before running them. The [Lightning workspace starter](https://weedkat.github.io/geosave-engine/advanced/training/)
+uses current APIs.
 
 | Your next task | Guide |
 | --- | --- |
-| Download imagery for your area | [Search and download](https://weedkat.github.io/geosave-engine/guides/download-imagery/) |
-| Explore imagery on a map | [Explorer](https://weedkat.github.io/geosave-engine/guides/explore/) |
-| Start with pretrained weights | [Pretrained models](https://weedkat.github.io/geosave-engine/guides/pretrained/) |
-| Create an editable training project | [Workspaces](https://weedkat.github.io/geosave-engine/guides/workspaces/) |
+| Download imagery for your area | [Search and download](https://weedkat.github.io/geosave-engine/advanced/download-imagery/) |
+| Explore imagery on a map | [Explorer](https://weedkat.github.io/geosave-engine/basics/explore/) |
+| Start with pretrained weights | [Pretrained models](https://weedkat.github.io/geosave-engine/advanced/pretrained/) |
+| Create an editable training project | [Workspaces](https://weedkat.github.io/geosave-engine/advanced/training/) |
+| Organize data, experiments and releases | [Three-repository workflow](https://weedkat.github.io/geosave-engine/mlops/) |
 | Look up a function | [API reference](https://weedkat.github.io/geosave-engine/reference/) |
 
 ## Development

@@ -11,6 +11,7 @@ from geosave.geodata.sampling import (
     ChipLayout,
     ChipLocation,
     RasterChipper,
+    find_chip_span,
     lay_chip_offsets,
 )
 from tests.geodata.sampling.conftest import GRID, build_tree, format_times
@@ -131,12 +132,12 @@ def test_a_chip_converts_to_tensors():
     windows = build_tree().gs.sample("MS", size=2)
     chipper = RasterChipper(windows, size=4, stride=2, mode="reflect")
 
-    tensors = chipper[len(chipper) - 1].gs.to_tensor()
+    tensors = chipper[len(chipper) - 1].gs.to_tensor(context=["time"])
 
     assert tensors["image"].shape == (2, 2, 4, 4)
     assert tensors["label"].shape == (1, 4, 4)
     assert tensors["time"].shape == (2,)
-    batch = torch.utils.data.default_collate([chipper[0].gs.to_tensor(), tensors])
+    batch = torch.utils.data.default_collate([chipper[0].gs.to_tensor(context=["time"]), tensors])
     assert batch["image"].shape == (2, 2, 2, 4, 4)
 
 
@@ -176,3 +177,22 @@ def test_a_layout_places_chips_from_grids_alone():
     assert len(layout) == len(chipper)
     assert layout.locate(7) == chipper.layout.locate(7)
     assert layout.geobox(7) == chipper[7].gs.geobox
+
+
+@pytest.mark.parametrize(("size", "stride"), [(4, 3), (4, 4), (5, 2), (8, 3)])
+def test_a_span_with_its_halo_holds_every_chip_that_touches_it(size, stride):
+    length = 29
+    offsets = lay_chip_offsets(length, size=size, stride=stride, mode="reflect")
+
+    for start in range(0, length, 2 * stride):
+        stop = min(start + 2 * stride, length)
+        first, last = find_chip_span(start, stop, length, size=size, stride=stride)
+
+        touching = [o for o in offsets if o < stop and o + size > start]
+        assert first <= touching[0]
+        assert first % stride == 0
+        assert last == min(touching[-1] + size, length)
+        # A chip past the end reflects pixels the span must hold.
+        reach = touching[-1] + size - length
+        if reach > 0:
+            assert first <= max(0, length - 1 - reach)

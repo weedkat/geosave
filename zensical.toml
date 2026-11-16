@@ -11,43 +11,42 @@ copyright = "Copyright © 2026 GeoSave contributors"
 
 nav = [
     { "Home" = "index.md" },
-    { "Getting started" = [
-        { "Installation" = "install.md" },
-        { "Your first vegetation map" = "first-raster.md" },
-        { "Download satellite imagery" = "guides/download-imagery.md" },
-        { "Explore imagery on a map" = "guides/explore.md" },
-        { "Compare vegetation by area" = "guides/vegetation-zones.md" },
-        { "From images to training chips" = "quickstart.md" },
-        { "Train and map predictions" = "guides/training.md" },
-        { "Real-world examples" = "examples.md" },
-    ] },
     { "Basics" = [
-        { "Overview" = "basics/index.md" },
+        "basics/index.md",
+        { "Installation" = "basics/install.md" },
+        { "Your first vegetation map" = "basics/first-raster.md" },
         { "Raster data" = "basics/rasters.md" },
         { "Vector data" = "basics/vectors.md" },
         { "Describe raster values" = "basics/attrs.md" },
         { "Read and save data" = "basics/io.md" },
+        { "Images to training chips" = "basics/training-chips.md" },
+        { "Explore a map" = "basics/explore.md" },
+        { "Common questions" = "basics/faq.md" },
     ] },
-    { "How-to guides" = [
-        { "Find your task" = "activities.md" },
+    { "Advanced" = [
+        "advanced/index.md",
+        { "Find and analyze imagery" = [
+            { "Download satellite imagery" = "advanced/download-imagery.md" },
+            { "Compare vegetation by area" = "advanced/vegetation-zones.md" },
+        ] },
         { "Prepare data" = [
-            { "Ingest existing files" = "guides/ingest-files.md" },
-            { "Search and load STAC data" = "guides/stac.md" },
-            { "Align labels with imagery" = "guides/align-rasters.md" },
-            { "Create and reopen a raster catalog" = "guides/catalogs-and-cuts.md" },
-            { "Lazy raster processing" = "guides/large-data.md" },
-            { "Read chips and merge predictions" = "guides/chips.md" },
+            { "Crop a vegetation map" = "advanced/crop-imagery.md" },
+            { "Search and load STAC data" = "advanced/stac.md" },
+            { "Align labels with imagery" = "advanced/align-rasters.md" },
+            { "Create and reopen a raster catalog" = "advanced/raster-catalog.md" },
+            { "Lazy raster processing" = "advanced/large-data.md" },
+            { "Read overlapping training chips" = "advanced/overlapping-chips.md" },
         ] },
         { "Models and training" = [
-            { "Build a model" = "guides/models.md" },
-            { "Build from pretrained" = "guides/pretrained.md" },
-            { "Prepare model inputs" = "guides/model-inputs.md" },
-            { "Create a training workspace" = "guides/workspaces.md" },
-            { "Release and run a model" = "guides/release.md" },
+            { "Build a model" = "advanced/models.md" },
+            { "Build from pretrained" = "advanced/pretrained.md" },
+            { "Prepare model inputs" = "advanced/model-inputs.md" },
+            { "Train with Lightning" = "advanced/training.md" },
+            { "Release and run a model" = "advanced/release.md" },
         ] },
     ] },
     { "Concepts" = [
-        { "Overview" = "concepts/index.md" },
+        "concepts/index.md",
         { "How the library works" = "concepts/data-flow.md" },
         { "DataArray, Dataset, and DataTree" = "concepts/xarray-structure.md" },
         { "Raster grids" = "concepts/raster-grids.md" },
@@ -57,12 +56,8 @@ nav = [
         { "Explorer controls and behavior" = "concepts/explorer.md" },
         { "Training contracts" = "concepts/training.md" },
     ] },
-    { "Help" = [
-        { "Troubleshooting" = "troubleshooting.md" },
-        { "Common questions" = "faq.md" },
-    ] },
-    { "API reference" = [
-        { "Overview" = "reference/index.md" },
+    { "API Reference" = [
+        "reference/index.md",
         { "Command-line inputs and outputs" = "reference/cli.md" },
         { "Data" = [
             { "Overview" = "reference/geodata.md" },
@@ -101,14 +96,22 @@ nav = [
             { "Flow definitions" = "reference/generated/flows.md" },
         ] },
     ] },
+    { "MLOps" = "mlops/index.md" },
+    { "Examples" = "examples.md" },
     { "Contributing" = [
+        "contributing/index.md",
         { "Architecture" = "contributing/architecture.md" },
-        { "Maintain the documentation" = "contributing/documentation.md" },
         { "Open decisions" = "contributing/open-decisions.md" },
-        { "Design: direction" = "contributing/design/direction.md" },
-        { "Design: publish and load" = "contributing/design/publish-load.md" },
-        { "Design: samples and chips" = "contributing/design/samples-chips.md" },
-        { "Design: release and inference" = "contributing/design/release-inference.md" },
+        { "Documentation" = [
+            { "Maintain the documentation" = "contributing/documentation.md" },
+            { "Documentation review" = "contributing/documentation-review.md" },
+        ] },
+        { "Design notes" = [
+            { "Direction" = "contributing/design/direction.md" },
+            { "Publish and load" = "contributing/design/publish-load.md" },
+            { "Samples and chips" = "contributing/design/samples-chips.md" },
+            { "Release and inference" = "contributing/design/release-inference.md" },
+        ] },
     ] },
 ]
 
@@ -117,6 +120,9 @@ language = "en"
 features = [
   "announce.dismiss",
   "content.code.copy",
+  "navigation.tabs",
+  "navigation.path",
+  "navigation.indexes",
   "navigation.footer",
   "navigation.top",
   "navigation.tracking",

@@ -1,11 +1,13 @@
 # Explorer controls and behavior
 
 For a first map and a visual walkthrough, start with
-[Explore imagery on a map](../guides/explore.md).
+[Explore imagery on a map](../basics/explore.md).
 
 ```python
-scene.gs.explore("ndvi", basemap="Imagery")
+scene.gs.explore(rgb=("red", "green", "blue"), basemap="None")
 ```
+
+![Explorer with the sample imagery and its controls](../assets/explorer.png)
 
 `explore` returns a native Panel Material UI app with a light/dark theme toggle.
 The map fills the available page space and follows sidebar and browser resizing.

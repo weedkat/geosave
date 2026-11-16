@@ -55,22 +55,22 @@ metadata with records; see [samples and chips](design/samples-chips.md).
 
 ## Processing, release and inference
 
-Implemented 2026-11-15:
+Implemented 2026-11-16:
 
 ```text
-ml/processing/roles.py      Ingestor, Preprocessor, Predictor, Postprocessor; one Registry each
-ml/processing/ingestors.py  Sentinel2Ingestor ("sentinel2_l2a")
-ml/processing/preprocessors.py  Reflectance ("sentinel2_reflectance")
-ml/processing/predictors.py ChipPredictor ("chips"): RasterChipper -> forward -> RasterMerger
-ml/processing/postprocessors.py ClassMap ("class_map")
-ml/processing/processor.py  Processor(model, ingestor, preprocessor, predictor, postprocessor)
-                            predict_region, predict_path, predict_raster; ProcessorSpec, build_processor
-ml/release                  ChainConfig.processor, from_chain(chain), from_processor(processor), load_processor(repo)
-geosave_flows/monitor.py    monitor(processor): entry points become flows, sub-processor calls tasks
+ml/processing/raster/pipeline.py    RasterPipeline(model, preprocessor, predictor, postprocessor, ingestor=None)
+                                    predict(rasters), predict_to_zarr(rasters, destination, chunks)
+ml/processing/raster/ingestion/      base.py RasterIngestor; sentinel2.py Sentinel2Ingestor ("sentinel2_l2a")
+ml/processing/raster/preprocessing/  base.py RasterPreprocessor; dense.py DensePreprocessor ("dense"): bands, decode, fill, mean/std
+ml/processing/raster/prediction/     base.py RasterPredictor; dense.py DensePredictor ("dense"): RasterChipper -> model(**inputs) -> RasterMerger
+ml/processing/raster/postprocessing/ base.py RasterPostprocessor; dense.py SegmentationPostprocessor ("segmentation"),
+                                     RegressionPostprocessor ("regression"); thresholds.py
+ml/release                  ChainConfig.preprocessor/predictor/postprocessor/ingestor, from_chain(chain),
+                            from_pipeline(pipeline), load_pipeline(repo)
 ```
 
-A release names only library components and sub-processors, so it loads with
-`pip install geosave`; deploying a model means adding its parts to geosave.
+A release names only library components. A library sub-processor is stored by
+name; a project's own by class path, loading where the project's code is installed.
 
 Hugging Face repos, one audience each (decided 2026-11-15):
 
@@ -84,46 +84,84 @@ LitData stores are preloads tailored to one model; they stay local or in a
 bucket. Later: record the data and training commits in the release's model
 card (lineage), once configs name the data repo revision.
 
-There is one main `Processor`, the common pattern of using a model; every
-step around the model is an interchangeable sub-processor. A release stores
-the four sub-processors as `{name, init_args}` each;
-`ARTIFACT_FORMAT_VERSION` is 2. This supersedes the earlier plain-function
+`RasterPipeline` orchestrates inference over rasters. Every step around the
+model is an interchangeable sub-processor, named by its input and entered by
+`__call__`; `@chain_step()` on it declares the values handed between steps. Each step
+is a package holding its abstract role (`base.py`) and its implementations, named by task
+(`dense.py` for per-pixel segmentation and regression); subclass where a
+model needs more.
+The contract between steps carries no fixed names: the ingestor returns a
+DataTree of source rasters, the preprocessor returns a DataTree whose nodes
+are the model's pixel inputs, and the model is called with the batch by name.
+A release stores the sub-processors as `{name, init_args}` each, the ingestor
+optionally; `ARTIFACT_FORMAT_VERSION` is 3. This supersedes the earlier plain-function
 registries, the proposal to reuse ModelSpec as a declaration, and a registry
 of main processors. `workspace/dynamicworld` runs it end to end: train,
 `scripts/publish.py`, `scripts/predict_region.py`.
 
-Open: offline inference (preload ingest, preprocessing and chips into LitData,
-then predict from the store); `Processor.forward` passes the model `image` only
-(named versus stacked tensors, time and location inputs); missing inputs/time
-steps; progress inside one raster is not visible to `monitor`. See
+`predict_to_zarr(rasters, destination, chunks)` predicts chunk by chunk.
+Chunks start on multiples of the predictor's stride and each is read with a
+halo (`sampling.find_chip_span`: the pixels of every chip touching it, plus
+what a reflection reads at the raster's end), predicted, cropped back to the
+chunk and written into its region of one Zarr store (`create_zarr`,
+`write_zarr_region`). The chunk's chips are then the whole raster's, so the
+store equals `predict` for padding modes; `shift`, `drop` and `wrap` layouts
+are not reproduced exactly. Memory holds one chunk's output. `predict` is in
+memory with no chunk concept; `predict_path` and `predict_region` were
+removed, and the caller runs `processor.ingestor`; `RasterIngestor` is an
+abstract class whose `ingest_to_zarr` writes each acquisition to a store first.
+
+Deployment (2026-11-16): the whole processor runs on the server. A release
+accepts a project's sub-processor by `class_path` (`check_deployable_spec`);
+it rebuilds wherever the project's code is installed, so the server image is
+built from the workspace. The segmentation template's `scripts/.../serve.py`
+is a LitServe API taking `{"rasters": store, "destination": store}` and
+calling `predict_to_zarr`. LitServe is not a dependency of geosave. Open:
+the other templates have no `serve.py`; a region request that ingests first;
+loading a release without the project's code (shipping `processing.py`). A LitData preload of input chips was tried and
+removed: it did not lower memory, and in deployment the model sits behind
+LitServe, tensors in and tensors out. Open: nothing checks that hand-built rasters match what the
+ingestor would return (bands, packing, resolution); one acquisition per store,
+no time cube yet; chunks are predicted one after another; serving the model remotely (`DensePredictor.predict` reads the
+model's device); the templates' DataModules still call their own preprocessor's `normalize`, which the library no longer has;
+missing inputs/time
+steps. `monitor` was replaced 2026-11-16 by the `geosave_flows.predict.predict_region`
+flow, whose tasks are plain `@task` functions; progress inside one raster is not a task. See
 [release and inference](design/release-inference.md).
 
-Per-class thresholds are postprocessor `init_args`, found after training by
-`calibrate_thresholds` on the best checkpoint's validation predictions; it is
-a stub. Decode merged predictions; do not average integer class ids.
+`calibrate_thresholds` remains a stub. The built-in segmentation postprocessor
+accepts class names/colors and uses argmax; it does not yet accept thresholds.
+A future calibrated decoder needs its thresholds persisted with its settings.
+Decode merged predictions; do not average integer class ids.
 
 ## Template and notebook migrations
 
-ModelSpec is disabled. Its template data workflows need replacement while
-retaining project-owned Modules and sample types. Migration work includes the
-template `data.py`/`datasets.py`, recipe files, configuration keys and tests that
-import their helpers. `segmentation/supervised` no longer imports ModelSpec in
-its modules; the other methods' `data.py` still do, so their DataModules raise
-`NotImplementedError` when constructed.
+ModelSpec is unavailable. Template DataModules now build explicit preprocessors
+and take project Datasets; they no longer import ModelSpec. Most task Datasets
+remain placeholders. Supervised segmentation has a paired raster Dataset and
+scene-merging evaluation, but its Dataset/DataModule supply flat named samples
+while Module steps still read nested `inputs`; complete that integration before
+claiming a full training run. See [recipe status](../reference/training.md).
 
-The earlier notebook audit identified removed `gs.write_grid` calls in lessons
-0 and 1, and old chip APIs in later lessons. They remain separate notebook
-migration work; see [examples](../examples.md). Do not treat those notebooks as
-verified by the executable Markdown tutorials.
+Its publication script supports separate release and private training repos;
+other generated publication scripts still combine workspace archives with the
+release. Migrate them to the [three-repository workflow](../mlops/index.md).
+
+The current notebook source still references removed `geosave.model` in
+lesson 1 and removed model/chip APIs in lessons 3 and 4. They remain separate
+migration work; see [examples](../examples.md). Do not treat the notebook
+series as verified by executable Markdown tutorials.
 
 ## Explorer and architecture
 
 - Decide whether native DataTrees need their own overview figure; plot selected
   Dataset nodes today.
-- Static export without a live kernel, time scrolling, point/region series and
-  separation of pixel reading from display state remain design topics.
+- Standalone map export is implemented through `Explorer.snapshot()` and
+  Export map; it captures current pixels. Time scrolling, point/region series
+  and separation of pixel reading from display state remain design topics.
 - Declare and test the dependency direction inside `geodata`; public package
-  direction is already `geodata <- model <- ml` and `geosave <- geosave_flows`.
+  direction is already `geodata <- ml` and `geosave <- geosave_flows`, with
+  inference isolated from training support inside `ml`.
 - Per-Item band metadata and provider-specific decoding need a contract when
   scale/offset differs along time. Loading currently refuses conflicting packing.
 
@@ -136,7 +174,7 @@ and releases and predicts through `scripts/publish.py` and
 `scripts/predict_region.py`. Its validation still merges chips in the Module
 with its own `RasterMerger`; the agreed pattern is the segmentation template's:
 `TensorChipper` and `TensorMerger` in the step, with the release
-`ChipPredictor`'s chip settings.
+`DensePredictor`'s chip settings.
 
 `workspace/gedi-biomass` still calls the removed `gs.Chips`
 (`modules/preparation.py`, `modules/prediction.py`, its Dataset); migrate it to `RasterChipper` and a processor, or archive it.

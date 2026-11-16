@@ -2,7 +2,7 @@
 
 Use `StacClient` and `StacQuery` to choose observations, then load their pixels
 on a supplied grid, or use `load_native_datasets` for native grids.
-See [Search and load STAC data](../guides/stac.md) for examples.
+See [Search and load STAC data](../advanced/stac.md) for examples.
 
 ## Search and loading
 
@@ -55,7 +55,6 @@ for crs, resolution, native in stac.load_native_datasets(
 states one file's grid and bands.
 
 ::: geosave.geodata.stac.publish.StacItem
-
 
 ## Collection and observation metadata
 

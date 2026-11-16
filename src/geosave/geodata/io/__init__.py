@@ -32,9 +32,11 @@ from .raster.netcdf import (
 from .raster.zarr import (
     ZarrOpenOptions,
     ZarrWriteOptions,
+    create_zarr,
     open_zarr,
     open_zarr_tree,
     write_zarr,
+    write_zarr_region,
     write_zarr_tree,
 )
 from .vector.geoparquet import (
@@ -78,6 +80,8 @@ __all__ = [
     "open_zarr_tree",
     "write_zarr",
     "write_zarr_tree",
+    "create_zarr",
+    "write_zarr_region",
     "open_netcdf",
     "open_netcdf_tree",
     "write_netcdf",

@@ -39,8 +39,9 @@ def main() -> None:
     sys.path.insert(0, str(workspace))
     from modules.segmentation.supervised.processing import Reflectance
 
-    prepared = Reflectance().preprocess(sample_raster())
-    print(prepared.compute())
+    sources = xr.DataTree.from_dict({"image": sample_raster()})
+    prepared = Reflectance()(sources)
+    print(prepared["image"].to_dataset().compute())
 
 
 if __name__ == "__main__":

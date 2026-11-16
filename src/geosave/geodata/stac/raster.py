@@ -99,6 +99,7 @@ class RasterStac:
         cls,
         dataset: xr.Dataset,
         *,
+        collection: pystac.Collection | None = None,
         item_dim: str = TIME_COORDINATE,
         id_format: str = ITEM_ID_FORMAT,
     ) -> Self:
@@ -111,6 +112,9 @@ class RasterStac:
 
         Args:
             dataset: Source raster Dataset; keep it open while using lazy assets.
+            collection: Collection the Items belong to. None keeps the one the
+                Dataset states, as `stac.load_dataset` stamps it; give one for
+                a derived raster, which is no longer its source's Collection.
             item_dim: Dimension to group by. Each group must have one entry.
                 The dimension must exist on the Dataset.
             id_format: GeoRegion.format template for each group's Item id.
@@ -146,7 +150,8 @@ class RasterStac:
                 nodes[f"{item_id}/{name}"] = assets[name].to_dataset()
 
         tree = xr.DataTree.from_dict(nodes)
-        collection = dataset.gs.stac_collection
+        if collection is None:
+            collection = dataset.gs.stac_collection
         return cls(tree=tree, collection=collection)
 
     def merge(self, other: RasterStac) -> RasterStac:

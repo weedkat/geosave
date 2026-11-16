@@ -1,7 +1,7 @@
 # Rasters and trees
 
 Rasters are native xarray objects. Build them with xarray's own constructors and
-place them with ODC's `xr_coords` or `wrap_xr`. Start with [Your first raster](../first-raster.md),
+place them with ODC's `xr_coords` or `wrap_xr`. Start with [Your first raster](../basics/first-raster.md),
 then see [Raster data](../basics/rasters.md). Accessor methods are listed
 separately for [Dataset](dataset-accessor.md), [DataArray](dataarray-accessor.md),
 and [DataTree](datatree-accessor.md).

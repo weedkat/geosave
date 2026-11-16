@@ -1,1 +1,1 @@
-"""Run a model over regions and rasters through interchangeable sub-processors."""
+"""Pipelines run a model over what a caller has, step by step; one package per input kind."""

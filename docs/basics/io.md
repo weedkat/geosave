@@ -1,112 +1,86 @@
-# Read and save data
+# Save imagery for GIS or Python
 
-Save a named band as a Cloud Optimized GeoTIFF, then check its grid and values.
-This example creates a small raster locally and needs only the base package.
+Export selected bands as a Cloud Optimized GeoTIFF, or keep them in a chunked
+Zarr store. Reopen the output with its band names and geographic grid intact.
+
+**You need:** the base package and the [sample scene](first-raster.md#open-the-sample).
+
+## Save a GeoTIFF for a GIS
 
 ```python
-import tempfile
 from pathlib import Path
-
-import numpy as np
-import xarray as xr
-from odc.geo.geobox import GeoBox
-from odc.geo.xr import xr_coords
 
 import geosave as gs
 from geosave.geodata import io
 
-root = Path(tempfile.mkdtemp())
-grid = GeoBox.from_bbox(
-    (500000, 5000000, 500040, 5000040), crs="EPSG:32633", resolution=10,
-)
-pixels = np.arange(1, 17, dtype="uint8").reshape(4, 4)
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid))
-scene = scene.gs.write_nodata(0)
-path = root / "scene.tif"
-io.write_cog(scene, path)
+Path("output").mkdir(exist_ok=True)
+scene = gs.open_raster("sample-scene.tif")
+image = scene[["red", "nir"]]
+path = io.write_cog(image, "output/scene.tif")
+print(path)
+```
+
+```text
+output/scene.tif
+```
+
+```python
 reopened = gs.open_raster(path)
-list(reopened.data_vars), reopened.gs.geobox == scene.gs.geobox
+bands = list(reopened.data_vars)
+bands
 ```
 
 ```text
-(['red'], True)
+['red', 'nir']
 ```
 
+The file keeps the band names, stored values, metadata and grid. Writing reads
+pixels. Existing destinations are refused unless you pass `overwrite=True`.
+
+A COG is a GeoTIFF organized for reading spatial windows efficiently. It is
+useful for sharing imagery with GIS tools or reading portions remotely.
+Its bands share a grid and storage dtype; keep categorical labels separate
+from imagery when their stored representations differ.
+
+## Save a Zarr store for Python workflows
+
 ```python
-np.array_equal(reopened["red"].values, pixels), reopened["red"].gs.nodata
+store = image.gs.to_zarr("output/scene.zarr")
+reopened = gs.open_raster(store)
+bands = list(reopened.data_vars)
+bands
 ```
 
 ```text
-(True, 0)
+['red', 'nir']
 ```
 
-`io.write_cog` returns the destination UPath and preserves variable names as
-band metadata. It refuses an existing file unless `overwrite=True` is passed.
-Opening a TIFF returns a Dataset with one variable per band; external TIFFs
-without GeoSave identity tags use `band_1`, `band_2`, etc.
-
-## Several bands in one TIFF
-
-For bands on one grid, use `io.write_cog(scene[["red", "nir"]], "image.tif")`.
-Variables keep their names and band metadata; the TIFF shares one stored dtype,
-nodata value and pixel grid. Select one observation before writing a time series.
-
-For dated observations or assets on different grids, use
-[catalog publication](../guides/catalogs-and-cuts.md). Dataset `.gs.to_cog()`
-remains unavailable; the explicit format writer handles one file.
-
-## Choose a format
-
-| Data and goal | Write | Return value |
-| --- | --- | --- |
-| Named bands on one grid at one instant | `io.write_cog(dataset, "image.tif")` | One file `UPath` |
-| Dataset or DataTree, including multiple dates | `raster.gs.to_zarr("scene.zarr")` | One store `UPath` |
-| Dataset or DataTree in one scientific file | `raster.gs.to_netcdf("scene.nc")` | One file `UPath` |
-| One COG per staged asset | `staged.to_cog("assets")` on `RasterStac` | Native Items |
-| COG assets plus an Item table | `dataset.gs.to_catalog("assets")` | GeoDataFrame |
-| Vector features or STAC Item table | `rows.gs.to_geoparquet("rows.parquet")` | One file `UPath` |
-
-The [I/O reference](../reference/io.md#saved-raster-files) lists deferred-write
-returns and format options. A catalog table describes raster files; save the
-table separately with `.gs.to_geoparquet(...)`.
-
-## Save multidimensional data
+Zarr supports chunked arrays and time series. NetCDF is another option when
+you need multidimensional data in one file:
 
 ```python
-store = scene.gs.to_zarr(root / "scene.zarr")
-zarr_scene = gs.open_raster(store)
-path = scene.gs.to_netcdf(root / "scene.nc")
-netcdf_scene = gs.open_raster(path)
-zarr_scene.gs.geobox == grid, netcdf_scene.gs.geobox == grid
+path = image.gs.to_netcdf("output/scene.nc")
+print(path)
 ```
 
 ```text
-(True, True)
+output/scene.nc
 ```
 
-Zarr stores chunked arrays; NetCDF stores scientific arrays in one file.
-DataTree writers preserve groups. `gs.open_raster` always returns a Dataset:
-the root group by default, or a selected group with `group="scene"`.
-Use `gs.open_raster_tree(store)` to read the whole hierarchy as a DataTree,
-including a root-only tree when there are no child groups.
+These formats keep named variables and dimensions, so a time series can stay
+one Dataset instead of becoming a folder of individual image files. Zarr's
+chunks can be read separately; NetCDF provides a single-file exchange format.
 
-Raster readers select their format from the suffix. The default `chunks={}`
-uses Dask arrays; `chunks=None` uses backend indexing without Dask. Opening
-reads metadata and defers pixels where the backend supports it.
-[Lazy execution](../concepts/lazy-data.md) explains when work runs.
+## Choose for your project
 
-```python
-reopened.close()
-zarr_scene.close()
-netcdf_scene.close()
-```
+| Goal | Format |
+| --- | --- |
+| Share one image or map with GIS tools | Cloud Optimized GeoTIFF |
+| Work with chunked arrays or time series | Zarr |
+| Exchange scientific arrays in one file | NetCDF |
+| Save vector features | [GeoParquet](vectors.md) |
+| Organize dated raster files by footprint | [STAC catalog](../advanced/raster-catalog.md) |
 
-## Vector files and remote paths
-
-`gs.open_vector("fields.parquet")` returns a GeoDataFrame. Write it with
-`.gs.to_geoparquet(...)`, `.gs.to_geojson(...)`, or `.gs.to_geopackage(...)`.
-See [vector data](vectors.md) for a complete round trip.
-
-Locations accept strings, `Path`, or `UPath`. See
-[storage and file layouts](../concepts/storage.md) for suffixes, tree paths,
-remote credentials, and the difference between lazy pixels and windowed downloads.
+`gs.open_raster` reads one Dataset. Use `gs.open_raster_tree` when a Zarr or
+NetCDF file contains a hierarchy of groups. See [I/O reference](../reference/io.md)
+for format options and [storage concepts](../concepts/storage.md) for remote paths.

@@ -40,26 +40,29 @@ def build_tree(seed: int) -> xr.DataTree:
 @pytest.mark.parametrize("mode", ["reflect", "edge", "wrap", "constant", "shift"])
 def test_tensor_chips_equal_raster_chips(mode):
     trees = [build_tree(0), build_tree(1)]
-    batch = default_collate([trees[0].gs.to_tensor(), trees[1].gs.to_tensor()])
+    samples = []
+    for tree in trees:
+        samples.append(tree.gs.to_tensor(grid=True, context=["time"]))
+    batch = default_collate(samples)
     raster = RasterChipper(trees, size=16, stride=12, mode=mode)
 
     tensor = TensorChipper(batch, pixels=["image"], size=16, stride=12, mode=mode)
 
     assert len(tensor) == len(raster)
     for index in range(len(raster)):
-        expected = raster[index].gs.to_tensor()
+        expected = raster[index].gs.to_tensor(grid=True, context=["time"])
         actual = tensor[index]
         assert set(actual) == set(expected)
         torch.testing.assert_close(actual["image"], expected["image"])
         torch.testing.assert_close(actual["transform"], expected["transform"])
         torch.testing.assert_close(actual["time"], expected["time"])
-        assert actual["crs"] == expected["crs"]
+        torch.testing.assert_close(actual["crs"], expected["crs"])
 
 
 @pytest.mark.parametrize("window", ["boxcar", "hann"])
 def test_tensor_merge_equals_raster_merge(window):
     trees = [build_tree(0), build_tree(1)]
-    batch = default_collate([trees[0].gs.to_tensor(), trees[1].gs.to_tensor()])
+    batch = default_collate([trees[0].gs.to_tensor(grid=True), trees[1].gs.to_tensor(grid=True)])
     chipper = TensorChipper(batch, pixels=["image"], size=16, stride=12)
     raster = RasterMerger(chipper.layout, window=window)
     tensor = TensorMerger(chipper.layout, window=window)
@@ -80,12 +83,13 @@ def test_tensor_merge_equals_raster_merge(window):
 
 def test_chip_samples_keep_the_batch_structure():
     tree = build_tree(0)
-    sample = tree.gs.to_tensor()
+    sample = tree.gs.to_tensor(grid=True, context=["centroid"])
     scene = {
         "inputs": {"image": sample["image"], "season": torch.tensor([3.0])},
         "target": torch.zeros(50, 70, dtype=torch.long),
         "transform": sample["transform"],
         "crs": sample["crs"],
+        "context": {"centroid": sample["centroid"]},
     }
     batch = default_collate([scene, scene])
 
@@ -96,11 +100,13 @@ def test_chip_samples_keep_the_batch_structure():
     torch.testing.assert_close(chips["inputs"]["season"], torch.tensor([[3.0], [3.0]]))
     # Entries not named in `pixels` are the chip's sample's, uncut.
     assert chips["target"].shape == (2, 50, 70)
-    assert chips["crs"] == ["EPSG:32749", "EPSG:32749"]
+    assert chips["crs"].tolist() == [32749, 32749]
+    # Context read from the scene stays the scene's; only `transform` moves.
+    torch.testing.assert_close(chips["context"]["centroid"], batch["context"]["centroid"])
 
 
 def test_dropped_edges_stay_unpredicted():
-    batch = default_collate([build_tree(0).gs.to_tensor()])
+    batch = default_collate([build_tree(0).gs.to_tensor(grid=True)])
     chipper = TensorChipper(batch, pixels=["image"], size=16, mode="drop")
     merger = TensorMerger(chipper.layout)
 

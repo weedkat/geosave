@@ -541,6 +541,42 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.core.raster.utils.context.TENSOR_CONTEXT
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.build_sample
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_centroid
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_day_of_year
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_hour
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_time
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_timeline
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_week
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.read_year
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.core.raster.utils.stack.extend_pixels
     options:
       show_root_full_path: true
@@ -614,18 +650,6 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.core.vector.catalog.dated
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.vector.catalog.one_collection
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.vector.catalog.stac_collections
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.vector.catalog.stac_items
     options:
       show_root_full_path: true
 
@@ -1262,7 +1286,15 @@ fields appear as attributes, including their annotated types and defaults.
         - chunkmanager_store_kwargs
         - synchronizer
 
+::: geosave.geodata.io.raster.zarr.create_zarr
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.io.raster.zarr.encode_fill_value
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.raster.zarr.find_run
     options:
       show_root_full_path: true
 
@@ -1291,6 +1323,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.raster.zarr.write_zarr
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.raster.zarr.write_zarr_region
     options:
       show_root_full_path: true
 
@@ -1371,10 +1407,6 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.io.vector.geoparquet.read_footer
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.io.vector.geoparquet.restore_stac_attrs
     options:
       show_root_full_path: true
 
@@ -1464,14 +1496,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.vector.stac_geoparquet.select_referenced
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.io.vector.stac_geoparquet.to_relative_items
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.io.vector.stac_geoparquet.write_stac_geoparquet
     options:
       show_root_full_path: true
@@ -1511,6 +1535,10 @@ fields appear as attributes, including their annotated types and defaults.
         - left
 
 ::: geosave.geodata.sampling.layout.ChipMode
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.sampling.layout.find_chip_span
     options:
       show_root_full_path: true
 
@@ -1561,35 +1589,67 @@ fields appear as attributes, including their annotated types and defaults.
         - add
         - merge
 
-::: geosave.geodata.stac.catalog.FOOTER_KEY
+::: geosave.geodata.stac.catalog.collections.NAVIGATION_RELS
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.ITEM_COLUMNS
+::: geosave.geodata.stac.catalog.collections.concat_catalogs
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.NAVIGATION_RELS
+::: geosave.geodata.stac.catalog.collections.merge_collections
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.SOURCE_KEY
+::: geosave.geodata.stac.catalog.collections.read_collections
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.build_item
+::: geosave.geodata.stac.catalog.hrefs.ABSOLUTE_HREF
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.concat_catalogs
+::: geosave.geodata.stac.catalog.hrefs.resolve_hrefs
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.create_catalog
+::: geosave.geodata.stac.catalog.items.build_item
     options:
       show_root_full_path: true
 
-::: geosave.geodata.stac.catalog.merge_collections
+::: geosave.geodata.stac.catalog.items.create_catalog
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.items.to_items
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.layout.FOOTER_KEY
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.layout.ITEM_COLUMNS
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.layout.read_assets
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.layout.to_arrow
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.rules.one_collection
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.rules.stac_collections
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.rules.stac_items
     options:
       show_root_full_path: true
 

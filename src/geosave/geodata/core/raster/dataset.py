@@ -948,27 +948,44 @@ class GeoDataset(
             array = array.astype(dtype)
         return array.values
 
-    def to_tensor(self, *, dtype: str | torch.dtype | None = None) -> torch.Tensor:
-        """Stack every variable into one model-input tensor, laid out as `to_numpy`.
+    def to_tensor(
+        self,
+        name: str,
+        *,
+        dtype: str | torch.dtype | None = None,
+        grid: bool = False,
+        context: Sequence[str] = (),
+    ) -> dict[str, torch.Tensor]:
+        """Stack every variable into one layer tensor named `name`, with the grid and context.
 
         Args:
+            name: Key of the layer, the input name a model chain takes it by.
             dtype: Torch dtype or its string name. None keeps the source dtype,
                 which every variable must then share.
+            grid: Add `transform` and `crs`, as `DataTree.gs.to_tensor` does.
+            context: Names in `TENSOR_CONTEXT` whose readers add one entry each.
 
         Returns:
-            Tensor shaped `(*axes, band, y, x)`.
+            {name: tensor shaped `(*axes, band, y, x)`, plus the grid and
+            context entries asked for}.
 
         Raises:
-            ValueError: A dtype name is unknown, or `to_numpy` refuses the
-                raster.
+            KeyError: A context name is not in `TENSOR_CONTEXT`.
+            ValueError: A dtype name is unknown, `to_numpy` refuses the
+                raster, `name` takes the name of an entry, or the CRS has no
+                EPSG code.
             TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
                 dtype has no tensor equivalent.
 
         Examples:
-            >>> ds[["B04", "B08"]].gs.to_tensor(dtype="float32").shape
+            >>> ds[["B04", "B08"]].gs.to_tensor("image", dtype="float32")["image"].shape
             torch.Size([2, 2, 256, 256])
         """
-        return as_tensor(self.to_numpy, dtype)
+        from .utils.context import build_sample
+
+        layers = {name: as_tensor(self.to_numpy, dtype)}
+        tree = xr.DataTree.from_dict({name: self._data})
+        return build_sample(layers, tree, grid=grid, context=context)
 
     def mask_and_scale(self) -> Dataset:
         """Decode the Dataset's CF values, coordinates and relationships lazily.
@@ -992,6 +1009,7 @@ class GeoDataset(
         self,
         path: Location,
         *,
+        collection: pystac.Collection | None = None,
         item_dim: str = TIME_COORDINATE,
         id_format: str = ITEM_ID_FORMAT,
         overwrite: bool = False,
@@ -1006,6 +1024,8 @@ class GeoDataset(
 
         Args:
             path: Folder or URL prefix to publish under.
+            collection: Collection the Items belong to. None keeps the one
+                the Dataset states, or none; give a derived raster its own.
             item_dim: Dimension holding one Item per position.
             id_format: GeoRegion.format template for each Item id.
             overwrite: Replace existing files when true.
@@ -1013,8 +1033,8 @@ class GeoDataset(
             **options: COG creation options, passed to GDAL unchanged.
 
         Returns:
-            Item table, one row per Item, carrying the Collection when the
-            Dataset states one; write it with `.gs.to_geoparquet`.
+            Item table, one row per Item, carrying the Collection when
+            there is one; write it with `.gs.to_geoparquet`.
 
         Raises:
             KeyError: `item_dim` is absent.
@@ -1023,13 +1043,14 @@ class GeoDataset(
 
         Examples:
             >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
+            >>> catalog = water.gs.to_catalog("s3://bucket/water", collection=water_maps)
             >>> catalog.gs.to_geoparquet("s3://bucket/s2/catalog.parquet")
         """
         from geosave.geodata.stac.catalog import create_catalog
         from geosave.geodata.stac.raster import RasterStac
 
         staged = RasterStac.from_dataset(
-            self._data, item_dim=item_dim, id_format=id_format
+            self._data, collection=collection, item_dim=item_dim, id_format=id_format
         )
         items = staged.to_cog(
             path, overwrite=overwrite, storage_options=storage_options, **options

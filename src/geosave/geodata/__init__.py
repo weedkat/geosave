@@ -26,6 +26,7 @@ from .sampling import (
 from geosave.geodata.io.gdal_env import configure_gdal
 from .errors import RasterValidationError, VectorValidationError
 from .core.raster.utils.statistics import class_percent, statistics
+from .core.raster.utils.context import TENSOR_CONTEXT
 
 if TYPE_CHECKING:
     from . import features, stac
@@ -128,4 +129,5 @@ __all__ = [
     "stac",
     "class_percent",
     "statistics",
+    "TENSOR_CONTEXT",
 ]

@@ -38,7 +38,7 @@ def test_geodata_loads_no_torch():
 def test_model_core_loads_no_lightning():
     imports = (
         "geosave.ml.chain, geosave.ml.components.build, geosave.ml.components.head, "
-        "geosave.ml.processing.processor"
+        "geosave.ml.processing.raster.pipeline"
     )
     assert not _loads(imports, "lightning")
 

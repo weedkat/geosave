@@ -4,13 +4,13 @@
         artifacts/<name>/version_0/checkpoints/last.ckpt \\
         --release-repo org/model --training-repo org/model-training
 
-Without the repos, only the local release folder is written.
+Pass --out release/model to retain an optional local export.
 
-    checkpoint ──▶ {out}: config.json + model.safetensors ──▶ release repo (public)
+    checkpoint ──▶ release repo (public), optionally exported under release/
     workspace code + this run ──────────────────────────────▶ training repo (private)
 
 The release holds the chain alone: this method defines no ingestor or
-postprocessor yet, so `ChainModel.from_processor` cannot release a processor.
+postprocessor yet, so `ChainModel.from_pipeline` cannot release a pipeline.
 Data belongs in its own dataset repo; LitData stores stay local.
 """
 
@@ -24,18 +24,27 @@ from geosave.ml.release import ChainModel
 
 # An allowlist, so `.env` credentials, data, and other runs never reach the Hub.
 # Top-level files are named: a `*` pattern also matches inside folders.
-WORKSPACE_FILES = ["main.py", "README.md", "configs/**", "scripts/**", "modules/**"]
+WORKSPACE_FILES = [
+    "main.py",
+    "README.md",
+    "project.yaml",
+    "configs/**",
+    "scripts/**",
+    "modules/**",
+]
 COMPILED_FILES = ["*.pyc", "**/__pycache__/**"]
 
 
 def main() -> None:
-    """Write the release folder; upload it and the run when repos are given."""
+    """Publish the release; optionally export locally and archive the run."""
     parser = ArgumentParser(description=__doc__)
     parser.add_argument(
         "checkpoint", type=Path, help="Lightning checkpoint to release."
     )
-    parser.add_argument("--out", type=Path, default=Path("artifacts/release/model"))
-    parser.add_argument("--release-repo", help="Public model repo users load.")
+    parser.add_argument("--out", type=Path, help="Optional local release directory.")
+    parser.add_argument(
+        "--release-repo", required=True, help="Public model repo users load."
+    )
     parser.add_argument("--training-repo", help="Private repo of code and runs.")
     args = parser.parse_args()
 
@@ -47,8 +56,10 @@ def main() -> None:
 
     # Release: the trained chain, rebuilt from its registered recipe.
     task = Module.load_from_checkpoint(checkpoint, map_location="cpu")
-    ChainModel.from_chain(task.model).save_pretrained(args.out)
-    print(args.out)
+    release = ChainModel.from_chain(task.model)
+    if args.out is not None:
+        release.save_pretrained(args.out)
+        print(args.out)
 
     api = HfApi()
     if args.training_repo is not None:
@@ -69,14 +80,8 @@ def main() -> None:
         )
         print(f"Archived {run} in {args.training_repo} at {commit.oid}")
 
-    if args.release_repo is not None:
-        api.create_repo(args.release_repo, exist_ok=True)
-        commit = api.upload_folder(
-            repo_id=args.release_repo,
-            folder_path=args.out,
-            commit_message=f"Release {checkpoint.name}",
-        )
-        print(f"Released {args.release_repo} at {commit.oid}")
+    commit = release.push_to_hub(args.release_repo)
+    print(f"Released {args.release_repo} at {commit.oid}")
 
 
 if __name__ == "__main__":

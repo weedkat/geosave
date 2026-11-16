@@ -11,7 +11,7 @@ from geosave.geodata import (
     open_raster,
 )
 from tests.conftest import build_dataset
-from tests.geodata.conftest import build_raster, geobox
+from tests.geodata.conftest import build_raster, create_test_collection, geobox
 from tests.geodata.core.raster.conftest import optical
 
 import dask.array as da
@@ -242,7 +242,10 @@ def test_to_numpy_casts_variables_onto_one_dtype() -> None:
 
 
 def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout(torch) -> None:
-    tensor = optical().gs.to_tensor()
+    sample = optical().gs.to_tensor("image", grid=True, context=["centroid"])
+
+    assert list(sample) == ["image", "transform", "crs", "centroid"]
+    tensor = sample["image"]
 
     assert tensor.dtype is torch.uint16
     assert tuple(tensor.shape) == (2, 2, 8, 8)
@@ -395,9 +398,13 @@ def test_catalog_publishes_one_cog_per_variable_and_item_and_loads_back(tmp_path
     scene = build_raster(times=2, packed=True)
     scene = scene.gs.write_stac_property("eo:cloud_cover", [10.0, 40.0])
 
-    catalog = scene.gs.to_catalog(tmp_path, id_format="{start:%Y%m%d}")
+    collection = create_test_collection("optical", description="Optical")
+    catalog = scene.gs.to_catalog(
+        tmp_path, collection=collection, id_format="{start:%Y%m%d}"
+    )
 
     assert catalog["id"].tolist() == ["20250601", "20250602"]
+    assert catalog["collection"].tolist() == ["optical", "optical"]
     assert catalog["eo:cloud_cover"].tolist() == [10.0, 40.0]
     assert (tmp_path / "20250602" / "nir.tif").exists()
     items = catalog.gs.to_items()
@@ -405,7 +412,7 @@ def test_catalog_publishes_one_cog_per_variable_and_item_and_loads_back(tmp_path
     for name in scene.data_vars:
         np.testing.assert_array_equal(loaded[name].values, scene[name].values)
     with pytest.raises(FileExistsError):
-        scene.gs.to_catalog(tmp_path, id_format="{start:%Y%m%d}")
+        scene.gs.to_catalog(tmp_path, collection=collection, id_format="{start:%Y%m%d}")
 
 
 def test_one_item_reads_its_property_values_and_declared_extensions():

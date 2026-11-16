@@ -1,10 +1,10 @@
-"""Model chains, components, processors, releases and training support.
+"""Model chains, components, pipelines, releases and training support.
 
 Public names load on first use, so `import geosave.ml` pays for neither
 torch nor Lightning.
 
 Examples:
-    >>> from geosave.ml import ModelChain, build_model, chain_step, load_processor
+    >>> from geosave.ml import ModelChain, build_model, chain_step, load_pipeline
 """
 
 from importlib import import_module
@@ -16,35 +16,31 @@ if TYPE_CHECKING:
     from .components.catalog import list_models
     from .components.published import Published
     from .factory import BuildSpec, Registry
-    from .processing.processor import Processor, ProcessorSpec, build_processor
-    from .release import load_processor
+    from .processing.raster.pipeline import RasterPipeline
+    from .release import load_pipeline
 
 _LAZY = {
     "BuildSpec": "factory",
     "ModelChain": "chain",
-    "Processor": "processing.processor",
-    "ProcessorSpec": "processing.processor",
     "Published": "components.published",
+    "RasterPipeline": "processing.raster.pipeline",
     "Registry": "factory",
     "build_model": "components.build",
-    "build_processor": "processing.processor",
     "chain_step": "chain",
     "list_models": "components.catalog",
-    "load_processor": "release",
+    "load_pipeline": "release",
 }
 
 __all__ = [
     "BuildSpec",
     "ModelChain",
-    "Processor",
-    "ProcessorSpec",
     "Published",
+    "RasterPipeline",
     "Registry",
     "build_model",
-    "build_processor",
     "chain_step",
     "list_models",
-    "load_processor",
+    "load_pipeline",
 ]
 
 

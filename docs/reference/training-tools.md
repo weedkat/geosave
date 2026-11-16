@@ -1,7 +1,7 @@
 # Training configuration and utilities
 
 Task modules and data modules use these builders and transforms. Add logging
-through Trainer. See [Train a model](../guides/training.md).
+through Trainer. See [Train a model](../advanced/training.md).
 
 ## Optimizer, scheduler, and loss builders
 
@@ -11,7 +11,6 @@ through Trainer. See [Train a model](../guides/training.md).
         - name
         - class_path
         - init_args
-        - resolve
 
 ::: geosave.ml.builders.OptimizerSpec
     options:
@@ -19,7 +18,6 @@ through Trainer. See [Train a model](../guides/training.md).
         - name
         - class_path
         - init_args
-        - resolve
 
 ::: geosave.ml.builders.SchedulerSpec
     options:
@@ -27,7 +25,6 @@ through Trainer. See [Train a model](../guides/training.md).
         - name
         - class_path
         - init_args
-        - resolve
 
 ::: geosave.ml.builders.build_criterion
 
@@ -55,7 +52,7 @@ through Trainer. See [Train a model](../guides/training.md).
 Thresholds are postprocessor configuration, not model state. Calibration is in
 progress: `calibrate_thresholds` raises `NotImplementedError`.
 
-::: geosave.ml.processing.thresholds.calibrate_thresholds
+::: geosave.ml.processing.raster.postprocessing.thresholds.calibrate_thresholds
 
 ## Workspace entry point
 

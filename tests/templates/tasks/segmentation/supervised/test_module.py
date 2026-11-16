@@ -83,7 +83,7 @@ def build_module(model_chain, **changes) -> supervised.Module:
         "optimizer": {"name": "adamw", "init_args": {"lr": 1e-3}},
         "lr_scheduler": None,
         "metrics": ["iou.macro"],
-        "predictor": {"name": "chips", "init_args": {"size": 2}},
+        "predictor": {"name": "dense", "init_args": {"size": 2}},
     }
     arguments.update(changes)
     return supervised.Module(**arguments)
@@ -278,7 +278,7 @@ def test_lightning_cli_parses_nested_construction_specs(
                 "model_chain": stages,
                 "ignore_index": -1,
                 "metrics": ["iou.macro"],
-                "predictor": {"name": "chips", "init_args": {"size": 2}},
+                "predictor": {"name": "dense", "init_args": {"size": 2}},
                 "criterion": {
                     "class_path": "torch.nn.CrossEntropyLoss",
                     "init_args": {"ignore_index": -1},
@@ -374,7 +374,7 @@ def test_validation_chips_and_merges_scenes_larger_than_a_chip(stages, tmp_path,
     }
     task = build_module(
         stages,
-        predictor={"name": "chips", "init_args": {"size": 2, "mode": mode}},
+        predictor={"name": "dense", "init_args": {"size": 2, "mode": mode}},
     )
     trainer = Trainer(
         accelerator="cpu",

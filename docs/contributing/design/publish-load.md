@@ -2,7 +2,7 @@
 
 Updated against library source on 2026-11-15. This page records implemented
 boundaries and unresolved choices. For a runnable round trip, use the
-[catalog tutorial](../../guides/catalogs-and-cuts.md).
+[catalog tutorial](../../advanced/raster-catalog.md).
 
 ## Current flow
 
@@ -34,8 +34,8 @@ separately from this COG catalog route.
 | Write assets and describe them | `RasterStac.to_cog` writes `<root>/<item>/<asset>.tif`; `StacItem.from_region` and `add_raster_asset` build metadata |
 | One-grid publication shortcut | `Dataset.gs.to_catalog` stages, writes and converts to rows |
 | Items → rows | `stac.create_catalog` |
-| Rows ⇄ file | `.gs.to_geoparquet`, `open_vector`; relative asset hrefs in the file |
-| Rows → native Items | `.gs.to_items`, resolving hrefs against the source file |
+| Rows ⇄ file | `.gs.to_geoparquet`, `open_vector`; absolute asset hrefs, Arrow written directly |
+| Rows → native Items | `.gs.to_items`, the one conversion in `stac.catalog.items.to_items` |
 | Rows → Dataset | `.gs.to_dataset`, validating Items and at most one collection |
 | Items → Dataset | `stac.load_dataset`, ODC and registered stamps |
 | Items → native-grid groups | `stac.load_native_datasets`, yielding `(crs, resolution, dataset)` |
@@ -73,10 +73,10 @@ properties and decode policy when loading.
   Item properties, the Collection, or neither unless explicitly marked.
 - **Native-grid results:** keep `(crs, resolution, dataset)` tuples or return only
   Datasets, which already state their grids?
-- **Derived Collections:** callers currently replace source Collection metadata
-  themselves. Decide whether publication should take an explicit Collection.
-- **Catalog concatenation:** different source-file bases are refused. Resolving
-  all hrefs on read could remove that restriction, at the cost of changing in-memory rows.
+- **Derived Collections:** settled 2026-11-16: publication takes an optional
+  `collection=`, which replaces the one the raster states. STAC GeoParquet
+  does not require a Collection, so none is demanded; a pgstac export would.
+  Open: building a Collection still needs a hand-written pystac extent.
 - **Publication options:** lazy writes, standalone STAC JSON, Zarr assets and
   classification extension output are not implemented in this path.
 - **Write failure boundaries:** consider validating all destinations before the

@@ -45,7 +45,7 @@ class GeoCatalogItem:
         """Require every table rule of this record, as a one-row table.
 
         Args:
-            *rules: Table rules from `core.vector.catalog`, such as `stac_items`.
+            *rules: Table rules, such as `stac.catalog.stac_items`.
 
         Raises:
             VectorValidationError: A rule is broken.
@@ -96,12 +96,10 @@ class GeoCatalogItem:
             >>> catalog.iloc[0].gs.to_item().id
             '20250601T103000'
         """
-        import pystac
         import shapely
         from stac_geoparquet import to_dict
 
-        from geosave.geodata.core.vector.catalog import stac_items
-        from geosave.geodata.stac.catalog import FOOTER_KEY, SOURCE_KEY, build_item
+        from geosave.geodata.stac.catalog import build_item, read_collections, stac_items
 
         self.validate(stac_items)
         item_dict = to_dict(self._row.to_dict())
@@ -109,15 +107,7 @@ class GeoCatalogItem:
         item_dict["bbox"] = shapely.bounds(self._row["geometry"]).tolist()
 
         # pandas carries the table's attrs onto each of its rows.
-        footer = self._row.attrs.get(FOOTER_KEY, {})
-        collections_by_id = {}
-        for collection_id, collection_dict in footer.get("collections", {}).items():
-            collections_by_id[collection_id] = pystac.Collection.from_dict(collection_dict)
-        return build_item(
-            item_dict,
-            source_file=self._row.attrs.get(SOURCE_KEY),
-            collections_by_id=collections_by_id,
-        )
+        return build_item(item_dict, read_collections(self._row.attrs))
 
     def read_pixels(self, *args: Any, **kwargs: Any) -> Dataset:
         """Read the row's pixels onto a grid from the overview that fits it.

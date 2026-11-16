@@ -8,7 +8,7 @@ geosave publish --help
 ```
 
 These commands show the installed version's accepted inputs. Use the
-[workspace guide](../guides/workspaces.md) for a complete activity.
+[workspace guide](../advanced/training.md) for a complete activity.
 
 ## Create a project
 
@@ -25,7 +25,8 @@ geosave create demo --task lightning --method boilerplate
 
 The output is an editable project with local training implementations, config,
 and method-specific scripts. It does not train or download data. Task/method
-validation happens before writing files. Geospatial recipes remain paused;
+validation happens before writing files. Geospatial recipes need project data
+or integration work;
 see [method availability](training.md).
 
 ## Add a task and method
@@ -46,8 +47,10 @@ not copied again. Existing incidental files trigger overwrite/skip prompts.
 
 `geosave publish [CHECKPOINT] --repo ORG/NAME` is a placeholder: it prints that
 it is not implemented yet and exits with status 1. Use
-[the model release API](../guides/release.md) for trained registered chains.
-The geospatial starter publication scripts depend on paused workflows.
+[the model release API](../advanced/release.md) for trained registered chains.
+The supervised-segmentation script supports separate release and training
+repositories; [workspace publication status](../advanced/training.md#save-and-share-your-work)
+describes its scope and the older scripts' limitations.
 
 ## Shared options
 
@@ -57,3 +60,17 @@ installs it for the current shell. The CLI currently calls automatic `.env` disc
 the installed library rather than your workspace. Export required settings
 explicitly until workspace lookup is corrected; generated training startup
 does not itself load `.env`.
+
+## Project ownership and outputs
+
+A project has one data preparation workflow and one AI task. Selecting a task
+writes `project.yaml` with `task` and `data` fields. `add-task` can add another
+method for that task; selecting a different task requires another project.
+With the task recorded, `geosave add-task --method fixmatch` uses it directly.
+Generated methods live in `modules/<method>/`, with scripts under
+`scripts/<method>/`. The template catalogue remains grouped by task and method.
+The project README owns the task explanation, experiment plan and results.
+
+TensorBoard runs live in `artifacts/<model_name>/version_N/`; leave checkpoint
+`dirpath` unset to save under that run's `checkpoints/`. Local inference exports
+belong in `release/`, and native `push_to_hub(repo_id)` publishes directly.

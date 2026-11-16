@@ -29,9 +29,12 @@ def test_a_raster_pair_reads_as_reflectance_and_class_ids(tmp_path):
             "class_path": "modules.segmentation.supervised.processing.Reflectance"
         },
         num_classes=2,
+        context=["centroid"],
     )
     sample = dataset[0]
 
-    assert sample["inputs"]["image"].shape == (4, 8, 8)
-    assert np.allclose(sample["inputs"]["image"].numpy(), 0.2)
+    assert sample["image"].shape == (4, 8, 8)
+    assert np.allclose(sample["image"].numpy(), 0.2)
     assert sample["target"].tolist() == np.eye(8, dtype="int64").tolist()
+    assert sample["crs"].item() == 32633
+    assert sample["centroid"].shape == (2,)

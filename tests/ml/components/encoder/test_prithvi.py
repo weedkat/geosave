@@ -4,12 +4,8 @@ import numpy as np
 import pytest
 import torch
 from torch import nn
-from torch.utils.data import default_collate
 
-import xarray as xr
 
-from geosave.ml.components.encoder import prithvi
-from geosave.ml.components.encoder.grid import locate_centres
 from geosave.ml.components.encoder.prithvi import BACKBONE_REGISTRY, Prithvi, PrithviTL
 
 
@@ -32,32 +28,6 @@ def test_named_bands_keep_their_pretrained_patch_embedding(tmp_path: Path) -> No
     assert weight.shape[1] == 5
     assert torch.equal(weight[:, :4], source[:, :4])
     assert not torch.equal(weight[:, 4], source[:, 4])
-
-
-def _chip(data, column=0):
-    return data.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
-
-
-def _batch(scene, columns):
-    """Collate chips as a DataLoader does, with their grid entries."""
-    samples = []
-    for column in columns:
-        tree = xr.DataTree.from_dict({"image": _chip(scene, column)})
-        samples.append(tree.gs.to_tensor())
-    return default_collate(samples)
-
-
-def test_time_and_place_are_read_from_each_chips_grid_entries(scene):
-    batch = _batch(scene, range(2))
-
-    temporal = prithvi.temporal_coords(batch["time"])
-    location = locate_centres(batch["transform"], batch["crs"], (4, 4))
-
-    torch.testing.assert_close(
-        temporal, torch.tensor([[[2024.0, 365.0], [2024.0, 0.0]]] * 2)
-    )
-    torch.testing.assert_close(location, torch.tensor([[51.5, 10.5], [51.5, 11.5]]))
-    assert temporal.dtype == location.dtype == torch.float32
 
 
 class PatchEmbed(nn.Module):
@@ -110,12 +80,17 @@ def test_prithvi_reorders_geodata_temporal_pixels(
     expected = image.transpose(1, 2) if temporal else image
     if isinstance(model, PrithviTL):
         frames = 2 if temporal else 1
-        transform = torch.tensor([[1.0, 0, 500_000, 0, -1, 9_000_000]] * 2).double()
-        time = torch.zeros(2, frames, dtype=torch.int64)
         model.forward_pyramid(
-            image, transform=transform, crs=["EPSG:32749"] * 2, time=time
+            image,
+            centroid=torch.tensor([[51.0, 11.0]] * 2),
+            year=torch.full((2, frames), 2024),
+            day_of_year=torch.full((2, frames), 366),
         )
-        assert backbone.context["temporal_coords"].shape == (2, frames, 2)
+        # The pretrained model counts days from zero.
+        torch.testing.assert_close(
+            backbone.context["temporal_coords"],
+            torch.tensor([[[2024.0, 365.0]] * frames] * 2),
+        )
         assert backbone.context["location_coords"].shape == (2, 2)
     else:
         model.forward_pyramid(image)

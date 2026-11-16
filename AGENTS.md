@@ -13,7 +13,7 @@ designs rather than adding compatibility layers unless the user requires them.
   (Transformers and Hugging Face Hub) and reusable Lightning training support.
 - `src/geosave/cli/` and `src/templates/`: workspace generation and its source
   templates. Generated `workspace/` files belong to the user.
-- `src/geosave_flows/`: Prefect orchestration through public GeoSave APIs.
+- `src/geosave_flows/`: Prefect flows that run a released pipeline through public GeoSave APIs.
 
 Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`.
 Geodata imports must not load torch; the inference path of `ml` (chain,

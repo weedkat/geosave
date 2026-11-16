@@ -17,18 +17,23 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = (
     "index.md",
-    "first-raster.md",
-    "guides/vegetation-zones.md",
+    "basics/first-raster.md",
+    "advanced/vegetation-zones.md",
     "basics/rasters.md",
     "basics/attrs.md",
     "basics/io.md",
     "basics/vectors.md",
-    "guides/ingest-files.md",
-    "guides/chips.md",
-    "guides/catalogs-and-cuts.md",
-    "guides/model-inputs.md",
-    "quickstart.md",
-    "guides/training.md",
+    "advanced/crop-imagery.md",
+    "advanced/large-data.md",
+    "advanced/overlapping-chips.md",
+    "advanced/raster-catalog.md",
+    "advanced/models.md",
+    "advanced/model-inputs.md",
+    "concepts/xarray-structure.md",
+    "concepts/lazy-data.md",
+    "concepts/raster-grids.md",
+    "advanced/release.md",
+    "basics/training-chips.md",
 )
 
 
@@ -42,17 +47,17 @@ def read_example(page: str) -> str:
 
 
 def check_result(page: str, values: dict) -> None:
-    """Check geographic artifacts and training behavior, beyond successful execution."""
+    """Check pixels, metadata, laziness and saved artifacts after execution."""
     import numpy as np
     import torch
     import geosave as gs
 
     if page == "index.md":
-        with gs.open_raster("output/ndvi.tif") as saved:
-            assert list(saved.data_vars) == ["ndvi"]
-            assert saved.gs.geobox == values["scene"].gs.geobox
+        assert values["ndvi"].gs.geobox == values["scene"].gs.geobox
+        assert values["scene"].red.chunks is not None
+        assert values["ndvi"].chunks is not None
         values["scene"].close()
-    elif page == "first-raster.md":
+    elif page == "basics/first-raster.md":
         scene = values["scene"]
         ndvi = values["ndvi"]
         assert scene.red.chunks is not None
@@ -65,7 +70,7 @@ def check_result(page: str, values: dict) -> None:
             np.testing.assert_allclose(
                 saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
             )
-    elif page == "guides/vegetation-zones.md":
+    elif page == "advanced/vegetation-zones.md":
         summary = values["summary"]
         assert summary.index.tolist() == ["West", "East"]
         assert (summary["coverage"] > 0.9).all()
@@ -74,149 +79,243 @@ def check_result(page: str, values: dict) -> None:
             assert np.isnan(saved.ndvi.gs.nodata)
     elif page == "basics/rasters.md":
         with gs.open_raster("output/ndvi.tif") as saved:
-            assert saved.ndvi.shape == (128, 128)
-            assert saved.gs.geobox == values["patch"].gs.geobox
+            assert saved.ndvi.shape == (337, 267)
+            assert saved.gs.geobox == values["scene"].gs.geobox
     elif page == "basics/attrs.md":
-        assert values["labels"].label.gs.flags.classes == {
-            0: "background",
-            1: "forest",
-            2: "water",
-        }
+        assert values["labels"].label.gs.flags.classes[1] == "trees"
+        assert values["labels"].label.gs.nodata == 255
+        assert values["labels"].label.dtype == np.uint8
+        assert values["reflectance"].red.chunks is not None
+        assert values["image"].red.dtype == np.uint16
+        assert values["reflectance"].red.dtype == np.float64
         np.testing.assert_allclose(
-            values["reflectance"].values,
-            [[np.nan, 0.1], [0.2, 0.3]],
+            values["reflectance"].red.values,
+            values["image"].red.where(values["image"].red != 0).values * 0.0001,
             equal_nan=True,
         )
-        assert values["stored"].dtype == np.uint16
     elif page == "basics/io.md":
         for name in ("scene.tif", "scene.zarr", "scene.nc"):
-            with gs.open_raster(values["root"] / name) as saved:
-                np.testing.assert_array_equal(saved.red.values, values["pixels"])
-                assert saved.gs.geobox == values["grid"]
-                assert saved.red.dtype == np.uint8
-                assert saved.red.gs.nodata == 0
+            with gs.open_raster(Path("output") / name) as saved:
+                assert set(saved.data_vars) == {"red", "nir"}
+                assert saved.gs.geobox == values["image"].gs.geobox
+                for band in ("red", "nir"):
+                    source = values["image"][band]
+                    np.testing.assert_array_equal(saved[band].values, source.values)
+                    assert saved[band].dtype == source.dtype
+                    assert saved[band].gs.nodata == source.gs.nodata
+                    assert saved[band].gs.packing == source.gs.packing
     elif page == "basics/vectors.md":
         from geopandas.testing import assert_geodataframe_equal
 
         assert_geodataframe_equal(values["reopened"], values["selected"])
-    elif page == "guides/chips.md":
-        assert values["pixels"].shape == (2, 128, 128)
-        with gs.open_raster("output/red-copy.tif") as saved:
-            with gs.open_raster("sample-scene.tif") as source:
-                assert saved.gs.geobox == source.gs.geobox
-                # Weighted merging accumulates float32 scores, so allow rounding.
-                np.testing.assert_allclose(
-                    saved.red_copy.values, source.red.values, rtol=1e-6, atol=1e-3
-                )
-    elif page == "guides/catalogs-and-cuts.md":
-        assert values["items"]["id"].tolist() == ["20250101", "20250201", "20250301"]
-        np.testing.assert_allclose(values["means"].values, [1, 1])
-        assert values["observations"].gs.geobox == values["grid"]
-    elif page == "guides/model-inputs.md":
-        image = values["inputs"]["image"]
-        assert image.shape == (2, 128, 128)
+    elif page == "advanced/overlapping-chips.md":
+        assert len(values["chips"]) == 9
+        assert values["sample"]["image"].shape == (4, 128, 128)
+        assert values["sample"]["labels"].shape == (1, 128, 128)
+        assert values["sample"]["labels"].dtype == torch.uint8
+        assert values["chip"]["image"].gs.geobox == values["chip"]["labels"].gs.geobox
+        expected = values["labels"].gs.crop_to_grid(values["chip"].gs.geobox)
+        np.testing.assert_array_equal(
+            values["sample"]["labels"][0].numpy(), expected.label.values
+        )
+    elif page == "advanced/raster-catalog.md":
+        assert values["items"]["id"].tolist() == ["20250627"]
+        assert values["loaded"].gs.geobox == values["scene"].gs.geobox
+        assert values["loaded"].sizes["time"] == 1
+        for band in ("red", "green", "blue", "nir"):
+            assert values["loaded"][band].chunks is not None
+            np.testing.assert_array_equal(
+                values["loaded"][band].values[0],
+                values["scene"][band].values,
+            )
+    elif page == "concepts/lazy-data.md":
+        assert values["ndvi"].chunks == ((128, 128, 81), (128, 128, 11))
+    elif page == "concepts/raster-grids.md":
+        assert values["aligned"]
+    elif page == "concepts/xarray-structure.md":
+        import xarray as xr
+
+        red = values["red"]
+        scene = values["scene"]
+        assert red.dims == ("y", "x")
+        assert dict(red.sizes) == {"y": 2, "x": 3}
+        assert values["position"] == 1
+        np.testing.assert_array_equal(values["selected"].values, [0.2, 0.5])
+        assert list(red.indexes) == ["y", "x"]
+        assert red.column_name.dims == ("x",)
+        assert values["by_name"].indexes["column_name"].get_loc("centre") == 1
+        assert list(scene.data_vars) == ["red", "nir", "cloud"]
+        assert scene.cloud.dims == ("x",)
+        xr.testing.assert_identical(scene["red"], red)
+        inherited = values["image"].to_dataset(inherit="all_coords")
+        assert "time" in inherited.coords
+        assert "title" not in inherited.attrs
+    elif page == "advanced/model-inputs.md":
+        image = values["sample"]["image"]
+        assert image.shape == (2, 337, 267)
         assert image.dtype == torch.float32
         with gs.open_raster("sample-scene.tif") as source:
-            selected = source[["red", "nir"]].isel(y=slice(0, 128), x=slice(0, 128))
-            expected = selected.gs.mask_and_scale().gs.to_numpy(dtype="float32")
-        np.testing.assert_allclose(image.numpy(), expected)
-    elif page == "guides/ingest-files.md":
-        with gs.open_raster("prepared/ndvi.tif") as saved:
-            assert saved.gs.geobox == values["patch"].gs.geobox
-            assert saved.ndvi.shape == (128, 128)
-    elif page == "quickstart.md":
-        assert len(values["chips"]) == 16
-        assert isinstance(values["chip"], np.ndarray)
-        assert tuple(values["image"].shape) == (2, 32, 32)
-        assert tuple(values["target"].shape) == (32, 32)
-        assert set(values["target"].unique().tolist()) == {0, 1}
-    elif page == "guides/training.md":
-        valid = values["valid"]
-        image, _ = valid[0]
-        with torch.inference_mode():
-            before = values["model"](image.unsqueeze(0))
-            after = values["restored"](image.unsqueeze(0))
-        torch.testing.assert_close(before, after)
-        assert torch.isfinite(before).all()
-        assert torch.isfinite(values["trainer"].callback_metrics["val_loss"])
-        with gs.open_raster("output/prediction.tif") as saved:
-            assert saved.gs.geobox == values["scene"].isel(x=slice(64, 128)).gs.geobox
-            np.testing.assert_array_equal(
-                saved.prediction.values, values["prediction"].values
+            expected = source[["red", "nir"]].gs.mask_and_scale().fillna(0)
+            np.testing.assert_allclose(
+                image.numpy(), expected.gs.to_numpy(dtype="float32")
             )
-            assert saved.prediction.dtype == np.uint8
-    elif page == "guides/download-imagery.md":
+    elif page == "advanced/crop-imagery.md":
+        with gs.open_raster("prepared/ndvi.tif") as saved:
+            assert saved.gs.geobox == values["area"].gs.geobox
+            assert saved.ndvi.shape == (169, 134)
+    elif page == "advanced/large-data.md":
+        assert values["ndvi"].chunks is not None
+        with gs.open_raster(values["store"]) as saved:
+            assert saved.gs.geobox == values["area"].gs.geobox
+            np.testing.assert_allclose(
+                saved.ndvi.values,
+                values["ndvi"].values,
+                equal_nan=True,
+            )
+    elif page == "advanced/release.md":
+        import xarray as xr
+
+        xr.testing.assert_identical(values["product"], values["reloaded_product"])
+        with gs.open_raster("sample-scene.tif") as source:
+            assert values["product"].gs.geobox == source.gs.geobox
+        classes = values["product"]["class_id"]
+        assert classes.dtype == np.uint8
+        assert classes.gs.nodata == 255
+        assert classes.gs.flags.classes == {0: "water", 1: "vegetation", 2: "bare"}
+        with gs.open_raster(values["store"]) as saved:
+            assert saved.gs.geobox == values["product"].gs.geobox
+            assert saved.class_id.dtype == classes.dtype
+            assert saved.class_id.gs.nodata == classes.gs.nodata
+            assert saved.class_id.gs.flags == classes.gs.flags
+            assert np.isin(saved.class_id.values, [0, 1, 2]).all()
+    elif page == "basics/training-chips.md":
+        sample = values["sample"]
+        assert len(values["chips"]) == 4
+        assert set(sample) == {"image", "labels"}
+        assert tuple(sample["image"].shape) == (4, 128, 128)
+        assert tuple(sample["labels"].shape) == (1, 128, 128)
+        assert sample["image"].is_floating_point()
+        assert sample["labels"].dtype == torch.uint8
+        assert torch.isfinite(sample["image"]).all()
+        with gs.open_raster("training-labels.tif") as labels:
+            expected = labels.label.isel(y=slice(0, 128), x=slice(0, 128))
+            np.testing.assert_array_equal(sample["labels"][0].numpy(), expected.values)
+            assert values["chip"].gs.geobox == expected.gs.geobox
+    elif page == "advanced/download-imagery.md":
         with gs.open_raster("imagery/scene.tif") as saved:
             assert saved.gs.geobox == values["scene"].gs.geobox
             assert set(saved.data_vars) == {"red", "green", "blue", "nir"}
             assert np.isfinite(saved.red.values).any()
 
 
-def save_figures(values: dict) -> None:
-    """Render actual tutorial data and predictions as compact documentation images."""
-    import matplotlib
-
-    matplotlib.use("Agg")
+def save_xarray_previews(values: dict) -> None:
+    """Export native notebook displays and illustrate the example's index lookup."""
     import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap
-    import numpy as np
-    import geosave as gs
+    import xarray as xr
+    from matplotlib.patches import Rectangle
 
-    assets = ROOT / "docs" / "assets"
-    plt.rcParams.update(
-        {"font.size": 11, "axes.spines.top": False, "axes.spines.right": False}
-    )
-    with gs.open_raster(assets / "sample-scene.tif") as scene:
-        rgb = (
-            scene[["red", "green", "blue"]]
-            .to_array()
-            .transpose("y", "x", "variable")
-            .values
+    for name, obj in (("dataarray", values["red"]), ("dataset", values["scene"])):
+        with xr.set_options(display_default_indexes=True, display_expand_indexes=True):
+            display = obj._repr_html_()
+        document = (
+            '<!doctype html><html lang="en"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f"<title>xarray {name} example</title>"
+            "<style>body{margin:8px;background:white;color:#222;"
+            "font:14px system-ui,sans-serif}.xr-wrap{max-width:100%}</style>"
+            f"<body>{display}</body></html>"
         )
-        low, high = np.percentile(rgb, [2, 98], axis=(0, 1))
-        rgb = np.clip((rgb - low) / (high - low), 0, 1)
-        ndvi = gs.features.ndvi(scene, nir="nir", red="red").values
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5), layout="constrained")
-    axes[0].imshow(rgb)
-    axes[0].set_title("Sentinel-2 · Natural color", loc="left", fontweight="bold")
-    plot = axes[1].imshow(ndvi, cmap="YlGn", vmin=-0.2, vmax=0.9)
-    axes[1].set_title("Vegetation index · NDVI", loc="left", fontweight="bold")
-    fig.colorbar(plot, ax=axes[1], shrink=0.72, label="NDVI")
-    for axis in axes:
-        axis.set_axis_off()
-    fig.savefig(assets / "vegetation.jpg", dpi=140, facecolor="#ffffff")
-    plt.close(fig)
+        (ROOT / "docs/assets" / f"xarray-{name}.html").write_text(document)
 
-    scene = values["scene"]
-    colors = ListedColormap(["#263b50", "#65b98b"])
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4.7), layout="constrained")
-    axes[0].imshow(scene.nir, cmap="YlGn", vmin=0.15, vmax=0.75)
-    axes[1].imshow(scene.label, cmap=colors, vmin=0, vmax=1)
-    for axis, title in zip(
-        axes,
-        ("Synthetic near-infrared band", "Labels · background / field"),
-        strict=True,
-    ):
-        axis.set_title(title, loc="left", fontweight="bold")
-        axis.set_xticks([31.5, 63.5, 95.5], labels=[])
-        axis.set_yticks([31.5, 63.5, 95.5], labels=[])
-        axis.grid(color="white", linewidth=1.2)
-        axis.tick_params(length=0)
-    fig.savefig(assets / "training-chips.png", dpi=130, facecolor="#ffffff")
-    plt.close(fig)
+    red = values["red"]
+    selected = values["position"]
+    figure, ax = plt.subplots(figsize=(8, 4.5))
+    ax.set(xlim=(-1.1, 3.2), ylim=(-0.65, 2.9))
+    ax.axis("off")
+    ax.text(1.5, 2.75, "x: 3 columns", ha="center", weight="bold", fontsize=14)
+    ax.text(-0.2, 2.25, "label", ha="right", fontsize=11, color="#555555")
+    ax.text(-0.2, 1.85, "position", ha="right", fontsize=11, color="#555555")
+    ax.text(-0.95, 0.8, "y: 2 rows", rotation=90, va="center", fontsize=13)
+    for column, label in enumerate(red.x.values):
+        color = "#215ca0" if column == selected else "#333333"
+        ax.text(column + 0.5, 2.25, str(label), ha="center", color=color, fontsize=14)
+        ax.text(column + 0.5, 1.85, str(column), ha="center", color=color, fontsize=12)
+        for row, y_label in enumerate(red.y.values):
+            bottom = (1 - row) * 0.8
+            ax.add_patch(
+                Rectangle(
+                    (column, bottom),
+                    1,
+                    0.8,
+                    facecolor="#dcecfb" if column == selected else "#f3f5f7",
+                    edgecolor="white",
+                    linewidth=3,
+                )
+            )
+            ax.text(
+                column + 0.5,
+                bottom + 0.4,
+                f"{red.values[row, column]:.1f}",
+                ha="center",
+                va="center",
+                fontsize=18,
+                color="#222222",
+            )
+            if column == 0:
+                ax.text(
+                    -0.15,
+                    bottom + 0.4,
+                    str(y_label),
+                    ha="right",
+                    va="center",
+                    fontsize=13,
+                )
+    ax.annotate(
+        "",
+        xy=(selected + 0.5, 1.64),
+        xytext=(selected + 0.5, 1.78),
+        arrowprops={"arrowstyle": "->", "color": "#215ca0", "lw": 2},
+    )
+    ax.text(
+        1.5,
+        -0.4,
+        "sel(x=110)  =  isel(x=1)  →  [0.2, 0.5]",
+        ha="center",
+        fontsize=13,
+        color="#215ca0",
+    )
+    figure.savefig(ROOT / "docs/assets/xarray-index.svg", bbox_inches="tight")
+    plt.close(figure)
 
-    region = scene.isel(x=slice(64, 128))
-    fig, axes = plt.subplots(1, 3, figsize=(10, 4.8), layout="constrained")
-    axes[0].imshow(region.nir, cmap="YlGn", vmin=0.15, vmax=0.75)
-    axes[1].imshow(region.label, cmap=colors, vmin=0, vmax=1)
-    axes[2].imshow(values["prediction"], cmap=colors, vmin=0, vmax=1)
-    for axis, title in zip(
-        axes, ("Held-out input", "Reference labels", "Model prediction"), strict=True
-    ):
-        axis.set_title(title, loc="left", fontweight="bold")
-        axis.set_axis_off()
-    fig.savefig(assets / "training-result.png", dpi=130, facecolor="#ffffff")
-    plt.close(fig)
+
+def save_figures(page: str, values: dict) -> None:
+    """Save the actual plot objects returned by the documentation examples."""
+    import holoviews as hv
+
+    if page == "concepts/xarray-structure.md":
+        save_xarray_previews(values)
+        return
+
+    plots = {
+        "index.md": {"preview": "home-preview.png"},
+        "basics/first-raster.md": {
+            "image_plot": "first-raster-rgb.png",
+            "ndvi_plot": "first-raster-ndvi.png",
+        },
+        "advanced/crop-imagery.md": {"ndvi_plot": "cropped-ndvi.png"},
+        "advanced/overlapping-chips.md": {"chip_plot": "overlapping-chip.png"},
+        "basics/training-chips.md": {
+            "image_plot": "training-image.png",
+            "label_plot": "training-labels.png",
+        },
+    }
+    for name, filename in plots.get(page, {}).items():
+        hv.save(
+            values[name],
+            ROOT / "docs/assets" / filename,
+            backend="matplotlib",
+            dpi=140,
+        )
 
 
 def main() -> None:
@@ -236,19 +335,20 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="geosave-docs-") as directory:
         os.environ.setdefault("MPLCONFIGDIR", str(Path(directory) / "matplotlib"))
         os.environ.setdefault("OMP_NUM_THREADS", "2")
-        shutil.copy(ROOT / "docs/assets/sample-scene.tif", directory)
+        for name in ("sample-scene.tif", "training-image.tif", "training-labels.tif"):
+            shutil.copy(ROOT / "docs/assets" / name, directory)
         os.chdir(directory)
         try:
             pages = list(PAGES)
             if args.network:
-                pages.append("guides/download-imagery.md")
+                pages.append("advanced/download-imagery.md")
             for page in pages:
                 started = time.monotonic()
                 values = {"__name__": "__main__"}
                 exec(compile(read_example(page), page, "exec"), values)
                 check_result(page, values)
-                if args.figures and page == "guides/training.md":
-                    save_figures(values)
+                if args.figures:
+                    save_figures(page, values)
                 print(f"PASS {page} ({time.monotonic() - started:.1f}s)", flush=True)
         finally:
             os.chdir(original)

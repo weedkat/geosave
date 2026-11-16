@@ -4,3 +4,16 @@
   max-width: 36rem;
   margin-inline: auto;
 }
+
+.gs-xarray-preview {
+  display: block;
+  width: 100%;
+  height: 390px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  background: white;
+}
+
+.gs-xarray-preview--dataset {
+  height: 440px;
+}

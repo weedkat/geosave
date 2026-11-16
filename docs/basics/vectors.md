@@ -85,9 +85,9 @@ and refuse existing files unless `overwrite=True`. GeoJSON writes WGS84 coordina
 
 Vector `.gs.rasterize(...)` is currently unavailable while catalog accessors
 are rebuilt. Existing raster labels can still be opened, aligned, and used in
-[training chips](../quickstart.md). Raster `.gs.vectorize()` converts a selected
+[training chips](training-chips.md). Raster `.gs.vectorize()` converts a selected
 two-dimensional band to polygons and computes its pixels.
 
 A STAC Item table uses the same GeoDataFrame type, with columns identifying
-observations and their assets. See [catalog creation and loading](../guides/catalogs-and-cuts.md)
+observations and their assets. See [catalog creation and loading](../advanced/raster-catalog.md)
 for that workflow and [vector reference](../reference/vectors.md) for signatures.

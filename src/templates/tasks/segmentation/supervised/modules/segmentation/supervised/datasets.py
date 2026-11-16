@@ -1,6 +1,6 @@
 """Read explicitly paired image and label rasters for this project."""
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 
 import geosave as gs
 from geosave.ml.factory import BuildSpec
-from geosave.ml.processing.roles import PREPROCESSORS
+from geosave.ml.processing.raster.preprocessing.base import PREPROCESSORS
 
 from .data import Sample
 
@@ -27,6 +27,8 @@ class RasterDataset(Dataset[Sample]):
             `init_args`; its `preprocess` runs on every raster read.
         num_classes: Number of classes, with IDs from zero to this value minus one.
         ignore_index: Label excluded from loss and metrics; also used for nodata.
+        context: Names in `geosave.geodata.TENSOR_CONTEXT` the model reads
+            beside the pixels, such as `["centroid", "year", "day_of_year"]`.
 
     Raises:
         ValueError: Lists differ in length, classes are invalid, or a read finds
@@ -40,6 +42,7 @@ class RasterDataset(Dataset[Sample]):
         preprocessor: dict[str, Any],
         num_classes: int,
         ignore_index: int = 255,
+        context: list[str] | None = None,
     ) -> None:
         if len(images) != len(targets):
             raise ValueError("images and targets must contain the same number of files")
@@ -52,6 +55,7 @@ class RasterDataset(Dataset[Sample]):
         self.preprocessor = PREPROCESSORS.build(BuildSpec.model_validate(preprocessor))
         self.num_classes = num_classes
         self.ignore_index = ignore_index
+        self.context = context or []
 
     def __len__(self) -> int:
         """Return the number of image/label pairs."""
@@ -67,7 +71,8 @@ class RasterDataset(Dataset[Sample]):
                 raise ValueError(
                     "select one raster from each hierarchy before training"
                 )
-            reference = self.preprocessor.preprocess(image)
+            sources = xr.DataTree.from_dict({"image": image})
+            reference = self.preprocessor(sources)["image"].to_dataset()
             if labels.gs.geobox is None or labels.gs.geobox != reference.gs.geobox:
                 raise ValueError(
                     "image and target must have the same grid; align explicitly"
@@ -94,22 +99,15 @@ class RasterDataset(Dataset[Sample]):
             target = torch.from_numpy(
                 np.where(missing, self.ignore_index, pixels).astype("int64")
             )
-            # The tree's tensors carry the grid that places the pixels.
-            tensors = xr.DataTree.from_dict({"image": reference}).gs.to_tensor()
-            inputs = {"image": tensors["image"].float()}
-            for name in inputs:
-                if not torch.isfinite(inputs[name]).all():
-                    raise ValueError(
-                        f"{name} must be finite; declare a nodata policy in the preprocessor"
-                    )
-                if inputs[name].shape[-2:] != target.shape:
-                    raise ValueError("image tensor and target must cover the same grid")
-            sample: Sample = {
-                "inputs": inputs,
-                "target": target,
-                "transform": tensors["transform"],
-                "crs": tensors["crs"],
-            }
-            if "time" in tensors:
-                sample["time"] = tensors["time"]
-            return sample
+            # The grid lets the Module chip whole scenes as the release does.
+            sample = reference.gs.to_tensor(
+                "image", dtype="float32", grid=True, context=self.context
+            )
+            if not torch.isfinite(sample["image"]).all():
+                raise ValueError(
+                    "image must be finite; declare a nodata policy in the preprocessor"
+                )
+            if sample["image"].shape[-2:] != target.shape:
+                raise ValueError("image tensor and target must cover the same grid")
+            sample["target"] = target
+            return cast(Sample, sample)

@@ -1,39 +1,40 @@
 from __future__ import annotations
 
-from typing import Any, NotRequired, Protocol, TypedDict, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import torch
+from typing_extensions import TypedDict
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.transforms import CutMix, DataKey, ImageAugmenter
 from geosave.ml.factory import BuildSpec
-from geosave.ml.processing.roles import PREPROCESSORS
+from geosave.ml.processing.raster.preprocessing.base import PREPROCESSORS
 
 
-class Sample(TypedDict):
+class Sample(TypedDict, extra_items=torch.Tensor):
     """One chip or scene, as every dataset this DataModule reads returns it.
 
-    A collated batch holds the same keys with a leading batch axis; `crs`
-    becomes a list.
+    Every entry is a tensor, named as the model chain takes it. A collated
+    batch holds the same keys with a leading batch axis.
 
     Attributes:
-        inputs: Named pixel tensors on the sample's grid, such as `image`,
-            ending in `(band, y, x)`, with a time axis before `band` when the
-            model takes one. Time and place travel as the grid entries below.
+        image: Pixels on the sample's grid, ending in `(band, y, x)`, with a
+            time axis before `band` when the model takes one. Further pixel
+            layers, such as `dem`, sit beside it under their own names.
         target: ``(y, x)`` int64 labels, `ignore_index` where unknown.
         transform: float64 affine coefficients placing the pixels, as
-            `DataTree.gs.to_tensor` writes them.
-        crs: The grid's CRS, as `"EPSG:<code>"` or WKT.
-        time: int64 nanoseconds since 1970 of each time label, for dated
-            samples only.
+            `DataTree.gs.to_tensor(grid=True)` writes them.
+        crs: int64 EPSG code of the grid.
+
+    Further entries are the model's context, such as `centroid`, as
+    `DataTree.gs.to_tensor(context=...)` writes them.
     """
 
-    inputs: dict[str, torch.Tensor]
+    image: torch.Tensor
     target: torch.Tensor
     transform: torch.Tensor
-    crs: str
-    time: NotRequired[torch.Tensor]
+    crs: torch.Tensor
 
 
 @runtime_checkable
@@ -62,8 +63,11 @@ class DataModule(LightningDataModule):
         train: Training dataset.
         val: Validation dataset.
         test: Test dataset. None leaves the test split unavailable.
+        layers: Names of the pixel tensors in each sample, augmented with the
+            target while training and chipped with it in evaluation. None
+            takes `["image"]`.
         augmentations: Kornia augmentations by ``name`` and ``init_args``, run
-            on every input and the target together while training.
+            on every layer and the target together while training.
         cutmix: Probability a training sample gets a box of its batch
             neighbour pasted in, pixels and labels alike, after augmentation.
         ignore_index: Label a target pixel takes where an augmentation
@@ -94,6 +98,7 @@ class DataModule(LightningDataModule):
         val: SampleDataset,
         *,
         test: SampleDataset | None = None,
+        layers: list[str] | None = None,
         augmentations: list[dict[str, Any]] | None = None,
         cutmix: float = 0.0,
         ignore_index: int = 255,
@@ -107,6 +112,7 @@ class DataModule(LightningDataModule):
         self.train_dataset = train
         self.val_dataset = val
         self.test_dataset = test
+        self.layers = layers or ["image"]
         self.cutmix = CutMix(cutmix)
         self.ignore_index = ignore_index
         self.batch_size = batch_size
@@ -164,40 +170,34 @@ class DataModule(LightningDataModule):
         )
 
     def on_after_batch_transfer(self, batch: Sample, dataloader_idx: int) -> Sample:
-        """Augment every input with the target while training, then normalize `image`.
+        """Augment every layer with the target while training, then normalize `image`.
 
         Args:
             batch: Collated samples.
             dataloader_idx: Lightning loader number.
 
         Returns:
-            Prepared samples with their grid entries. Values are not repaired.
+            Prepared samples with their grid and context entries. Values are
+            not repaired.
         """
-        inputs = dict(batch["inputs"])
-        target = batch["target"]
+        prepared = batch.copy()
         if self.trainer is not None and self.trainer.training:
-            names = list(inputs)
+            target = batch["target"]
             # Zero is reserved for unknown labels and augmentation padding.
             shifted = (target + 1).masked_fill(target == self.ignore_index, 0).float()
-            keys: list[DataKey] = ["input" for _ in names]
+            keys: list[DataKey] = ["input" for _ in self.layers]
             keys.append("mask")
             *images, shifted = self.augmenter(
-                *(inputs[name] for name in names), shifted, data_keys=keys
+                *(batch[name] for name in self.layers), shifted, data_keys=keys
             )
             target = shifted.round().long() - 1
             target = target.masked_fill(target < 0, self.ignore_index)
             *images, target = self.cutmix(*images, target)
-            inputs.update(zip(names, images, strict=True))
-        inputs["image"] = self.preprocessor.normalize(inputs["image"])
+            for name, image in zip(self.layers, images, strict=True):
+                prepared[name] = image
+            prepared["target"] = target
+        prepared["image"] = self.preprocessor.normalize(prepared["image"])
 
         # Augmentation moves pixels without moving `transform`; the grid is
         # exact for validation, test and prediction batches only.
-        prepared: Sample = {
-            "inputs": inputs,
-            "target": target,
-            "transform": batch["transform"],
-            "crs": batch["crs"],
-        }
-        if "time" in batch:
-            prepared["time"] = batch["time"]
         return prepared

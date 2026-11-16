@@ -13,5 +13,5 @@ from tests.geodata.core.raster.conftest import optical
 def test_to_tensor_casts_to_a_named_or_torch_dtype(torch, dtype, expected) -> None:
     dtype = dtype if dtype == "float32" else getattr(torch, dtype)
     expected = getattr(torch, expected)
-    assert optical().gs.to_tensor(dtype=dtype).dtype is expected
-    assert optical().B04.gs.to_tensor(dtype=dtype).dtype is expected
+    assert optical().gs.to_tensor("image", dtype=dtype)["image"].dtype is expected
+    assert optical().B04.gs.to_tensor("red", dtype=dtype)["red"].dtype is expected

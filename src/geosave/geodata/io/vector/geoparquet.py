@@ -117,9 +117,9 @@ def open_geoparquet(
 
     Returns:
         Native GeoDataFrame with its stable `GeoCatalog` accessor. Item
-        tables keep asset hrefs relative to the file, as stored, and mirror
-        the file's `stac-geoparquet` footer metadata in `attrs`, with the
-        file's location as `attrs["source"]`.
+        tables mirror the file's `stac-geoparquet` footer metadata in
+        `attrs` and state every asset by absolute href: one a file stores
+        relative is resolved against that file.
 
     Raises:
         TypeError: An option is unsupported, or repeated in `parquet_options`.
@@ -128,6 +128,8 @@ def open_geoparquet(
         >>> open_geoparquet("plots.parquet", columns=["name"]).columns
         Index(['name', 'geometry'], dtype='object')
     """
+    from geosave.geodata.stac.catalog import FOOTER_KEY, resolve_hrefs
+
     # PyArrow accepts engine-specific keywords that GeoPandas cannot type.
     parquet_options = cast(
         "dict[str, Any]", dict(open_options.pop("parquet_options", {}))
@@ -148,7 +150,12 @@ def open_geoparquet(
     frame = gpd.read_parquet(
         path.path, filesystem=path.fs, **open_options, **parquet_options
     )
-    return restore_stac_attrs(cast("GeoDataFrame", frame), footer, path)
+    frame = cast("GeoDataFrame", frame)
+    if footer.stac is not None:
+        frame.attrs[FOOTER_KEY] = footer.stac
+    if footer.holds_items and "assets" in frame:
+        frame = resolve_hrefs(frame, str(path.absolute()))
+    return frame
 
 
 def select_columns(columns: Sequence[str], footer: ParquetFooter) -> list[str]:
@@ -166,30 +173,6 @@ def select_columns(columns: Sequence[str], footer: ParquetFooter) -> list[str]:
     if geometry is not None and geometry not in selected:
         selected.append(geometry)
     return selected
-
-
-def restore_stac_attrs(
-    frame: GeoDataFrame, footer: ParquetFooter, path: UPath
-) -> GeoDataFrame:
-    """Mirror an Item table's footer metadata and location in the frame's attrs.
-
-    Asset hrefs are stored relative to the file; Items resolve them against
-    the location kept here.
-
-    Args:
-        frame: The table as GeoPandas read it.
-        footer: The file's footer.
-        path: The file read.
-
-    Returns:
-        `frame`, with its attrs set where the footer states STAC metadata.
-    """
-    from geosave.geodata.stac.catalog import FOOTER_KEY, SOURCE_KEY
-
-    if footer.stac is not None:
-        frame.attrs[FOOTER_KEY] = footer.stac
-        frame.attrs[SOURCE_KEY] = str(path.absolute())
-    return frame
 
 
 # Closed: a keyword these options do not name is a type error, not a pass-through.

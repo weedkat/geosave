@@ -1,22 +1,21 @@
 # Training contracts
 
-Geospatial workspace recipes are paused while ModelSpec is redesigned.
-The working [Lightning boilerplate](../guides/workspaces.md) and caller-owned
-Datasets do not require it. The method contracts below describe template code;
-they are not a claim that each generated geospatial workflow currently runs.
+The [Lightning boilerplate](../advanced/training.md) runs offline. Other
+generated recipes need project Datasets or integration work; check
+[method status](../reference/training.md) before using them. ModelSpec is
+unavailable, but template DataModules now use explicit preprocessors.
 
-Start with [a complete offline segmentation run](../guides/training.md). This
+Start with [the Lightning workspace](../advanced/training.md). This
 page explains what changes when you connect real rasters, add transforms, or
 choose another training method.
 
 ## Feed the project's DataModule
 
-The Dataset reads one sample from your source. Its DataModule batches samples
-and prepares tensors on the device; the Module owns loss and metrics. Lightning
-runs the training loop. The generated DataModules do not discover files, split
-geographic regions, run raster preprocessing, or construct chips. Use
-[Chips](../guides/chips.md) for raster windows and
-[explicit preparation functions](../guides/model-inputs.md) for model inputs.
+The Dataset reads and prepares one sample. The DataModule batches samples
+and applies training transforms; the Module owns loss and metrics.
+Lightning runs training. You choose geographic splits and supply each Dataset. Use
+[Chips](../advanced/overlapping-chips.md) for raster windows and
+[shared input preparation](../advanced/model-inputs.md) for model inputs.
 
 Each generated method owns its Module, DataModule, sample dictionary type and
 Dataset protocol under `modules.<task>.<method>`. Generate it with
@@ -32,8 +31,10 @@ Dataset protocol under `modules.<task>.<method>`. Generate it with
 | `regression.supervised` | `float32 (variable, y, x)` physical values | `(B, variable, y, x)` values | NaN |
 | `pretraining.mim` (experimental) | No target key | Reconstruction of selected pixel input | Scores the selected hidden patches |
 
-`B` is the number of samples in a batch. Supervised samples also contain
-`inputs`, a dictionary of named model-ready tensors. There is no input-validity
+`B` is the number of samples in a batch. Classification, regression, FixMatch
+and MIM use an `inputs` dictionary of named model-ready tensors.
+Supervised segmentation's flat/nested sample migration remains unfinished;
+check [method status](../reference/training.md). There is no input-validity
 field: the source and selected model own handling unavailable input data.
 Pixel inputs end in `(band, y, x)`; a temporal input may include preceding
 axes such as `(time, band, y, x)`. The Dataset must produce the layout the
@@ -75,10 +76,15 @@ repairs NaN/Inf inputs or filters evaluation using an input mask.
 
 ## Apply augmentation and normalization
 
-Recipe-based DataModules are paused while ModelSpec is rebuilt. Use caller-owned
-DataLoaders and explicit preparation with the same band order and normalization
-at training and inference. `ImageAugmenter` remains available for synchronized
-tensor geometry.
+Shared preprocessors prepare and standardize raster values before sampling.
+DataModules apply synchronized pixel/target augmentation during training.
+Keep band order, units and missing-value policy consistent with inference.
+`ImageAugmenter` supplies synchronized tensor geometry; it does not update
+geographic context after an augmentation.
+
+Several generated DataModules still call a separate batch `normalize` hook.
+That legacy integration needs migration; it is not part of the current library
+preprocessor contract. Check [recipe status](../reference/training.md).
 
 ## Change loss, optimizer, and metrics
 
@@ -92,13 +98,14 @@ module = Module(
         "head": {"name": "segmentation", "init_args": {"num_classes": 2}},
     },
     ignore_index=255,
+    predictor={"name": "dense", "init_args": {"size": 256, "stride": 192}},
     criterion={"name": "cross_entropy", "init_args": {"ignore_index": 255}},
     optimizer={"name": "adamw", "init_args": {"lr": 0.001}},
     metrics=["iou.macro", "f1.macro"],
 )
 ```
 
-`model_chain` is a [`build_model`](../guides/models.md#use-a-built-in-stage)
+`model_chain` is a [`build_model`](../advanced/models.md#compose-the-model)
 specification. Builder settings accept a registered `name` or an importable
 `class_path` with constructor `init_args`. Schedulers additionally carry
 Lightning settings such as `interval` and, for ReduceLROnPlateau, `monitor`.
@@ -108,9 +115,12 @@ rate for an encoder.
 Multiclass metrics accept names such as `iou.macro`, `f1.micro`, and
 `f1.per_class`. Unknown metrics and unsupported aggregation combinations raise
 `ValueError`; see [metrics](../reference/metrics.md). Modules update separate
-training, validation, and test metrics. Dense validation scores the sampled
-chips, including pixels in overlaps when your Dataset returns overlapping
-chips; it does not merge predictions to remove repeated pixels.
+training, validation, and test metrics. Supervised segmentation implements
+whole-scene validation/test with TensorChipper and TensorMerger, using the
+configured dense predictor's chip settings. Its sample migration must be
+completed before that path runs with its supplied Dataset. Other dense
+recipes score supplied samples, so overlapping evaluation chips can count
+pixels repeatedly. Choose independent scenes or non-overlapping evaluation samples.
 
 ## Use unlabeled data
 
@@ -145,21 +155,30 @@ See the [task API](../reference/training.md) when experimenting with this method
 
 ## Time and place of each sample
 
-A sample carries its grid and dates as `DataTree.gs.to_tensor` writes them:
-`transform`, `crs` and, when dated, `time`. The template Module passes them to
-the model with the pixels; a validation chip's `transform` is cut to the chip
-by `TensorChipper`. An encoder pretrained on location or dates, such as
-Prithvi or Clay, derives its own inputs from them; other encoders ignore them.
+A sample is one flat dict of tensors, as `tree.gs.to_tensor(grid=True,
+context=[...])` writes it: each pixel layer under its node name, `transform`
+and `crs` (an int64 EPSG code), and each context entry the dataset names,
+such as `centroid` or `day_of_year`. The model chain takes every entry by
+name; encoders not pretrained on location or dates ignore the context.
+
+```python
+{"image": (band, y, x), "target": (y, x), "transform": (6,), "crs": (),
+ "centroid": (2,), "year": (time,), "day_of_year": (time,)}
+```
+
+A validation chip's `transform` is cut to the chip by `TensorChipper`; context
+read from the scene, such as `centroid`, stays the scene's.
 
 Geometric augmentation moves pixels but not `transform`, so a training
 sample's place is the one it was read at.
 
 ## Calibrate segmentation confidence
 
-Per-class confidence thresholds are part of the release's postprocessor
-configuration, not the trained model. After training, run
-`calibrate_thresholds` on the best checkpoint's validation predictions and put
-its result in the postprocessor's `init_args`. Calibration is in progress.
+Threshold calibration is in progress: `calibrate_thresholds` raises
+`NotImplementedError`. The built-in segmentation postprocessor currently
+decodes merged logits by argmax and accepts class names/colors; it has no
+threshold argument. Treat threshold selection and a matching postprocessor
+as future work, with validation data reserved for calibration.
 
 `DensePredictionLogger` remains available for label and argmax panels to
 TensorBoard or MLflow. See [training tools](../reference/training-tools.md).

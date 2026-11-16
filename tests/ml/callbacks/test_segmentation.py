@@ -78,7 +78,7 @@ def test_max_steps_training_preserves_explicit_callbacks(tmp_path: Path) -> None
             "interval": "epoch",
         },
         metrics=["iou.macro"],
-        predictor={"name": "chips", "init_args": {"size": 4}},
+        predictor={"name": "dense", "init_args": {"size": 4}},
     )
     observer = ValidationObserver()
     image_logger = DensePredictionLogger({0: "#000000"})

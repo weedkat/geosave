@@ -80,6 +80,47 @@ def lay_chip_offsets(
     return offsets
 
 
+def find_chip_span(
+    start: int, stop: int, length: int, *, size: int, stride: int
+) -> tuple[int, int]:
+    """Find the pixels covered by every chip touching a span of one axis.
+
+    Chips sit on multiples of `stride`, as `lay_chip_offsets` lays them with
+    a padding mode. A span that starts on a multiple of `stride` and is
+    chipped together with this halo gets the same chips as the whole axis.
+
+    Args:
+        start: First pixel of the span; a multiple of `stride`.
+        stop: Pixel after the span's last.
+        length: Pixels along the axis.
+        size: Pixels of one chip.
+        stride: Pixels between the starts of consecutive chips.
+
+    Returns:
+        First pixel, on a multiple of `stride`, and the pixel after the
+        last, clipped to the axis. At the end of the axis the span also
+        holds the pixels a reflection fills the last chip from.
+
+    Examples:
+        >>> find_chip_span(6, 12, 20, size=4, stride=3)
+        (3, 13)
+        >>> find_chip_span(0, 6, 20, size=4, stride=3)
+        (0, 7)
+    """
+    # The first chip reaching into the span starts after `start - size`.
+    first = max(0, ((start - size) // stride + 1) * stride)
+    # The last chip touching the span starts on or before its last pixel.
+    last = ((stop - 1) // stride) * stride
+
+    # A chip reaching past the end is filled by reflecting the pixels before
+    # it, so those are read too, from a chip start so the layout stays aligned.
+    reach = last + size - length
+    if reach > 0:
+        mirrored = max(0, length - 1 - reach)
+        first = min(first, (mirrored // stride) * stride)
+    return first, min(last + size, length)
+
+
 class ChipLayout:
     """Where every chip sits on a sequence of raster grids.
 

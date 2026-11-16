@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from geosave.ml.transforms import DataKey, ImageAugmenter
 from geosave.ml.factory import BuildSpec
-from geosave.ml.processing.roles import PREPROCESSORS
+from geosave.ml.processing.raster.preprocessing.base import PREPROCESSORS
 
 
 class Sample(TypedDict):

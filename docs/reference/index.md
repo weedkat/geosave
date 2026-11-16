@@ -12,7 +12,7 @@ GeoPandas objects; their own methods retain upstream behavior.
 | Inspect a pixel grid | `raster.gs.geobox`. [Dataset accessor](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.geobox) |
 | Crop by geometry or exact grid | `.gs.crop`, `.gs.crop_to_grid`. [Crop and grid operations](transforms.md#grid-masks-and-values) |
 | Match another image's grid | `.gs.reproject(...)`. [Reprojection](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.reproject) |
-| Decode nodata, scale and offset | `.gs.mask_and_scale()`. [Value metadata](../basics/attrs.md#decode-stored-measurements) |
+| Decode nodata, scale and offset | `.gs.mask_and_scale()`. [Value metadata](../basics/attrs.md#decode-imagery-to-reflectance) |
 | Calculate NDVI or another index | `gs.features.ndvi(...)`. [Features and masks](features.md) |
 | Convert selected bands to arrays or tensors | `.gs.to_numpy`, `.gs.to_tensor`. [Dataset conversion](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.to_numpy) |
 | Window time, cut chips or merge predictions | `.gs.sample`, `gs.RasterChipper`, `gs.RasterMerger`. [Chips](chips.md) |
@@ -22,7 +22,8 @@ GeoPandas objects; their own methods retain upstream behavior.
 | Publish a dated Dataset | `Dataset.gs.to_catalog(...)`. [Catalog operations](catalog.md) |
 | Build a model from stages | `geosave.ml.build_model`. [Chains and registry](model-chain.md) |
 | Save and load model weights | `ChainModel`. [Releases](model-release.md) |
-| Predict a raster with a released model | `Processor`, `build_processor`, `load_processor`, `ChipPredictor`. [Processors](model-release.md#processors) |
+| Predict a raster with a released model | `RasterPipeline`, `load_pipeline`, `DensePredictor`. [Pipelines](model-release.md#pipelines) |
+| Write a large prediction | `pipeline.predict_to_zarr(rasters, path, chunks=...)`. [Chunked output](../advanced/release.md#write-large-predictions-to-zarr) |
 
 ## Look up methods for your object
 
@@ -37,7 +38,7 @@ are separate. Inherited GeoSave methods are included on each accessor page.
 | [Models](model-chain.md) | Chains, [stages](model-stages.md) and native [releases](model-release.md). |
 | [Training](ml.md) | Losses, metrics, transforms, callbacks and Lightning tools. |
 | [CLI](cli.md) | Workspace commands and generated files. |
-| [Optional flows](workflow.md) | Prefect helpers and current availability. |
+| [Prediction flow](workflow.md) | Prefect flow over a released pipeline, and its region configs. |
 
 ## Read a signature
 
@@ -50,5 +51,10 @@ The [symbol inventory](public-api.md) also lists low-level module definitions,
 configuration fields and protocols. Use it when you know a symbol's name;
 start with the operations above for everyday calls.
 
-For complete workflows, use [Find a task](../activities.md). For behavior shared
+The existing [`scripts/api_reference.py`](https://github.com/weedkat/geosave/blob/main/scripts/api_reference.py)
+generates that inventory and the four complete contract pages from both source
+packages. See [automatic API reference](../contributing/documentation.md#automatic-api-reference)
+for refresh commands, exclusions and validation limits.
+
+For complete workflows, use [Find a task](../advanced/index.md). For behavior shared
 across methods, use [Concepts](../concepts/index.md).

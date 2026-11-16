@@ -39,7 +39,10 @@ def test_a_band_carrying_no_band_axis_reads_without_one() -> None:
 
 
 def test_a_band_converts_without_gaining_a_band_axis(torch) -> None:
-    tensor = optical().B04.gs.to_tensor()
+    sample = optical().B04.gs.to_tensor("red", grid=True)
+
+    assert list(sample) == ["red", "transform", "crs"]
+    tensor = sample["red"]
 
     assert tensor.dtype is torch.uint16
     assert tuple(tensor.shape) == (2, 8, 8)

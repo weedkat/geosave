@@ -1,112 +1,55 @@
 # Lazy data and computation
 
-Build a calculation without reading every pixel:
+A lazy raster describes pixel work to run later. Opening a file makes its
+coordinates and metadata available without loading every pixel.
+
+With the [sample scene](../basics/first-raster.md#open-the-sample):
 
 ```python
-import dask.array as da
-import xarray as xr
-from odc.geo.xr import xr_coords
-
 import geosave as gs
 
-from odc.geo.geobox import GeoBox
-
-grid = GeoBox.from_bbox(
-    (500000, 5000000, 500040, 5000040),
-    crs='EPSG:32633', resolution=10,
-)
-pixels = da.arange(16, chunks=4).reshape(4, 4).astype("uint16")
-scene = xr.Dataset({"red": (("y", "x"), pixels)}).assign_coords(xr_coords(grid)).gs.write_nodata(0)
-subset = scene.isel(y=slice(0, 2), x=slice(0, 2))
-subset
+scene = gs.open_raster("sample-scene.tif", chunks={"y": 128, "x": 128})
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+ndvi.chunks
 ```
-
-Output:
 
 ```text
-<xarray.Dataset> Size: 44B
-Dimensions:      (y: 2, x: 2)
-Coordinates:
-  * y            (y) float64 16B 5e+06 5e+06
-  * x            (x) float64 16B 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 8B dask.array<chunksize=(1, 2), meta=np.ndarray>
+((128, 128, 81), (128, 128, 11))
 ```
 
-Lazy arrays describe work to run later. Their coordinates and metadata can be
-available while their pixels remain unread. The Dataset display's `Size` is
-the logical size of the values, not a measurement of memory currently used.
+NDVI is still split into deferred blocks. This describes the work layout,
+not measured memory use. Select bands and an area before computing.
 
-## Backend laziness and Dask chunks
+## When pixels are read
 
-`gs.open_raster(path, chunks=None)` generally uses the file backend's lazy array
-access. It can defer reads without a Dask graph. Dated TIFFs gain a Dask-backed
-time axis because adding that axis to a backend array would otherwise read it.
+| Action | Effect |
+| --- | --- |
+| Select bands, crop, decode or calculate NDVI | Can preserve lazy arrays. |
+| Plot or explore a map | Reads the displayed values. |
+| `.compute()` | Returns an in-memory object. |
+| `.load()` | Loads values into the existing object. |
+| Convert to NumPy or tensors | Materializes the selected input. |
+| Save a raster | Normally computes and writes output pixels. |
 
-`chunks={}` requests Dask arrays using the backend's preferred chunks;
-`chunks={"y": 1024, "x": 1024}` selects spatial chunk sizes. Chunk shape affects
-parallelism and read efficiency. A small logical selection may still read a
-whole TIFF block or Zarr chunk that contains it.
+## File reads and Dask blocks
 
-STAC sources use Dask chunks by default. Their `set_config(chunks=None)`
-explicitly requests eager loading; this differs from a file reader's
-backend-lazy `chunks=None`.
+File readers with `chunks=None` generally defer reads through their backend.
+`chunks={}` requests Dask arrays with backend-preferred chunks; an explicit
+mapping chooses block sizes.
 
-## What triggers work
+STAC sources use Dask by default. Their `chunks=None` setting requests eager
+loading, unlike a file reader's backend-lazy mode.
 
-```python
-loaded = subset.compute()
-loaded
-```
+A small requested window can still read an entire TIFF block or Zarr chunk.
+Lazy inputs do not guarantee bounded output memory. For example, prediction
+merging holds whole-raster accumulators unless a chunked output workflow is used.
 
-Output:
+## Control the boundary
 
-```text
-<xarray.Dataset> Size: 44B
-Dimensions:      (y: 2, x: 2)
-Coordinates:
-  * y            (y) float64 16B 5e+06 5e+06
-  * x            (x) float64 16B 5e+05 5e+05
-    spatial_ref  int32 4B 32633
-Data variables:
-    red          (y, x) uint16 8B 0 1 4 5
-```
+[Large-raster processing](../advanced/large-data.md) selects an area before
+writing. [Training chips](../advanced/overlapping-chips.md) materializes model-sized windows.
+[Chunked prediction](../advanced/release.md#write-large-predictions-to-zarr)
+writes model outputs a region at a time.
 
-`.compute()` returns an in-memory object; `.load()` fills the existing object.
-`.gs.to_numpy()` and `.gs.to_tensor()` also materialize the selected pixels.
-`.gs.statistics()` computes reductions and returns a small table. Plotting
-needs the displayed pixel values, and writes normally compute their output.
-
-Selection, cropping, masking, decoding, and spectral arithmetic can preserve
-Dask laziness. Rasterization produces pixels eagerly; vectorization needs the
-selected two-dimensional plane in memory. Reprojection can remain lazy, but
-its result still needs checking for the selected resampling method.
-
-## Read chips on demand
-
-`gs.RasterChipper([tree], size=256)` plans windows over a prepared one-grid DataTree without computing pixels.
-`chips[0]` returns one lazy window; computing it reads that window, and
-repeated reads can read it again. Keep the source open until all dependent
-reads finish. Storage chunks and upstream transforms may require more work than
-the requested window.
-
-Prediction merging still allocates full output accumulators. Lazy input reads
-do not make whole-scene output memory bounded. See [chip reading and merging](../guides/chips.md)
-for batching and output rules.
-
-## Schedule a write explicitly
-
-`io.write_cog` and raster `to_zarr` / `to_netcdf` accept `compute=False`.
-Each returns one native Dask Delayed. For example,
-`scene.gs.to_zarr("scene.zarr", compute=False).compute()` writes the store and
-returns its UPath. Tree Zarr and NetCDF writes yield one store path, retaining
-groups. DataArray `.gs.to_cog` forwards `compute=False` to rioxarray instead.
-No write reaches the destination before the delayed job runs.
-See [writer return values](../reference/io.md#saved-raster-files).
-
-Keep file-backed rasters and trees open until the work that depends on them
-finishes. Close them afterward to release handles. Select the region and
-variables before converting to NumPy or tensors so you only materialize the
-input you need. See [large rasters](../guides/large-data.md) for a complete
-crop, reduce, and save example.
+The [I/O reference](../reference/io.md#saved-raster-files) describes
+`compute=False` and writer-specific behavior.

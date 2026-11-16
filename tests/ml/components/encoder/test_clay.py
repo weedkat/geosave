@@ -1,6 +1,7 @@
 import pytest
 import torch
 import xarray as xr
+from torch.utils.data import default_collate
 
 from geosave.geodata import Dataset
 from geosave.ml.components.encoder import clay
@@ -62,17 +63,30 @@ def test_the_head_resizes_logits_to_the_chip_the_encoder_reads():
     assert logits.shape == (1, 2, 32, 32)
 
 
-def test_week_and_hour_are_read_from_the_time_entry(scene):
-    frame = scene.isel(time=[0])
-    sample = xr.DataTree.from_dict({"image": frame}).gs.to_tensor()
+def test_clay_reads_one_frames_week_and_hour(scene: Dataset) -> None:
+    encoder = clay.Clay(
+        model_name="clay_v15_tiny",
+        in_channels=1,
+        input_size=8,
+        waves=[0.665],
+        gsd=10.0,
+    ).eval()
+    names = ["centroid", "week", "hour"]
+    frame = xr.DataTree.from_dict({"image": scene.isel(time=[0])})
+    batch = default_collate([frame.gs.to_tensor(context=names)])
 
-    week_hour = clay.week_and_hour(sample["time"][None])
+    with torch.inference_mode():
+        pyramid, _ = encoder.forward_pyramid(
+            batch["image"][:, 0],
+            centroid=batch["centroid"],
+            week=batch["week"],
+            hour=batch["hour"],
+        )
 
-    torch.testing.assert_close(week_hour, torch.tensor([[1.0, 14.0]]))
-
-
-def test_clay_refuses_multiple_frames(scene: Dataset) -> None:
-    sample = xr.DataTree.from_dict({"image": scene}).gs.to_tensor()
-
+    assert pyramid[0].shape[0] == 1
+    frames = xr.DataTree.from_dict({"image": scene})
+    batch = default_collate([frames.gs.to_tensor(context=names)])
     with pytest.raises(ValueError, match="single frame"):
-        clay.week_and_hour(sample["time"][None])
+        encoder.forward_pyramid(
+            batch["image"][:, 0], week=batch["week"], hour=batch["hour"]
+        )

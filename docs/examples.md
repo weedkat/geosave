@@ -1,116 +1,52 @@
-# Examples and projects
+# Examples
 
-Choose a small processing task or follow a complete land-cover project.
-Start with the output you want; you do not need to learn model development to
-use GeoSave for imagery.
+Start with a small task, inspect its output, then adapt it to your own data.
+The first examples work offline after downloading their small sample files.
 
-<div class="grid cards" markdown>
+## Small complete tasks
 
--   **Map vegetation in a satellite scene**
+| Example | You produce | What you need |
+| --- | --- | --- |
+| [Your first vegetation map](basics/first-raster.md) | NDVI plot and a GeoTIFF | Base package; 752 KiB image. |
+| [Images and labels to chips](basics/training-chips.md) | Image/label plots and named tensors | ML extra; about 520 KiB for the pair. |
+| [Run a training workspace](advanced/training.md) | Run configuration and checkpoint | ML extra; supplied Lightning boilerplate. |
+| [Compare vegetation by area](advanced/vegetation-zones.md) | Zone summary, CSV and raster | Base package; the vegetation-map sample. |
+| [Read overlapping training chips](advanced/overlapping-chips.md) | Aligned image/label samples and a plot | ML extra; the training pair. |
+| [Create and reopen a catalog](advanced/raster-catalog.md) | Named COG assets and an observation index | Base package; the vegetation-map sample. |
 
-    Open a small real Sentinel-2 crop, calculate NDVI, and export a GeoTIFF.
-    Base installation; one 752 KiB sample; no GPU or account.
+![Satellite image and expert labels used in the real-data examples](assets/land-cover-labels.png)
 
-    [Run the vegetation tutorial →](first-raster.md)
-
--   **Compare vegetation between zones**
-
-    Summarize NDVI and valid coverage from real imagery. Export a map, CSV,
-    GeoTIFF, and demonstration polygons. Offline; base installation.
-
-    [Run the zone analysis →](guides/vegetation-zones.md)
-
-</div>
-
-![Natural color and NDVI from the vegetation tutorial](assets/vegetation.jpg)
+*Reference annotations, not model predictions. Tait et al. (2021),
+[Dynamic World training dataset](https://doi.org/10.1594/PANGAEA.933475), CC BY 4.0.
+Contains modified Copernicus Sentinel data (2019).*
 
 ## Real land-cover project
 
-!!! note "No catalog sampling or input recipe yet"
-    Catalog sampling and ModelSpec are paused. The notebooks pair imagery and
-    labels as one Item per tile, select rows with pandas, and keep model input
-    preparation as a plain Python function next to the model release.
+The older notebook series develops a larger project with a roughly 400 MB
+[teaching dataset](https://huggingface.co/datasets/fatmur/dynamicworld-300).
+It covers data inspection, model choices, acquisition, training and reuse.
 
-![Sentinel-2 image beside expert land-cover annotations](assets/land-cover-labels.png)
+!!! warning "Migration in progress"
+    Notebooks 1, 3 and 4 still use removed model or chip APIs. Use the current
+    tutorials above for a runnable path; the notebooks remain project material
+    to read and adapt.
 
-*One paired training tile, not a prediction. Expert labels: Tait et al. (2021),
-[Dynamic World training dataset](https://doi.org/10.1594/PANGAEA.933475),
-CC BY 4.0. Contains modified Copernicus Sentinel data (2019).*
-
-The notebook series below uses real satellite image/label pairs to explore a
-larger workflow. Its teaching dataset is roughly 400 MB, so start with the
-small tutorials above if you only want to try the API.
-
-```mermaid
-flowchart LR
-    A[Inspect imagery and labels] --> B[Train a baseline]
-    B --> C[Compare model choices]
-    C --> D[Acquire new inputs]
-    D --> E[Predict and map]
-    E --> F[Reuse the model]
-```
-
-Build a land-cover map from satellite images using ordinary PyTorch Datasets
-and Lightning modules.
-
-| Notebook | What you do |
+| Notebook | Focus |
 | --- | --- |
-| [0 · Basics](https://github.com/weedkat/geosave/blob/main/examples/00_basics.ipynb) | Explore images and labels, train a small model, and plot a prediction. |
-| [1 · Model](https://github.com/weedkat/geosave/blob/main/examples/01_model.ipynb) | Swap model parts and compare training runs. |
-| [2 · Build a dataset](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Fetch images for labels and a forest outline, then save the files and catalogs. |
-| [3 · Train and predict](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on the acquired pairs, join predictions into forest maps, and save the trained model. |
-| [4 · Reuse the model](https://github.com/weedkat/geosave/blob/main/examples/04_recipe.ipynb) | Reload the model release, check it reproduces the forest map with identical preparation, and keep a review pair. |
+| [0 · Basics](https://github.com/weedkat/geosave/blob/main/examples/00_basics.ipynb) | Inspect image/label pairs and train a baseline. |
+| [1 · Model](https://github.com/weedkat/geosave/blob/main/examples/01_model.ipynb) | Compose model stages and compare runs. |
+| [2 · Build a dataset](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Acquire imagery and save paired observations. |
+| [3 · Train and predict](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on prepared data and export maps. |
+| [4 · Reuse the model](https://github.com/weedkat/geosave/blob/main/examples/04_recipe.ipynb) | Reload weights with matching preparation. |
 
-The [teaching dataset](https://huggingface.co/datasets/fatmur/dynamicworld-300)
-is about 400 MB. Later notebooks reuse that download. Notebook 2 also needs
-Planetary Computer access; notebook 3 uses the files it saves. Notebook 4
-uses notebook 3's model release in `data/landcover/`; it needs no new
-download or training run.
+Run notebooks from `examples/` with a fresh kernel and the development
+environment from `uv sync`. Later notebooks reuse earlier artifacts.
 
-The targets are **expert-annotated training labels**, not the automated Dynamic
-World product. The subset has ten classes (including cloud), nodata 255, and
-four ordered bands: B02, B03, B04, B08. Each notebook pins the dataset snapshot.
+These short runs teach a workflow. Evaluate on independent geography or periods
+before making claims about model quality or land-cover change.
 
-Split complete tiles before chipping; inspect overlap between geographic
-footprints before claiming generalization. Notebooks 0 and 1 use complete,
-prepared pairs. Notebook 2 acquires imagery on each label's grid. Notebook 3
-prepares missing coverage before constructing its Dataset and uses matching
-image/label chips. Evaluation chips do not overlap, so each original pixel is
-counted once; padding is ignored. Overlap and merging belong to the forest
-prediction workflow.
+## Organize your project
 
-The short runs demonstrate the workflow, not operational accuracy. Forest-map
-differences can reflect clouds, season, or model errors rather than actual
-land-cover change. For a no-download test of training mechanics, use the
-explicitly [synthetic chip tutorial](quickstart.md) and
-[CPU training smoke test](guides/training.md).
-
-This learning path follows practical concerns illustrated by
-[TorchGeo's surface-water tutorial](https://docs.torchgeo.org/en/stable/tutorials/earth_surface_water.html):
-paired imagery and labels, preprocessing, evaluation, and geographic output.
-
-## Run the notebooks
-
-```bash
-git clone https://github.com/weedkat/geosave.git
-cd geosave
-uv sync
-```
-
-Open a notebook in `examples/`. Select the repository's `.venv` as the kernel
-and use `examples/` as the working directory. Run cells in order with a fresh
-kernel for each notebook. Later lessons reuse earlier files. Read each
-notebook's prerequisites before starting downloads or training.
-
-Each notebook ends with project extensions rather than quizzes.
-
-## Next steps
-
-| I want to… | Read |
-| --- | --- |
-| Start with pretrained weights. | [Pretrained models](guides/pretrained.md) |
-| Run an editable Lightning starter. | [Workspaces](guides/workspaces.md) |
-| Save training settings in a project. | [Workspaces](guides/workspaces.md) |
-| Prepare a model's inputs consistently. | [Model input preparation](guides/model-inputs.md) |
-| Read spatial windows and merge predictions. | [Chips](guides/chips.md) |
-| Publish a model. | [Model releases](guides/release.md) |
+Use [MLOps](mlops/index.md) for repository layouts and MLOps,
+[Advanced](advanced/index.md) for larger workflows, and
+[Contributing](contributing/index.md) for the library's direction and open work.

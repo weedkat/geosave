@@ -1,6 +1,6 @@
 # Architecture
 
-This page is for contributors. Start with the [practical guides](../activities.md)
+This page is for contributors. Start with the [practical guides](../advanced/index.md)
 when learning to use GeoSave.
 
 ## Native objects and package boundaries
@@ -36,12 +36,13 @@ flowchart LR
 The inference path of `ml` (chain, components, processing, release) does not
 import its training support. Importing `geosave` or `geosave.ml` does not load
 torch. Operations that need it,
-such as `.gs.to_tensor()`, import it when called. Encoder libraries may load
+such as `.gs.to_tensor`, import it when called. Encoder libraries may load
 additional dependencies when their modules are imported.
 
-Prefect jobs live in `geosave_flows`, a second import package in the same
-distribution, installed with `pip install "geosave[flows]"`. Those jobs compose
-public GeoSave APIs; `geosave` imports neither `geosave_flows` nor Prefect.
+`geosave_flows`, a second import package in the same distribution, installed
+with `pip install "geosave[flows]"`, holds Prefect flows that run a released
+pipeline through public GeoSave APIs, and their JSON region configs.
+`geosave` imports neither `geosave_flows` nor Prefect.
 
 ## Raster structure
 
@@ -70,8 +71,8 @@ declared extent over ODC. Grid operations are ODC's; `gs.spatial_dims`,
 `gs.geobox`, `gs.crs`, `gs.transform`, `gs.map_bounds()` and
 `gs.output_geobox()` are shorthands for `.odc`. Place bare pixels with
 `odc.geo.xr.wrap_xr`, declare a CRS with `.odc.assign_crs`. `gs.validate()`
-requires a grid ODC recognizes, with a CRS; pixel operations (`to_numpy`,
-`to_array`, `mask`) need only spatial dimensions.
+requires a grid ODC recognizes, with a CRS. Array/tensor conversion also
+validates that grid; Dataset stacking additionally checks pixel meaning.
 
 CF is a file encoding, applied by `io/raster/codecs/cf.py`:
 
@@ -94,7 +95,7 @@ GeoSave's own `Display`. Band metadata is per variable and constant along
 ```text
 Item rows -> ODC Dataset -> prepared one-grid DataTree -> RasterChipper -> project Dataset -> Lightning
 Dataset -> RasterStac -> COG assets + Item rows -> GeoParquet
-trained chain + processor -> release -> load_processor -> predict_path / predict_region -> product Dataset
+trained chain + pipeline -> release -> load_pipeline -> predict / predict_to_zarr -> product Dataset / Zarr store
 ```
 
 Raster writers save pixels and return paths. STAC describes those files in
@@ -111,38 +112,49 @@ optimizers, schedulers and losses. A registry maps case-insensitive names to
 constructors of one base type and imports the modules that register the
 library's own entries on first lookup. A `class_path` reaches any importable
 subclass of that type without registration. `get_spec` writes out every
-constructor argument, defaults included, as a release stores it.
+constructor argument, defaults included, as a release stores it; `read_spec`
+reads the same spec back from a built object.
 
 Components own the network. `ml/components/registry.py` declares one registry
 per stage (`ENCODERS`, `DECODERS`, `HEADS`, `MONOLITHS`); `build.py` builds a
 chain from a recipe, filling `Published` values from earlier stages;
 `catalog.py` lists what is registered and what connects.
 
-`ml/processing/roles.py` declares the four roles (`Ingestor`, `Preprocessor`,
-`Predictor`, `Postprocessor`), one Protocol and one registry each.
-`processor.py` holds `Processor`, which runs them around a model
-(`predict_region`, `predict_path`, `predict_raster`), and `build_processor`,
-which records each role's `get_spec` in `Processor.spec`. The library
-registers one module per role: `ingestors.py` (`sentinel2_l2a`),
-`preprocessors.py` (`sentinel2_reflectance`), `predictors.py` (`chips`) and
-`postprocessors.py` (`class_map`). Projects may register more or select them
-by class path for local prediction.
+`ml/processing/raster/` has one package per role: `ingestion`, `preprocessing`,
+`prediction` and `postprocessing`. Each `base.py` declares an abstract
+role and its registry. `pipeline.py` owns `RasterPipeline`, the orchestrator
+of inference, and its `predict` and `predict_to_zarr` entry points. A
+sub-processor is entered by `__call__`, which declares with `@chain_step()`
+the values it takes and returns by name; the pipeline checks that they
+connect when it is constructed and checks each value's type as it is handed
+over. Sources and prepared pixel inputs are named DataTree nodes; the
+predictor passes named tensors and requested context to the model and
+returns its values undecoded; the postprocessor masks, decodes and builds the
+product. The library provides `sentinel2_l2a` ingestion, `dense`
+preprocessing and prediction, and `segmentation`/`regression` postprocessing.
+Projects subclass a role for their own.
 
 `ml/release/huggingface.py` holds `ChainConfig` and `ChainModel`, the
 Transformers config and model of a `ModelChain`. `ChainModel.from_chain(chain)`
-releases a chain alone; `ChainModel.from_processor(processor)` adds the
-processor's spec (`ChainConfig.processor`, format version 2). Both refuse any
-component or sub-processor defined outside geosave: a release rebuilds from
-`pip install geosave` alone, so a model is deployed by adding its components
-and sub-processors to the library. `load_processor` rebuilds the processor
-around the loaded model. A different GeoSave version only warns; exact weight
+releases a chain alone; `ChainModel.from_pipeline(pipeline)` adds each
+sub-processor's spec, read from the sub-processor (`ChainConfig.preprocessor`,
+`predictor`, `postprocessor`, `ingestor`; format version 4). Both refuse a
+component defined outside geosave. A library sub-processor is stored by name,
+a project's own by class path, which rebuilds wherever the project's code is
+installed. `AutoModel.from_pretrained` loads the model alone; `load_pipeline`
+rebuilds the pipeline around the native chain. A different GeoSave version only warns; exact weight
 keys guard the architecture. A Lightning checkpoint additionally holds
 training state.
 
-Each template method's `processing.py` holds its `Preprocessor`; its datasets
-call `preprocess` and its DataModule `normalize`, as a release's processor
-does. Training Modules remain project-owned; Prefect orchestration stays
+Each template method's `processing.py` holds its preprocessor. Shared pixel
+preparation, including standardization, belongs in `preprocess`. Some template
+DataModules still call a separate `normalize` hook and need migration to that
+contract. Training Modules remain project-owned; Prefect orchestration stays
 outside `ml`.
+
+Data snapshots, experiment workspaces and model releases have separate
+repositories and revision histories. See the [model-development guide](../mlops/index.md)
+for their contents and provenance links. Lineage records remain project-owned.
 
 ## Implementation rules
 
@@ -195,7 +207,7 @@ outside `ml`.
 - `core/vector/catalog.py` owns GeoCatalog coverage, drawing, validation,
   Item conversion and table persistence. Item tables follow stac-geoparquet,
   one Item per row. `item.py` owns GeoCatalogItem. Catalog sampling,
-  vector rasterization and row pixel reads remain unavailable. `stac/catalog.py`
+  vector rasterization and row pixel reads remain unavailable. `stac/catalog/`
   owns native Item/table conversion and `concat_catalogs`; conflicting
   Collection definitions raise. STAC encoding is selected by the frame's
   `stac-geoparquet` metadata at write time; damaged catalogs raise instead
@@ -225,7 +237,7 @@ outside `ml`.
   accessors expose exact grids through `.gs.geobox`; `.gs.region` exposes coverage.
   Frames and trees union their footprints and envelope dated members. A point
   names a location, not a raster window.
-- `stac/catalog.py` owns native Item/table conversion, including `create_catalog`.
+- `stac/catalog/` owns native Item/table conversion, including `create_catalog`.
   `stac/raster.py` owns the publication layout. `stac/publish.py` constructs
   Items and asset metadata; `stac/stamps/` applies source, Collection, band and
   property metadata on load. Extension modules translate native PySTAC bands.
@@ -238,7 +250,7 @@ outside `ml`.
   its codecs (`zarr.CODECS`, `netcdf.CODECS`), and `codecs/gdal.py` stacks a
   Dataset into the band array rioxarray writes, with `EXTRA_WRITERS` for the
   properties rioxarray has no slot for. `geotiff.py` owns lazy
-  Rasterio/rioxarray reading and backend handle lifetime. `io/gdal_env.py`
+  rioxarray reading, Rasterio filesystem openers and backend handle lifetime. `io/gdal_env.py`
   retains the documented `configure_gdal` environment interface. Typed
   property snapshots survive closing the metadata reader; arbitrary GDAL tags
   remain string mappings. `vector/ogr.py` writes GeoJSON and GeoPackage
@@ -256,14 +268,14 @@ outside `ml`.
   (`create_upath`); nothing below takes a string path or `storage_options`, and
   no code asks whether a path is local. Each format reaches storage through the
   UPath: pyarrow through `path.fs`, Zarr through `str(path)` and
-  `path.storage_options`, readers through `path.open()`. HDF5 and SQLite writers stage local files. GTiff writes use Rasterio
-  with `opener=path.fs`; object stores that cannot seek in write mode stage
-  locally. COG writes convert a temporary disk TIFF through GDAL to avoid
+  `path.storage_options`, readers through `path.open()`. HDF5, SQLite and
+  GeoTIFF writers stage local files for non-local destinations; rioxarray's
+  chunk writer reopens a GeoTIFF by name. COG writes convert a temporary disk TIFF through GDAL to avoid
   Rasterio's full-raster memory buffer. GDAL reads supported URLs itself
   (`io.raster.geotiff.read_gdal_address`); other paths and paths with filesystem
-  options use the UPath filesystem opener. rioxarray normally opens bands as Dataset variables. For filesystem openers,
-  GeoSave splits one lazy band array to avoid rioxarray's per-band reopen issue;
-  the same metadata mappings restore per-band properties in either path.
+  options use the UPath filesystem opener. GeoSave opens one lazy band array
+  and decodes it into Dataset variables; per-band metadata comes from typed
+  GDAL property snapshots.
 - `stac/raster.py` defines `RasterStac`, a dataclass holding one
   collection's opened raster assets in a prescribed Item/asset DataTree,
   with native Collection metadata stored separately. Its class docstring
@@ -273,7 +285,7 @@ outside `ml`.
   accessors impose no STAC structure.
 - `stac/publish.py` owns the native `StacItem` subclass and its
   `from_region` and `add_raster_asset` builders. Tree-based Item/Collection builders are removed.
-  Native Item/table conversion stays in `stac/catalog.py`; STAC GeoParquet
+  Native Item/table conversion stays in `stac/catalog/`; STAC GeoParquet
   persistence stays in its format module.
 - `stac/search/` owns API/table discovery. `set_region` replaces spatial and time
   selectors. Selected Items feed `stac.load_dataset` or `stac.load_native_datasets` without

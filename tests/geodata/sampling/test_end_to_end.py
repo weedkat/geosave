@@ -16,7 +16,7 @@ def test_windows_chip_to_batches_and_merge_back_per_window():
 
     samples = []
     for index in range(len(chipper)):
-        tensors = chipper[index].gs.to_tensor()
+        tensors = chipper[index].gs.to_tensor(context=["time"])
         tensors["index"] = index
         samples.append(tensors)
     loader = torch.utils.data.DataLoader(samples, batch_size=5, shuffle=True)

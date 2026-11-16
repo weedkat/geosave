@@ -12,7 +12,6 @@ from odc.geo.crs import CRS as OdcCRS
 from odc.geo.geom import Geometry
 
 from geosave.geodata.errors import VectorValidationError
-from geosave.geodata.stac.catalog import FOOTER_KEY, ITEM_COLUMNS
 
 
 if TYPE_CHECKING:
@@ -33,7 +32,8 @@ if TYPE_CHECKING:
 type Rule = Callable[[gpd.GeoDataFrame], None]
 
 
-# Rules a table can be asked to meet; `rows.gs.validate(stac_items)` runs one.
+# Rules a table can be asked to meet; `rows.gs.validate(valid_geometry)` runs one.
+# The rules of a STAC Item table live in `stac.catalog`.
 
 
 def valid_geometry(rows: gpd.GeoDataFrame) -> None:
@@ -52,73 +52,6 @@ def valid_geometry(rows: gpd.GeoDataFrame) -> None:
             raise VectorValidationError(
                 f"Row at position {position} (Item {identity!r}): {error}"
             ) from error
-
-
-def stac_items(rows: gpd.GeoDataFrame) -> None:
-    """Require STAC Item rows, as stac-geoparquet states them.
-
-    Every Item column is present, each asset has an href, and an id is unique
-    within its collection.
-
-    Raises:
-        VectorValidationError: A column is missing, an asset has no href, or
-            two Items of one collection share an id.
-    """
-    missing = set(ITEM_COLUMNS) - set(rows.columns)
-    if missing:
-        raise VectorValidationError(
-            f"STAC Items need columns {sorted(missing)}; item tables come from "
-            "create_catalog, StacClient.search, or reading a stac-geoparquet file"
-        )
-
-    for position, assets in enumerate(rows["assets"]):
-        # The assets column holds every key any row has; a row lacking one holds None.
-        for key, asset in (assets or {}).items():
-            if asset is not None and not asset.get("href"):
-                raise VectorValidationError(
-                    f"Row at position {position}: asset {key!r} has no href"
-                )
-
-    collection = rows["collection"] if "collection" in rows else None
-    identities = pd.DataFrame({"collection": collection, "id": rows["id"]})
-    repeated = identities[identities.duplicated(keep=False)]
-    if not repeated.empty:
-        raise VectorValidationError(
-            f"Items share an id within their collection: {sorted(set(repeated['id']))}"
-        )
-
-
-def stac_collections(rows: gpd.GeoDataFrame) -> None:
-    """Require a definition, in the table's footer, of every collection a row names.
-
-    Raises:
-        VectorValidationError: A row names a collection the footer lacks.
-    """
-    if "collection" not in rows:
-        return
-    named = set(rows["collection"].dropna())
-    missing = named - set(rows.gs.collections)
-    if missing:
-        raise VectorValidationError(
-            f"Rows name collections {sorted(missing)} without their definition; "
-            "pass them to create_catalog(collections=...)"
-        )
-
-
-def one_collection(rows: gpd.GeoDataFrame) -> None:
-    """Require every row to name the same collection.
-
-    Raises:
-        VectorValidationError: The rows name several collections.
-    """
-    if "collection" not in rows:
-        return
-    named = list(rows["collection"].dropna().unique())
-    if len(named) > 1:
-        raise VectorValidationError(
-            f"Rows name the collections {named}; select one with "
-            "rows[rows['collection'] == '<id>']"
-        )
 
 
 def dated(rows: gpd.GeoDataFrame) -> None:
@@ -150,7 +83,7 @@ class GeoCatalog:
 
     Examples:
         >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
-        >>> recent = catalog[catalog["datetime"] >= "2025-06-01"]
+        >>> recent = catalog[catalog["datetime"] >= pd.Timestamp("2025-06-01", tz="UTC")]
         >>> scene = recent.gs.to_dataset(chunks={})
     """
 
@@ -185,7 +118,7 @@ class GeoCatalog:
             VectorValidationError: A rule is broken; the error names the row.
 
         Examples:
-            >>> rows.gs.validate(stac_items, stac_collections)
+            >>> rows.gs.validate(valid_geometry, stac.catalog.stac_items)
         """
         for rule in rules:
             rule(self._data)
@@ -320,13 +253,9 @@ class GeoCatalog:
     @property
     def collections(self) -> dict[str, pystac.Collection]:
         """Return the Collections the table's footer metadata holds, by id."""
-        import pystac
+        from geosave.geodata.stac.catalog import read_collections
 
-        footer = self._data.attrs.get(FOOTER_KEY, {})
-        collections_by_id = {}
-        for collection_id, collection_dict in footer.get("collections", {}).items():
-            collections_by_id[collection_id] = pystac.Collection.from_dict(collection_dict)
-        return collections_by_id
+        return read_collections(self._data.attrs)
 
     def to_geojson(
         self,
@@ -407,7 +336,7 @@ class GeoCatalog:
         """Write features or a STAC catalog to one GeoParquet file.
 
         Frames carrying `attrs["stac-geoparquet"]` use STAC encoding,
-        preserving Collection definitions and portable asset hrefs. Ordinary
+        preserving Collection definitions and absolute asset hrefs. Ordinary
         features use GeoPandas encoding. Catalog metadata is checked at write
         time, so missing fields raise instead of losing their STAC encoding.
 
@@ -474,17 +403,17 @@ class GeoCatalog:
         Examples:
             >>> scene = catalog.gs.to_dataset(chunks={}, with_properties=["eo:cloud_cover"])
         """
+        from geosave.geodata.stac.catalog import one_collection
         from geosave.geodata.stac.load import load_dataset
 
-        self.validate(stac_items, one_collection)
+        self.validate(one_collection)
         dataset = load_dataset(self.to_items(), **options)
         return cast("Dataset", dataset)
 
     def to_items(self) -> list[pystac.Item]:
         """Convert Item rows to native pystac Items, ready for `stac.load_dataset`.
 
-        The stac-geoparquet library decodes the rows. Asset hrefs a file
-        stored relative resolve against that file, and each Item links to
+        The stac-geoparquet library decodes the rows, and each Item links to
         the Collection the table defines for it.
 
         Returns:
@@ -496,33 +425,6 @@ class GeoCatalog:
         Examples:
             >>> scene = stac.load_dataset(catalog.gs.to_items(), chunks={})
         """
-        import pyarrow as pa
-        from stac_geoparquet.arrow import stac_table_to_items
+        from geosave.geodata.stac.catalog import to_items
 
-        from geosave.geodata.stac.catalog import SOURCE_KEY, build_item
-
-        self.validate(stac_items)
-        if self._data.empty:
-            return []
-
-        wgs84_rows = self._data.to_crs("EPSG:4326")
-        if wgs84_rows.active_geometry_name != "geometry":
-            wgs84_rows = wgs84_rows.rename_geometry("geometry")
-        # stac-geoparquet reads each Item's bbox from a struct column, which
-        # the table does not keep. GeoPandas names bounds minx..maxy; the
-        # struct uses xmin..ymax.
-        bounds = wgs84_rows.geometry.bounds.rename(
-            columns={"minx": "xmin", "miny": "ymin", "maxx": "xmax", "maxy": "ymax"}
-        )
-        bbox_column = pd.Series(bounds.to_dict("records"), index=wgs84_rows.index)
-        arrow_table = pa.table(wgs84_rows.assign(bbox=bbox_column).to_arrow(index=False))
-
-        collections_by_id = self.collections
-        source_file = self._data.attrs.get(SOURCE_KEY)
-        items = []
-        for item_dict in stac_table_to_items(arrow_table):
-            item = build_item(
-                item_dict, source_file=source_file, collections_by_id=collections_by_id
-            )
-            items.append(item)
-        return items
+        return to_items(self._data)
