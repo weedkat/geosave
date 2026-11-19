@@ -83,7 +83,8 @@ The 256 × 256 scene gives four 128 × 128 chips; planning them reads no pixels.
 
 ```python
 chip = chips[0]
-sample = chip.gs.to_tensor()
+pixels, context = chip.gs.to_tensor()
+sample = {**pixels, **context}
 {name: tuple(tensor.shape) for name, tensor in sample.items()}
 ```
 

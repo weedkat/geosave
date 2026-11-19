@@ -89,5 +89,5 @@ are rebuilt. Existing raster labels can still be opened, aligned, and used in
 two-dimensional band to polygons and computes its pixels.
 
 A STAC Item table uses the same GeoDataFrame type, with columns identifying
-observations and their assets. See [catalog creation and loading](../advanced/raster-catalog.md)
+observations and their assets. See [catalog creation and loading](catalog.md)
 for that workflow and [vector reference](../reference/vectors.md) for signatures.

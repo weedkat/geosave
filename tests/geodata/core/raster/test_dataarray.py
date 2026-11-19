@@ -2,7 +2,6 @@ from __future__ import annotations
 
 
 import numpy as np
-import pandas as pd
 import pytest
 import xarray as xr
 
@@ -15,7 +14,6 @@ from affine import Affine
 from odc.geo.geobox import GeoBox
 from tests.conftest import build_dataarray
 
-import dask.array as da
 from dask.callbacks import Callback
 
 
@@ -39,36 +37,12 @@ def test_a_band_carrying_no_band_axis_reads_without_one() -> None:
 
 
 def test_a_band_converts_without_gaining_a_band_axis(torch) -> None:
-    sample = optical().B04.gs.to_tensor("red", grid=True)
+    tensor, context = optical().B04.gs.to_tensor(grid=True)
 
-    assert list(sample) == ["red", "transform", "crs"]
-    tensor = sample["red"]
+    assert list(context) == ["transform", "crs"]
 
     assert tensor.dtype is torch.uint16
     assert tuple(tensor.shape) == (2, 8, 8)
-
-
-def test_statistics_reads_a_lazy_source_once() -> None:
-    from dask import delayed
-
-    reads = []
-
-    @delayed
-    def pixels():
-        reads.append(1)
-        return np.array([[1.0, 2.0], [3.0, 0.0]])
-
-    values = da.from_delayed(pixels(), shape=(2, 2), dtype="float64")
-    band = xr.DataArray(values, dims=("y", "x"), name="red", attrs={"nodata": 0})
-    summary = band.gs.statistics()
-
-    assert isinstance(summary, pd.DataFrame)
-    assert summary.loc["red", "minimum"] == 1.0
-    assert summary.loc["red", "maximum"] == 3.0
-    assert summary.loc["red", "mean"] == 2.0
-    assert summary.loc["red", "stddev"] == pytest.approx(np.sqrt(2 / 3))
-    assert summary.loc["red", "valid_percent"] == 75.0
-    assert len(reads) == 1
 
 
 def test_split_defaults_to_bands_and_preserves_pixel_interpretation():
@@ -77,24 +51,6 @@ def test_split_defaults_to_bands_and_preserves_pixel_interpretation():
     assert list(split.data_vars) == image.band.values.tolist()
     assert split.red.attrs == image.attrs
     assert split.gs.geobox == image.gs.geobox
-
-
-def test_multiband_array_statistics_keep_band_order_and_shared_nodata() -> None:
-    source = build_dataset(
-        {
-            "nir": (("y", "x"), np.array([[0.0, 10.0, 20.0]])),
-            "red": (("y", "x"), np.array([[0.0, 1.0, 3.0]])),
-        },
-        geobox(shape=(1, 3)),
-    ).gs.write_nodata(0)
-
-    table = source.gs.to_array().gs.statistics(dim="band")
-
-    pd.testing.assert_frame_equal(table, source.gs.statistics())
-    assert list(table.index) == ["nir", "red"]
-    assert table.loc["nir", "mean"] == 15.0
-    assert table.loc["red", "mean"] == 2.0
-    assert table.loc["red", "valid_percent"] == pytest.approx(200 / 3)
 
 
 def test_to_dataset_recovers_only_the_attrs_every_band_shared() -> None:

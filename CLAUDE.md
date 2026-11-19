@@ -65,7 +65,7 @@ src/geosave/geodata/
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # raster/ (Dataset <-> file, codecs/), vector/ (GeoDataFrame <-> file); storage.py turns every path or URL into a UPath
 ├── sampling/     # ChipLayout; RasterChipper/RasterMerger for rasters, TensorChipper/TensorMerger for batches in a Module step
-├── stac/         # search, ODC loading and stamps, catalog conversion, RasterStac publication
+├── stac/         # search, ODC loading and stamps, catalog conversion, Item publication
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows that run a released pipeline; installed with the `flows` extra
@@ -91,8 +91,8 @@ Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`; `ge
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC table conversion lives in `stac/catalog/` (layout, hrefs, collections, rules, items); publication in `raster.py`
-and `publish.py`; loading metadata in `stac/stamps/`.
+STAC table conversion lives in `stac/catalog/` (layout, hrefs, collections, rules, items); publication in
+`publish.py`; loading metadata in `stac/stamps/`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
 `stac.load_dataset` and `stac.load_native_datasets` load selected Items through ODC. Format

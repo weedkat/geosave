@@ -80,7 +80,12 @@ def predict_region(
 
     stores = []
     for rasters in ingest(pipeline, area):
-        start, _ = rasters.gs.region.timespan
+        spans = [
+            node.gs.to_dataset().gs.timespan
+            for node in rasters.leaves
+            if node.data_vars
+        ]
+        start = min(span[0] for span in spans if span is not None)
         destination = folder / f"{start:%Y%m%dT%H%M%S}.zarr"
         stores.append(predict_to_zarr(pipeline, rasters, destination, chunks))
     return stores

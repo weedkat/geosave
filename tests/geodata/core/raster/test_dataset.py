@@ -11,7 +11,7 @@ from geosave.geodata import (
     open_raster,
 )
 from tests.conftest import build_dataset
-from tests.geodata.conftest import build_raster, create_test_collection, geobox
+from tests.geodata.conftest import build_raster, geobox
 from tests.geodata.core.raster.conftest import optical
 
 import dask.array as da
@@ -22,6 +22,75 @@ from odc.geo.geom import Geometry
 
 
 UTM = "EPSG:32633"
+
+
+def test_to_tree_keeps_group_metadata_and_lazy_variable_identity():
+    source = build_raster(times=2).chunk()
+    source.attrs = {"title": "Observation", "rgb": ["red", "nir", "red"]}
+    source.red.attrs["units"] = "1"
+    source.red.encoding["dtype"] = "uint16"
+    before = source.copy(deep=False)
+
+    with Callback(pretask=lambda *_: pytest.fail("grouping read pixels")):
+        tree = source.gs.to_tree(name="s2", groups={"image": ["nir"], "red": ["red"]})
+        plain = source.gs.to_tree()
+
+    assert list(tree.children) == ["s2"]
+    assert list(tree["s2"].children) == ["image", "red"]
+    assert tree["s2"].attrs == source.attrs
+    assert not tree["s2"].data_vars
+    assert not tree["s2"].coords
+    assert tree["s2/image"].attrs == {}
+    assert tree["s2/red"]["red"].data is source.red.data
+    xr.testing.assert_identical(tree["s2/red"].gs.to_dataset(), source[["red"]])
+    assert tree["s2/red"]["red"].encoding == source.red.encoding
+    xr.testing.assert_identical(plain["ds"].gs.to_dataset(), source)
+    xr.testing.assert_identical(source, before)
+
+
+@pytest.mark.parametrize(
+    "groups,message",
+    [
+        ({}, "missing"),
+        ({"image": ["red"]}, "missing"),
+        ({"image": ["red", "nir"], "mask": ["red"]}, "more than once"),
+        ({"image": ["red", "red", "nir"]}, "more than once"),
+        ({"image": ["missing"]}, "Unknown variable"),
+        ({"image": []}, "nonempty"),
+        ({"image": "red"}, "variable-name list"),
+        ({"nested/image": ["red", "nir"]}, "child name"),
+    ],
+)
+def test_to_tree_requires_an_exclusive_complete_partition(groups, message):
+    source = build_raster().chunk()
+
+    with Callback(pretask=lambda *_: pytest.fail("validation read pixels")):
+        with pytest.raises(ValueError, match=message):
+            source.gs.to_tree(groups=groups)
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "nested/image"])
+def test_to_tree_requires_one_source_node_name(name):
+    with pytest.raises(ValueError, match="child name"):
+        build_raster().gs.to_tree(name)
+
+
+def test_to_tree_preserves_auxiliary_coordinates_and_references():
+    source = build_raster(times=2).chunk()
+    starts = source.time.values
+    bounds = np.stack([starts, starts + np.timedelta64(1, "D")], axis=1)
+    source = source.assign_coords(time_bounds=(("time", "bounds"), bounds))
+    source.time.attrs["bounds"] = "time_bounds"
+    source.time_bounds.encoding["dtype"] = "int64"
+
+    with Callback(pretask=lambda *_: pytest.fail("grouping read pixels")):
+        tree = source.gs.to_tree(groups={"nir": ["nir"], "red": ["red"]})
+        raster = tree["ds"].gs.merge().gs.to_dataset()
+
+    assert list(raster.data_vars) == ["nir", "red"]
+    xr.testing.assert_identical(raster, source)
+    assert raster.time_bounds.encoding == source.time_bounds.encoding
+    assert raster.red.data is source.red.data
 
 
 def test_to_array_keeps_what_every_band_states_alike() -> None:
@@ -99,31 +168,6 @@ def test_nodata_reads_back_what_was_written() -> None:
 
     assert built.red.gs.nodata == 0
     assert built.nir.gs.nodata is None
-
-
-def test_raster_statistics_tabulate_each_variable_as_its_band_does() -> None:
-    box = geobox()
-    pixels = np.arange(64, dtype="uint16").reshape(box.shape)
-    built = build_dataset(
-        {
-            "red": (("y", "x"), pixels),
-            "nir": (("y", "x"), pixels * 2),
-        },
-        box,
-        nodata=0,
-    )
-
-    table = built.gs.statistics()
-
-    assert list(table.index) == ["red", "nir"]
-    assert list(table.columns) == [
-        "minimum",
-        "maximum",
-        "mean",
-        "stddev",
-        "valid_percent",
-    ]
-    pd.testing.assert_frame_equal(table.loc[["nir"]], built.nir.gs.statistics())
 
 
 def _classes() -> xr.Dataset:
@@ -217,21 +261,23 @@ def test_to_numpy_trees_in_the_order_xarray_holds_the_variables() -> None:
     assert stacked[0, :, 0, 0].tolist() == [8, 4]
 
 
-def test_stacking_broadcasts_a_static_band_along_time() -> None:
+def test_stacking_requires_explicit_broadcast_for_static_channels() -> None:
     source = optical()
     # A static band of the same pixel meaning, such as a reference image.
     mixed = source.assign(static=source.B04.isel(time=0, drop=True))
 
-    stacked = mixed.gs.to_numpy()
+    with pytest.raises(ValueError, match="dimensions"):
+        mixed.gs.to_numpy()
+    prepared = mixed.broadcast_like(source)
+    assert prepared.gs.to_numpy().shape == (2, len(mixed.data_vars), 8, 8)
 
-    assert stacked.shape == (2, len(mixed.data_vars), 8, 8)
 
-
-def test_stacking_promotes_dtypes_as_numpy_does() -> None:
+def test_stacking_requires_explicit_dtype_for_mixed_channels() -> None:
     source = optical()
     mixed = source.assign(ndvi=source.B04.astype("float32"))
 
-    assert mixed.gs.to_numpy().dtype == np.float32
+    with pytest.raises(ValueError, match="dtype"):
+        mixed.gs.to_numpy()
 
 
 def test_to_numpy_casts_variables_onto_one_dtype() -> None:
@@ -242,10 +288,9 @@ def test_to_numpy_casts_variables_onto_one_dtype() -> None:
 
 
 def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout(torch) -> None:
-    sample = optical().gs.to_tensor("image", grid=True, context=["centroid"])
+    tensor, context = optical().gs.to_tensor(grid=True, context=["centroid"])
 
-    assert list(sample) == ["image", "transform", "crs", "centroid"]
-    tensor = sample["image"]
+    assert list(context) == ["transform", "crs", "centroid"]
 
     assert tensor.dtype is torch.uint16
     assert tuple(tensor.shape) == (2, 2, 8, 8)
@@ -392,29 +437,6 @@ def test_extent_survives_band_selection_without_changing_pixels(city):
     assert written.gs.region.extent == city
 
 
-def test_catalog_publishes_one_cog_per_variable_and_item_and_loads_back(tmp_path):
-    from geosave.geodata import stac
-
-    scene = build_raster(times=2, packed=True)
-    scene = scene.gs.write_stac_property("eo:cloud_cover", [10.0, 40.0])
-
-    collection = create_test_collection("optical", description="Optical")
-    catalog = scene.gs.to_catalog(
-        tmp_path, collection=collection, id_format="{start:%Y%m%d}"
-    )
-
-    assert catalog["id"].tolist() == ["20250601", "20250602"]
-    assert catalog["collection"].tolist() == ["optical", "optical"]
-    assert catalog["eo:cloud_cover"].tolist() == [10.0, 40.0]
-    assert (tmp_path / "20250602" / "nir.tif").exists()
-    items = catalog.gs.to_items()
-    loaded = stac.load_dataset(items, chunks={}, like=scene)
-    for name in scene.data_vars:
-        np.testing.assert_array_equal(loaded[name].values, scene[name].values)
-    with pytest.raises(FileExistsError):
-        scene.gs.to_catalog(tmp_path, collection=collection, id_format="{start:%Y%m%d}")
-
-
 def test_one_item_reads_its_property_values_and_declared_extensions():
     from geosave.geodata import attrs
 
@@ -434,3 +456,96 @@ def test_one_item_reads_its_property_values_and_declared_extensions():
         scene.gs.read_stac_properties()
     assert scene.gs.stac_extensions == [schema]
     assert build_raster().gs.stac_extensions == []
+
+
+def test_model_channels_allow_distinct_units_and_require_explicit_dtype():
+    source = build_raster()
+    source.red.attrs["units"] = "m"
+    source.nir.attrs["units"] = "K"
+    pixels = source.gs.to_numpy()
+    np.testing.assert_array_equal(pixels[0], source.red.values)
+    source["nir"] = source.nir.astype("float32")
+    with pytest.raises(ValueError, match="dtype"):
+        source.gs.to_numpy()
+    assert source.gs.to_numpy(dtype="float32").dtype == np.float32
+    source["nir"] = source.nir.expand_dims(layer=[1])
+    with pytest.raises(ValueError, match="dimensions"):
+        source.gs.to_numpy(dtype="float32")
+
+
+def test_model_stacking_rejects_empty_or_already_named_channel_axis():
+    source = build_raster()
+    with pytest.raises(ValueError, match="at least one"):
+        source.drop_vars(list(source.data_vars)).gs.to_numpy()
+    with pytest.raises(ValueError, match="band dimension"):
+        source.expand_dims(band=[0]).gs.to_numpy()
+
+
+def build_observation():
+    grid = geobox(shape=(4, 4))
+    product = build_dataset(
+        {
+            "landcover": (("y", "x"), np.ones((4, 4), dtype="uint8")),
+            "probability": (("y", "x"), np.full((4, 4), 0.5, dtype="float32")),
+        },
+        grid,
+        time=np.datetime64("2025-06-01", "ns"),
+    )
+    product.landcover.attrs.update(
+        flag_values=np.array([1, 2], "uint8"), flag_meanings="forest water"
+    )
+    return product
+
+
+def test_publish_item_writes_one_file_per_variable_by_default(tmp_path):
+    from geosave.geodata import stac
+
+    product = build_observation()
+
+    item = product.gs.publish_item(tmp_path, id="forest-20250601")
+
+    assert list(item.assets) == ["landcover", "probability"]
+    assert (tmp_path / "forest-20250601/landcover.tif").exists()
+    assert item.datetime is not None
+    assert stac.create_catalog([item])["id"].tolist() == ["forest-20250601"]
+    restored = open_raster(item.assets["landcover"].href, mask_and_scale=False)
+    assert restored.gs.geobox == product.gs.geobox
+
+
+def test_publish_item_groups_variables_and_reads_marked_properties(tmp_path):
+    source = build_raster(times=1).isel(time=0)
+    source = source.gs.write_stac_property("eo:cloud_cover", 12.5)
+
+    item = source.gs.publish_item(
+        tmp_path, id="scene", assets={"image": ["red", "nir"]}
+    )
+
+    assert list(item.assets) == ["image"]
+    assert len(item.assets["image"].extra_fields["raster:bands"]) == 2
+    assert item.properties["eo:cloud_cover"] == 12.5
+
+
+def test_asset_on_another_grid_joins_the_published_item(tmp_path):
+    from geosave.geodata import stac
+
+    product = build_observation()
+    coarse = build_dataset(
+        {"scl": (("y", "x"), np.full((2, 2), 4, dtype="uint8"))},
+        product.gs.geobox.zoom_out(2),
+        time=product.time.values,
+    )
+
+    item = product.gs.publish_item(
+        tmp_path, id="scene", assets={"landcover": ["landcover"]}
+    )
+    item = stac.publish_item(item, assets={"scl": coarse}, root=tmp_path)
+
+    assert list(item.assets) == ["landcover", "scl"]
+    assert item.assets["scl"].extra_fields["proj:shape"] == [2, 2]
+    assert item.assets["landcover"].extra_fields["proj:shape"] == [4, 4]
+
+
+def test_publish_item_refuses_a_time_series(tmp_path):
+    with pytest.raises(ValueError):
+        build_raster(times=2).gs.publish_item(tmp_path, id="series")
+    assert not list(tmp_path.rglob("*.tif"))

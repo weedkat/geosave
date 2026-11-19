@@ -196,10 +196,19 @@ def test_opacity_and_vector_style_do_not_compute_other_rasters(scene, fields):
 
 
 @pytest.mark.parametrize("action", ["opacity", "pan", "uncached pan"])
-def test_rgb_resends_pixels_only_for_uncached_views(scene, action):
+def test_rgb_resends_pixels_only_for_uncached_views(action):
     from bokeh.document import Document
     from bokeh.models import GlyphRenderer, ImageRGBA
 
+    from tests.conftest import build_dataset
+    from tests.geodata.viz.conftest import create_grid
+
+    grid = create_grid(768)
+    y, x = np.indices(grid.shape, dtype="float32")
+    scene = build_dataset(
+        {"r": (("y", "x"), x), "g": (("y", "x"), y), "b": (("y", "x"), x + y)},
+        grid,
+    ).gs.write_rgb("r", "g", "b")
     viewer = Explorer(layers=[create_layer(scene)], basemap="None")
     document = Document()
     root = viewer.map.pane.get_root(document)
@@ -236,6 +245,44 @@ def test_rgb_resends_pixels_only_for_uncached_views(scene, action):
             if isinstance(renderer.glyph, ImageRGBA)
         )
     viewer.close()
+
+
+def test_compact_raster_navigation_reuses_the_browser_image(scene, monkeypatch):
+    from bokeh.models import Plot
+
+    viewer = scene.B04.chunk({"x": 16, "y": 16}).gs.explore(cmap="RdYlGn")
+    try:
+        figure = viewer.map.pane.get_root().select_one({"type": Plot})
+        viewer.map.size.event(width=656, height=637)
+        source = next(
+            r.data_source
+            for r in figure.renderers
+            if isinstance(r, GlyphRenderer) and "image" in r.data_source.data
+        )
+        pixels = source.data["image"][0]
+        assert "rangesupdate" in figure.subscribed_events
+        assert figure.sizing_mode == "stretch_both"
+        assert max(pixels.shape) < 100
+        assert np.isfinite(pixels).any()
+
+        layer = viewer.layers[0]
+
+        def unexpected_draw(*args):
+            pytest.fail("navigation redrew an image already in the browser")
+
+        monkeypatch.setattr(layer, "draw", unexpected_draw)
+        left, right = viewer.map.ranges.x_range
+        bottom, top = viewer.map.ranges.y_range
+        tasks = []
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            viewer.map.ranges.event(
+                x_range=((left + right) / 2, right), y_range=((bottom + top) / 2, top)
+            )
+            viewer.map.ranges.event(x_range=(left, right), y_range=(bottom, top))
+        assert source.data["image"][0] is pixels
+        assert tasks == []
+    finally:
+        viewer.close()
 
 
 def test_static_and_explorer_backends_in_both_orders(scene):
@@ -364,6 +411,43 @@ def test_hidden_raster_does_not_execute_dask_on_pan(scene, fields):
         viewer.zoom(box)
     assert tasks == []
     viewer.close()
+
+
+def test_default_basemap_keeps_raster_in_view_on_first_resize(scene):
+    from bokeh.models import Plot, TileRenderer
+
+    viewer = scene["B04"].gs.explore(cmap="RdYlGn")
+    try:
+        root = viewer.map.pane.get_root()
+        figure = root.select_one({"type": Plot})
+        viewer.map.size.event(width=656, height=637)
+
+        bounds = viewer.layers[0].bbox
+        assert figure.x_range.start <= bounds.left < bounds.right <= figure.x_range.end
+        assert figure.y_range.start <= bounds.bottom < bounds.top <= figure.y_range.end
+        assert figure.select_one({"type": TileRenderer}) is not None
+    finally:
+        viewer.close()
+
+
+def test_enabling_basemap_preserves_raster_hover(scene):
+    from bokeh.models import HoverTool, Image, Plot, TileRenderer
+
+    viewer = scene["B04"].gs.explore(basemap="None")
+    try:
+        figure = viewer.map.pane.get_root().select_one({"type": Plot})
+        hover = figure.select_one({"type": HoverTool})
+        (image,) = hover.renderers
+        assert isinstance(image.glyph, Image)
+
+        for basemap in ("Light", "None", "OpenStreetMap"):
+            viewer.basemap = basemap
+            tiles = figure.select_one({"type": TileRenderer})
+            assert tiles.visible == (basemap != "None")
+            assert hover in figure.tools
+            assert hover.renderers == [image]
+    finally:
+        viewer.close()
 
 
 def test_zoom_updates_the_rendered_map_ranges(scene, fields):

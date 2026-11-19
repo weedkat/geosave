@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from odc.geo import SomeCRS
     from odc.geo.geobox import GeoBox
     from geosave.geodata.utils.geocode import Place
+    from geosave.geodata.viz.explore import Explorer
 
 
 @dataclass(frozen=True, eq=False)
@@ -68,6 +69,21 @@ class GeoRegion:
         longitude, latitude = self.lonlat
         return mgrs.MGRS().toMGRS(latitude, longitude, MGRSPrecision=0)
 
+    def explore(self, *, basemap: str | None = None) -> Explorer:
+        """Display the region geometry as a layer in GeoSave's Explorer.
+
+        Args:
+            basemap: Explorer basemap name. Defaults to the light basemap.
+
+        Returns:
+            An interactive map centered on the region.
+        """
+        import geopandas as gpd
+        from geosave.geodata.viz.explore import Explorer, VectorLayer
+
+        frame = gpd.GeoDataFrame(geometry=[self.extent.geom], crs=self.crs.wkt)
+        return Explorer(layers=[VectorLayer(frame, name="Region")], basemap=basemap)
+
     def locate(self) -> Place | None:
         """Reverse geocode the centroid through Nominatim.
 
@@ -82,7 +98,7 @@ class GeoRegion:
         longitude, latitude = self.lonlat
         return Place.from_coordinate(latitude, longitude)
 
-    def replace(self, *, timespan: RegionDatetime | None) -> Self:
+    def set_time(self, timespan: RegionDatetime | None) -> Self:
         """Return a new region with the same geometry and another timespan.
 
         Args:
@@ -93,7 +109,17 @@ class GeoRegion:
                 timeless.
 
         Returns:
-            New region; the original is unchanged.
+            New region; the original is unchanged. A DateRange tuple keeps its
+            exact endpoints. A month string spans its first day at midnight
+            through its last day at 23:59:59.999999.
+
+        Examples:
+            >>> month = region.set_time("2024-02")
+            >>> month.timespan
+            (datetime.datetime(2024, 2, 1, 0, 0),
+             datetime.datetime(2024, 2, 29, 23, 59, 59, 999999))
+            >>> region.set_time(month.timespan).timespan == month.timespan
+            True
         """
         return dataclasses.replace(
             self, timespan=None if timespan is None else parse_daterange(timespan)

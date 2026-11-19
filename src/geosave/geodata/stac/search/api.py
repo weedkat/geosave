@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import planetary_computer
 import pystac
@@ -17,25 +17,18 @@ from geosave.geodata.errors import CollectionNotFoundError
 from .query import SearchParams, StacQuery
 
 if TYPE_CHECKING:
-    import rustac
-
     from geosave.geodata import GeoDataFrame
-    from geosave.geodata.io.storage import Location
-
-    from .table import StacTable
 
 CDSE_URL = "https://stac.dataspace.copernicus.eu/v1/"
 PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/"
 ELEMENT84_URL = "https://earth-search.aws.element84.com/v1/"
 
-type StacProvider = Literal["planetary_computer", "cdse", "element84"]
-
 
 class StacClient:
     """Search one STAC API and inspect its Collections.
 
-    Open it with `open`: a built-in provider, a STAC API URL, or a STAC
-    GeoParquet table. Table endpoints return an independent StacTable.
+    Use `open(url)` for a STAC API, or a named provider constructor such as
+    `planetary_computer()`. Search GeoParquet files with `StacTable(path)`.
 
     Args:
         client: Open pystac-client session.
@@ -62,44 +55,22 @@ class StacClient:
         self._collections: dict[str, pystac.Collection] = {}
 
     @classmethod
-    def open(
-        cls,
-        endpoint: StacProvider | Location,
-        *,
-        duckdb: rustac.DuckdbClient | None = None,
-    ) -> StacClient | StacTable:
-        """Open a built-in provider, a STAC API by URL, or a GeoParquet table.
+    def open(cls, url: str) -> StacClient:
+        """Connect to a STAC API at its root URL.
 
         Args:
-            endpoint: Built-in provider name, STAC API URL, or the path or URL
-                of a `.parquet` item table as `to_geoparquet` stores it.
-            duckdb: Configured rustac session for a table in a bucket behind
-                credentials or a custom endpoint. Only a table takes it.
+            url: STAC API root URL. For built-in providers, use
+                `planetary_computer()`, `cdse()` or `element84()` instead.
+                For a GeoParquet path or URL, use `StacTable(path)`.
 
         Returns:
-            Client for the catalog.
-
-        Raises:
-            ValueError: `duckdb` is given for an API.
+            Client for the STAC API, without provider-specific asset signing.
 
         Examples:
-            >>> StacClient.open("element84").collection("sentinel-2-l2a")
-            >>> StacClient.open("data/catalog.parquet").collections()
+            >>> client = StacClient.open("https://example.org/stac/v1")
+            >>> client.collections()
             {'forest'}
         """
-        url = str(endpoint)
-        if url.split("?")[0].endswith((".parquet", ".geoparquet")):
-            from .table import StacTable
-
-            return StacTable(endpoint, duckdb=duckdb)
-        if duckdb is not None:
-            raise ValueError("duckdb applies to a GeoParquet table, not a STAC API")
-        if endpoint == "planetary_computer":
-            return cls.planetary_computer()
-        if endpoint == "cdse":
-            return cls.cdse()
-        if endpoint == "element84":
-            return cls.element84()
         return cls(Client.open(url, stac_io=_default_io()))
 
     @classmethod
@@ -228,7 +199,7 @@ def _default_io() -> StacApiIO:
         max_retries=Retry(
             total=5,
             backoff_factor=1,
-            status_forcelist=[502, 503, 504],
+            status_forcelist=[429, 502, 503, 504],
             allowed_methods=["GET", "POST"],
         )
     )

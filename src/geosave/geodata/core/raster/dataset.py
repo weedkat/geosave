@@ -44,22 +44,19 @@ from typing import TYPE_CHECKING, Any, Literal, Unpack, cast
 import cf_xarray  # noqa: F401  — registers the .cf accessor
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
-import pandas as pd
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
 
-from geosave.geodata.errors import RasterValidationError
 from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
-    ITEM_ID_FORMAT,
-    TIME_COORDINATE,
 )
-from geosave.geodata.core.raster.utils.statistics import class_percent, statistics
 from geosave.geodata.core.raster.utils.tensor import as_tensor
 
+from .datatree import check_node_name
 from .base import GeoRaster, RasterStacProperties, RasterTime
+from .rules import dataset as dataset_rules
 from .transform.temporal import Reducer, Interpolation
 
 if TYPE_CHECKING:
@@ -71,51 +68,23 @@ if TYPE_CHECKING:
     from odc.geo.geom import Geometry
     from geosave.geodata.core.region import GeoRegion
     import pystac
-    from geosave.geodata import GeoDataFrame
     from collections.abc import Hashable, Mapping, Sequence
 
     import holoviews as hv
     import torch
+    from .utils.context import ContextTensors
     from numpy.typing import DTypeLike
     from odc.geo import SomeCRS
 
-    from geosave.geodata import DataArray, Dataset
+    from geosave.geodata import DataArray, Dataset, DataTree
     from dask.delayed import Delayed
     from upath import UPath
-    from geosave.geodata.io.raster.geotiff import COGWriteOptions
     from geosave.geodata.io.raster.netcdf import NetCDFWriteOptions
     from geosave.geodata.io.raster.zarr import ZarrWriteOptions
+    from geosave.geodata.io.raster.geotiff import COGWriteOptions
     from geosave.geodata.io.storage import Location, StorageOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
-
-
-# Rules a Dataset can be asked to meet; `ds.gs.validate(same_pixel_meaning)`
-# runs one.
-def same_pixel_meaning(raster: xr.Dataset) -> None:
-    """Require every variable to state the same CF packing, flags and units.
-
-    Raises:
-        RasterValidationError: Two variables state different pixel meaning.
-    """
-    names = list(raster.data_vars)
-    if not names:
-        return
-
-    first = raster[names[0]]
-    for name in names[1:]:
-        band = raster[name]
-        if (
-            band.gs.packing != first.gs.packing
-            or band.gs.flags != first.gs.flags
-            or band.attrs.get("units") != first.attrs.get("units")
-        ):
-            raise RasterValidationError(
-                f"It states different CF packing, flags or units than "
-                f"{names[0]!r}, so stacked pixels would mean different things. "
-                "Decode them with mask_and_scale() first.",
-                variable=name,
-            )
 
 
 class GeoDataset(
@@ -134,6 +103,45 @@ class GeoDataset(
         >>> ds.gs.geobox.shape
         (512, 512)
     """
+
+    def to_tree(
+        self,
+        name: str = "ds",
+        *,
+        groups: Mapping[str, list[str]] | None = None,
+    ) -> DataTree:
+        """Place this Dataset in a named node, optionally partitioning its variables.
+
+        Shared Dataset attrs stay on the named node. Group leaves keep all source
+        coordinates, variable attrs and encoding, and share the source pixels.
+        Time is not split and no STAC identity is inferred.
+
+        Args:
+            name: Name of the source node under an empty root.
+            groups: Ordered child names mapped to variable-name lists. Every
+                source variable must appear exactly once. None keeps the whole
+                Dataset in the source node.
+
+        Returns:
+            New native DataTree with lazy, independently described raster leaves.
+
+        Raises:
+            ValueError: A name is invalid, a group is empty, or variables are
+                missing, repeated or unknown.
+            RasterValidationError: The Dataset holds no georeferenced raster.
+
+        Examples:
+            >>> tree = scene.gs.to_tree("s2", groups={"image": ["red", "nir"]})
+            >>> tree["s2/image"].gs.to_dataset()
+        """
+        check_node_name(name)
+        node = cast("DataTree", xr.DataTree(self._data))
+        node.gs.validate()
+
+        if groups is not None:
+            node = node.gs.group(groups)
+
+        return cast("DataTree", xr.DataTree(children={name: node}))
 
     def composite(
         self,
@@ -700,46 +708,6 @@ class GeoDataset(
             self._data, display.model_copy(update={"rgb": channels})
         )
 
-    def statistics(self) -> pd.DataFrame:
-        """Summarise every variable's present pixels, reading each of them.
-
-        Returns:
-            One row per variable, in Dataset order, with minimum, maximum,
-            mean, population stddev, and valid_percent columns. All axes of
-            each variable are reduced together.
-
-        Raises:
-            ValueError: A variable holds no present pixel.
-
-        Examples:
-            >>> ds.gs.statistics()
-                 minimum  maximum  mean  stddev  valid_percent
-            red      1.0     96.0  45.6    29.9          100.0
-            nir      8.0     98.0  56.7    23.2          100.0
-        """
-        return statistics([self._data[list(self.variables)]])
-
-    def class_percent(self) -> pd.DataFrame:
-        """Give the share of present pixels in each class of every label variable.
-
-        Returns:
-            One column per categorical variable that states class names, one
-            row per class name in legend order.
-
-        Examples:
-            >>> ds.gs.class_percent()
-                   label
-            water   12.5
-            trees   87.5
-        """
-        columns = {}
-        for name in self.variables:
-            band = self._data[name]
-            flags = band.gs.flags
-            if flags is not None and flags.classes is not None:
-                columns[name] = class_percent([band])
-        return pd.DataFrame(columns)
-
     def to_array(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Stack variables lazily along `band`, in their existing order.
 
@@ -775,7 +743,7 @@ class GeoDataset(
                 "pass another dim or rename it first"
             )
 
-        self.validate(same_pixel_meaning)
+        self.validate(dataset_rules.same_pixel_meaning)
 
         spatial = cast("tuple[str, str]", self.spatial_dims)
         array = self._data.to_array(dim=dim).transpose(..., dim, *spatial)
@@ -797,7 +765,7 @@ class GeoDataset(
         for name in self.variables:
             encoding = self._data[name].encoding
             recipe = {}
-            for key in (*attrs.CFPacking.KEYS, "dtype", "_Unsigned"):
+            for key in (*attrs.CFPacking.KEYS, "dtype"):
                 if key in encoding:
                     recipe[key] = encoding[key]
             recipes.append(recipe)
@@ -943,49 +911,66 @@ class GeoDataset(
             >>> ds[["B04", "B08"]].gs.to_numpy().shape
             (2, 2, 256, 256)
         """
-        array = self.to_array()
-        if dtype is not None:
-            array = array.astype(dtype)
-        return array.values
+        self.validate()
+        variables = list(self._data.data_vars.values())
+        if not variables:
+            raise ValueError("Model input needs at least one raster variable")
+        if BAND_DIMENSION in self._data.dims:
+            raise ValueError(
+                "Rename the existing band dimension before stacking variables"
+            )
+        first = variables[0]
+        for variable in variables[1:]:
+            if variable.dims != first.dims:
+                raise ValueError(
+                    "Model channels must have matching dimensions; broadcast explicitly"
+                )
+            if dtype is None and variable.dtype != first.dtype:
+                raise ValueError(
+                    "Model channels have different dtypes; provide dtype explicitly"
+                )
+
+        raster = self._data if dtype is None else self._data.astype(dtype)
+        array = raster.to_array(dim=BAND_DIMENSION)
+        return array.transpose(
+            ..., BAND_DIMENSION, *cast("tuple[str, str]", self.spatial_dims)
+        ).values
 
     def to_tensor(
         self,
-        name: str,
         *,
         dtype: str | torch.dtype | None = None,
         grid: bool = False,
         context: Sequence[str] = (),
-    ) -> dict[str, torch.Tensor]:
-        """Stack every variable into one layer tensor named `name`, with the grid and context.
+    ) -> tuple[torch.Tensor, ContextTensors]:
+        """Read pixels and return requested context separately as tensors.
 
         Args:
-            name: Key of the layer, the input name a model chain takes it by.
-            dtype: Torch dtype or its string name. None keeps the source dtype,
-                which every variable must then share.
-            grid: Add `transform` and `crs`, as `DataTree.gs.to_tensor` does.
-            context: Names in `TENSOR_CONTEXT` whose readers add one entry each.
+            dtype: Torch dtype or its string name. None keeps the pixel dtype.
+            grid: Include affine `transform` and EPSG `crs` tensors in context.
+            context: Names in `TENSOR_CONTEXT` to read alongside the pixels.
 
         Returns:
-            {name: tensor shaped `(*axes, band, y, x)`, plus the grid and
-            context entries asked for}.
+            Pixel tensor shaped `(*axes, band, y, x)` and a dictionary of context
+            tensors. The dictionary is empty when no context or grid is requested.
 
         Raises:
-            KeyError: A context name is not in `TENSOR_CONTEXT`.
-            ValueError: A dtype name is unknown, `to_numpy` refuses the
-                raster, `name` takes the name of an entry, or the CRS has no
-                EPSG code.
-            TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
-                dtype has no tensor equivalent.
+            KeyError: A context name is unknown.
+            ValueError: A dtype is unknown, the raster cannot be converted, or
+                the requested grid has no EPSG code.
+            TypeError: The dtype is invalid or has no tensor equivalent.
 
         Examples:
-            >>> ds[["B04", "B08"]].gs.to_tensor("image", dtype="float32")["image"].shape
-            torch.Size([2, 2, 256, 256])
+            >>> pixels, context = raster.gs.to_tensor(dtype="float32")
         """
-        from .utils.context import build_sample
+        from .utils.context import read_context
 
-        layers = {name: as_tensor(self.to_numpy, dtype)}
-        tree = xr.DataTree.from_dict({name: self._data})
-        return build_sample(layers, tree, grid=grid, context=context)
+        pixels = as_tensor(self.to_numpy, dtype)
+        entries = {}
+        if grid or context:
+            tree = xr.DataTree.from_dict({"pixels": self._data})
+            entries = read_context(tree, grid=grid, context=context)
+        return pixels, entries
 
     def mask_and_scale(self) -> Dataset:
         """Decode the Dataset's CF values, coordinates and relationships lazily.
@@ -994,82 +979,6 @@ class GeoDataset(
         """
         decoded = xr.decode_cf(self._data.copy(deep=False), decode_coords="all")
         return cast("Dataset", decoded)
-
-    def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt as `the pending RasterStac publication interface`.
-
-        Raises:
-            NotImplementedError: Always, until publication is rebuilt.
-        """
-        raise NotImplementedError(
-            "STAC publication is being rebuilt as the pending RasterStac publication interface"
-        )
-
-    def to_catalog(
-        self,
-        path: Location,
-        *,
-        collection: pystac.Collection | None = None,
-        item_dim: str = TIME_COORDINATE,
-        id_format: str = ITEM_ID_FORMAT,
-        overwrite: bool = False,
-        storage_options: StorageOptions | None = None,
-        **options: Unpack[COGWriteOptions],
-    ) -> GeoDataFrame:
-        """Publish one COG per variable and Item, and return their catalog.
-
-        A shortcut for `RasterStac.from_dataset(ds).to_cog(path)` followed by
-        `stac.create_catalog`. Stage rasters on several grids with
-        `RasterStac.merge` instead.
-
-        Args:
-            path: Folder or URL prefix to publish under.
-            collection: Collection the Items belong to. None keeps the one
-                the Dataset states, or none; give a derived raster its own.
-            item_dim: Dimension holding one Item per position.
-            id_format: GeoRegion.format template for each Item id.
-            overwrite: Replace existing files when true.
-            storage_options: Options for the filesystem a URL names.
-            **options: COG creation options, passed to GDAL unchanged.
-
-        Returns:
-            Item table, one row per Item, carrying the Collection when
-            there is one; write it with `.gs.to_geoparquet`.
-
-        Raises:
-            KeyError: `item_dim` is absent.
-            FileExistsError: A file exists and `overwrite` is false.
-            ValueError: Two positions format to the same Item id.
-
-        Examples:
-            >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
-            >>> catalog = water.gs.to_catalog("s3://bucket/water", collection=water_maps)
-            >>> catalog.gs.to_geoparquet("s3://bucket/s2/catalog.parquet")
-        """
-        from geosave.geodata.stac.catalog import create_catalog
-        from geosave.geodata.stac.raster import RasterStac
-
-        staged = RasterStac.from_dataset(
-            self._data, collection=collection, item_dim=item_dim, id_format=id_format
-        )
-        items = staged.to_cog(
-            path, overwrite=overwrite, storage_options=storage_options, **options
-        )
-        return create_catalog(items)
-
-    def to_cog(self, path: Location, **options: Any) -> list[UPath]:
-        """A Dataset is not COG-shaped: a COG holds one instant of one grid.
-
-        Publish with ``ds.gs.to_catalog(path)`` for one file per asset,
-        or ``array.gs.to_cog(path)`` for one array.
-
-        Raises:
-            NotImplementedError: Always.
-        """
-        raise NotImplementedError(
-            "a Dataset is not COG-shaped; publish with Dataset.gs.to_catalog(path) "
-            "or DataArray.gs.to_cog(path)"
-        )
 
     def to_zarr(
         self,
@@ -1151,4 +1060,70 @@ class GeoDataset(
             overwrite=overwrite,
             storage_options=storage_options,
             **write_options,
+        )
+
+    def publish_item(
+        self,
+        root: Location,
+        *,
+        id: str,
+        assets: Mapping[str, list[str]] | None = None,
+        properties: dict[str, Any] | None = None,
+        overwrite: bool = False,
+        storage_options: StorageOptions | None = None,
+        **options: Unpack[COGWriteOptions],
+    ) -> pystac.Item:
+        """Write this observation as COG assets of one STAC Item.
+
+        The Item covers this raster's region and time; `stac.create_catalog`
+        lays Items out as a table. Files are written to
+        ``<root>/<id>/<asset key>.tif``. An asset on another grid joins the
+        returned Item through `stac.publish_item(item, assets=...)`.
+
+        Args:
+            root: Destination folder or URL prefix.
+            id: Item id, also the Item's folder name.
+            assets: Asset keys mapped to the variables each file holds, as
+                `to_tree(groups=)` partitions them. None writes one file per
+                variable.
+            properties: STAC properties of the Item. None reads them from the
+                coordinates marked `stac_property`, as `stac.load_dataset`
+                writes them.
+            overwrite: Replace existing files.
+            storage_options: Filesystem options for the destination.
+            **options: Native GDAL COG creation options.
+
+        Returns:
+            The published Item with written hrefs and band, grid and class metadata.
+
+        Raises:
+            ValueError: The raster is not one dated observation, a file's
+                variables differ in dtype, meaning or storage, or an id or key
+                is not one file-name component.
+            FileExistsError: A destination exists and overwrite is false.
+
+        Examples:
+            >>> item = product.gs.publish_item("out", id="khdtk-20250601")
+            >>> stac.create_catalog([item]).gs.to_geoparquet("out/catalog.parquet")
+        """
+        from geosave.geodata import stac
+
+        if assets is None:
+            assets = {}
+            for name in self._data.data_vars:
+                assets[str(name)] = [str(name)]
+        if properties is None:
+            properties = self.read_stac_properties()
+
+        item = stac.StacItem.from_region(self.region, id=id, properties=properties)
+        rasters = {}
+        for key, variables in assets.items():
+            rasters[key] = self._data[variables]
+        return stac.publish_item(
+            item,
+            assets=rasters,
+            root=root,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            **options,
         )

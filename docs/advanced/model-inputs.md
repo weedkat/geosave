@@ -25,7 +25,8 @@ preprocessor = DensePreprocessor(bands=["red", "nir"], fill=0.0)
 image = gs.open_raster("sample-scene.tif")
 rasters = xr.DataTree.from_dict({"image": image})
 prepared = preprocessor(rasters)
-sample = prepared.gs.to_tensor()
+pixels, context = prepared.gs.to_tensor()
+sample = {**pixels, **context}
 sample["image"].shape
 ```
 

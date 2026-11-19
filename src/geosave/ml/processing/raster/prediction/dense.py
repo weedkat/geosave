@@ -105,7 +105,8 @@ class DensePredictor(RasterPredictor):
             indexes = range(start, min(start + self.batch_size, len(chipper)))
             chips = []
             for index in indexes:
-                chips.append(chipper[index].gs.to_tensor(context=self.context))
+                pixels, context = chipper[index].gs.to_tensor(context=self.context)
+                chips.append({**pixels, **context})
 
             inputs = {}
             for name, value in default_collate(chips).items():

@@ -143,6 +143,26 @@ output fits memory. Each chunk is read with a halo, the pixels of every chip
 touching it, so the store holds what `predict` returns. The destination
 must not exist. See [pipeline contracts](../reference/model-release.md#pipelines).
 
+## Publish predictions
+
+A product is a raster like any other: publish it as COGs with an index, as
+[Store imagery as a catalog](../basics/catalog.md) does for imagery.
+
+```python
+from geosave.geodata import stac
+
+item = saved.gs.publish_item("predictions", id="20250627")
+predictions = stac.create_catalog([item])
+list(item.assets), predictions["id"].tolist()
+```
+
+```text
+(['class_id'], ['20250627'])
+```
+
+The product keeps the scene's acquisition time, so the Item is dated like the
+imagery it was predicted from.
+
 ## Publish to Hugging Face
 
 Replace the repository name and provide a Hub token with write access.

@@ -8,7 +8,6 @@ GEOSAVE_PROOF_SIZE=8192 for the larger raster-work measurement fixture.
 
 import os
 import weakref
-from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,6 +15,8 @@ import dask.array as da
 import geopandas as gpd
 import panel as pn
 import xarray as xr
+import numpy as np
+from geosave.geodata import stac
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import xr_coords
 from shapely.geometry import Point, box
@@ -53,11 +54,12 @@ def create_explorer() -> Explorer:
         }
     ).gs.write_rgb("red", "green", "blue")
     # File creation is explicit fixture work, outside display measurements.
-    catalog = raster.gs.to_catalog(
-        Path(directory.name) / "image.tif",
-        id_format="COG",
-        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    raster = raster.assign_coords(time=np.datetime64("2024-01-01"))
+    item = stac.StacItem.from_region(raster.gs.region, id="COG")
+    published = stac.publish_item(
+        item, assets={"image": raster}, root=Path(directory.name)
     )
+    catalog = stac.create_catalog([published])
     catalog["quality"] = 90
     fields = gpd.GeoDataFrame(
         {"crop": ["rice", "palm"], "area": [2.0, 5.0]},

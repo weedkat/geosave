@@ -137,32 +137,51 @@ january = monthly.sel(time="2025-01")
 
 ## Validation
 
-`validate(*rules)` always requires a grid ODC recognizes, with a CRS, then runs
-each rule the operation needs, without reading pixels. A rule takes the object
-it checks and raises `RasterValidationError` when it is broken; it lives with
-the accessor of that object.
+`validate(*rules)` first checks the object's raster structure, then runs each
+additional rule without reading pixels. DataArray and Dataset require a grid
+ODC recognizes, with a CRS; DataTree requires raster leaves with locally owned
+grids. A `Rule[T]` is a callable taking the native object and returning `None`,
+or raising `RasterValidationError` with the offending node or variable.
+
+Rules live in `geosave.geodata.core.raster.rules`, organized by object type.
+They validate only. Accessors own transformations and metadata preservation;
+STAC publication owns observation and asset membership.
 
 ```python
-from geosave.geodata.core.raster.dataarray import compatible_resampling, decoded
-from geosave.geodata.core.raster.dataset import same_pixel_meaning
-from geosave.geodata.core.raster.datatree import same_grid, same_geobox
+from geosave.geodata.core.raster.rules.dataarray import compatible_resampling, decoded
+from geosave.geodata.core.raster.rules.dataset import same_pixel_meaning
+from geosave.geodata.core.raster.rules.datatree import compatible_concat, same_geobox
 
 band.gs.validate()                       # a georeferenced grid
 band.gs.validate(decoded)                # and no active CF packing
 scene.gs.validate(same_pixel_meaning)    # one packing, flags and units across variables
 tree.gs.validate(same_geobox)           # every raster node on the identical GeoBox
+observations.gs.validate(compatible_concat("time"))  # preflight without combining
 band.gs.validate(compatible_resampling("mean"))  # class codes need nearest, mode, first or last
 ```
 
 | Rule | Checks | Used by |
 | --- | --- | --- |
-| `dataarray.decoded` | no active CF packing | `composite` |
-| `dataarray.compatible_resampling(method)` | class codes resampled only by nearest, mode, first or last | `reproject`, `composite` |
-| `dataset.same_pixel_meaning` | one packing, flags and units across variables | `to_array`, `to_numpy` |
-| `datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | explicit validation |
-| `datatree.same_geobox` | identical CRS, transform and shape across raster nodes | `RasterChipper`, tree tensor conversion |
+| `rules.common.georeferenced` | an ODC grid with a CRS | DataArray/Dataset `validate` |
+| `rules.dataarray.decoded` | no active CF packing | `composite` |
+| `rules.dataarray.compatible_resampling(method)` | class codes resampled only by nearest, mode, first or last | `reproject`, `composite` |
+| `rules.dataset.same_pixel_meaning` | one packing, flags and units across variables | `to_array` |
+| `rules.datatree.raster_leaves` | raster data only on leaves with locally owned grids | DataTree `validate` |
+| `rules.datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | explicit validation |
+| `rules.datatree.same_geobox` | identical CRS, transform and shape across raster nodes | `merge`, `concat`, consumers requiring shared spatial context |
+| `rules.datatree.compatible_concat(dim)` | immediate raster children with matching grids, indexes outside `dim`, variable sets and representations | `concat` |
 
 A rule that needs an operation's argument is built from it:
 `compatible_resampling(method)` returns the rule that the band's values allow
 `method`, which `reproject` and `composite` pass to `validate`. Argument checks, such as a
-mask spanning foreign axes, stay inside their operation.
+mask spanning foreign axes, stay inside their operation. Likewise,
+`compatible_concat(dim)` checks whether child Datasets can be concatenated;
+`concat` calls that rule before combining them. Different units between distinct
+variables are allowed; corresponding variables across children must agree.
+
+Numerical channel conversion (`to_numpy` and `to_tensor`) allows different units
+and requires explicit dtype preparation when source dtypes differ. It does not
+use the storage-stacking rule `same_pixel_meaning`.
+
+The former rule imports from `raster.base`, `raster.dataarray`, `raster.dataset`
+and `raster.datatree` have been removed; import them from `raster.rules` modules.

@@ -22,32 +22,49 @@ def stac_items(rows: gpd.GeoDataFrame) -> None:
         VectorValidationError: A column is missing, an asset has no absolute
             href, or two Items of one collection share an id.
     """
-    import pyarrow.compute as pc
-
     missing = set(ITEM_COLUMNS) - set(rows.columns)
     if missing:
         raise VectorValidationError(
             f"STAC Items need columns {sorted(missing)}; item tables come from "
             "create_catalog, StacClient.search, or reading a stac-geoparquet file"
         )
+    check_asset_hrefs(rows)
+    check_unique_ids(rows)
+
+
+def check_asset_hrefs(rows: gpd.GeoDataFrame) -> None:
+    """Require an absolute href of every asset a row states.
+
+    Raises:
+        VectorValidationError: An asset has none; the error names row and key.
+    """
+    import pyarrow.compute as pc
 
     assets = read_assets(rows)
-    if assets is not None:
-        # The assets column holds every key any row has; a row lacking one holds null.
-        for position, field in enumerate(assets.type):
-            # `struct_field` keeps a row without assets null, unlike `assets.field`.
-            asset = pc.struct_field(assets, position)
-            unlocated = asset.is_valid()
-            if asset.type.get_field_index("href") != -1:
-                hrefs = pc.struct_field(asset, "href")
-                absolute = pc.match_substring_regex(hrefs, ABSOLUTE_HREF)
-                unlocated = pc.and_(unlocated, pc.invert(pc.fill_null(absolute, False)))
-            row = pc.index(unlocated, True).as_py()
-            if row != -1:
-                raise VectorValidationError(
-                    f"Row at position {row}: asset {field.name!r} has no absolute href"
-                )
+    if assets is None:
+        return
+    # The assets column holds every key any row has; a row lacking one holds null.
+    for position, field in enumerate(assets.type):
+        # `struct_field` keeps a row without assets null, unlike `assets.field`.
+        asset = pc.struct_field(assets, position)
+        unlocated = asset.is_valid()
+        if asset.type.get_field_index("href") != -1:
+            hrefs = pc.struct_field(asset, "href")
+            absolute = pc.match_substring_regex(hrefs, ABSOLUTE_HREF)
+            unlocated = pc.and_(unlocated, pc.invert(pc.fill_null(absolute, False)))
+        row = pc.index(unlocated, True).as_py()
+        if row != -1:
+            raise VectorValidationError(
+                f"Row at position {row}: asset {field.name!r} has no absolute href"
+            )
 
+
+def check_unique_ids(rows: gpd.GeoDataFrame) -> None:
+    """Require each Item id once within its collection.
+
+    Raises:
+        VectorValidationError: Two Items of one collection share an id.
+    """
     collection = rows["collection"] if "collection" in rows else None
     identities = pd.DataFrame({"collection": collection, "id": rows["id"]})
     repeated = identities[identities.duplicated(keep=False)]

@@ -9,7 +9,7 @@ import xarray as xr
 
 
 from geosave.geodata import GeoDataset
-from geosave.geodata.core.raster.datatree import same_geobox, same_grid
+from geosave.geodata.core.raster.rules.datatree import same_geobox, same_grid
 from tests.geodata.conftest import build_raster, flat
 
 
@@ -74,7 +74,7 @@ def test_gs_reads_native_spatial_names() -> None:
         held.gs.validate()
         assert held.gs.geobox == foreign.odc.geobox
     tree.gs.validate()
-    assert tree.gs.geobox == foreign.odc.geobox
+    assert tree.gs.common_geobox() == foreign.odc.geobox
 
 
 def test_a_band_read_from_disk_uses_native_cf_precision(tmp_path) -> None:

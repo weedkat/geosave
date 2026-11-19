@@ -52,3 +52,19 @@ def test_a_band_round_trips_through_its_variable() -> None:
     # The file reader supplies effective nodata; STAC adds scaling and units.
     assert stamped.gs.nodata is None
     assert stamped.attrs["units"] == "1"
+
+
+def test_decoded_pixels_describe_their_encoded_storage_without_execution():
+    stored = build_raster(packed=True).chunk().red.assign_attrs(units="1")
+    decoded = stored.gs.mask_and_scale()
+
+    with dask.config.set(scheduler=_refuse):
+        band = raster.build_band(decoded)
+
+    assert band.data_type == "uint16"
+    assert band.nodata == 0
+    assert band.scale == 0.0001
+    assert band.offset == 0
+    assert band.unit == "1"
+    assert decoded.dtype == "float32"
+    assert "scale_factor" not in decoded.attrs

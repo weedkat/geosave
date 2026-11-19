@@ -22,10 +22,11 @@ from .sampling import (
     RasterMerger,
     TensorChipper,
     TensorMerger,
+    random_crop,
 )
 from geosave.geodata.io.gdal_env import configure_gdal
 from .errors import RasterValidationError, VectorValidationError
-from .core.raster.utils.statistics import class_percent, statistics
+from .core.raster.utils.statistics import class_percent, summary
 from .core.raster.utils.context import TENSOR_CONTEXT
 
 if TYPE_CHECKING:
@@ -105,6 +106,7 @@ __all__ = [
     "RasterMerger",
     "TensorChipper",
     "TensorMerger",
+    "random_crop",
     "attrs",
     "GeoRegion",
     "GeoDataArray",
@@ -128,6 +130,6 @@ __all__ = [
     "open_vector",
     "stac",
     "class_percent",
-    "statistics",
+    "summary",
     "TENSOR_CONTEXT",
 ]

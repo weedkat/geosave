@@ -62,12 +62,11 @@ See [STAC loading](stac.md) and [catalog operations](catalog.md).
 | `io.write_cog(dataset, path)` or `io.write_geotiff(dataset, path)` | One file `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_zarr(path)` | One store `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_netcdf(path)` | One file `UPath` | Delayed yielding that UPath |
-| `Dataset.gs.to_catalog(folder)` | Item GeoDataFrame; assets written | Not supported |
-| `RasterStac.to_cog(folder)` | Native Items; assets written | Not supported |
+| `stac.publish_item(item, assets=assets, root=folder)` | Native Item; assets written | Not supported |
 
 Dataset `.gs.to_cog()` is unavailable. Use `io.write_cog(dataset, path)` for
 one file preserving variable names and band metadata. For dated assets use
-`Dataset.gs.to_catalog`; `RasterStac` stages assets on several grids. Asset paths
+`stac.publish_item` with explicit Item/asset membership on independent grids. Asset paths
 follow `folder/Item/asset.tif`. Zarr and NetCDF retain a whole hierarchy in one store.
 
 DataArray TIFF/COG methods delegate directly to `.rio.to_raster`, selecting

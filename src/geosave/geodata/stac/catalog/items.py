@@ -9,15 +9,19 @@ from typing import TYPE_CHECKING, Any, cast
 import geopandas as gpd
 import pandas as pd
 
-from .collections import merge_collections, read_collections
+from .collections import read_collections, write_collections
 from .hrefs import ABSOLUTE_HREF
-from .layout import FOOTER_KEY, ITEM_COLUMNS, to_arrow
+from .layout import ITEM_COLUMNS, to_arrow
 from .rules import stac_items
 
 if TYPE_CHECKING:
     import pystac
 
     from geosave.geodata import GeoDataFrame
+
+# One Item as STAC JSON: open-ended fields under the keys the specification names.
+type ItemJSON = dict[str, Any]
+ABSOLUTE_HREF_PATTERN = re.compile(ABSOLUTE_HREF)
 
 
 def create_catalog(
@@ -28,11 +32,11 @@ def create_catalog(
     """Lay Items out as an item table, one row per Item, as stac-geoparquet does.
 
     The stac-geoparquet library builds the columns. Item tables otherwise
-    come from `StacClient.search`, `Dataset.gs.to_catalog` and reading a
+    come from `StacClient.search`, `create_catalog` over published Items and reading a
     stac-geoparquet file.
 
     Args:
-        items: Native Items, as `RasterStac.to_cog` returns them. A relative
+        items: Native Items, as `stac.publish_item` returns them. A relative
             asset href is made absolute against its Item's own location.
             Inputs are not changed.
         collections: Collections the table carries beside the ones the Items
@@ -53,7 +57,6 @@ def create_catalog(
     import pystac
     from stac_geoparquet.arrow import parse_stac_items_to_arrow
 
-    absolute_href = re.compile(ABSOLUTE_HREF)
     item_dicts = []
     collections = list(collections)
     for item in items:
@@ -61,27 +64,7 @@ def create_catalog(
         if collection_link is not None:
             if isinstance(collection_link.target, pystac.Collection):
                 collections.append(collection_link.target)
-        # Transforming link hrefs reads a searched Item's API root over HTTP.
-        item_dict = item.to_dict(include_self_link=False, transform_hrefs=False)
-
-        for key, asset in item.assets.items():
-            if absolute_href.match(asset.href):
-                continue
-            href = asset.get_absolute_href()
-            if href is None:
-                raise ValueError(
-                    f"Item {item.id!r}: asset {key!r} has the relative href "
-                    f"{asset.href!r} and the Item states no location to resolve it against"
-                )
-            item_dict["assets"][key]["href"] = href
-
-        # The footer carries the Collection; a link naming no document says nothing.
-        located_links = []
-        for link in item_dict["links"]:
-            if link.get("href"):
-                located_links.append(link)
-        item_dict["links"] = located_links
-        item_dicts.append(item_dict)
+        item_dicts.append(to_item_dict(item))
 
     if item_dicts:
         arrow_table = parse_stac_items_to_arrow(
@@ -99,11 +82,39 @@ def create_catalog(
             crs="EPSG:4326",
         )
 
-    collection_dicts = {}
-    for collection in merge_collections(collections).values():
-        collection_dicts[collection.id] = collection.to_dict(transform_hrefs=False)
-    catalog.attrs[FOOTER_KEY] = {"collections": collection_dicts}
+    write_collections(catalog, collections)
     return cast("GeoDataFrame", catalog)
+
+
+def to_item_dict(item: pystac.Item) -> ItemJSON:
+    """Return an Item's STAC JSON as a table stores it, without changing the Item.
+
+    Asset hrefs are absolute, and links naming no document are left out: the
+    table's footer carries the Collection.
+
+    Raises:
+        ValueError: An asset href is relative and the Item states no location.
+    """
+    # Transforming link hrefs reads a searched Item's API root over HTTP.
+    item_dict = item.to_dict(include_self_link=False, transform_hrefs=False)
+
+    for key, asset in item.assets.items():
+        if ABSOLUTE_HREF_PATTERN.match(asset.href):
+            continue
+        href = asset.get_absolute_href()
+        if href is None:
+            raise ValueError(
+                f"Item {item.id!r}: asset {key!r} has the relative href "
+                f"{asset.href!r} and the Item states no location to resolve it against"
+            )
+        item_dict["assets"][key]["href"] = href
+
+    located_links = []
+    for link in item_dict["links"]:
+        if link.get("href"):
+            located_links.append(link)
+    item_dict["links"] = located_links
+    return item_dict
 
 
 def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
@@ -130,7 +141,7 @@ def to_items(rows: gpd.GeoDataFrame) -> list[pystac.Item]:
 
 
 def build_item(
-    item_dict: dict[str, Any],
+    item_dict: ItemJSON,
     collections_by_id: Mapping[str, pystac.Collection],
 ) -> pystac.Item:
     """Build a pystac Item from the JSON dict stac-geoparquet makes of one row.

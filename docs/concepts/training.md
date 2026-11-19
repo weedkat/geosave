@@ -155,9 +155,10 @@ See the [task API](../reference/training.md) when experimenting with this method
 
 ## Time and place of each sample
 
-A sample is one flat dict of tensors, as `tree.gs.to_tensor(grid=True,
-context=[...])` writes it: each pixel layer under its node name, `transform`
-and `crs` (an int64 EPSG code), and each context entry the dataset names,
+`pixels, context = tree.gs.to_tensor(grid=True, context=[...])` returns
+pixel layers under their node names separately from tensorized context. The
+Dataset assembles its flat sample with `{**pixels, **context}`, including
+`transform`, `crs` (an int64 EPSG code), and requested context entries,
 such as `centroid` or `day_of_year`. The model chain takes every entry by
 name; encoders not pretrained on location or dates ignore the context.
 

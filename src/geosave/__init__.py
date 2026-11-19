@@ -37,7 +37,8 @@ from geosave.geodata import (
     open_raster,
     open_raster_tree,
     open_vector,
-    statistics,
+    random_crop,
+    summary,
 )
 
 __all__ = [
@@ -67,9 +68,10 @@ __all__ = [
     "open_raster",
     "open_raster_tree",
     "open_vector",
+    "random_crop",
     "stac",
     "class_percent",
-    "statistics",
+    "summary",
 ]
 
 # These bring their own heavy dependencies, so they load on first use.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterable, Mapping
+from collections.abc import Iterable
 
 import dask.array as da
 import numpy as np
@@ -11,7 +11,9 @@ import xarray as xr
 from dask.base import compute
 
 
-def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFrame:
+def summary(
+    rasters: xr.Dataset | xr.DataArray | Iterable[xr.Dataset | xr.DataArray],
+) -> pd.DataFrame:
     """Summarise each variable over the present pixels of every raster.
 
     Pixels are pooled across rasters, so rasters may differ in grid and size;
@@ -21,7 +23,11 @@ def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFra
     `dask.diagnostics.ProgressBar` to watch a long one.
 
     Args:
-        rasters: Datasets sharing the same variables, such as training tiles.
+        rasters: One Dataset or DataArray, or an iterable sharing the same
+            variable names, such as training tiles. A DataArray contributes
+            one row under its name (None if unnamed), reducing all axes.
+            To summarize a band axis separately, split it into a Dataset first.
+            Select variables and decode packed values before calling.
 
     Returns:
         One row per variable, in the first raster's order, with minimum,
@@ -33,18 +39,25 @@ def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFra
             a variable holds no present pixel.
 
     Examples:
+        >>> gs.summary(scene)  # one row per variable
+        >>> gs.summary(scene["B04"])  # one row for one band
         >>> tiles = [gs.open_raster(path) for path in paths]
-        >>> gs.statistics(tiles)
+        >>> gs.summary(tiles)
              minimum  maximum  mean  stddev  valid_percent
         B04   0.0001   1.6528  0.12    0.08          100.0
         B08   0.0001   1.5872  0.25    0.08           99.9
     """
-    rasters = list(rasters)
-    names = list(rasters[0]) if rasters else []
-    for raster in rasters[1:]:
-        if list(raster) != names:
+    if isinstance(rasters, (xr.Dataset, xr.DataArray)):
+        rasters = [rasters]
+    variables = [
+        {raster.name: raster} if isinstance(raster, xr.DataArray) else raster
+        for raster in rasters
+    ]
+    names = list(variables[0]) if variables else []
+    for raster in variables[1:]:
+        if set(raster) != set(names):
             raise ValueError(
-                f"statistics pool variables by name, but a raster holds "
+                f"summary pools variables by name, but a raster holds "
                 f"{list(raster)} where the first holds {names}"
             )
 
@@ -57,7 +70,7 @@ def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFra
     # than waiting for every raster's later variables.
     blocks = []
     sizes = np.zeros(len(names))
-    for raster in rasters:
+    for raster in variables:
         rows = []
         for position, name in enumerate(names):
             band = raster[name]
@@ -99,7 +112,7 @@ def statistics(rasters: Iterable[Mapping[Hashable, xr.DataArray]]) -> pd.DataFra
     return table
 
 
-def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
+def class_percent(bands: xr.DataArray | Iterable[xr.DataArray]) -> pd.Series:
     """Give the share of present pixels in each class, pooled over bands.
 
     Bands may differ in grid and size but must share one set of CF flags. Pixels equal
@@ -107,8 +120,9 @@ def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
     compute.
 
     Args:
-        bands: Categorical bands sharing the same legend, such as the label of
-            each training tile.
+        bands: One categorical DataArray, or an iterable sharing the same
+            legend, such as the label of each training tile. Select the label
+            variable from a Dataset before calling.
 
     Returns:
         Percent per class, named `percent` and indexed by class name in legend
@@ -126,7 +140,7 @@ def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
         crops    27.5
         Name: percent, dtype: float64
     """
-    bands = list(bands)
+    bands = [bands] if isinstance(bands, xr.DataArray) else list(bands)
     if not bands:
         raise ValueError("class_percent needs at least one band to count")
     first = bands[0].gs.flags
@@ -154,6 +168,7 @@ def class_percent(bands: Iterable[xr.DataArray]) -> pd.Series:
         )
     (total,) = compute(sum(counts))
 
+    fill = bands[-1].gs.nodata
     names = [name for code, name in classes.items() if code != fill]
     percent = 100.0 * total.values / total.values.sum()
     return pd.Series(percent, index=names, name="percent")

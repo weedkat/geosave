@@ -68,7 +68,7 @@ def test_the_engine_opens_a_banded_file_as_a_root_only_tree(tmp_path):
 
     with xr.open_datatree(path, engine="geosave") as opened:
         assert opened.groups == ("/",)
-        assert opened.gs.geobox == source.gs.geobox
+        assert opened.gs.to_dataset().gs.geobox == source.gs.geobox
         np.testing.assert_array_equal(opened.to_dataset().red, source.red)
 
 

@@ -38,7 +38,8 @@ windows = tree.gs.sample("MS", size=2, keep="last")
 chipper = gs.RasterChipper(windows, size=256, stride=224)
 merger = gs.RasterMerger(chipper.layout, window="hann")
 for index in range(len(chipper)):
-    sample = chipper[index].gs.to_tensor()
+    pixels, context = chipper[index].gs.to_tensor()
+    sample = {**pixels, **context}
     merger.add(index, predict(sample))  # NumPy (band, 256, 256)
 merged = merger.merge(0)                # DataArray on raster 0's grid
 ```
@@ -51,7 +52,9 @@ through `chipper.layout.locate(index)`.
 
 Temporal `.gs.sample` chooses one observation per calendar slot and returns
 windows of slots. Empty slots exclude a window; `keep` is `first` or `last`.
-Random training crops can use a directly sliced GeoBox and `crop_to_grid`.
+`gs.random_crop(obj, size, seed)` draws an in-bounds GeoBox and returns the
+cropped xarray object. The training task can read an aligned segmentation
+mask with `label.gs.crop_to_grid(image_crop.gs.geobox)`.
 
 Dense merging preserves the full source grid, removes padding, floors taper
 weights at covered borders, and uses NaN for uncovered pixels. Predictions may
@@ -74,7 +77,7 @@ slot selection and point-centred chip placement remain future work.
 
 In a release, a registered postprocessor performs the decoding and
 the `dense` predictor the dense reconstruction; see [release and inference](release-inference.md).
-Dense results can be converted to dated Datasets and published through `Dataset.gs.to_catalog`;
+Dense results can be converted to dated Datasets and published through `stac.publish_item` and `create_catalog`;
 vector results write through `.gs.to_geoparquet`.
 
 Detection targets in training run the other way: clip the labels

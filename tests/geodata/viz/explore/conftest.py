@@ -10,6 +10,16 @@ from tests.conftest import build_dataset, build_dataset as build_raster
 from tests.geodata.viz.conftest import ORIGIN, create_grid
 from tests.geodata.conftest import create_file_items, create_test_collection
 
+@pytest.fixture(autouse=True)
+def bokeh_backend():
+    """Load the backend the layers draw with; only an Explorer loads it itself."""
+    import holoviews as hv
+
+    # As the Explorer does: an already loaded backend is left current.
+    if not hv.extension._loaded:
+        hv.extension("bokeh")
+
+
 DATES = np.array(["2024-03-05", "2024-04-05", "2024-05-05"], "datetime64[ns]")
 
 

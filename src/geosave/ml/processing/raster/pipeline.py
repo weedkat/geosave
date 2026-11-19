@@ -129,7 +129,7 @@ class RasterPipeline:
             TypeError: The postprocessor's product is not a raster Dataset.
         """
         sample = self.preprocess(rasters)
-        grid = sample.gs.geobox
+        grid = sample.gs.common_geobox()
         height, width = grid.shape
 
         size, stride = self.predictor.measure_chips()

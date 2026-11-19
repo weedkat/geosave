@@ -14,8 +14,12 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import xarray as xr
 
+
 if TYPE_CHECKING:
     import torch
+
+# Tensors read beside the pixels, keyed by their `TENSOR_CONTEXT` name.
+type ContextTensors = dict[str, torch.Tensor]
 
 
 def read_timeline(tree: xr.DataTree) -> pd.DatetimeIndex:
@@ -25,15 +29,17 @@ def read_timeline(tree: xr.DataTree) -> pd.DatetimeIndex:
         ValueError: No node is dated, or dated nodes hold different labels.
     """
     times = None
-    for node in tree.subtree:
-        node_times = node.to_dataset(inherit=False).gs.times
+    for node in tree.leaves:
+        if not node.data_vars:
+            continue
+        node_times = node.gs.to_dataset().gs.times
         if node_times is None:
             continue
         if times is None:
             times = node_times
         elif not node_times.equals(times):
             raise ValueError(
-                f"node {node.path!r} has its own time labels; tensors need "
+                f"node {node.path!r} has its own time labels; this operation needs "
                 "every dated node on one timeline"
             )
     if times is None:
@@ -90,7 +96,7 @@ def read_centroid(tree: xr.DataTree) -> torch.Tensor:
     """
     import torch
 
-    geobox = tree.gs.geobox
+    geobox = tree.gs.common_geobox()
     if geobox is None or geobox.crs is None:
         raise ValueError("centroid needs a georeferenced grid")
     centre = geobox.extent.centroid.to_crs("EPSG:4326")
@@ -108,17 +114,15 @@ TENSOR_CONTEXT: dict[str, Callable[[xr.DataTree], torch.Tensor]] = {
 }
 
 
-def build_sample(
-    layers: dict[str, torch.Tensor],
+def read_context(
     tree: xr.DataTree,
     *,
     grid: bool,
     context: Sequence[str],
-) -> dict[str, torch.Tensor]:
-    """Return the layers with the grid and context entries read from `tree` beside them.
+) -> ContextTensors:
+    """Read requested grid and context values as tensors.
 
     Args:
-        layers: Pixel tensors by layer name.
         tree: The rasters the layers were read from.
         grid: Add `transform`, the six float64 affine coefficients, and `crs`,
             the int64 EPSG code.
@@ -126,14 +130,13 @@ def build_sample(
 
     Raises:
         KeyError: A context name is not in `TENSOR_CONTEXT`.
-        ValueError: A layer takes the name of an entry, the grid's CRS has no
-            EPSG code, or a reader refuses the tree.
+        ValueError: The grid CRS has no EPSG code, or a reader refuses the tree.
     """
     import torch
 
     entries = {}
     if grid:
-        geobox = tree.gs.geobox
+        geobox = tree.gs.common_geobox()
         if geobox is None or geobox.crs is None:
             raise ValueError("grid entries need a georeferenced grid")
         if geobox.crs.epsg is None:
@@ -147,9 +150,4 @@ def build_sample(
             raise KeyError(f"Unknown context {name!r}; known: {sorted(TENSOR_CONTEXT)}")
         entries[name] = TENSOR_CONTEXT[name](tree)
 
-    sample = dict(layers)
-    for name, value in entries.items():
-        if name in sample:
-            raise ValueError(f"Layer {name!r} takes the name of an entry")
-        sample[name] = value
-    return sample
+    return entries

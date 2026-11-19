@@ -19,7 +19,7 @@ GeoPandas objects; their own methods retain upstream behavior.
 | Reduce observations into calendar bins | `.gs.composite`. [Composites](rasters.md#composites-and-time-selection) |
 | Save rasters and schedule writes | `io.write_cog`, `.gs.to_zarr`, `.gs.to_netcdf`. [Writer returns](io.md#saved-raster-files) |
 | Search observations or load STAC Items | `gs.StacClient`, `stac.load_dataset`, `stac.group_bands_by_grid`. [STAC](stac.md) |
-| Publish a dated Dataset | `Dataset.gs.to_catalog(...)`. [Catalog operations](catalog.md) |
+| Publish a dated Dataset | `stac.publish_item(...)`. [Catalog operations](catalog.md) |
 | Build a model from stages | `geosave.ml.build_model`. [Chains and registry](model-chain.md) |
 | Save and load model weights | `ChainModel`. [Releases](model-release.md) |
 | Predict a raster with a released model | `RasterPipeline`, `load_pipeline`, `DensePredictor`. [Pipelines](model-release.md#pipelines) |

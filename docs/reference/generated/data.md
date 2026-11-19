@@ -126,6 +126,7 @@ fields appear as attributes, including their annotated types and defaults.
         - valid_min
         - valid_max
         - valid_range
+        - unsigned
         - KEYS
         - is_stated_in
         - from_attrs
@@ -245,10 +246,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.conventions.ITEM_ID_FORMAT
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.conventions.START_DATETIME
     options:
       show_root_full_path: true
@@ -299,14 +296,6 @@ fields appear as attributes, including their annotated types and defaults.
         - write_time_bounds
         - timespan
 
-::: geosave.geodata.core.raster.base.Rule
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.base.georeferenced
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.raster.dataarray.GeoDataArray
     options:
       show_root_full_path: true
@@ -336,16 +325,12 @@ fields appear as attributes, including their annotated types and defaults.
         - to_numpy
         - to_tensor
         - mask_and_scale
-        - to_item
-        - to_catalog
         - to_cog
         - to_zarr
         - to_netcdf
         - to_gtiff
         - vectorize
         - to_dataset
-        - statistics
-        - class_percent
         - colorize
         - explore
         - plot
@@ -392,23 +377,12 @@ fields appear as attributes, including their annotated types and defaults.
         - write_time_bounds
         - __init__
 
-::: geosave.geodata.core.raster.dataarray.VALUE_PRESERVING
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.dataarray.compatible_resampling
-    options:
-      show_root_full_path: true
-
-::: geosave.geodata.core.raster.dataarray.decoded
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.raster.dataset.GeoDataset
     options:
       show_root_full_path: true
       filters: []
       members:
+        - to_tree
         - composite
         - spatial_dims
         - geobox
@@ -430,19 +404,15 @@ fields appear as attributes, including their annotated types and defaults.
         - write_packing
         - write_spectral
         - write_rgb
-        - statistics
-        - class_percent
         - to_array
         - explore
         - plot
         - to_numpy
         - to_tensor
         - mask_and_scale
-        - to_item
-        - to_catalog
-        - to_cog
         - to_zarr
         - to_netcdf
+        - publish_item
         - ydim
         - xdim
         - validate
@@ -486,21 +456,19 @@ fields appear as attributes, including their annotated types and defaults.
         - write_time_bounds
         - __init__
 
-::: geosave.geodata.core.raster.dataset.same_pixel_meaning
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.core.raster.datatree.GeoDataTree
     options:
       show_root_full_path: true
       filters: []
       members:
-        - spatial_dims
-        - geobox
+        - common_geobox
+        - to_dataset
+        - group
+        - split
+        - concat
+        - merge
+        - ungroup
         - validate
-        - timespan
-        - times
-        - region
         - crop
         - crop_to_grid
         - sample
@@ -508,36 +476,72 @@ fields appear as attributes, including their annotated types and defaults.
         - reproject
         - to_zarr
         - to_netcdf
-        - ydim
-        - xdim
-        - is_georeferenced
-        - crs
-        - crs_name
-        - bounds
-        - resolution
-        - transform
-        - aspect
-        - map_bounds
-        - output_geobox
-      inherited_members:
-        - ydim
-        - xdim
-        - is_georeferenced
-        - crs
-        - crs_name
-        - bounds
-        - resolution
-        - transform
-        - aspect
-        - map_bounds
-        - output_geobox
-        - __init__
 
-::: geosave.geodata.core.raster.datatree.same_geobox
+::: geosave.geodata.core.raster.datatree.check_node_name
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.datatree.same_grid
+::: geosave.geodata.core.raster.rules.Rule
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.common.georeferenced
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataarray.compatible_resampling
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataarray.decoded
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataarray.same_encoding_as
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataarray.same_pixel_meaning_as
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataset.same_encoding
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.dataset.same_pixel_meaning
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.compatible_concat
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.compatible_merge
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.one_raster
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.raster_leaves
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.same_geobox
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.same_grid
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.rules.datatree.splittable
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.context.ContextTensors
     options:
       show_root_full_path: true
 
@@ -545,11 +549,11 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.context.build_sample
+::: geosave.geodata.core.raster.utils.context.read_centroid
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.context.read_centroid
+::: geosave.geodata.core.raster.utils.context.read_context
     options:
       show_root_full_path: true
 
@@ -593,7 +597,11 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.core.raster.utils.statistics.statistics
+::: geosave.geodata.core.raster.utils.statistics.summary
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.core.raster.utils.tensor.PixelTensors
     options:
       show_root_full_path: true
 
@@ -620,7 +628,7 @@ fields appear as attributes, including their annotated types and defaults.
         - lonlat
         - mgrs
         - locate
-        - replace
+        - set_time
         - format
         - from_bbox
         - from_geometry
@@ -1484,15 +1492,15 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.geodata.io.vector.stac_geoparquet.merge_stated_collections
-    options:
-      show_root_full_path: true
-
 ::: geosave.geodata.io.vector.stac_geoparquet.parse_collections
     options:
       show_root_full_path: true
 
 ::: geosave.geodata.io.vector.stac_geoparquet.resolve_parquet_options
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.io.vector.stac_geoparquet.select_stored_collections
     options:
       show_root_full_path: true
 
@@ -1510,6 +1518,10 @@ fields appear as attributes, including their annotated types and defaults.
         - layout
         - __len__
         - __getitem__
+
+::: geosave.geodata.sampling.crop.random_crop
+    options:
+      show_root_full_path: true
 
 ::: geosave.geodata.sampling.layout.ChipLayout
     options:
@@ -1557,6 +1569,7 @@ fields appear as attributes, including their annotated types and defaults.
       members:
         - layout
         - add
+        - merge_batch
         - is_complete
         - discard
         - merge
@@ -1605,11 +1618,31 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.geodata.stac.catalog.collections.write_collections
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.stac.catalog.hrefs.ABSOLUTE_HREF
     options:
       show_root_full_path: true
 
+::: geosave.geodata.stac.catalog.hrefs.has_relative_href
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.hrefs.resolve_asset
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.stac.catalog.hrefs.resolve_hrefs
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.items.ABSOLUTE_HREF_PATTERN
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.items.ItemJSON
     options:
       show_root_full_path: true
 
@@ -1618,6 +1651,10 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.stac.catalog.items.create_catalog
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.items.to_item_dict
     options:
       show_root_full_path: true
 
@@ -1638,6 +1675,14 @@ fields appear as attributes, including their annotated types and defaults.
       show_root_full_path: true
 
 ::: geosave.geodata.stac.catalog.layout.to_arrow
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.rules.check_asset_hrefs
+    options:
+      show_root_full_path: true
+
+::: geosave.geodata.stac.catalog.rules.check_unique_ids
     options:
       show_root_full_path: true
 
@@ -1798,16 +1843,9 @@ fields appear as attributes, including their annotated types and defaults.
         - from_region
         - add_raster_asset
 
-::: geosave.geodata.stac.raster.RasterStac
+::: geosave.geodata.stac.publish.publish_item
     options:
       show_root_full_path: true
-      filters: []
-      members:
-        - tree
-        - collection
-        - from_dataset
-        - merge
-        - to_cog
 
 ::: geosave.geodata.stac.search.api.CDSE_URL
     options:
@@ -1835,10 +1873,6 @@ fields appear as attributes, including their annotated types and defaults.
         - collections
         - collection
         - patch_url
-
-::: geosave.geodata.stac.search.api.StacProvider
-    options:
-      show_root_full_path: true
 
 ::: geosave.geodata.stac.search.query.SearchParams
     options:

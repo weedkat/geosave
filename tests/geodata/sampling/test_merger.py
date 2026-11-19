@@ -30,7 +30,7 @@ def test_shuffled_chips_merge_back_to_each_raster(mode, window):
         expected = raster["image"].to_dataset().isel(time=-1).gs.to_numpy()
         assert merged.dims == ("band", "y", "x")
         assert merged.dtype == "float32"
-        assert merged.odc.geobox == raster.gs.geobox
+        assert merged.odc.geobox == raster["image"].gs.to_dataset().gs.geobox
         np.testing.assert_allclose(merged.values, expected, rtol=1e-5)
 
 
@@ -118,3 +118,19 @@ def test_a_raster_completes_with_its_last_chip_and_is_freed_on_discard():
     assert not merger.is_complete(0)
     with pytest.raises(ValueError, match="no prediction was added"):
         merger.merge(0)
+
+
+def test_merge_batch_finishes_two_rasters_in_chip_arrival_order():
+    raster = build_tree(SMALL_GRID, times=None)
+    chipper = RasterChipper([raster, raster], size=6, stride=6)
+    merger = RasterMerger(chipper.layout)
+    predictions = np.ones((2, 1, 6, 6), dtype="float32")
+    with pytest.raises(ValueError, match="per chip index"):
+        merger.merge_batch([2], predictions)
+    assert merger.merge_batch([2, 0], predictions) == []
+    completed = merger.merge_batch([3, 1], predictions)
+    assert [index for index, _ in completed] == [1, 0]
+    for index, merged in completed:
+        np.testing.assert_allclose(merged, 1)
+        with pytest.raises(ValueError, match="no prediction was added"):
+            merger.merge(index)

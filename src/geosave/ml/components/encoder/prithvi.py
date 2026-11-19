@@ -250,7 +250,8 @@ class PrithviTL(_Prithvi):
 
         Examples:
             >>> tree = xr.DataTree.from_dict({"image": chip})
-            >>> sample = tree.gs.to_tensor(context=["centroid", "year", "day_of_year"])
+            >>> pixels, context = tree.gs.to_tensor(context=["centroid", "year", "day_of_year"])
+            >>> sample = {**pixels, **context}
             >>> batch = default_collate([sample])
             >>> pyramid, _ = PrithviTL().forward_pyramid(**batch)
         """

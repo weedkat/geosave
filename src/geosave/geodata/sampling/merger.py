@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
@@ -135,6 +136,32 @@ class RasterMerger:
         sums[:, scene_rows, scene_columns] += weighted[:, chip_rows, chip_columns]
         weights[scene_rows, scene_columns] += self._chip_weights[chip_rows, chip_columns]
         self._added[raster_index] += 1
+
+    def merge_batch(
+        self, indices: Sequence[int], predictions: np.ndarray
+    ) -> list[tuple[int, xr.DataArray]]:
+        """Add a batch and return the rasters completed by its chips.
+
+        Args:
+            indices: Layout indices in prediction order. Supply each chip once.
+            predictions: Values shaped `(batch, band, size, size)`.
+
+        Returns:
+            Pairs of raster index and merged array in completion order.
+            Completed accumulators are released. Partial rasters carry into
+            the next batch.
+        """
+        if predictions.ndim != 4 or len(indices) != len(predictions):
+            raise ValueError("Pass one (band, size, size) prediction per chip index.")
+
+        completed = []
+        for index, prediction in zip(indices, predictions, strict=True):
+            self.add(index, prediction)
+            raster_index = self.layout.locate(index).raster_index
+            if self.is_complete(raster_index):
+                completed.append((raster_index, self.merge(raster_index)))
+                self.discard(raster_index)
+        return completed
 
     def is_complete(self, raster_index: int) -> bool:
         """Say whether every chip of a raster was added, each once.

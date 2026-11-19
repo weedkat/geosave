@@ -55,7 +55,8 @@ Image and label boundaries stay aligned. Indexing returns a lazy window;
 plotting or converting it reads its pixels.
 
 ```python
-sample = chip.gs.to_tensor()
+pixels, context = chip.gs.to_tensor()
+sample = {**pixels, **context}
 {name: tuple(value.shape) for name, value in sample.items()}
 ```
 

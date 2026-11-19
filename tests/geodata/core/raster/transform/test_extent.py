@@ -62,7 +62,7 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
     cropped = tree.gs.crop(_triangle())
 
     assert tuple(cropped.children) == ("optical", "dem")
-    assert cropped.gs.geobox.shape == (3, 3)
+    assert all(node.gs.to_dataset().gs.geobox.shape == (3, 3) for node in cropped.leaves)
     assert cropped["dem"].to_dataset().height.isel(time=0).values.tolist() == [
         [1, 0, 0],
         [1, 1, 0],

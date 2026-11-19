@@ -37,15 +37,18 @@ metadata or several dates, use a staged STAC publication of separate assets:
 ```python title="Adaptation example — use a Dataset with a time dimension"
 from geosave.geodata import stac
 
-staged = stac.RasterStac.from_dataset(observations, id_format="{start:%Y%m%d}")
-items = staged.to_cog("output/assets")
+items = []
+for position in range(observations.sizes["time"]):
+    observation = observations.isel(time=position)
+    item = stac.StacItem.from_region(observation.gs.region, id=f"scene-{position}")
+    assets = {name: observation[[name]] for name in observation.data_vars}
+    items.append(stac.publish_item(item, assets=assets, root="output/assets"))
+catalog = stac.create_catalog(items)
+catalog.gs.to_geoparquet("output/catalog.parquet")
 ```
 
-An asset at `/20250101/red` becomes `output/assets/20250101/red.tif`.
-`id_format` controls Item names; variable names identify assets. `to_cog`
-returns native Items describing the written files. For an Item table in one
-step, use `observations.gs.to_catalog("output/assets")` and save it separately
-with `.gs.to_geoparquet`. See [catalog publication](../advanced/raster-catalog.md).
+Choose the observation's assets explicitly; exclude independent static rasters.
+Item IDs and asset keys determine paths. See [catalog publication](../basics/catalog.md).
 
 ## Multidimensional stores
 
@@ -54,8 +57,8 @@ one group per node; they are not split into separate files. `gs.open_raster`
 returns a Dataset for the root group, or the group selected by `group=`.
 `gs.open_raster_tree` returns the complete hierarchy as a DataTree, even for
 a root-only store. Neither opener merges groups or selects a child implicitly.
-Ordinary xarray trees have caller-defined groups. `RasterStac` owns the
-Item/asset layout used for COG publication separately.
+Ordinary xarray trees have caller-defined groups. Explicit Item/asset mappings
+belong to STAC publication separately.
 
 NetCDF stores observation cells as a CF bounds variable; readers restore
 `start_datetime` and `end_datetime`. Zarr stores those coordinates directly.

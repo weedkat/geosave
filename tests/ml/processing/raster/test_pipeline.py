@@ -401,7 +401,7 @@ def test_predicting_to_a_store_reads_one_chunk_with_its_halo_at_a_time(tmp_path)
     class Recorded(DensePredictor):
         @chain_step()
         def __call__(self, model: torch.nn.Module, sample: xr.DataTree) -> xr.DataArray:
-            shapes.append(tuple(sample.gs.geobox.shape))
+            shapes.append(tuple(sample.gs.common_geobox().shape))
             output = super().__call__(model, sample)
             return output
 

@@ -1,44 +1,59 @@
 # Publish and load: Dataset ⇄ catalog
 
-Updated against library source on 2026-11-15. This page records implemented
-boundaries and unresolved choices. For a runnable round trip, use the
-[catalog tutorial](../../advanced/raster-catalog.md).
+Updated 2026-11-17. General raster preparation and STAC membership have separate
+owners; see the [tree specification](raster-tree.md) and
+[catalog tutorial](../../basics/catalog.md).
 
 ## Current flow
 
-```python title="Adaptation example — use a dated Dataset and destination grid"
-rows = scene.gs.to_catalog("out/assets")
+```python
+observation = scene.isel(time=position)
+item = stac.StacItem.from_region(observation.gs.region, id=observation_id)
+item.set_collection(collection)
+assets = {"image": observation[["B04", "B08"]], "scl": observation[["SCL"]]}
+published = stac.publish_item(item, assets=assets, root="out/assets")
+rows = stac.create_catalog([published])
 rows.gs.to_geoparquet("out/catalog.parquet")
-rows = gs.open_vector("out/catalog.parquet")
-selected = rows.loc[rows["eo:cloud_cover"] < 20]
-scene = selected.gs.to_dataset(geobox=grid, chunks={}, with_properties=["eo:cloud_cover"])
+loaded = gs.open_vector("out/catalog.parquet").gs.to_dataset(geobox=grid, chunks={})
 ```
+
+Datasets can instead come from independent tree leaves and retain different grids.
+Tree `split`/`merge`/`concat`/`ungroup` prepare structure; effective `to_dataset`
+extracts one node. They assign no Item identity. Publication consumes explicit
+membership and a native Item, preserves its geometry/properties/Collection links,
+and returns a clone with actual written asset hrefs. No prescribed staging tree,
+Item formatter or automatic property/Collection inference remains.
+
+Each Item is one observation or derived product. Static reference inputs may
+coexist with imagery in an analysis tree but must not enter the dated asset map.
+Scalar times/periods must agree with the Item; unsliced dimensions and timeless
+assets fail before writing. Explicit membership asserts provenance; copied scalar
+timestamps cannot establish it. No mandatory provenance declarations are added.
 
 ```text
-Dataset -> RasterStac Item/asset tree -> COGs + native Items -> Item table -> GeoParquet
-Dataset <- ODC + metadata stamps <- native Items <- selected Item rows <- open_vector
+Dataset / extracted leaf -> explicit Item + asset map -> COGs + native Item
+native Items -> create_catalog -> GeoParquet
+selected rows -> native Items -> ODC + metadata stamps -> Dataset
 ```
-
-`RasterStac` owns the prescribed publication layout and optional native
-Collection. General DataTrees have caller-defined hierarchies. Loading returns
-Datasets, with one array per band across observations; it does not construct
-one tree node per Item and asset. Zarr and NetCDF store whole Datasets or trees
-separately from this COG catalog route.
 
 ## Who does what
 
 | Step | Owner |
 | --- | --- |
-| Dataset → staged Item/asset tree | `RasterStac.from_dataset(item_dim="time", id_format=...)`; no pixel reads |
-| Join staged grids | `RasterStac.merge`; Items match by id, assets keep their grids |
-| Write assets and describe them | `RasterStac.to_cog` writes `<root>/<item>/<asset>.tif`; `StacItem.from_region` and `add_raster_asset` build metadata |
-| One-grid publication shortcut | `Dataset.gs.to_catalog` stages, writes and converts to rows |
+| Select observation positions and group variables | Native xarray or GeoDataTree operations |
+| Define identity, properties, geometry and Collection | Native Item, optionally `StacItem.from_region` |
+| Write files and describe assets | `stac.publish_item`, existing `geotiff.write_files`, extension translators |
 | Items → rows | `stac.create_catalog` |
-| Rows ⇄ file | `.gs.to_geoparquet`, `open_vector`; absolute asset hrefs, Arrow written directly |
-| Rows → native Items | `.gs.to_items`, the one conversion in `stac.catalog.items.to_items` |
-| Rows → Dataset | `.gs.to_dataset`, validating Items and at most one collection |
-| Items → Dataset | `stac.load_dataset`, ODC and registered stamps |
-| Items → native-grid groups | `stac.load_native_datasets`, yielding `(crs, resolution, dataset)` |
+| Rows ⇄ file | `.gs.to_geoparquet`, `open_vector` |
+| Rows → Dataset | `.gs.to_dataset`, ODC and metadata stamps |
+| Items → grouped grids | `stac.load_native_datasets`, yielding `(crs, resolution, dataset)` |
+
+All metadata, encoding and destination preflight happens before file writes.
+Runtime failures can leave earlier files; publication is eager and nontransactional.
+Loading assembles analysis data. It does not restore the published tree hierarchy;
+use Zarr/NetCDF for structural persistence. Catalog-to-tree convenience is deferred
+by agreement. Native-grid loading groups by CRS/resolution, so differing pixel
+origins may align to an output grid; opening individual assets preserves file grids.
 
 ## What round trips
 
@@ -50,44 +65,22 @@ properties and decode policy when loading.
 | Pixels and grid | Each asset states its grid; load onto that exact GeoBox to avoid resampling. The catalog tutorial checks pixel values and placement. |
 | Time | Items state instants or periods. A period reloads using its start; a distinct original time label is not preserved. |
 | Packing and nodata | Asset raster metadata and file encoding describe stored values; loading retains stored values until explicitly decoded. |
-| Item properties | Only marked coordinates publish as properties; request them with `with_properties` on load. |
+| Item properties | Supplied native Item properties are preserved; explicitly select any values from marked coordinates. Request them with `with_properties` on load. |
 | Shared scalar property | Repeated in Items and loaded as a coordinate along time. |
 | Collection | Carried separately from Item properties and stored in the table metadata. Its extent is not recomputed from written Items. |
 | Arbitrary Dataset attrs | Not automatically published as Item properties. |
-| Static variables | Written as an asset in every Item; they are not dropped. |
+| Static variables | Independent static/reference rasters stay outside observation asset maps; timeless assets are rejected. Copied scalar dates cannot prove provenance. |
 
 ## Gaps to settle
 
-- **Item identity:** default formatting can collide for repeated observations
-  or differ between grids intended for one Item. Carry source identity, allow
-  property-based formatting, or retain explicit formatting and reject collisions?
-  Fused observations and derived products need their own identity rule.
-- **Item dimension:** `from_dataset` requires an existing dimension, normally
-  `time`. Scalar-time and timeless publication need a deliberate contract.
-- **Property names:** ODC can turn `eo:cloud_cover` into `eo_cloud_cover`;
-  the `stac_property` mark remains its identity. Should loaders rename coordinates,
-  or continue comparing by the marked key?
-- **Property selection:** retain explicit `with_properties`, or offer all scalar
-  properties by default? `stac.list_properties(items)` already helps callers select.
-- **Dataset attrs:** decide whether descriptive attrs such as `title` belong to
-  Item properties, the Collection, or neither unless explicitly marked.
-- **Native-grid results:** keep `(crs, resolution, dataset)` tuples or return only
-  Datasets, which already state their grids?
-- **Derived Collections:** settled 2026-11-16: publication takes an optional
-  `collection=`, which replaces the one the raster states. STAC GeoParquet
-  does not require a Collection, so none is demanded; a pgstac export would.
-  Open: building a Collection still needs a hand-written pystac extent.
-- **Publication options:** lazy writes, standalone STAC JSON, Zarr assets and
-  classification extension output are not implemented in this path.
-- **Write failure boundaries:** consider validating all destinations before the
-  first asset write; current publication writes assets in sequence.
-- **Decoded packing:** confirm asset declarations and stored encoding agree
-  for decoded variables carrying packing only in `encoding`.
+- Reference products without observation dates need a separate publication contract.
+- Derived Collections still use explicit native PySTAC metadata and extent updates.
+- Deferred publication, standalone STAC JSON and alternate asset formats are not
+  part of the initial publisher.
+- A standalone tree writer returning path-to-href mapping has no settled entry
+  point/destination policy; publication associates assets by explicit keys.
 
-Staging reads metadata only; `to_cog` writes and therefore computes pixels.
-The former promise of `RasterStac.to_cog(compute=False)` was never implemented.
-Attach assets to their Item before adding extension declarations.
-
-For large catalogs, select rows before `to_items`. Workers should open a catalog
-by path instead of receiving a pickled copy; that ownership lesson survives the
-older prototype without requiring its benchmark numbers as current guarantees.
+Classification metadata, complete destination preflight and encoded packing are
+implemented and tested. Runtime write failure remains nontransactional.
+For large catalogs, select rows before `to_items`; workers can open the catalog
+by path instead of receiving a pickled copy.

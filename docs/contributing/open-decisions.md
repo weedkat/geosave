@@ -6,29 +6,36 @@ migration work. Design rationale lives in [direction](design/direction.md).
 
 ## Publication and catalog loading
 
-Implemented: `RasterStac.from_dataset`, `merge`, `to_cog`,
-`Dataset.gs.to_catalog`, native Item/table conversion, catalog concatenation,
-row `to_item`, table `to_dataset`, and ODC loading on chosen or native grids.
-The old STAC-specific DataTree accessors have been removed. General trees have
-caller-defined hierarchies; the staging wrapper owns Item/asset structure.
+The [GeoDataTree specification](design/raster-tree.md) records the implemented
+separation: general raster leaves, independent grids, effective inherited attrs,
+variable grouping, dimension split, merge, concat and ungroup. The default
+`raster_leaves` policy requires leaf-owned grids; crop/reprojection uses native
+tree mapping without parent-coordinate repair. Numerical channel conversion permits
+different units and requires explicit dtype preparation when necessary.
 
-Remaining questions and limitations are maintained in
-[publish and load](design/publish-load.md#gaps-to-settle):
+`stac.publish_item(item, assets=..., root=...)` writes one observation's explicit
+COG assets and returns a completed native Item. Native catalog composition and
+GeoParquet round trips remain separate. RasterStac and automatic Dataset catalog
+conversion are removed. Timeless assets and conflicting times/periods are rejected;
+explicit membership cannot prove provenance when timestamps were copied.
 
-- Item identity across repeated observations, fused observations and grids.
-- Scalar-time/timeless publication; static variables currently repeat per Item.
-- Original time labels for periods, property selection and arbitrary Dataset attrs.
-- Derived Collection identity and extent updates.
-- Native-grid return shape and concatenation across differing href bases.
-- Deferred publication, classification metadata, alternate asset formats and
-  preflight validation of all destinations.
+Remaining design work is explicit, not missing foundation implementation:
 
-DataArray `to_catalog`, raster `to_item` and Dataset `to_cog` remain stubs.
-Use `Dataset.gs.to_catalog` for dated assets, or `io.write_cog(dataset, path)`
-for one named-band file. Catalog sampling, vector rasterization and row pixel
-reading remain unavailable. Explorer catalog pixel viewing depends on that
-row reader; loading selected rows into a Dataset is available independently.
-GCP placement remains unsupported by `gs.geobox`.
+- Standalone tree batch-file writer returning node-path-to-href mapping: not
+  implemented here; its public entry point/destination policy is not settled.
+  Publisher mapping uses explicit asset keys and does not substitute for that API.
+- Per-leaf dtype/layout arguments on tree tensor conversion: not added without
+  an agreed argument shape; prepare each Dataset explicitly first.
+- Dedicated catalog-to-tree loading is deferred by agreement; compose existing
+  loading with native DataTree construction. ODC native-grid grouping remains by
+  CRS/resolution and can align differing pixel origins.
+- Reference-product publication, alternate formats, deferred/transactional writes,
+  and derived Collection extent updates require their own contracts. No fake dates
+  or new provenance metadata are introduced.
+
+Catalog sampling, vector rasterization and row pixel reading remain unavailable.
+Explorer catalog pixel viewing depends on the row reader. GCP placement remains
+unsupported by `gs.geobox`.
 
 ## Sampling and stores
 
@@ -147,10 +154,12 @@ Its publication script supports separate release and private training repos;
 other generated publication scripts still combine workspace archives with the
 release. Migrate them to the [three-repository workflow](../mlops/index.md).
 
-The current notebook source still references removed `geosave.model` in
-lesson 1 and removed model/chip APIs in lessons 3 and 4. They remain separate
-migration work; see [examples](../examples.md). Do not treat the notebook
-series as verified by executable Markdown tutorials.
+Lesson 1 now uses `geosave.ml`, stage registries and the `(pixels, context)`
+tensor return. Model construction, forward/backward and one training/validation
+batch were checked with local teaching rasters; the full six-epoch run was not.
+Removed model/chip APIs in lessons 3 and 4 remain separate migration work; see
+[examples](../examples.md). Do not treat the notebook series as verified by
+executable Markdown tutorials.
 
 ## Explorer and architecture
 

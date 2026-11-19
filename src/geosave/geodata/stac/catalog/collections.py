@@ -34,6 +34,20 @@ def read_collections(attrs: Mapping[Any, Any]) -> dict[str, pystac.Collection]:
     return collections_by_id
 
 
+def write_collections(
+    rows: gpd.GeoDataFrame, collections: Iterable[pystac.Collection]
+) -> None:
+    """Set a table's footer to these Collections, reconciled by id, in place.
+
+    Raises:
+        ValueError: Two definitions of one Collection disagree.
+    """
+    collection_dicts = {}
+    for collection in merge_collections(collections).values():
+        collection_dicts[collection.id] = collection.to_dict(transform_hrefs=False)
+    rows.attrs = {FOOTER_KEY: {"collections": collection_dicts}}
+
+
 def merge_collections(
     collections: Iterable[pystac.Collection],
 ) -> dict[str, pystac.Collection]:
@@ -116,10 +130,6 @@ def concat_catalogs(catalogs: Sequence[gpd.GeoDataFrame]) -> GeoDataFrame:
     collections = []
     for catalog in catalogs:
         collections.extend(read_collections(catalog.attrs).values())
-    collection_dicts = {}
-    for collection in merge_collections(collections).values():
-        collection_dicts[collection.id] = collection.to_dict(transform_hrefs=False)
-
     combined = pd.concat(catalogs, ignore_index=True)
-    combined.attrs = {FOOTER_KEY: {"collections": collection_dicts}}
+    write_collections(combined, collections)
     return cast("GeoDataFrame", combined)

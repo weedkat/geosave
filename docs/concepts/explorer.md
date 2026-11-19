@@ -43,8 +43,10 @@ hidden, and timeless rasters always show. **Color by** selects a vector
 attribute. The optional comparison card switches between two open rasters.
 
 The map uses Panel, HoloViews, GeoViews and Bokeh. Dense point, line and polygon layers
-use Datashader for numeric, categorical and single-color rendering. Imagery, light, dark and OpenStreetMap basemaps include their
-providers' attribution. Basemaps need network access; the explorer needs a
+use Datashader for numeric, categorical and single-color rendering. The data layers
+set the initial map extent and supply the values shown on hover. Imagery, light,
+dark and OpenStreetMap basemaps provide the background and their providers'
+attribution. Basemaps need network access; the explorer needs a
 live notebook kernel or `panel serve`.
 
 For a shareable map of the current view, capture a standalone HoloViews overlay:
@@ -66,11 +68,15 @@ network access. Choose `basemap="None"` before capture for a map without tile
 requests. Capturing uncached pixels computes them; output dimensions do not
 bound source reads.
 
-For a Dataset layer, the explorer masks missing values, casts the shown bands
-to float32 and reprojects them onto the viewport grid before computing.
-Catalog-backed layers depend on the paused `row.gs.read_pixels` operation.
-Pans within the cached area at the same zoom level
-and opacity changes neither read nor resend pixels; hidden rasters do no work.
+For an xarray raster, the explorer computes the selected bands and reprojects
+them to Web Mercator for display. When both the source and the projected scene
+fit within 512 × 512 pixels, the browser receives one image for the selection.
+Pan and zoom then reuse that image. The limit is 1 MiB of float32 pixels per
+band before rendering. Larger rasters use padded viewport windows. A pan inside
+the active window at the same zoom reuses the displayed pixels. A finer zoom
+or a pan beyond the window requests detail. Dense vector layers resample when
+their view changes.
+
 Recent viewport windows share a 128 MiB pixel-cache budget per raster layer,
 so returning to a retained zoom avoids another source read. Returning to a
 zoom can still transfer an image to the browser. Changing bands, date, or

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import geoviews as gv
 import geoviews.plotting.bokeh  # noqa: F401 -- register the geographic Bokeh plots
@@ -47,12 +47,17 @@ def set_map_aspect(plot, _):
     plot.state.match_aspect = True
 
 
-def scope_hover(plot, _):
+def scope_hover(plot, element):
     """Keep dynamically added glyphs out of unrelated attribute hover tools.
 
     HoloViews attaches new overlay renderers to its first hover tool. Only
     renderers carrying that tool's declared fields can answer those hovers.
     """
+    if isinstance(element, hv.Overlay) and plot.dynamic:
+        # HoloViews appends each new renderer to this overlay-wide hover handle
+        # before hooks run. A TileRenderer fails Bokeh's validation at that
+        # point. Keep the toolbar tools and bind their data renderers below.
+        plot.handles.pop("hover", None)
     for tool in plot.state.select({"type": HoverTool}):
         tool.point_policy = "follow_mouse"
         tool.line_policy = "none"
@@ -112,6 +117,7 @@ class Map(Viewer):
             x_range=(extent.left, extent.right),
             y_range=(extent.bottom, extent.top),
         )
+        self.ranges.add_subscriber(self._navigate)
         self.tap = SingleTap(source=self._anchor)
         self.size = PlotSize(source=self._anchor)
         self.size.add_subscriber(self._resize)
@@ -130,12 +136,9 @@ class Map(Viewer):
             ),
         ]
         self.pane = pn.ui.HoloViews(backend="bokeh", sizing_mode="stretch_both")
-        # Every event redraws: a repeated settings event, or a zoom to the
-        # range already shown, must still run the hooks. Layers keep their own
-        # caches, so a redraw reads no pixels it already has.
         self.pane.object = hv.DynamicMap(
             Callable(self._draw, memoize=False),
-            streams=[self.ranges, self._refresh, *self._settings],
+            streams=[self.size, self._refresh, *self._settings],
         )
         self._watcher = explorer.param.watch(self._follow_layers, "layers")
         self._follow_layers()
@@ -178,18 +181,24 @@ class Map(Viewer):
     def zoom(self, bbox: BoundingBox) -> None:
         """Frame `bbox`, in Web Mercator metres, keeping the map's aspect."""
         self._frame_extent(frame_bbox(bbox))
+        self.redraw()
 
     def snapshot(self) -> hv.Overlay:
         """Freeze the current view without live streams or drawing tools."""
-        plot = self._draw(**self.ranges.contents)
+        plot = self._draw()
         # The invisible anchor carries the live viewport streams. Detach every
         # element so rendering the snapshot cannot subscribe to this map.
-        snapshot = plot.map(lambda element: element.clone(link=False), hv.Element)
+        snapshot = cast(
+            "hv.Overlay",
+            plot.map(lambda element: element.clone(link=False), hv.Element),
+        )
+        assert self.ranges.x_range is not None and self.ranges.y_range is not None
         left, right = self.ranges.x_range
         bottom, top = self.ranges.y_range
         # A standalone map has no Python resize callback to adjust its ranges.
         # Fix the frame's aspect to the captured extent instead.
-        return snapshot.opts(
+        snapshot.opts(
+            clone=False,
             responsive=False,
             width=None,
             height=None,
@@ -200,35 +209,51 @@ class Map(Viewer):
             active_tools=["pan", "wheel_zoom"],
             backend="bokeh",
         )
+        return snapshot
 
-    def _draw(self, x_range=None, y_range=None, **_: Any) -> hv.Overlay:
-        # HoloViews attaches a stream to the plot at its source's position in
-        # the overlay, so the anchor leads and keeps its position as layers
-        # and basemaps come and go. HoloViews refuses a DynamicMap inside one,
-        # so this is the map's only DynamicMap and each layer draws an element.
+    def _view(self):
+        x_range, y_range = self.ranges.x_range, self.ranges.y_range
+        if (
+            x_range is None
+            or y_range is None
+            or not (is_known_range(x_range) and is_known_range(y_range))
+        ):
+            return None
+        shape = DEFAULT_VIEW_SHAPE
+        if self.size.width and self.size.height:
+            shape = (self.size.height, self.size.width)
+        return create_view(x_range, y_range, shape)
+
+    def _navigate(self, **_):
+        """Let Bokeh move existing glyphs until a visible layer needs new pixels."""
+        explorer = self._explorer
+        view = self._view()
+        if view is None:
+            return
+        if any(
+            not layer.covers_view(view) for layer in explorer.select_drawn_rasters()
+        ):
+            self.redraw()
+        elif any(
+            isinstance(layer, VectorLayer) and layer.visible and layer.is_sampled
+            for layer in explorer.layers
+        ):
+            self.redraw()
+
+    def _draw(self, **_: Any) -> hv.Overlay:
+        # The anchor leads so its navigation streams keep the same subplot.
         explorer = self._explorer
         plot: Any = self._anchor
-        # The grid the map shows: its ranges, at the plot's size once it has one
-        view = None
-        if (
-            x_range is not None
-            and y_range is not None
-            and is_known_range(x_range)
-            and is_known_range(y_range)
-        ):
-            shape = DEFAULT_VIEW_SHAPE
-            if self.size.width and self.size.height:
-                shape = (self.size.height, self.size.width)
-            view = create_view(x_range, y_range, shape)
+        view = self._view()
         for layer in explorer.select_drawn_rasters():
             plot = plot * layer.draw(view)
         for layer in explorer.layers:
             if isinstance(layer, VectorLayer) and layer.visible:
                 plot = plot * layer.draw(view)
         tile = BASEMAPS[explorer.basemap]
-        # Tiles render beneath every glyph wherever they sit in the overlay.
         if tile is not None:
-            plot = plot * tile
+            # Background tiles have no data extent to contribute to the viewport.
+            plot = plot * tile.opts(apply_ranges=False, clone=True, backend="bokeh")
         return plot.opts(
             projection=gv.tile_sources.OSM.crs,
             responsive=True,
@@ -248,6 +273,9 @@ class Map(Viewer):
         # Runs on every redraw; only a new figure is set up, so later redraws
         # keep what was drawn and the toolbar choices made since.
         figure = plot.state
+        # HoloViews recomputes sizing_mode on refresh. Keep the live figure
+        # stretched to its pane in both dimensions, including after PlotSize.
+        figure.sizing_mode = self.pane.sizing_mode
         # Bokeh keeps metres square by widening the ranges. HoloViews'
         # data_aspect instead resizes the figure, first to thousands of pixels
         # tall; tiles fetched for that never draw, so the page never idles.
@@ -283,7 +311,7 @@ class Map(Viewer):
             else:
                 extent = extent.buffered(0, (extent.span_x / ratio - extent.span_y) / 2)
         self._extent = extent
-        self.ranges.event(
+        self.ranges.update(
             x_range=(extent.left, extent.right), y_range=(extent.bottom, extent.top)
         )
 
@@ -321,6 +349,7 @@ class Map(Viewer):
             layer.param.unwatch(watcher)
         self._layer_watchers.clear()
         self._refresh.clear()
+        self.ranges.clear()
         self.tap.clear()
         self.size.clear()
         for stream in self._settings:

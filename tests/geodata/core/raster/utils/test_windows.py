@@ -90,5 +90,5 @@ def test_windows_need_a_shared_datetime_time_dimension():
 
     scene = build_scene()
     mixed = xr.DataTree.from_dict({"image": scene, "other": scene.isel(time=slice(0, 3))})
-    with pytest.raises(ValueError, match="own time axis"):
+    with pytest.raises(ValueError, match="one timeline"):
         mixed.gs.sample("MS")

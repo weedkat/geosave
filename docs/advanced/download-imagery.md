@@ -18,7 +18,7 @@ from geosave import attrs
 from geosave.geodata import stac
 
 bbox = (-121.82, 38.52, -121.79, 38.55)
-client = gs.StacClient.open("element84")
+client = gs.StacClient.element84()
 query = gs.StacQuery(
     collections=["sentinel-2-l2a"],
     bbox=bbox,

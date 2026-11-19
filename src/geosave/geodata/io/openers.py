@@ -249,7 +249,7 @@ def open_raster(
     if isinstance(source, (list, tuple)):
         raise TypeError(
             "open_raster reads one file or store; files laid out across dates or bands "
-            "read back through the catalog `to_catalog` writes with them "
+            "read back through the catalog published with them "
             "(stac.load_dataset(rows.gs.to_items(), ...)), or open each file on its own"
         )
     opener = find_opener(source, RASTER_OPENERS)

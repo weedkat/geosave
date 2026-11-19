@@ -233,7 +233,8 @@ def test_transformers_reload_runs_on_prithvi_context(
     for column in range(2):
         chip = scene.isel(y=slice(0, 4), x=slice(4 * column, 4 * column + 4))
         tree = xr.DataTree.from_dict({"image": chip})
-        samples.append(tree.gs.to_tensor(context=["centroid", "year", "day_of_year"]))
+        pixels, context = tree.gs.to_tensor(context=["centroid", "year", "day_of_year"])
+        samples.append({**pixels, **context})
     inputs = default_collate(samples)
     torch.testing.assert_close(
         restored(**inputs),

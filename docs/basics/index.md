@@ -11,6 +11,7 @@ the pieces in your own project.
 | [Vector data](vectors.md) | Work with features in a GeoDataFrame. |
 | [Describe values](attrs.md) | Read nodata, scaling and class labels. |
 | [Read and save data](io.md) | Choose a format and reopen its output. |
+| [Store imagery as a catalog](catalog.md) | Publish observations as COGs with a searchable index. |
 | [Images to training chips](training-chips.md) | Keep imagery and labels named through tensor conversion. |
 | [Explore a map](explore.md) | Inspect raster and vector layers interactively. |
 

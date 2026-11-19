@@ -17,7 +17,7 @@ src/geosave/geodata/
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # readers and writers; storage.py turns every path or URL into a UPath
 ├── sampling/     # ChipLayout; RasterChipper/RasterMerger and TensorChipper/TensorMerger
-├── stac/         # search, ODC loading and stamps, catalog conversion, RasterStac publication
+├── stac/         # search, ODC loading and stamps, catalog conversion, explicit Item/asset publication
 └── features/     # spectral indices and masks
 
 src/geosave_flows/  # Prefect flows that run a released pipeline; installed with the `flows` extra
@@ -34,8 +34,13 @@ Public geospatial I/O lives in `geodata/io/`. Internal helpers stay with their
 owning package.
 
 `core/raster/transform` owns substantial pixel-changing implementations;
-`core/raster/utils` owns structural support such as grid placement. Accessors
-own variant-specific checks and traversal. Internal functions used across
+`core/raster/utils` owns structural support such as grid placement.
+`core/raster/rules/{common,dataarray,dataset,datatree}.py` owns validation-only
+callables consumed by `.gs.validate`; parameterized rules such as
+`compatible_concat(dim)` use the existing `Rule[T]` callable contract.
+Accessors own variant-specific operations, argument checks and traversal.
+Rules do not mutate inputs, execute pixel tasks or return transformed data.
+Internal functions used across
 modules have plain names; underscore names are module-local. Supported public
 API is declared explicitly, not inferred from implementation filenames.
 
@@ -47,13 +52,13 @@ support, so loading a release does not load Lightning training code.
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
-STAC table conversion lives in `stac/catalog/` (layout, hrefs, collections, rules, items); publication in `raster.py`
-and `publish.py`; loading metadata in `stac/stamps/`.
+STAC table conversion lives in `stac/catalog/` (layout, hrefs, collections, rules, items);
+publication in `stac/publish.py`; loading metadata in `stac/stamps/`.
 `stac/extensions/` has one module per schema and is the only production importer
 of `pystac.extensions`. `StacClient` and `StacTable` discover native Items;
 `stac.load_dataset` and `stac.load_native_datasets` load selected Items through ODC. Format
 readers/writers live in `io/raster/` and `io/vector/`. `stac/publish.py` owns `StacItem` (`from_region`, `add_raster_asset`).
-`RasterStac` stages a publication: `from_dataset`, `merge`, `to_cog`; loading returns Datasets, never the tree;
+`stac.publish_item` writes a native Item plus explicit asset Datasets; loading returns Datasets without reconstructing a tree;
 general DataTree accessors impose no STAC layout.
 `GeoRegion` describes geometry/time; native `GeoBox` defines exact pixel placement.
 

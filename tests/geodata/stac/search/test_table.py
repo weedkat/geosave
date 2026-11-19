@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from geosave.geodata.errors import CollectionNotFoundError
-from geosave.geodata.stac import StacClient, StacQuery
+from geosave.geodata.stac import StacQuery
 from geosave.geodata.stac.catalog import create_catalog
 from geosave.geodata.stac.search.table import StacTable
 from tests.geodata.conftest import create_file_items, create_test_collection
@@ -127,16 +127,14 @@ def test_search_returns_an_item_table(scene, tmp_path) -> None:
     assert none.empty
 
 
-def test_stac_client_opens_a_parquet_table_like_an_api(catalog) -> None:
+def test_a_table_searches_its_catalog(catalog) -> None:
     folder, _ = catalog
 
-    client = StacClient.open(folder)
+    client = StacTable(folder)
 
     assert isinstance(client, StacTable)
     assert client.collections() == {"forest"}
     assert not client.search(StacQuery(collections=["forest"])).empty
-    with pytest.raises(ValueError, match="duckdb"):
-        StacClient.open("element84", duckdb=object())  # type: ignore[arg-type]
 
 
 def test_search_results_retain_definitions_for_publication(catalog, tmp_path):
@@ -162,7 +160,7 @@ def test_a_table_without_collections_is_searched(tmp_path) -> None:
     path = create_catalog([entry(collection=None)]).gs.to_geoparquet(
         tmp_path / "plain.parquet"
     )
-    table = StacClient.open(path)
+    table = StacTable(path)
 
     assert table.collections() == set()
     assert [item.id for item in table.search_items({})] == ["one"]

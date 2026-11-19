@@ -19,6 +19,7 @@ nav = [
         { "Vector data" = "basics/vectors.md" },
         { "Describe raster values" = "basics/attrs.md" },
         { "Read and save data" = "basics/io.md" },
+        { "Store imagery as a catalog" = "basics/catalog.md" },
         { "Images to training chips" = "basics/training-chips.md" },
         { "Explore a map" = "basics/explore.md" },
         { "Common questions" = "basics/faq.md" },
@@ -33,7 +34,6 @@ nav = [
             { "Crop a vegetation map" = "advanced/crop-imagery.md" },
             { "Search and load STAC data" = "advanced/stac.md" },
             { "Align labels with imagery" = "advanced/align-rasters.md" },
-            { "Create and reopen a raster catalog" = "advanced/raster-catalog.md" },
             { "Lazy raster processing" = "advanced/large-data.md" },
             { "Read overlapping training chips" = "advanced/overlapping-chips.md" },
         ] },
@@ -108,6 +108,7 @@ nav = [
         ] },
         { "Design notes" = [
             { "Direction" = "contributing/design/direction.md" },
+            { "GeoDataTree and STAC publication" = "contributing/design/raster-tree.md" },
             { "Publish and load" = "contributing/design/publish-load.md" },
             { "Samples and chips" = "contributing/design/samples-chips.md" },
             { "Release and inference" = "contributing/design/release-inference.md" },

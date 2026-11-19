@@ -3,26 +3,21 @@
 A catalog is a GeoDataFrame of STAC Item records. The same `.gs` accessor also
 handles ordinary vector features. Item operations check the columns they need;
 an accessor's type alone does not certify STAC compliance.
-See [Create and reopen a raster catalog](../advanced/raster-catalog.md) for
+See [Store imagery as a catalog](../basics/catalog.md) for
 an offline example.
 
 ## Publish and load pixels
 
-```python title="Adaptation example — use your dated Dataset"
-rows = observations.gs.to_catalog("assets")
+```python
+published = stac.publish_item(item, assets={"image": image, "scl": scl}, root="assets")
+rows = stac.create_catalog([published])
 path = rows.gs.to_geoparquet("catalog.parquet")
-scene = gs.open_vector(path).gs.to_dataset(geobox=observations.gs.geobox, chunks={})
-result = scene.gs.mask_and_scale().mean("time").compute()
+scene = gs.open_vector(path).gs.to_dataset(geobox=image.gs.geobox, chunks={})
 ```
 
-Dataset publication needs an Item dimension, `time` by default. The Items
-join the Collection `stac.load_dataset` stamped on the Dataset, the
-`collection=` given for a derived raster, or none: STAC GeoParquet makes
-the Collection optional. It writes
-one COG per variable and Item at `folder/Item/asset.tif` and returns an Item
-table. Save the table separately. For assets on several grids, stage them
-with `RasterStac.from_dataset(...).merge(...)`; see [STAC publication](stac.md#publication).
-DataArray `.gs.to_catalog()` and raster `.gs.to_item()` remain unavailable.
+Choose observation membership and Item metadata explicitly. Publication accepts
+Datasets on independent grids; `create_catalog` composes completed native Items.
+See [STAC publication](stac.md#publication).
 
 Loading returns a Dataset on the chosen grid. Use `stac.load_native_datasets`
 to keep each native grid. Collection metadata, marked Item property coordinates

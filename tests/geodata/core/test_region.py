@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import geopandas as gpd
 import pandas as pd
 import pytest
@@ -14,15 +16,17 @@ def _region() -> GeoRegion:
     return GeoRegion.from_coordinates(52, 13, timespan="2025-06-11")
 
 
-def test_replacing_the_timespan_keeps_the_geometry() -> None:
+def test_setting_the_time_keeps_the_geometry_and_original_region() -> None:
     region = _region()
 
-    month = region.replace(timespan="2025-06")
+    month = region.set_time("2025-06")
 
     assert month.extent == region.extent
     start, end = month.timespan
     assert pd.Timestamp(start) == pd.Timestamp("2025-06-01")
-    assert pd.Timestamp(end) >= pd.Timestamp("2025-06-30")
+    assert end == datetime(2025, 6, 30, 23, 59, 59, 999999)
+    assert region.timespan == _region().timespan
+    assert month is not region
 
 
 def test_an_region_covers_every_feature_of_a_vector() -> None:
@@ -142,3 +146,39 @@ def test_catalog_region_ignores_published_timeless_bounds():
     assert create_catalog([timeless]).gs.region.timespan is None
     mixed = create_catalog([timeless, dated])
     assert mixed.gs.region.timespan == mixed.iloc[1].gs.region.timespan
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("2024-02", (datetime(2024, 2, 1), datetime(2024, 2, 29, 23, 59, 59, 999999))),
+        (
+            "2025-12",
+            (datetime(2025, 12, 1), datetime(2025, 12, 31, 23, 59, 59, 999999)),
+        ),
+        (
+            ("2025-05", "2025-06"),
+            (datetime(2025, 5, 1), datetime(2025, 6, 30, 23, 59, 59, 999999)),
+        ),
+    ],
+)
+def test_set_time_expands_partial_dates(value, expected):
+    assert _region().set_time(value).timespan == expected
+
+
+def test_set_time_preserves_exact_daterange_endpoints():
+    from geosave.geodata.utils.datetime import DateRange
+
+    span: DateRange = (
+        datetime(2025, 5, 2, 10, 30, tzinfo=timezone.utc),
+        datetime(2025, 6, 4, 15, 45, tzinfo=timezone.utc),
+    )
+    assert _region().set_time(span).timespan == span
+
+
+def test_set_time_none_clears_time_without_changing_place():
+    region = _region()
+    timeless = region.set_time(None)
+    assert timeless.timespan is None
+    assert timeless.extent == region.extent
+    assert region.timespan is not None

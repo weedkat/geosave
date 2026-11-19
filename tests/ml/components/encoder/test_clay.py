@@ -73,7 +73,8 @@ def test_clay_reads_one_frames_week_and_hour(scene: Dataset) -> None:
     ).eval()
     names = ["centroid", "week", "hour"]
     frame = xr.DataTree.from_dict({"image": scene.isel(time=[0])})
-    batch = default_collate([frame.gs.to_tensor(context=names)])
+    pixels, context = default_collate([frame.gs.to_tensor(context=names)])
+    batch = {**pixels, **context}
 
     with torch.inference_mode():
         pyramid, _ = encoder.forward_pyramid(
@@ -85,7 +86,8 @@ def test_clay_reads_one_frames_week_and_hour(scene: Dataset) -> None:
 
     assert pyramid[0].shape[0] == 1
     frames = xr.DataTree.from_dict({"image": scene})
-    batch = default_collate([frames.gs.to_tensor(context=names)])
+    pixels, context = default_collate([frames.gs.to_tensor(context=names)])
+    batch = {**pixels, **context}
     with pytest.raises(ValueError, match="single frame"):
         encoder.forward_pyramid(
             batch["image"][:, 0], week=batch["week"], hour=batch["hour"]

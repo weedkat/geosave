@@ -79,7 +79,7 @@ chunks can be read separately; NetCDF provides a single-file exchange format.
 | Work with chunked arrays or time series | Zarr |
 | Exchange scientific arrays in one file | NetCDF |
 | Save vector features | [GeoParquet](vectors.md) |
-| Organize dated raster files by footprint | [STAC catalog](../advanced/raster-catalog.md) |
+| Organize dated raster files by footprint | [STAC catalog](catalog.md) |
 
 `gs.open_raster` reads one Dataset. Use `gs.open_raster_tree` when a Zarr or
 NetCDF file contains a hierarchy of groups. See [I/O reference](../reference/io.md)

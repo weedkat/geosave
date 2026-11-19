@@ -35,6 +35,9 @@ from .layer import Layer
 # Largest side, in pixels, of the scene overview a composite's contrast fits.
 OVERVIEW_SIZE = 256
 
+# A complete float32 scene of this size costs at most 1 MiB per shown band.
+FULL_SCENE_MAX_SIDE = 512
+
 
 def _create_rgb(x, y, red, green, blue, shown) -> gv.RGB:
     """Return an RGB image on the map, transparent where `shown` is 0."""
@@ -179,6 +182,9 @@ class RasterLayer(Layer):
 
         # 4. Drawing caches: pixels read at one zoom level around the view and
         #    the selection they show, the contrast applied, and the RGB overview
+        self._scene_grid = (
+            self._full_scene_grid(raster.gs.geobox) if row is None else None
+        )
         self._pixel_windows = []
         self._cached_pixels = None
         self._cached_zoom = None
@@ -321,8 +327,37 @@ class RasterLayer(Layer):
                 steps[axis] = position
         return data.isel(steps)
 
+    def _full_scene_grid(self, source: GeoBox) -> GeoBox | None:
+        """Use a single display image when both source and projected grid are small."""
+        if min(source.shape) < 2 or max(source.shape) > FULL_SCENE_MAX_SIDE:
+            return None
+        if source.crs == self.bbox.crs and source.axis_aligned:
+            return source
+        # Use the Explorer's clipped, dateline-aware bounds for the output.
+        projected = source.to_crs("EPSG:3857", resolution="fit").enclosing(self.bbox)
+        if min(projected.shape) >= 2 and max(projected.shape) <= FULL_SCENE_MAX_SIDE:
+            return projected
+        return None
+
+    def covers_view(self, view: GeoBox) -> bool:
+        """Whether the active image can serve this viewport at the requested detail."""
+        return (
+            self._drawn_pixels is not None
+            and self._drawn_pixels is self._active_pixels(view)
+        )
+
+    def _active_pixels(self, view: GeoBox) -> xr.Dataset | None:
+        pixels = self._cached_pixels
+        if pixels is None or self._scene_grid is not None:
+            return pixels
+        bounds = view.boundingbox
+        cached = pixels.odc.geobox.boundingbox
+        if self._cached_zoom == find_zoom_level(view) and (cached & bounds) == bounds:
+            return pixels
+        return None
+
     def read_view_pixels(self, view: GeoBox) -> xr.Dataset:
-        """Read a padded viewport, reusing recent windows within `cache_bytes`.
+        """Reuse the compact scene or read a padded window for this viewport.
 
         Windows share the current band/time/axis selection and use globally
         aligned Web Mercator zoom grids. Styling does not invalidate pixels.
@@ -340,29 +375,19 @@ class RasterLayer(Layer):
             self._pixel_windows.clear()
             self._cached_pixels = None
         self._cached_selection = selection
+        active = self._active_pixels(view)
+        if active is not None:
+            return active
+        if self._scene_grid is not None:
+            self._cached_pixels = self._read_pixels(self._scene_grid)
+            return self._cached_pixels
+
         zoom = find_zoom_level(view)
         bounds = view.boundingbox
-        # The active image is already retained for rendering, even when it
-        # exceeds the history budget. Styling and contained pans still reuse it.
-        if self._cached_pixels is not None and self._cached_zoom == zoom:
-            cached_bounds = self._cached_pixels.odc.geobox.boundingbox
-            if (
-                cached_bounds.left <= bounds.left
-                and cached_bounds.bottom <= bounds.bottom
-                and cached_bounds.right >= bounds.right
-                and cached_bounds.top >= bounds.top
-            ):
-                return self._cached_pixels
         for position in range(len(self._pixel_windows) - 1, -1, -1):
             cached_zoom, cached = self._pixel_windows[position]
             cached_bounds = cached.odc.geobox.boundingbox
-            if (
-                cached_zoom == zoom
-                and cached_bounds.left <= bounds.left
-                and cached_bounds.bottom <= bounds.bottom
-                and cached_bounds.right >= bounds.right
-                and cached_bounds.top >= bounds.top
-            ):
+            if cached_zoom == zoom and (cached_bounds & bounds) == bounds:
                 self._pixel_windows.append(self._pixel_windows.pop(position))
                 self._cached_pixels = cached
                 self._cached_zoom = zoom
@@ -401,13 +426,16 @@ class RasterLayer(Layer):
     def _read_pixels(self, geobox: GeoBox) -> xr.Dataset:
         """Read the shown bands onto `geobox`: from the row's files, or computed."""
         if self.row is None:
-            import sys, time; print("PROBE geobox", geobox.shape, geobox.resolution, "src", dict(self.data.sizes), time.strftime("%X"), file=sys.stderr, flush=True)
             shown = self.select_shown_bands()
             variables = {}
             for name in shown.gs.variables:
                 variables[name] = mask_missing(shown[name]).variable
             floats = shown.assign(variables).astype("float32")
-            return floats.gs.reproject(geobox).compute()
+            # A view is bounded by the screen: load the pixels it covers, then
+            # reproject once. A lazy reproject inherits the source's chunk size,
+            # which makes thousands of tasks for a finely chunked raster.
+            covered = floats.gs.crop(geobox.extent, mask=False).compute()
+            return covered.gs.reproject(geobox)
         names = list(self.select_shown_bands().data_vars)
         return self.row.gs.read_pixels(geobox, variables=names)
 

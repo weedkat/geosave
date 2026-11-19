@@ -20,6 +20,28 @@ should own an invariant that the native object cannot represent cleanly.
 See [DataArray, Dataset, and DataTree](../concepts/xarray-structure.md) for
 their dimensions, coordinates, indexes, and node inheritance, with printouts.
 
+`node.gs.to_dataset()` includes all inherited coordinates and merges Dataset
+attrs from root to the selected node, with local attrs taking precedence.
+Native xarray conversion is unchanged. GeoDataTree is independent of GeoRaster:
+raster variables belong on leaves, grouping nodes carry metadata, and each leaf
+may have its own grid and timeline. There are no tree-wide spatial or temporal
+summary properties.
+
+`ds.gs.to_tree(name="ds", groups=None)` wraps the whole Dataset; explicit groups
+partition its variables with Dataset attrs on the source group. `node.gs.merge()`
+combines all immediate raster children into a new leaf, requiring exact grids
+and shared indexes, unique variable names and native attribute conflict handling.
+`parent.gs.ungroup(name)` promotes one direct group's children, preserving
+effective metadata and sibling order. These operations preserve lazy arrays.
+`group(groups)` partitions variables; `split(dim=..., names=None)` separates
+positions under a dimension group, preserving one static sibling. Names default
+to labels and explicit names permit duplicates. `concat(dim=...)` requires matching
+representations. Coordinates stay on each leaf; only shared Dataset attrs live on
+the source group. The default `raster_leaves` validation policy requires leaf-owned
+grids. Crop/reprojection use native tree mapping and never repair parent coordinates.
+Crop-to-grid clips declared extents at their existing metadata owner. See the
+[redesign specification](design/raster-tree.md) for the delivery ledger.
+
 ```mermaid
 flowchart LR
     ml --> geodata
@@ -94,7 +116,7 @@ GeoSave's own `Display`. Band metadata is per variable and constant along
 
 ```text
 Item rows -> ODC Dataset -> prepared one-grid DataTree -> RasterChipper -> project Dataset -> Lightning
-Dataset -> RasterStac -> COG assets + Item rows -> GeoParquet
+Dataset / tree leaves -> explicit Item + asset mapping -> COGs + native Item -> Item rows -> GeoParquet
 trained chain + pipeline -> release -> load_pipeline -> predict / predict_to_zarr -> product Dataset / Zarr store
 ```
 
@@ -165,9 +187,22 @@ for their contents and provenance links. Lineage records remain project-owned.
   Keep short behavior on its accessor. `core/raster/transform` owns substantial
   pixel-changing operations such as padding and polygonization;
   they do not combine type dispatch, traversal and format policy.
-  `core/raster/utils` owns grid placement, statistics and tensor conversion;
+  `core/raster/utils` owns grid placement, statistics and tensor conversion.
+  `core/raster/rules` owns validation-only callables grouped by native object:
+  `common`, `dataarray`, `dataset` and `datatree`. Accessors run them through
+  `.validate`; rules neither transform data nor construct results.
+  `one_raster`, `splittable(dim)`, `compatible_merge` and `compatible_concat(dim)`
+  check the selected node before DataTree restructuring. Value-returning
+  members such as `tree.gs.common_geobox()` and variable partitioning stay with their
+  accessor owner. STAC observation and
+  publication checks stay in STAC.
+  Statistics are public functions: `gs.summary(rasters)` accepts a Dataset,
+  DataArray or iterable and returns a pandas table; `gs.class_percent(bands)`
+  accepts a categorical DataArray or iterable and returns a Series. They compute
+  pooled pixel summaries explicitly; selection and decoding belong to the caller.
+  Neither is an accessor method.
   `core/vector/utils` owns geometry checks and row membership planning.
-  STAC hierarchy belongs to `RasterStac`. General independent helpers stay
+  STAC membership belongs to `stac.publish_item`. General independent helpers stay
   in `geodata/utils`; format and visualization helpers stay with their owners.
 - `core/conventions.py` defines the shared raster layout and coordinate names
   consumed by accessors, I/O, STAC, features and visualization.
@@ -195,8 +230,8 @@ for their contents and provenance links. Lineage records remain project-owned.
   `attrs/stamp.py` writes attribute groups onto variables.
 - Rasters are built with xarray's own constructors and placed with ODC's `wrap_xr`;
   `xr.DataTree.from_dict` assigns explicit paths and parent attrs. `gs.reproject(geobox)` explicitly prepares mixed grids.
-  There is no `core/ctor`: no GeoSave constructor builds an xarray or pandas
-  object. Item tables come from `to_catalog`, `StacClient.search`, a stac-geoparquet
+  `Dataset.gs.to_tree` provides named wrapping and exclusive variable grouping.
+  There is no `core/ctor`. Item tables come from `create_catalog` over published Items, `StacClient.search`, a stac-geoparquet
   file or `stac.create_catalog`, and plain vector tables from native
   GeoDataFrame construction or `open_vector`.
 - `core/register.py` registers all xarray and pandas `.gs` accessors. Raster
@@ -233,13 +268,14 @@ for their contents and provenance links. Lineage records remain project-owned.
   Catalog load generations prevent obsolete results from changing current
   selections; removal unchecks pending rows while retaining opened rasters.
   `mercator.py` holds the web-map extents and `server.py` serving.
-- `core/region.py` describes geometry and time independently of grids. Raster
-  accessors expose exact grids through `.gs.geobox`; `.gs.region` exposes coverage.
-  Frames and trees union their footprints and envelope dated members. A point
+- `core/region.py` describes geometry and time independently of grids. DataArray
+  and Dataset expose exact grids through `.gs.geobox`; `.gs.region` exposes coverage.
+  STAC owns aggregation of asset footprints for the Items it publishes.
+  GeoDataFrames union their footprints and envelope dated members. A point
   names a location, not a raster window.
 - `stac/catalog/` owns native Item/table conversion, including `create_catalog`.
-  `stac/raster.py` owns the publication layout. `stac/publish.py` constructs
-  Items and asset metadata; `stac/stamps/` applies source, Collection, band and
+  `stac/publish.py` owns the publication layout and constructs Items and
+  asset metadata; `stac/stamps/` applies source, Collection, band and
   property metadata on load. Extension modules translate native PySTAC bands.
 
 - `io/raster/` persists a Dataset or tree and `io/vector/` a GeoDataFrame, one
@@ -259,7 +295,7 @@ for their contents and provenance links. Lineage records remain project-owned.
   root group or an explicit `group=` in Zarr and NetCDF. `open_raster_tree`
   returns the whole hierarchy as a DataTree, including root-only stores;
   `open_zarr_tree` and `open_netcdf_tree` own the format-specific tree reads.
-- Dataset publication stages `RasterStac`, writes COG assets and returns an Item table. Array writers take one explicit filename.
+- `stac.publish_item` writes an explicit asset mapping and returns a completed native Item. Array writers take one explicit filename.
   Dataset GeoTIFF writing prepares encoded rasters separately from execution;
   batch writes validate all destinations before writing and recheck them when
   deferred execution starts. DataArray TIFF/COG accessors delegate directly to
@@ -276,15 +312,13 @@ for their contents and provenance links. Lineage records remain project-owned.
   options use the UPath filesystem opener. GeoSave opens one lazy band array
   and decodes it into Dataset variables; per-band metadata comes from typed
   GDAL property snapshots.
-- `stac/raster.py` defines `RasterStac`, a dataclass holding one
-  collection's opened raster assets in a prescribed Item/asset DataTree,
-  with native Collection metadata stored separately. Its class docstring
-  owns the hierarchy diagram. `from_dataset` lazily splits observations and variables, extracting Collection
-  metadata from attrs. `merge` joins assets by Item id; `to_cog` writes files
-  and returns native Items. Loading returns Datasets; general DataTree
-  accessors impose no STAC structure.
-- `stac/publish.py` owns the native `StacItem` subclass and its
-  `from_region` and `add_raster_asset` builders. Tree-based Item/Collection builders are removed.
+- `stac/publish.py` owns explicit observation publication: native Item metadata
+  plus named Dataset assets, each on its own grid. `publish_item` validates
+  scalar times/periods, representation and destinations before writing COGs,
+  then associates actual returned hrefs with asset keys. It returns a clone;
+  supplied Item geometry, properties and Collection links remain authoritative.
+  `StacItem.from_region` and `add_raster_asset` remain native metadata builders.
+  `RasterStac` and automatic Dataset catalog conversion have been removed.
   Native Item/table conversion stays in `stac/catalog/`; STAC GeoParquet
   persistence stays in its format module.
 - `stac/search/` owns API/table discovery. `set_region` replaces spatial and time
@@ -359,7 +393,10 @@ its controls. Explorer's `select_drawn_rasters()` remains the common eligibility
 policy for drawing and Identify. `explore/server.py` owns the port registry and
 server start/stop mechanics; Explorer owns independent session copies.
 
-RasterLayer owns a byte-bounded LRU of viewport pixel windows, with a separate
+RasterLayer retains one projected display image for compact xarray scenes. Map
+tracks navigation and requests a redraw when a visible raster needs a different
+window or a dense vector layer needs resampling. For larger rasters RasterLayer
+owns a byte-bounded LRU of viewport pixel windows, with a separate
 active-window fast path for over-budget images. The 128 MiB default limits
 retained pixel windows, not total process memory or rendering buffers. Catalog-backed
 layers depend on the currently paused `row.gs.read_pixels` operation;
@@ -373,14 +410,26 @@ Catalog sampling is unavailable. Select rows with GeoPandas, load through
 `rows.gs.to_dataset` or `stac.load_dataset`, and construct RasterChipper from prepared
 one-grid trees. `GeoSamples` and the old `Chips` class have been removed.
 
-Dataset `to_catalog` publishes dated rasters; `RasterStac` stages assets on
-several grids. DataArray `to_catalog` and raster `to_item` remain unavailable.
-Array `to_cog` and `to_gtiff` delegate to native rioxarray writing. Dataset
-`to_cog` remains a stub; use `io.write_cog` for a named-band file. Zarr and NetCDF preserve whole Datasets or tree
-hierarchies in one destination.
-
+`stac.publish_item(item, assets=..., root=...)` publishes one observation;
+`stac.create_catalog(items)` composes the returned Items. Array `to_cog` and
+`to_gtiff` delegate to rioxarray; `io.write_cog` writes one prepared Dataset.
+Obsolete raster `to_item`/`to_catalog` and Dataset `to_cog` stubs are removed.
 Packing belongs to each concrete accessor. Dataset metadata writers require
 a list of target variable names: None selects all variables, an empty list
 selects none, and a bare string raises TypeError with a suggested list.
 `write_packing` replaces the whole packing declaration; `write_nodata` changes
 only the fill. The base declares contracts without type dispatch.
+
+Tensor conversion returns `(pixels, context)` without a model-input name.
+DataArray and Dataset pixels are tensors; DataTree pixels are dictionaries keyed
+by node path. Context is a separate dictionary of tensors (empty by default).
+Tree pixel tensors can have independent grids. Shared grid/centroid context and
+chipping require one GeoBox; temporal context and sampling require identical
+dated-leaf timelines, preserving axis order and repeated labels. Context is
+checked before pixel conversion. Numerical representation changes remain separate.
+Callers assemble named model samples, for example `{"image": pixels, **context}`.
+
+STAC search sources have explicit entry points: `StacClient.open(url)` opens
+an API without provider-specific signing; `planetary_computer()`, `cdse()` and
+`element84()` configure built-in providers. `StacTable(path, duckdb=...)` owns
+local or remote GeoParquet search. Opening an API never dispatches to a table.

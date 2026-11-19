@@ -10,6 +10,9 @@ import numpy as np
 if TYPE_CHECKING:
     import torch
 
+# Pixel tensors of a tree's raster nodes, keyed by node path.
+type PixelTensors = dict[str, torch.Tensor]
+
 
 def as_tensor(
     to_numpy: Callable[..., np.ndarray], dtype: str | torch.dtype | None

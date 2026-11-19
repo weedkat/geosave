@@ -126,6 +126,6 @@ def local_catalog(tmp_path):
     path = create_catalog([item]).gs.to_geoparquet(
         tmp_path / "local.parquet", collections=[collection]
     )
-    client = stac.StacClient.open(path)
+    client = stac.StacTable(path)
     options = dict(bands=["red", "nir"], groupby="time", chunks={})
     return client, region, grid, options

@@ -18,11 +18,11 @@ from geosave.geodata.io import storage
 from geosave.geodata.io.vector import geoparquet
 from geosave.geodata.stac.catalog import (
     FOOTER_KEY,
-    merge_collections,
     read_collections,
     stac_collections,
     stac_items,
     to_arrow,
+    write_collections,
 )
 
 if TYPE_CHECKING:
@@ -71,19 +71,11 @@ def write_stac_geoparquet(
         PosixUPath('data/forest.parquet')
     """
     stac_items(rows)
-    definitions = merge_stated_collections(rows, collections)
+    stored_collections = select_stored_collections(rows, collections)
     parquet_options = resolve_parquet_options(**write_options)
     row_group_size = parquet_options.pop("row_group_size", None)
     destination = storage.create_upath(path, storage_options)
     storage.check_destination(destination, geoparquet.SUFFIXES, overwrite=overwrite)
-
-    named = set()
-    if "collection" in rows:
-        named = set(rows["collection"].dropna())
-    stored = {}
-    for collection_id, collection in definitions.items():
-        if collection_id in named:
-            stored[collection_id] = collection.to_dict(transform_hrefs=False)
 
     table = to_arrow(rows)
     # The dependency writes each Arrow batch as a row group; keep its footer encoder.
@@ -91,32 +83,35 @@ def write_stac_geoparquet(
     if row_group_size is not None:
         batches = table.to_reader(max_chunksize=row_group_size)
 
+    collection_dicts = {}
+    for collection in stored_collections:
+        collection_dicts[collection.id] = collection.to_dict(transform_hrefs=False)
+
     storage.create_parent(destination)
     to_parquet(
         batches,
         destination.path,
-        collections=stored or None,
+        collections=collection_dicts or None,
         filesystem=destination.fs,
         **parquet_options,
     )
     return destination
 
 
-def merge_stated_collections(
+def select_stored_collections(
     rows: gpd.GeoDataFrame, collections: Iterable[pystac.Collection] | None
-) -> dict[str, pystac.Collection]:
-    """Join the Collections a table states with the ones supplied for it.
+) -> list[pystac.Collection]:
+    """Choose the Collections a file stores: the ones its rows name.
 
-    Together they must define every collection a row names.
+    The table's own definitions are reconciled with the supplied ones, and
+    together they must define every collection a row names.
 
     Args:
         rows: Item table carrying its catalog metadata.
         collections: Additional definitions.
 
     Returns:
-        {
-            "<collection id>": its one reconciled definition,
-        }
+        One reconciled definition per collection a row names.
 
     Raises:
         ValueError: The table's catalog metadata is malformed, two
@@ -130,14 +125,18 @@ def merge_stated_collections(
 
     stated = list(read_collections(rows.attrs).values())
     stated.extend(collections or ())
-    definitions = merge_collections(stated)
-    fields = {}
-    for collection_id, collection in definitions.items():
-        fields[collection_id] = collection.to_dict(transform_hrefs=False)
-    merged = rows.copy()
-    merged.attrs[FOOTER_KEY] = {**footer, "collections": fields}
-    stac_collections(merged)
-    return definitions
+    described = rows.copy()
+    write_collections(described, stated)
+    stac_collections(described)
+
+    named = set()
+    if "collection" in rows:
+        named = set(rows["collection"].dropna())
+    stored = []
+    for collection_id, collection in read_collections(described.attrs).items():
+        if collection_id in named:
+            stored.append(collection)
+    return stored
 
 
 # Settings the STAC encoding fixes, and the only value each may be given as.

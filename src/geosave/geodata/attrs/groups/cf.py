@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import numpy as np
 import orjson
@@ -60,6 +60,9 @@ class CFPacking(AttrsGroup):
         valid_min: Smallest valid stored value.
         valid_max: Largest valid stored value.
         valid_range: Smallest and largest valid stored values.
+        unsigned: `"true"` where signed integers store unsigned values, as
+            the netCDF `_Unsigned` convention says; native CF decoding reads
+            it with the packing.
 
     Examples:
         >>> ds["B04"].gs.packing.scale_factor
@@ -77,6 +80,7 @@ class CFPacking(AttrsGroup):
     valid_min: Decoded[int | float] | None = None
     valid_max: Decoded[int | float] | None = None
     valid_range: Decoded[list[int | float]] | None = None
+    unsigned: Literal["true", "false"] | None = Field(default=None, alias="_Unsigned")
 
     @model_validator(mode="before")
     @classmethod

@@ -32,6 +32,13 @@ falls back to pixel-grid footprints, never to a computed valid-pixel mask.
 Use `GeoRegion.extent` for spatial geometry; the `from_geometry()` constructor
 names the input representation.
 
+Call `region.explore()` to display its geometry in GeoSave’s interactive Explorer.
+
+```python
+jakarta = GeoRegion.from_bbox((106.81, -6.20, 106.84, -6.17))
+jakarta.explore()
+```
+
 ::: geosave.geodata.core.region.GeoRegion
 
 ## Location descriptions

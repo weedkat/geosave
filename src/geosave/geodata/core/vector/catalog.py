@@ -82,7 +82,7 @@ class GeoCatalog:
             geometry column.
 
     Examples:
-        >>> catalog = scene.gs.to_catalog("s3://bucket/s2")
+        >>> catalog = stac.create_catalog([published_item])
         >>> recent = catalog[catalog["datetime"] >= pd.Timestamp("2025-06-01", tz="UTC")]
         >>> scene = recent.gs.to_dataset(chunks={})
     """
@@ -171,9 +171,7 @@ class GeoCatalog:
         if dated_times.empty:
             return region
 
-        return region.replace(
-            timespan=(dated_times["start"].min(), dated_times["end"].max())
-        )
+        return region.set_time((dated_times["start"].min(), dated_times["end"].max()))
 
     def plot(self, *, color: str = "tab:blue", alpha: float = 0.3) -> hv.Overlay:
         """Draw this vector's geometry in its own coordinates.

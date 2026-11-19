@@ -7,6 +7,7 @@ from typing import TypedDict, cast
 
 
 import pystac
+import numpy as np
 import xarray as xr
 from pystac.extensions.raster import (
     DataType,
@@ -31,8 +32,8 @@ def build_band(variable: xr.DataArray) -> RasterBand:
     """Build the Raster band storing one variable.
 
     Args:
-        variable: Variable as `open_raster` opens it, holding stored values.
-            No pixel is read.
+        variable: Stored or decoded pixels. Encoding supplies the written
+            dtype and CF packing after decoding. No pixel is read.
 
     Returns:
         Its band: `data_type`, `nodata`, `scale` and `offset`, and `unit`.
@@ -41,14 +42,21 @@ def build_band(variable: xr.DataArray) -> RasterBand:
         >>> build_band(scene.red).scale
         0.0001
     """
-    fill = variable.gs.nodata
+    stored = {**variable.attrs, **variable.encoding}
+    packing = attrs.CFPacking.from_attrs(stored)
+    fill = None
+    if packing is not None:
+        fill = packing.fill_value
+        if fill is None and isinstance(packing.missing_value, (int, float)):
+            fill = packing.missing_value
+
     if isinstance(fill, float) and not isfinite(fill):
         fill = NoDataStrings(str(fill))
-    dtype = variable.dtype.name
+    dtype = np.dtype(variable.encoding.get("dtype", variable.dtype)).name
 
     # Packing as stored, in its own dtype, spelled as short as it reads back.
-    scale = variable.attrs.get("scale_factor")
-    offset = variable.attrs.get("add_offset")
+    scale = stored.get("scale_factor")
+    offset = stored.get("add_offset")
     return RasterBand.create(
         nodata=fill,
         data_type=DataType(dtype) if dtype in list(DataType) else DataType.OTHER,

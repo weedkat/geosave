@@ -10,20 +10,10 @@ from shapely.geometry import Point
 
 from geosave import GeoCatalog
 from geosave.geodata import io, stac
-from geosave.geodata.stac import RasterStac
 from geosave.geodata.stac.catalog import concat_catalogs, create_catalog
 from tests.geodata.conftest import create_test_collection
 from tests.geodata.stac.conftest import entry
-from tests.geodata.stac.test_raster import build_two_grids
-
-
-def publish_two_grids(root):
-    """Publish the two-grid fixture and return its Items and source rasters."""
-    fine, coarse = build_two_grids()
-    staged = RasterStac.from_dataset(fine, id_format="{start:%Y%m%d}").merge(
-        RasterStac.from_dataset(coarse, id_format="{start:%Y%m%d}")
-    )
-    return staged.to_cog(root), fine, coarse
+from tests.geodata.stac.test_publish import publish_two_grids
 
 
 def test_catalog_preserves_item_order_and_copies_collection_definitions():
@@ -84,7 +74,9 @@ def test_catalog_rows_convert_back_to_the_items(tmp_path):
 
 def test_published_catalog_round_trips_through_geoparquet(tmp_path):
     items, fine, coarse = publish_two_grids(tmp_path / "published")
-    path = create_catalog(items).gs.to_geoparquet(tmp_path / "published" / "catalog.parquet")
+    path = create_catalog(items).gs.to_geoparquet(
+        tmp_path / "published" / "catalog.parquet"
+    )
 
     opened = io.open_vector(path)
     restored = opened.gs.to_items()
@@ -116,7 +108,9 @@ def test_a_row_converts_to_the_item_its_table_gives(tmp_path):
 
     # Compared as JSON: the row's geometry holds tuples, the table's lists.
     table_item = catalog.gs.to_items()[1]
-    assert json.loads(json.dumps(item.to_dict())) == json.loads(json.dumps(table_item.to_dict()))
+    assert json.loads(json.dumps(item.to_dict())) == json.loads(
+        json.dumps(table_item.to_dict())
+    )
     assert item.get_collection().id == "optical"
     assert catalog.iloc[1].gs.region.timespan == catalog.iloc[[1]].gs.region.timespan
 

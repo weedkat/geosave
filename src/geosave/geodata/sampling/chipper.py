@@ -6,7 +6,6 @@ from collections.abc import Sequence
 
 import xarray as xr
 
-from geosave.geodata.core.raster.datatree import same_geobox
 from geosave.geodata.core.raster.transform.extent import Padding
 
 from .layout import ChipLayout, ChipMode
@@ -45,7 +44,7 @@ class RasterChipper:
         >>> chipper = RasterChipper([tree], size=256, stride=224)
         >>> chipper.layout.locate(1)
         ChipLocation(raster_index=0, top=0, left=224)
-        >>> chipper[1].gs.to_tensor()["image"].shape
+        >>> chipper[1].gs.to_tensor()[0]["image"].shape
         torch.Size([4, 256, 256])
     """
 
@@ -63,11 +62,7 @@ class RasterChipper:
 
         geoboxes = []
         for raster in self.rasters:
-            raster.gs.validate(same_geobox)
-            geobox = raster.gs.geobox
-            if geobox is None:
-                raise ValueError("every raster needs at least one raster node")
-            geoboxes.append(geobox)
+            geoboxes.append(raster.gs.common_geobox())
 
         self.layout = ChipLayout(geoboxes, size=size, stride=stride, mode=mode)
 

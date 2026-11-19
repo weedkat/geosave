@@ -26,7 +26,12 @@ SMALL_GRID = GeoBox.from_bbox(
 
 @pytest.mark.parametrize(
     ("mode", "expected"),
-    [("shift", [0, 4, 6]), ("drop", [0, 4]), ("reflect", [0, 4, 8]), ("constant", [0, 4, 8])],
+    [
+        ("shift", [0, 4, 6]),
+        ("drop", [0, 4]),
+        ("reflect", [0, 4, 8]),
+        ("constant", [0, 4, 8]),
+    ],
 )
 def test_each_mode_meets_the_edge_its_own_way(mode, expected):
     assert lay_chip_offsets(10, size=4, stride=4, mode=mode) == expected
@@ -55,7 +60,7 @@ def test_chips_are_cut_lazily_on_their_own_grid():
     assert tasks == []
     assert len(chipper) == 9
     assert chipper.layout.geobox(1) == GRID[0:4, 4:8]
-    assert chip.gs.geobox == GRID[0:4, 4:8]
+    assert chip.gs.common_geobox() == GRID[0:4, 4:8]
     assert dict(chip["image"].sizes) == {"y": 4, "x": 4}
     assert chip["image"]["red"].chunks is not None
     np.testing.assert_array_equal(
@@ -80,8 +85,8 @@ def test_a_padded_chip_reaches_past_the_edge_and_is_filled():
     chip = chipper[8]
 
     assert len(chipper) == 9
-    assert chip.gs.geobox == chipper.layout.geobox(8)
-    assert chip.gs.geobox.extent.boundingbox.right == GRID.extent.boundingbox.right + 20
+    assert chip.gs.common_geobox() == chipper.layout.geobox(8)
+    assert chip.gs.common_geobox().extent.boundingbox.right == GRID.extent.boundingbox.right + 20
     red = chip["image"]["red"].values
     np.testing.assert_array_equal(red[:2, :2], tree["image"]["red"].values[8:, 8:])
     assert (red[2:, :] == 7).all()
@@ -108,7 +113,7 @@ def test_chips_number_through_several_rasters_on_their_own_grids():
     assert chipper.layout.locate(9) == ChipLocation(raster_index=1, top=0, left=0)
     assert chipper.layout.locate(12) == ChipLocation(raster_index=1, top=2, left=4)
     assert chipper.layout.geobox(9) == SMALL_GRID[0:4, 0:4]
-    assert chipper[12].gs.geobox == SMALL_GRID[2:6, 4:8]
+    assert chipper[12].gs.common_geobox() == SMALL_GRID[2:6, 4:8]
     assert len(list(chipper)) == 13
     with pytest.raises(IndexError):
         chipper[13]
@@ -132,12 +137,17 @@ def test_a_chip_converts_to_tensors():
     windows = build_tree().gs.sample("MS", size=2)
     chipper = RasterChipper(windows, size=4, stride=2, mode="reflect")
 
-    tensors = chipper[len(chipper) - 1].gs.to_tensor(context=["time"])
+    pixels, context = chipper[len(chipper) - 1].gs.to_tensor(context=["time"])
+
+    tensors = {**pixels, **context}
 
     assert tensors["image"].shape == (2, 2, 4, 4)
     assert tensors["label"].shape == (1, 4, 4)
     assert tensors["time"].shape == (2,)
-    batch = torch.utils.data.default_collate([chipper[0].gs.to_tensor(context=["time"]), tensors])
+    first_pixels, first_context = chipper[0].gs.to_tensor(context=["time"])
+    batch = torch.utils.data.default_collate(
+        [{**first_pixels, **first_context}, tensors]
+    )
     assert batch["image"].shape == (2, 2, 2, 4, 4)
 
 
@@ -153,7 +163,9 @@ def test_chipper_refuses_what_it_cannot_lay_out():
     assert len(RasterChipper([], size=4)) == 0
 
     coarse = tree["label"].to_dataset().coarsen(x=2, y=2).max()
-    two_grids = xr.DataTree.from_dict({"image": tree["image"].to_dataset(), "coarse": coarse})
+    two_grids = xr.DataTree.from_dict(
+        {"image": tree["image"].to_dataset(), "coarse": coarse}
+    )
     with pytest.raises(RasterValidationError, match="GeoBoxes"):
         RasterChipper([two_grids], size=4)
 
@@ -176,7 +188,7 @@ def test_a_layout_places_chips_from_grids_alone():
 
     assert len(layout) == len(chipper)
     assert layout.locate(7) == chipper.layout.locate(7)
-    assert layout.geobox(7) == chipper[7].gs.geobox
+    assert layout.geobox(7) == chipper[7].gs.common_geobox()
 
 
 @pytest.mark.parametrize(("size", "stride"), [(4, 3), (4, 4), (5, 2), (8, 3)])

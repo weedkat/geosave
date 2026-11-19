@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Literal
@@ -20,7 +19,8 @@ from geosave.geodata.core.conventions import (
     START_DATETIME,
     TIME_COORDINATE,
 )
-from geosave.geodata.errors import RasterValidationError
+from . import rules as raster_rules
+from .rules import common as common_rules
 
 if TYPE_CHECKING:
     from affine import Affine
@@ -304,33 +304,7 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
         return first.to_pydatetime(), last.to_pydatetime()
 
 
-# A rule raises RasterValidationError when the raster breaks it; `gs.validate`
-# runs rules without reading pixels.
-type Rule[DataT] = Callable[[DataT], None]
-
-
-def georeferenced(raster: xr.DataArray | xr.Dataset | xr.DataTree) -> None:
-    """Require a grid ODC recognizes, with a CRS.
-
-    Raises:
-        RasterValidationError: ODC finds no grid, or the grid has no CRS.
-        NotImplementedError: Pixels are placed by ground control points.
-    """
-    geobox = raster.gs.geobox
-    if geobox is None:
-        raise RasterValidationError(
-            "ODC finds no grid. Name the spatial dimensions as ODC does, "
-            "y/x or latitude/longitude, with their coordinates."
-        )
-
-    if geobox.crs is None:
-        raise RasterValidationError(
-            "The coordinate reference system (CRS) is missing. Declare the "
-            "CRS of the existing coordinates with raster.odc.assign_crs(crs)."
-        )
-
-
-class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
+class GeoRaster[DataT: xr.Dataset | xr.DataArray](ABC):
     """Spatial, attrs, and pixel members every `gs` raster accessor shares.
 
     Concrete accessors bind their xarray object to `_data`; this class is
@@ -343,7 +317,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         """Bind the xarray object.
 
         Args:
-            data: Band, raster, or tree to read through this accessor.
+            data: Band or raster Dataset to read through this accessor.
         """
         self._data = data
 
@@ -364,7 +338,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         dims = self.spatial_dims
         return None if dims is None else dims[1]
 
-    def validate(self, *rules: Rule[DataT]) -> None:
+    def validate(self, *rules: raster_rules.Rule[DataT]) -> None:
         """Require a grid ODC recognizes, with a CRS, then every rule, without reading pixels.
 
         Args:
@@ -380,7 +354,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
             >>> band.gs.validate(decoded)
             >>> scene.gs.validate(same_pixel_meaning)
         """
-        georeferenced(self._data)
+        common_rules.georeferenced(self._data)
 
         for rule in rules:
             rule(self._data)
@@ -395,8 +369,7 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray | xr.DataTree](ABC):
         """Whether this object carries a locatable grid.
 
         Returns:
-            True when `geobox` resolves to a grid with a CRS. A tree with
-            differing grids has no shared grid and returns False.
+            True when `geobox` resolves to a grid with a CRS.
         """
         grid = self.geobox
         return grid is not None and grid.crs is not None

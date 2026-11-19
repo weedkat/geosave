@@ -16,6 +16,7 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
+    PrivateAttr,
 )
 from xarray.core.utils import equivalent
 
@@ -59,6 +60,11 @@ class AttrsGroup(BaseModel):
 
     KEYS: ClassVar[tuple[str, ...]] = ()
 
+    # NumPy values the group was read from, by field. CF decoding takes its
+    # float dtype from packing and requires flag values in the band's dtype,
+    # so an unchanged value is written back as stored, not as its Python value.
+    _numpy_values: dict[str, Any] = PrivateAttr(default_factory=dict)
+
     # Pydantic calls this once a subclass's fields exist; `__init_subclass__`
     # runs too early to see them. A field may be stored under an alias, such as
     # a CF or GDAL attr name, or under several (`AliasChoices`), so `KEYS` is
@@ -101,20 +107,41 @@ class AttrsGroup(BaseModel):
         Raises:
             ValueError: The attrs state the group invalidly.
         """
-        return cls.model_validate(dict(attrs)) if cls.is_stated_in(attrs) else None
+        if not cls.is_stated_in(attrs):
+            return None
+
+        group = cls.model_validate(dict(attrs))
+        for name, field in cls.model_fields.items():
+            keys = [name]
+            if isinstance(field.validation_alias, AliasChoices):
+                keys = [str(choice) for choice in field.validation_alias.choices]
+            elif field.alias is not None:
+                keys = [field.alias]
+            for key in keys:
+                value = attrs.get(key)
+                if isinstance(value, (np.generic, np.ndarray)):
+                    group._numpy_values[name] = value
+        return group
 
     def to_attrs(self) -> dict[str, Any]:
         """Return the attrs this value writes; a field at its default or None writes none.
 
-        netCDF refuses a None attr, so an unset field leaves its key out.
+        netCDF refuses a None attr, so an unset field leaves its key out. A
+        value read from NumPy attrs and unchanged is written as stored, in its
+        own dtype, even at its default.
 
         Returns:
-            New mapping using serialization aliases and JSON-compatible
-            values, omitting fields at their defaults or set to None.
+            New mapping using serialization aliases: stored NumPy values where
+            unchanged, otherwise JSON-compatible values.
         """
-        return self.model_dump(
+        written = self.model_dump(
             by_alias=True, mode="json", exclude_defaults=True, exclude_none=True
         )
+        for name, stored in self._numpy_values.items():
+            if equivalent(getattr(self, name), stored.tolist()):
+                field = type(self).model_fields[name]
+                written[field.serialization_alias or field.alias or name] = stored
+        return written
 
     # Defining `__eq__` makes a group unhashable on purpose: NaN equals NaN here
     # but hashes by identity, and a dict-valued field cannot hash at all.

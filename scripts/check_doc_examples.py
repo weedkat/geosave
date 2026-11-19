@@ -22,11 +22,11 @@ PAGES = (
     "basics/rasters.md",
     "basics/attrs.md",
     "basics/io.md",
+    "basics/catalog.md",
     "basics/vectors.md",
     "advanced/crop-imagery.md",
     "advanced/large-data.md",
     "advanced/overlapping-chips.md",
-    "advanced/raster-catalog.md",
     "advanced/models.md",
     "advanced/model-inputs.md",
     "concepts/xarray-structure.md",
@@ -118,7 +118,7 @@ def check_result(page: str, values: dict) -> None:
         np.testing.assert_array_equal(
             values["sample"]["labels"][0].numpy(), expected.label.values
         )
-    elif page == "advanced/raster-catalog.md":
+    elif page == "basics/catalog.md":
         assert values["items"]["id"].tolist() == ["20250627"]
         assert values["loaded"].gs.geobox == values["scene"].gs.geobox
         assert values["loaded"].sizes["time"] == 1

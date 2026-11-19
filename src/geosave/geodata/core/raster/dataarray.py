@@ -9,20 +9,18 @@ import rioxarray  # noqa: F401 registers .rio
 import cf_xarray  # noqa: F401  — registers the .cf accessor
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
-import pandas as pd
 import xarray as xr
 
 import geosave.geodata.attrs as attrs
 
-from geosave.geodata.errors import RasterValidationError
 from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
 )
-from geosave.geodata.core.raster.utils.statistics import class_percent, statistics
 from geosave.geodata.core.raster.utils.tensor import as_tensor
 
 
-from .base import GeoRaster, RasterStacProperties, RasterTime, Rule
+from .base import GeoRaster, RasterStacProperties, RasterTime
+from .rules import dataarray as array_rules
 from .transform.temporal import Reducer, Interpolation
 
 if TYPE_CHECKING:
@@ -31,13 +29,13 @@ if TYPE_CHECKING:
     from odc.geo import SomeResolution
     from .transform.warp import Resampling
     from .transform.extent import Padding, Region
-    import pystac
     from odc.geo.geom import Geometry
     from geosave.geodata.core.region import GeoRegion
     from collections.abc import Mapping, Sequence
 
     import holoviews as hv
     import torch
+    from .utils.context import ContextTensors
     from numpy.typing import DTypeLike
 
     from odc.geo import SomeCRS
@@ -51,54 +49,6 @@ if TYPE_CHECKING:
     from geosave.geodata.io.raster.zarr import ZarrWriteOptions
     from geosave.geodata.utils.color import Palette
     from geosave.geodata.viz.explore import Explorer
-
-
-# Rules a band can be asked to meet; `band.gs.validate(decoded)` runs one.
-# Methods that pick an existing value rather than compute a new one.
-VALUE_PRESERVING = frozenset({"nearest", "mode", "first", "last"})
-
-
-def decoded(band: xr.DataArray) -> None:
-    """Require no active CF packing, so a reduction sees physical values.
-
-    Raises:
-        RasterValidationError: The band still states CF packing.
-    """
-    if attrs.CFPacking.is_stated_in(band.attrs):
-        raise RasterValidationError(
-            "The band still holds packed values. Decode them with "
-            "mask_and_scale() first.",
-            variable=band.name,
-        )
-
-
-def compatible_resampling(method: str) -> Rule[xr.DataArray]:
-    """Build the rule that the band's values allow resampling with `method`.
-
-    Class codes allow only methods that pick an existing value: nearest or
-    mode in space, first or last in time. Other values allow any method.
-
-    Args:
-        method: Resampling kernel or temporal reducer, such as ``"bilinear"``
-            or ``"mean"``.
-
-    Returns:
-        Rule for `validate`.
-
-    Examples:
-        >>> landcover.gs.validate(compatible_resampling("bilinear"))
-        RasterValidationError: Raster 'landcover': Its class codes need ...
-    """
-
-    def check(band: xr.DataArray) -> None:
-        if band.gs.is_categorical and method not in VALUE_PRESERVING:
-            raise RasterValidationError(
-                f"Its class codes need nearest, mode, first or last, not "
-                f"{method!r}, which would compute values that name no class.",
-                variable=band.name,
-            )
-
-    return check
 
 
 class GeoDataArray(
@@ -157,7 +107,10 @@ class GeoDataArray(
         from .transform.temporal import composite
 
         # Interpolation computes values, so it decides compatibility when given.
-        self.validate(decoded, compatible_resampling(interpolation or method))
+        self.validate(
+            array_rules.decoded,
+            array_rules.compatible_resampling(interpolation or method),
+        )
 
         result = composite(
             self._data,
@@ -313,7 +266,7 @@ class GeoDataArray(
 
         from .transform.warp import reproject
 
-        self.validate(compatible_resampling(resampling))
+        self.validate(array_rules.compatible_resampling(resampling))
 
         return cast(
             "DataArray",
@@ -606,40 +559,41 @@ class GeoDataArray(
 
     def to_tensor(
         self,
-        name: str,
         *,
         dtype: str | torch.dtype | None = None,
         grid: bool = False,
         context: Sequence[str] = (),
-    ) -> dict[str, torch.Tensor]:
-        """Read this band as one layer tensor named `name`, with the grid and context.
+    ) -> tuple[torch.Tensor, ContextTensors]:
+        """Read pixels and return requested context separately as tensors.
 
         Args:
-            name: Key of the layer, the input name a model chain takes it by.
             dtype: Torch dtype or its string name. None keeps the pixel dtype.
-            grid: Add `transform` and `crs`, as `DataTree.gs.to_tensor` does.
-            context: Names in `TENSOR_CONTEXT` whose readers add one entry each.
+            grid: Include affine `transform` and EPSG `crs` tensors in context.
+            context: Names in `TENSOR_CONTEXT` to read alongside the pixels.
 
         Returns:
-            {name: tensor shaped as `to_numpy`, `(*axes, y, x)`, plus the grid
-            and context entries asked for}.
+            Pixel tensor shaped `(*axes, y, x)` and a dictionary of context
+            tensors. The dictionary is empty when no context or grid is requested.
 
         Raises:
-            KeyError: A context name is not in `TENSOR_CONTEXT`.
-            ValueError: A dtype name is unknown, `name` takes the name of an
-                entry, or the CRS has no EPSG code.
-            TypeError: `dtype` is neither a torch dtype nor a name, or a pixel
-                dtype has no tensor equivalent.
+            KeyError: A context name is unknown.
+            ValueError: A dtype is unknown, the raster cannot be converted, or
+                the requested grid has no EPSG code.
+            TypeError: The dtype is invalid or has no tensor equivalent.
 
         Examples:
-            >>> ds["ndvi"].gs.to_tensor("ndvi", dtype="float32")["ndvi"].shape
-            torch.Size([2, 256, 256])
+            >>> pixels, context = raster.gs.to_tensor(dtype="float32")
         """
-        from .utils.context import build_sample
+        from .utils.context import read_context
 
-        layers = {name: as_tensor(self.to_numpy, dtype)}
-        tree = xr.DataTree.from_dict({name: self._data.to_dataset(name=name)})
-        return build_sample(layers, tree, grid=grid, context=context)
+        pixels = as_tensor(self.to_numpy, dtype)
+        entries = {}
+        if grid or context:
+            tree = xr.DataTree.from_dict(
+                {"pixels": self._data.to_dataset(name="pixels")}
+            )
+            entries = read_context(tree, grid=grid, context=context)
+        return pixels, entries
 
     def mask_and_scale(self) -> DataArray:
         """Decode CF packing with xarray, keeping coordinates and lazy pixels.
@@ -659,26 +613,6 @@ class GeoDataArray(
         result = xr.DataArray(decoded, coords=array.coords, name=array.name)
         result.encoding = decoded.encoding
         return cast("DataArray", result)
-
-    def to_item(self, path: Location, **options: Any) -> pystac.Item:
-        """STAC Item publication is being rebuilt as `the pending RasterStac publication interface`.
-
-        Raises:
-            NotImplementedError: Always, until publication is rebuilt.
-        """
-        raise NotImplementedError(
-            "STAC publication is being rebuilt as the pending RasterStac publication interface"
-        )
-
-    def to_catalog(self, path: Location, **options: Any) -> GeoDataFrame:
-        """STAC catalog publication is being rebuilt as `the pending RasterStac publication interface`.
-
-        Raises:
-            NotImplementedError: Always, until publication is rebuilt.
-        """
-        raise NotImplementedError(
-            "STAC publication is being rebuilt as the pending RasterStac publication interface"
-        )
 
     def to_cog(self, path: Location, **options: Any) -> Any:
         """Write through ``DataArray.rio.to_raster(driver="COG")``.
@@ -882,54 +816,6 @@ class GeoDataArray(
             band.encoding = dict(recipe)
             dataset[name] = band
         return cast("Dataset", dataset)
-
-    def statistics(self, dim: str | None = None) -> pd.DataFrame:
-        """Summarise present pixels, with one table row per band.
-
-        NaN and the fill value are excluded. This eagerly reads every band. A
-        `dim` is split through `to_dataset(dim)`, every band taking the array's
-        own attrs, so a fill value counts only where all bands share it. Other
-        axes are reduced together.
-
-        Args:
-            dim: Dimension whose labels name one row each; None summarises the
-                array as one row.
-
-        Returns:
-            DataFrame with minimum, maximum, mean, population stddev, and
-            valid_percent columns. Rows follow band order; without a band
-            axis, the single row uses the array's name, or None when unnamed.
-
-        Raises:
-            ValueError: A band holds no present pixels, or the band axis
-                carries no labels to identify its bands.
-
-        Examples:
-            >>> ds["B04"].gs.statistics()
-                 minimum  maximum  mean  stddev  valid_percent
-            B04      1.0     63.0  32.0    18.2           98.4
-        """
-        if dim is not None:
-            return self.to_dataset(dim).gs.statistics()
-
-        return statistics([{self._data.name: self._data}])
-
-    def class_percent(self) -> pd.Series:
-        """Give the share of present pixels in each class, reading the band.
-
-        Returns:
-            Percent per class name in legend order, summing to 100.
-
-        Raises:
-            ValueError: The band states no class names.
-
-        Examples:
-            >>> ds["label"].gs.class_percent()
-            water    12.5
-            trees    87.5
-            Name: percent, dtype: float64
-        """
-        return class_percent([self._data])
 
     def colorize(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Bake the class colours this band carries into display channels.

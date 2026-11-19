@@ -12,7 +12,7 @@ The first examples work offline after downloading their small sample files.
 | [Run a training workspace](advanced/training.md) | Run configuration and checkpoint | ML extra; supplied Lightning boilerplate. |
 | [Compare vegetation by area](advanced/vegetation-zones.md) | Zone summary, CSV and raster | Base package; the vegetation-map sample. |
 | [Read overlapping training chips](advanced/overlapping-chips.md) | Aligned image/label samples and a plot | ML extra; the training pair. |
-| [Create and reopen a catalog](advanced/raster-catalog.md) | Named COG assets and an observation index | Base package; the vegetation-map sample. |
+| [Store imagery as a catalog](basics/catalog.md) | Named COG assets and an observation index | Base package; the vegetation-map sample. |
 
 ![Satellite image and expert labels used in the real-data examples](assets/land-cover-labels.png)
 
@@ -22,25 +22,24 @@ Contains modified Copernicus Sentinel data (2019).*
 
 ## Real land-cover project
 
-The older notebook series develops a larger project with a roughly 400 MB
+The notebooks develop one land-cover project with a roughly 435 MB
 [teaching dataset](https://huggingface.co/datasets/fatmur/dynamicworld-300).
 It covers data inspection, model choices, acquisition, training and reuse.
 
-!!! warning "Migration in progress"
-    Notebooks 1, 3 and 4 still use removed model or chip APIs. Use the current
-    tutorials above for a runnable path; the notebooks remain project material
-    to read and adapt.
 
 | Notebook | Focus |
 | --- | --- |
 | [0 · Basics](https://github.com/weedkat/geosave/blob/main/examples/00_basics.ipynb) | Inspect image/label pairs and train a baseline. |
 | [1 · Model](https://github.com/weedkat/geosave/blob/main/examples/01_model.ipynb) | Compose model stages and compare runs. |
-| [2 · Build a dataset](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Acquire imagery and save paired observations. |
-| [3 · Train and predict](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on prepared data and export maps. |
-| [4 · Reuse the model](https://github.com/weedkat/geosave/blob/main/examples/04_recipe.ipynb) | Reload weights with matching preparation. |
+| [2 · Find a Sentinel-2 Item](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Query Sentinel-2 over Jakarta, crop one Item, and compare natural color with NDVI, and save a GeoTIFF. |
+| [3 · Fine-tune Prithvi on image chips](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on random crops, predict up to 16 chips per batch, and merge logits on each image’s grid. |
+| [4 · From a Sentinel-2 image to a land-cover map](https://github.com/weedkat/geosave/blob/main/examples/04_pipeline.ipynb) | Restore the checkpoint, assemble and call the pipeline on a validation image, then save it and map the forest. |
 
 Run notebooks from `examples/` with a fresh kernel and the development
-environment from `uv sync`. Later notebooks reuse earlier artifacts.
+environment from `uv sync`. Lessons 0 and 1 compare models on the same tiles.
+Lesson 2 saves a Jakarta NDVI GeoTIFF. Lesson 3 uses a Lightning DataModule
+for the training and evaluation splits and defines its predictor inline. Lesson 4
+restores the training checkpoint and uses the same predictor in its pipeline.
 
 These short runs teach a workflow. Evaluate on independent geography or periods
 before making claims about model quality or land-cover change.

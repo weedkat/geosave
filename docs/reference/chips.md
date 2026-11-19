@@ -1,5 +1,15 @@
 # Chips and prediction merging
 
+For training, `gs.random_crop` draws one window uniformly from all pixel
+origins where the requested size fits. An integer seed repeats the draw on
+the same grid. Omit it to draw a fresh window on each visit. Read a
+segmentation target on the cropped image's grid:
+
+```python
+chip = gs.random_crop(image, size=128, seed=42)
+target = label.gs.crop_to_grid(chip.gs.geobox)
+```
+
 Sampling is three steps, each its own piece:
 
 ```python
@@ -8,7 +18,8 @@ chipper = gs.RasterChipper(windows, size=256, stride=224)         # space: chips
 merger = gs.RasterMerger(chipper.layout, window="hann")              # back: predictions by chip index
 
 for index in range(len(chipper)):
-    sample = chipper[index].gs.to_tensor(grid=True, context=["centroid"])
+    pixels, context = chipper[index].gs.to_tensor(grid=True, context=["centroid"])
+    sample = {**pixels, **context}
     # {"image": (time, band, y, x), "label": ..., "transform": (6,), "crs": (), "centroid": (2,)}
     merger.add(index, predict(sample))                      # (band, y, x)
 
@@ -31,6 +42,16 @@ classes = merger.merge(0).argmax("band")                    # raster 0, on its o
 `RasterMerger` takes `chipper.layout`, weights overlaps with a supported scipy
 window, and discards padding. It returns a georeferenced DataArray, with NaN
 where uncovered. Full output accumulators remain in memory.
+
+For batched prediction, `merge_batch` pairs each chip index with one entry
+in a NumPy array shaped `(batch, band, size, size)`. A batch can finish zero,
+one, or several rasters. Each finished raster is returned on its own grid
+and its accumulator is released.
+
+```python
+for raster_index, logits in merger.merge_batch(chip_indices, batch_logits):
+    classes = logits.argmax("band")
+```
 
 ## Chips of tensor batches
 
@@ -60,6 +81,8 @@ logits = merger.merge()                      # (batch, band, y, x), NaN where un
 | `TensorChipper` / `TensorMerger` | collated batch with `transform` and `crs` | sample dict, same keys | tensor, batch layout |
 
 ::: geosave.geodata.sampling.chipper.RasterChipper
+
+::: geosave.geodata.sampling.crop.random_crop
 
 ::: geosave.geodata.sampling.layout.ChipLayout
 

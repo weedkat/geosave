@@ -100,9 +100,10 @@ class RasterDataset(Dataset[Sample]):
                 np.where(missing, self.ignore_index, pixels).astype("int64")
             )
             # The grid lets the Module chip whole scenes as the release does.
-            sample = reference.gs.to_tensor(
-                "image", dtype="float32", grid=True, context=self.context
+            pixels, context = reference.gs.to_tensor(
+                dtype="float32", grid=True, context=self.context
             )
+            sample = {"image": pixels, **context}
             if not torch.isfinite(sample["image"]).all():
                 raise ValueError(
                     "image must be finite; declare a nodata policy in the preprocessor"

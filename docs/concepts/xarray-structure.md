@@ -272,6 +272,28 @@ Data variables:
 Data variables and attrs belong to their own node; they do not inherit.
 The result above has no `title`. Converting `tree["scene"]` gives its date
 and inherited grid labels, with no data variables: `red` belongs to its child.
+
+GeoSave adds `node.gs.to_dataset()` when a standalone Dataset should also
+include ancestor attrs:
+
+```python
+import geosave  # registers the .gs accessors
+
+raster = image.gs.to_dataset()
+print(raster.attrs["title"])
+```
+
+```text
+Survey
+```
+
+This includes all inherited coordinates and merges Dataset attrs from root to
+the selected node. Nearer nodes override more distant ancestors; the selected
+node's attrs win. It does not combine descendant rasters or change native
+`node.to_dataset()` behavior. Pixels remain shared and lazy. Updating parent
+attrs affects the next extraction; previously returned Datasets keep their own
+attrs dictionaries. Nested attr values remain shared, as in a shallow copy.
+
 Combining children into one Dataset is a separate, explicit operation.
 
 See xarray's [data structures](https://docs.xarray.dev/en/stable/user-guide/data-structures.html),

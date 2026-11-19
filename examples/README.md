@@ -11,18 +11,16 @@ results you can use in the next lesson.
 | --- | --- | --- |
 | [0 · Explore and train](00_basics.ipynb) | Can these images and labels teach a model to recognize land cover? | A baseline prediction and training logs; optional per-class review. |
 | [1 · Compare models](01_model.ipynb) | What should I change when the baseline misses things? | A second training run and concrete experiments to compare. |
-| [2 · Build a dataset](02_sources.ipynb) | How do I find matching imagery for my labels and my forest? | Aligned training pairs, six forest observations, and catalogs. |
-| [3 · Train and predict](03_inputs.ipynb) | How do I turn those images into complete land-cover maps? | Dated forest maps, evaluation results, and a model release. |
-| [4 · Reuse the model](04_recipe.ipynb) | How do I map the next observation without changing what the model sees? | A check that the reloaded model reproduces the map, and an image/prediction pair for review. |
+| [2 · Find a Sentinel-2 Item](02_sources.ipynb) | How do I find an observation and read just my region? | A Jakarta NDVI GeoTIFF on the source image grid. |
+| [3 · Fine-tune Prithvi on image chips](03_inputs.ipynb) | How does Prithvi perform on held-out scenes? | Test metrics, a training checkpoint and a project predictor. |
+| [4 · From a Sentinel-2 image to a land-cover map](04_pipeline.ipynb) | How do I turn a raw image into a class map in one call? | A reusable pipeline and dated forest maps with a catalog. |
 
-Run them in order. Notebook 1 can reuse the downloaded teaching data without
-rerunning notebook 0; notebook 3 needs notebook 2's acquired files; notebook 4
-needs notebook 3's **Keep this trained model** cell. Start a fresh kernel for
+Notebooks 1 and 3 use the teaching data from notebook 0. Notebook 2 runs independently.
+Notebook 4 restores notebook 3’s checkpoint and repeats its predictor definition. Start a fresh kernel for
 each lesson: files carry forward, Python variables do not.
 
-Each lesson ends with **More things you can do**: ways to extend this land-cover
-project, such as reviewing difficult classes, expanding the observation period,
-or preparing a map for a forest manager. There are no quizzes or answer cells.
+The **Explore further** sections suggest ways to extend the project, such as
+reviewing difficult classes or expanding the observation period.
 
 ## Before you start
 
@@ -36,9 +34,7 @@ Open the notebooks in Jupyter or VS Code, select the repository `.venv` as the
 kernel, and use `examples/` as the working directory. Run cells top to bottom.
 The teaching-data download is about 400 MB. CPU training is supported; the short
 runs demonstrate the workflow rather than produce a validated operational map.
-Notebook 2 additionally makes live Planetary Computer queries and reads imagery;
-this can take longer than training. Notebook 4 uses existing files with no new
-download or training run.
+Notebook 2 searches over Jakarta and saves NDVI as a GeoTIFF. Notebook 4 uses the same search workflow to load forest imagery for prediction.
 
 Plots render in the notebook. TensorBoard and the Explorer server are optional
 snippets you can run separately. Rerunning training starts a fresh run unless
@@ -48,15 +44,36 @@ experiments separate. Cells with `overwrite=True` replace their example outputs.
 ## The data and what it means
 
 The pinned teaching subset pairs Sentinel-2 imagery with **expert-annotated
-Dynamic World training labels**, not the automated Dynamic World product.
-It has ten classes including cloud, nodata 255, and four bands in the order
-B02, B03, B04, B08. Each notebook links the dataset card and original source;
-retain their attribution when sharing derived work.
+Dynamic World human annotations**, not the automated Dynamic World product.
+Labels keep their original classes (0 unlabelled, 1–9 land cover, 10 cloud); the
+notebooks remap them in memory with the `dynamic_world` scheme in `labels.yaml`
+to nine classes, with 255 ignored. Images hold B02, B03, B04, B08 as stored
+digital numbers; each scene's SCL is a separate file.
+`scene.parquet` lists every annotation with its split, paths and date; several
+annotations can share one image. Each notebook links the dataset card and
+original source; retain their attribution when sharing derived work.
 
-Notebooks 0 and 1 use the same eight complete training pairs and two validation
-pairs for a short experiment. Their Datasets read prepared data and convert it
-to tensors. Notebook 3 handles missing coverage in newly acquired imagery before
-constructing its Dataset; categorical labels are never reflectance-scaled.
+Notebooks 0 and 1 use the same eight expert training pairs and two validation
+pairs. Both use the same class lookup and fill missing image values with zero.
+In notebook 3, `DynamicWorld.read_sample` draws a random 128 × 128 training
+crop and reads its mask on the same grid. The training loader batches two crops.
+For validation and test, `DynamicWorldEval.read_sample` returns the whole lazy
+image and its remapped mask. The DataModule yields one sample at a time. `Segmenter` calls `LandCoverPredictor` on the image and compares its
+merged logits with the mask, counting each labeled pixel once.
+
+The predictor uses `RasterChipper` to read overlapping windows, passes up to
+16 chips per call to Prithvi and blends their logits on the original grid with
+`RasterMerger`. The merger holds one scene’s class logits in host memory.
+Prithvi EO 2.0 Tiny TL uses each chip’s center and acquisition date. The first
+run downloads about 130 MB of encoder weights. Notebook 4 uses the same
+predictor with preprocessing and class decoding, saves the pipeline and
+applies the reloaded pipeline to forest imagery.
+
+The notebooks use `original_class_names` and `original_class_colors` for the
+stored annotation codes. After remapping, `class_names` and `class_colors`
+map training IDs to names and colors in the same order as the model outputs.
+Notebook 4 uses that same scheme for the postprocessor, so the saved pipeline
+attaches the training legend to each map it produces.
 
 Keep the train/validation/test splits fixed before cutting chips. Inspect
 geographic overlap before claiming generalization. Compare experiments on
@@ -69,15 +86,16 @@ themselves establish forest loss.
 
 | Folder | What it carries |
 | --- | --- |
-| `data/dynamic_world/` | Downloaded teaching images, labels, and class definitions |
-| `data/my_dataset/` | Notebook 2's image/label pairs, one Item each, and their split catalog |
-| `data/khdtk/` | The forest observations from notebook 2 |
-| `data/khdtk_pred/` | Notebook 3's dated land-cover maps and catalog |
-| `data/landcover/` | Notebook 3's model release (`config.json`, `model.safetensors`) and classes; notebook 4 adds the review pair |
-| `lightning_logs/` | Training curves and checkpoints for resuming experiments |
+| `data/dynamic_world/` | Downloaded teaching images, labels, `scene.parquet` and `labels.yaml` |
+| `data/jakarta/ndvi.tif` | Notebook 2’s vegetation index |
+| `data/checkpoints/03_inputs/last.ckpt` | Notebook 3's final training checkpoint, restored in notebook 4 |
+| `data/landcover_pipeline/` | Notebook 4's release of the model with its pipeline |
+| `data/khdtk_maps/` | Notebook 4's published land-cover maps and catalog |
+| `lightning_logs/` | Training curves for each notebook and checkpoints for notebooks 0 and 1 |
 
-Keep catalogs with the image folders their relative paths reference. Notebook 3
-loads its small collection before preparation. `gs.Chipper` reads windows on demand;
+Catalogs state their assets by absolute path, so a catalog opens from anywhere but must stay
+where its images were published; publish to the final folder.
+`gs.RasterChipper` reads windows on demand;
 merging predictions allocates full output maps. Prepare larger projects in batches.
 
 ## Where the project goes next

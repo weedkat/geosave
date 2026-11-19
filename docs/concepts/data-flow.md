@@ -42,10 +42,10 @@ be explicit. See [metadata](metadata.md) before combining packed imagery.
 | Load on an exact grid | `stac.load_dataset(items, geobox=grid)` | Dataset on the supplied GeoBox. |
 | Retain native asset grids | `stac.load_native_datasets(items)` | One `(crs, resolution, Dataset)` per native grid. |
 | Read model-sized windows | `RasterChipper([tree], size=256)` | Lazy raster windows; explicit conversion reads pixels. |
-| Publish dated raster assets | `scene.gs.to_catalog(folder)` | Written TIFFs and an Item table. |
+| Publish dated raster assets | `stac.publish_item(item, assets=assets, root=folder)` | Written COGs and a native Item; compose with `create_catalog`. |
 
 Catalog sampling is currently unavailable. Select observations with GeoPandas
-or select dates on a prepared Dataset. [Catalogs](../advanced/raster-catalog.md)
+or select dates on a prepared Dataset. [Catalogs](../basics/catalog.md)
 and [chips](../advanced/overlapping-chips.md) work independently.
 
 Lazy execution delays pixel work; it does not guarantee small downloads or bounded peak memory.

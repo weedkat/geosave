@@ -117,3 +117,21 @@ def test_search_attaches_only_returned_collections(monkeypatch):
     assert list(found.gs.collections) == ["s2"]
     found.attrs["stac-geoparquet"]["collections"]["s2"]["description"] = "changed"
     assert client.collection("s2").description == "Rows"
+
+
+def test_open_connects_to_the_given_api_without_provider_signing(monkeypatch):
+    native = Client(id="custom", description="Custom STAC API")
+    opened = {}
+
+    def open_client(url, **options):
+        opened.update(url=url, **options)
+        return native
+
+    monkeypatch.setattr(Client, "open", open_client)
+    client = StacClient.open("https://example.org/stac/v1")
+
+    assert isinstance(client, StacClient)
+    assert opened["url"] == "https://example.org/stac/v1"
+    assert isinstance(opened["stac_io"], StacApiIO)
+    assert client.patch_url is None
+    assert client._client is native

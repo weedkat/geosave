@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .catalog import create_catalog
+    from .catalog import concat_catalogs, create_catalog
     from .load import (
         StacLoadOptions,
         group_bands_by_grid,
@@ -12,25 +12,24 @@ if TYPE_CHECKING:
         load_dataset,
         load_native_datasets,
     )
-    from .publish import StacItem
-    from .raster import RasterStac
-    from .search.api import StacClient, StacProvider
+    from .publish import StacItem, publish_item
+    from .search.api import StacClient
     from .search.query import StacQuery
     from .search.table import StacTable
 
 _LAZY = {
     "StacClient": ".search.api",
-    "StacProvider": ".search.api",
     "StacQuery": ".search.query",
     "StacTable": ".search.table",
     "create_catalog": ".catalog",
+    "concat_catalogs": ".catalog",
     "StacLoadOptions": ".load",
     "load_dataset": ".load",
     "group_bands_by_grid": ".load",
     "list_properties": ".load",
     "load_native_datasets": ".load",
     "StacItem": ".publish",
-    "RasterStac": ".raster",
+    "publish_item": ".publish",
 }
 
 
@@ -46,15 +45,15 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "StacClient",
-    "StacProvider",
     "StacQuery",
     "StacTable",
     "create_catalog",
+    "concat_catalogs",
     "StacLoadOptions",
     "load_dataset",
     "group_bands_by_grid",
     "list_properties",
     "load_native_datasets",
     "StacItem",
-    "RasterStac",
+    "publish_item",
 ]

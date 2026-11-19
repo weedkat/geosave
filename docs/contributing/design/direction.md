@@ -22,7 +22,7 @@ explore ─▶ operate ─▶ prepare ─▶ train ─▶ release ─▶ predict
 
 ```text
 provider STAC -> Item rows -> ODC Dataset -> preparation -> one-grid DataTree
-Dataset -> RasterStac -> COGs + Item rows -> GeoParquet
+Dataset / tree leaves -> explicit Item + assets -> COGs + Item rows -> GeoParquet
 prepared tree -> temporal windows -> RasterChipper -> project Sample -> DataLoader -> Module
 region or raster -> processor (ingest, preprocess, RasterChipper, model, RasterMerger, postprocess) -> product Dataset
 ```
@@ -36,10 +36,10 @@ model; the `dense` predictor is the library-owned prediction loop.
 
 | Stage | Current route | Remaining work |
 | --- | --- | --- |
-| Search | `StacClient.open(provider).search(query)` | provider-specific preparation |
+| Search | `StacClient.planetary_computer().search(query)` | provider-specific preparation |
 | Load | `rows.gs.to_dataset(geobox=grid, chunks={})` or `stac.load_dataset(items, ...)` | native-grid return shape remains a design question |
 | Open and operate | native xarray, raster accessors, features and visualization | see G1–G9 |
-| Publish | `ds.gs.to_catalog(path)`; `RasterStac` for several grids | identity and metadata limitations in publish-load |
+| Publish | `stac.publish_item(item, assets=..., root=...)` | identity and metadata limitations in publish-load |
 | Cut and merge | `RasterChipper([tree])`, `RasterMerger(chipper.layout)` | streaming output, vector outputs |
 | Plan sample rows | project pandas operations | persisted sample-catalog contract |
 | Store | project preparation | store invalidation and record identity |
@@ -144,30 +144,23 @@ worth arguing, and flags (coupling, complexity, bugs).
   add provider fixes); callables passed directly (not selectable from YAML).
 - **Flags**:
   - **Repeated time labels.** `groupby="id"` gives one step per Item, so two
-    tiles of one pass share a label (`time` index not unique). `RasterStac.from_dataset` then
-    raises `two Items format to the id`, because the id is formatted from the
-    whole Dataset's place and time. See G6.
+    tiles of one pass share a label (`time` index not unique). Positional tree
+    splitting preserves these separately; supply unique names and explicit Item IDs.
   - `load_native_datasets` returns `(crs, resolution, dataset)` tuples; the
     Dataset states both.
   - Not yet written: the `sentinel_2` stamp; per-step shared properties.
 
-### G6 Publication (`stac/raster.py`, `stac/publish.py`)
+### G6 Publication (`stac/publish.py`)
 
-- **Implemented**: `RasterStac.from_dataset` groups a Dataset into an Item/asset
-  tree. Collection metadata stays on the wrapper. `merge` joins by Item id;
-  `to_cog` writes pixels and returns Items; `create_catalog` produces rows.
-  `Dataset.gs.to_catalog` is the one-grid shortcut. Loading returns Datasets.
-- **Identity remains open**: formatting ids from time and footprint can collide
-  for repeated observations or differ between grids intended for one Item.
-  Options: carry source identity in a marked coordinate; allow property fields
-  in formatting; retain explicit formatting and reject collisions. Carrying
-  source identity also needs a rule for fused observations and derived products.
-  Inferring footprints from valid pixels would require reads during staging.
-- **Limitations**: an Item dimension is required; static variables repeat per
-  Item; unmarked Dataset attrs are not published as Item properties. See
-  [publication boundaries](publish-load.md#what-round-trips).
-- **Pattern**: native DataTree as an inspectable publication layout, owned by
-  `RasterStac`; native PySTAC Item builders. General DataTrees have no STAC rules.
+- **Implemented**: native Item plus explicit asset mapping; one observation per
+  call, independent asset grids, COG writing and returned native Item clone.
+  Item identity/properties/Collection membership are caller-owned. RasterStac and
+  Dataset catalog shortcuts are removed. Loading returns Datasets.
+- **Validation**: scalar observation times/periods must agree; static reference
+  assets and unsliced dimensions fail. Representation/destination checks run before
+  writes. Actual written hrefs are associated with asset keys.
+- **Limits**: explicit membership cannot prove provenance from copied timestamps;
+  runtime failures can leave partial files. No hierarchy reconstruction on loading.
 
 ### G7 Places and grids (`core/region.py`, odc-geo `GeoBox`)
 

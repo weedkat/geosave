@@ -157,8 +157,8 @@ def prepare_inputs(scene):
     std = image.new_tensor([0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049])
     image = (image - mean.reshape(1, 6, 1, 1)) / std.reshape(1, 6, 1, 1)
     names = ["centroid", "year", "day_of_year"]
-    sample = reflectance.gs.to_tensor("image", context=names)
-    sample["image"] = image
+    pixels, context = reflectance.gs.to_tensor(context=names)
+    sample = {"image": image, **context}
     return torch.utils.data.default_collate([sample])
 
 inputs = prepare_inputs(scene)

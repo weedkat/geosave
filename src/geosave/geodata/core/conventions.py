@@ -110,9 +110,9 @@ The Collection and the schemas the properties need are Dataset attrs::
     scene.attrs["stac_extensions"]          JSON extension schema URIs
 
 DataTree keeps its native, caller-defined hierarchy. General raster helpers
-operate on raster-bearing nodes, including parents. The STAC-specific tree
-layout is documented by ``stac.raster.RasterStac``; it is not a general
-DataTree convention. The tree stages publication only; Items load back as Datasets.
+operate on raster leaves. Explicit Item/asset membership belongs to
+``stac.publish_item``; it is not a general DataTree convention. Trees organize
+analysis inputs; publication consumes explicit Datasets and Items load as Datasets.
 
 Channels stacked in one DataArray span ``band``. Layouts ODC does not
 recognize, such as a weather model's rotated pole, are renamed by the caller.
@@ -136,8 +136,3 @@ END_DATETIME = "end_datetime"
 
 # The collection node of Items that name no collection, in a STAC-shaped tree.
 DEFAULT_COLLECTION = "default"
-
-# How RasterStac.from_dataset names an Item: its start, its MGRS square and its centroid, so
-# Items of one collection over many regions and dates stay unique and sort by
-# time. Fields are those of `GeoRegion.format`.
-ITEM_ID_FORMAT = "{start:%Y%m%dT%H%M%S}_{mgrs}_{lat:.4f}_{lon:.4f}"

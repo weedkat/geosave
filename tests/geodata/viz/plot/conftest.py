@@ -12,5 +12,11 @@ hv.extension("matplotlib")
 
 
 @pytest.fixture(autouse=True)
+def matplotlib_backend():
+    """Make matplotlib current again: an explorer test run earlier leaves bokeh."""
+    hv.Store.set_current_backend("matplotlib")
+
+
+@pytest.fixture(autouse=True)
 def resolved_location(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(GeoRegion, "locate", lambda _: Place(city="Test City"))

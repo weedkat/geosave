@@ -2,7 +2,7 @@
 
 Find observations by area and date, then choose how to read their pixels.
 For a complete first download, follow [Download satellite imagery](download-imagery.md).
-For local publication, follow [Create and reopen a raster catalog](raster-catalog.md).
+For local publication, follow [Store imagery as a catalog](../basics/catalog.md).
 
 A STAC **Item** describes an observation, an **Asset** points to a file, and
 a **Collection** describes the dataset its Items belong to. Search retrieves
@@ -17,7 +17,7 @@ Planetary Computer asset reads use the URL signer supplied by the client.
 import geosave as gs
 from geosave.geodata import stac
 
-client = gs.StacClient.open("planetary_computer")
+client = gs.StacClient.planetary_computer()
 query = gs.StacQuery(
     collections=["sentinel-2-l2a"],
     bbox=(-121.82, 38.52, -121.79, 38.55),
@@ -28,7 +28,9 @@ selected = client.search_items(query)
 ```
 
 `search_items` returns native PySTAC Items; `search` returns a GeoDataFrame.
-Provider names include `planetary_computer`, `element84`, and `cdse`.
+Use `StacClient.planetary_computer()`, `.element84()` or `.cdse()` for
+built-in providers. Use `StacClient.open("https://example.org/stac/v1")`
+for another API; this does not configure provider-specific asset signing.
 Collection IDs and band names depend on the provider. A scene-wide cloud score
 does not guarantee clear pixels in your area.
 
@@ -89,17 +91,17 @@ with `geobox=`.
 
 ## Search a saved Item table
 
-Use the file produced by the [catalog tutorial](raster-catalog.md):
+Use the file produced by the [catalog tutorial](../basics/catalog.md):
 
 ```python title="Adaptation example — use your catalog path"
-table = gs.StacClient.open("catalog.parquet")
+table = gs.StacTable("catalog.parquet")
 query = gs.StacQuery(
     collections=["my-collection"], bbox=(-121.82, 38.52, -121.79, 38.55),
 )
 found = table.search(query)
 ```
 
-Opening a `.parquet` path returns a `StacTable`, which searches the file with
+`StacTable(path)` searches a local or remote GeoParquet file with
 the same queries as an API. `table.collections()` lists its Collection ids;
 `found.gs.collections` retains their definitions. To read the whole table
 without filtering, use `gs.open_vector("catalog.parquet")`. Search does not
@@ -129,23 +131,28 @@ A time plane built from several Items holds ODC's fused value: numbers
 averaged, text joined with ",". Cropping does not recalculate scene cloud cover;
 remove or recompute facts that no longer describe a derived output.
 
-To publish a Dataset with a time dimension, use
-`cube.gs.to_catalog("assets")`. Publication reads marked Item property
-coordinates, and time and grid facts from the raster.
+To publish, first slice each observation position and prepare its asset Datasets.
+Call `stac.publish_item(item, assets=assets, root="assets")` with an explicit native
+Item. Choose its properties from marked coordinates when they describe the output.
 For a derived dataset, replace the source Collection with one describing the
 new product. See [metadata behavior](../concepts/metadata.md).
 
 ## Regions and credentials
 
 `gs.GeoRegion` describes geometry and optional time independently of a pixel
-grid. `query.set_region(region)` returns a query with replacement spatial and
+grid. `region.set_time("2025-06")` returns the same place covering the whole
+month; a `(start_datetime, end_datetime)` tuple preserves exact endpoints.
+`region.set_time(None)` clears time. `region.format("scene_{start:%Y%m%d}")`
+builds a string without changing the region.
+
+`query.set_region(region)` returns a query with replacement spatial and
 time selectors; it retains other criteria. A timeless region clears datetime.
 
 Search credentials and raster credentials are separate. Pass
 `patch_url=client.patch_url` for signed assets; configure other remote storage
 through [storage options and GDAL](../concepts/storage.md#use-remote-storage).
-The same client can search remote Item tables with a configured rustac
-DuckDB session; see [STAC reference](../reference/stac.md) for its arguments.
+`StacTable(path, duckdb=session)` can search remote Item tables with a configured
+rustac DuckDB session; see [STAC reference](../reference/stac.md) for its arguments.
 
 Select rows with GeoPandas, then call `rows.gs.to_dataset(geobox=grid, chunks={})`
 to load one collection. Catalog sampling remains unavailable.

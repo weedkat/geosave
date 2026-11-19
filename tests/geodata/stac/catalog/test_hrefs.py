@@ -18,7 +18,7 @@ def test_a_file_stored_with_relative_hrefs_opens_with_absolute_ones(tmp_path):
     opened = io.open_vector(path)
 
     assert opened["assets"][0]["red"]["href"] == str(tmp_path / "scenes" / "red.tif")
-    assert stac.StacClient.open(path).search_items({})[0].get_self_href() is None
+    assert stac.StacTable(path).search_items({})[0].get_self_href() is None
 
 
 def test_a_table_of_absolute_hrefs_is_returned_as_it_is():

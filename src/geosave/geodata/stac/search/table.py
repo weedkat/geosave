@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class StacTable:
-    """A STAC GeoParquet table searched with rustac, opened by `StacClient.open`.
+    """A local or remote STAC GeoParquet table searched with rustac.
 
     Item properties are columns of a table, so a sort or filter names them
     without the `properties.` prefix a STAC API takes.
@@ -32,7 +32,7 @@ class StacTable:
             credentials or a custom endpoint. None creates a session.
 
     Examples:
-        >>> table = StacClient.open("samples/catalog.parquet")
+        >>> table = StacTable("samples/catalog.parquet")
         >>> table.collections()
         {'forest'}
         >>> items = table.search_items(StacQuery(collections=["forest"]))
