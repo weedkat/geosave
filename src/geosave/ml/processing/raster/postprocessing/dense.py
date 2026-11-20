@@ -3,7 +3,6 @@
 import numpy as np
 import xarray as xr
 
-from geosave.ml.chain import chain_step
 from geosave.ml.processing.raster.postprocessing.base import (
     POSTPROCESSORS,
     RasterPostprocessor,
@@ -50,7 +49,7 @@ def mask_product(product: xr.Dataset, sample: xr.DataTree, mask: str) -> xr.Data
 
 
 @POSTPROCESSORS.register("segmentation")
-class SegmentationPostprocessor(RasterPostprocessor):
+class SegmentationPostprocessor(RasterPostprocessor[xr.DataArray, xr.Dataset]):
     """Decode merged logits into a class map that names its classes.
 
     Args:
@@ -64,7 +63,6 @@ class SegmentationPostprocessor(RasterPostprocessor):
         self.colors = colors
         self.mask = mask
 
-    @chain_step()
     def __call__(self, output: xr.DataArray, sample: xr.DataTree) -> xr.Dataset:
         """Take the strongest class of merged logits and build the class map.
 
@@ -74,7 +72,7 @@ class SegmentationPostprocessor(RasterPostprocessor):
                 node and the scalar coordinates.
 
         Returns:
-            `product`: Dataset of one variable, `class_id` (uint8, `(y, x)`)
+            Dataset of one variable, `class_id` (uint8, `(y, x)`)
             on the logits' grid, each value a position in `classes`. It
             states the class names and colours as flags and `NO_PREDICTION`
             as nodata, which fills pixels whose logits are missing or whose
@@ -105,7 +103,7 @@ class SegmentationPostprocessor(RasterPostprocessor):
 
 
 @POSTPROCESSORS.register("regression")
-class RegressionPostprocessor(RasterPostprocessor):
+class RegressionPostprocessor(RasterPostprocessor[xr.DataArray, xr.Dataset]):
     """Name merged per-pixel values as the variables a model estimates.
 
     Args:
@@ -126,7 +124,6 @@ class RegressionPostprocessor(RasterPostprocessor):
         self.units = units
         self.mask = mask
 
-    @chain_step()
     def __call__(self, output: xr.DataArray, sample: xr.DataTree) -> xr.Dataset:
         """Split merged values into one named variable per band.
 
@@ -136,7 +133,7 @@ class RegressionPostprocessor(RasterPostprocessor):
                 node and the scalar coordinates.
 
         Returns:
-            `product`: Dataset of one float32 `(y, x)` variable per entry of
+            Dataset of one float32 `(y, x)` variable per entry of
             `names`, on the values' grid, each stating `units` and NaN as
             nodata, which fills pixels no chip predicted or whose mask is
             false; it carries the sample's scalar coordinates.

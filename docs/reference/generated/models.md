@@ -335,6 +335,60 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
+::: geosave.ml.processing.change.pipeline.ChangePipeline
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+        - preprocessor
+        - predictor
+        - postprocessor
+        - ingestor
+        - predict
+
+::: geosave.ml.processing.change.preprocessing.base.ChangePreprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.processing.change.preprocessing.base.PREPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.prompt.pipeline.PromptPipeline
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+        - preprocessor
+        - predictor
+        - postprocessor
+        - ingestor
+        - predict
+
+::: geosave.ml.processing.prompt.postprocessing.base.POSTPROCESSORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.prompt.postprocessing.base.PromptPostprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.processing.prompt.prediction.base.PREDICTORS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.processing.prompt.prediction.base.PromptPredictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
 ::: geosave.ml.processing.raster.ingestion.base.INGESTORS
     options:
       show_root_full_path: true
@@ -345,6 +399,10 @@ fields appear as attributes, including their annotated types and defaults.
       filters: []
       members:
         - ingest_to_zarr
+
+::: geosave.ml.processing.raster.ingestion.sentinel2.ASSET_KEYS
+    options:
+      show_root_full_path: true
 
 ::: geosave.ml.processing.raster.ingestion.sentinel2.COLLECTION
     options:
@@ -358,12 +416,20 @@ fields appear as attributes, including their annotated types and defaults.
         - bands
         - resolution
         - name
+        - scl
+        - catalog
         - client
         - search_items
         - ingest_grid
+        - load
+        - split_nodes
         - ingest_to_zarr
       inherited_members:
         - ingest_to_zarr
+
+::: geosave.ml.processing.raster.ingestion.sentinel2.TILE_PROPERTIES
+    options:
+      show_root_full_path: true
 
 ::: geosave.ml.processing.raster.ingestion.sentinel2.drop_superseded
     options:
@@ -385,24 +451,6 @@ fields appear as attributes, including their annotated types and defaults.
         - ingestor
         - predict
         - predict_to_zarr
-        - preprocess
-        - predict_sample
-
-::: geosave.ml.processing.raster.pipeline.SUPPLIED
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.pipeline.check_steps
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.pipeline.find_step
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.pipeline.run_step
-    options:
-      show_root_full_path: true
 
 ::: geosave.ml.processing.raster.postprocessing.base.POSTPROCESSORS
     options:
@@ -506,6 +554,7 @@ fields appear as attributes, including their annotated types and defaults.
       members:
         - model_type
         - stages
+        - pipeline
         - preprocessor
         - predictor
         - postprocessor

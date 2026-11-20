@@ -31,7 +31,7 @@ from geosave.ml.processing.raster.prediction.base import PREDICTORS
 from geosave.ml.processing.raster.preprocessing.base import PREPROCESSORS
 from geosave.ml.processing.raster.pipeline import RasterPipeline
 
-ARTIFACT_FORMAT_VERSION = 4
+ARTIFACT_FORMAT_VERSION = 5
 
 
 class StageConfig(TypedDict):
@@ -57,6 +57,8 @@ class ChainConfig(PretrainedConfig):
     Args:
         stages: Ordered stage names and construction specifications. A list,
             because Transformers writes `config.json` with sorted keys.
+        pipeline: Pipeline variant the sub-processors belong to, such as
+            `raster`; None when the release carries the chain alone.
         preprocessor: The pipeline's preprocessor; None when the release
             carries the chain alone.
         predictor: The pipeline's predictor.
@@ -79,6 +81,7 @@ class ChainConfig(PretrainedConfig):
     def __init__(
         self,
         stages: list[StageConfig] | None = None,
+        pipeline: str | None = None,
         preprocessor: dict[str, Any] | None = None,
         predictor: dict[str, Any] | None = None,
         postprocessor: dict[str, Any] | None = None,
@@ -100,6 +103,7 @@ class ChainConfig(PretrainedConfig):
             )
         super().__init__(**kwargs)
         self.stages = stages if stages is not None else []
+        self.pipeline = pipeline
         self.preprocessor = preprocessor
         self.predictor = predictor
         self.postprocessor = postprocessor
@@ -180,12 +184,18 @@ class ChainModel(PreTrainedModel):
             the pipeline around it.
 
         Raises:
-            TypeError: The pipeline's model is not a `ModelChain`, or a
-                sub-processor keeps no attribute for a constructor argument.
+            TypeError: The pipeline is not a `RasterPipeline`, its model is
+                not a `ModelChain`, or a sub-processor keeps no attribute for
+                a constructor argument.
             ValueError: A stage is not part of the library, or a project's
                 sub-processor cannot be imported by its class path, as a
                 class defined inside a function.
         """
+        # Other variants gain a release with their first implementation.
+        if not isinstance(pipeline, RasterPipeline):
+            raise TypeError(
+                f"only a RasterPipeline can be released; got {type(pipeline).__name__}"
+            )
         if not isinstance(pipeline.model, ModelChain):
             raise TypeError("the pipeline's model must be a ModelChain")
 
@@ -195,6 +205,7 @@ class ChainModel(PreTrainedModel):
 
         config = ChainConfig(
             stages=read_stages(pipeline.model),
+            pipeline="raster",
             preprocessor=read_deployable_spec(PREPROCESSORS, pipeline.preprocessor),
             predictor=read_deployable_spec(PREDICTORS, pipeline.predictor),
             postprocessor=read_deployable_spec(POSTPROCESSORS, pipeline.postprocessor),
@@ -359,8 +370,13 @@ def load_pipeline(repo: str, **kwargs: Any) -> RasterPipeline:
     """
     release = ChainModel.from_pretrained(repo, **kwargs)
     config = release.config
-    if config.preprocessor is None:
+    if config.pipeline is None:
         raise ValueError(f"the release {repo!r} carries no pipeline")
+    if config.pipeline != "raster":
+        raise ValueError(
+            f"the release {repo!r} carries a {config.pipeline!r} pipeline; this "
+            f"GeoSave loads raster pipelines only"
+        )
 
     release.eval()
     ingestor = None

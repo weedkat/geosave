@@ -1,9 +1,11 @@
-"""A raster pipeline checks its sub-processors' contract, predicts by chips, and reloads from a release."""
+"""A raster pipeline runs its sub-processors in order, predicts by chips, and reloads from a release."""
 
 import json
 
+import geopandas as gpd
 import numpy as np
 import pytest
+import shapely
 import torch
 import xarray as xr
 from odc.geo.geobox import GeoBox
@@ -11,7 +13,7 @@ from transformers import AutoModel
 
 import geosave  # noqa: F401  registers the .gs accessors
 from geosave.geodata.io import open_raster
-from geosave.ml import ModelChain, build_model, chain_step
+from geosave.ml import ChangePipeline, ModelChain, build_model
 from geosave.ml.processing.raster.ingestion.base import RasterIngestor
 from geosave.ml.processing.raster.pipeline import RasterPipeline
 from geosave.ml.processing.raster.postprocessing.base import RasterPostprocessor
@@ -21,12 +23,14 @@ from geosave.ml.processing.raster.postprocessing.dense import (
     SegmentationPostprocessor,
     copy_scalar_coords,
 )
+from geosave.ml.processing.raster.prediction.base import RasterPredictor
 from geosave.ml.processing.raster.prediction.dense import DensePredictor
 from geosave.ml.processing.raster.preprocessing.base import (
     PREPROCESSORS,
     RasterPreprocessor,
 )
 from geosave.ml.processing.raster.preprocessing.dense import DensePreprocessor
+from geosave.ml.processing.change.preprocessing.base import ChangePreprocessor
 from geosave.ml.release import ChainModel, load_pipeline
 from tests.geodata.sampling.conftest import build_scene
 
@@ -58,15 +62,13 @@ class Halve(RasterPreprocessor):
     def __init__(self, bands):
         self.bands = bands
 
-    @chain_step()
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
         image = rasters["image"].to_dataset()[self.bands].astype("float32")
         sample = xr.DataTree.from_dict({"image": image / 2})
         return sample
 
 
-class Strongest(RasterPostprocessor):
-    @chain_step()
+class Strongest(RasterPostprocessor[xr.DataArray, xr.Dataset]):
     def __call__(self, output: xr.DataArray, sample: xr.DataTree) -> xr.Dataset:
         class_map = output.argmax("band").astype("uint8")
         product = copy_scalar_coords(class_map.to_dataset(name="class_id"), sample)
@@ -95,67 +97,6 @@ def test_sub_processors_are_called_directly():
 
     assert output.dims == ("band", "y", "x")
     xr.testing.assert_identical(product, pipeline.predict(rasters))
-
-
-def test_a_sub_processor_without_a_declared_step_is_refused():
-    class Undeclared(RasterPostprocessor):
-        def __call__(self, output, sample):
-            return output
-
-    with pytest.raises(TypeError, match="Undeclared.__call__ declares no step"):
-        RasterPipeline(PixelModel(), Halve(BANDS), DensePredictor(size=4), Undeclared())
-
-
-def test_a_postprocessor_taking_another_type_than_the_predictor_returns_is_refused():
-    class Boxes(RasterPostprocessor):
-        @chain_step()
-        def __call__(self, output: np.ndarray, sample: xr.DataTree) -> list:
-            product = [output]
-            return product
-
-    with pytest.raises(
-        TypeError, match="Boxes takes 'output' as ndarray.*returned as DataArray"
-    ):
-        RasterPipeline(PixelModel(), Halve(BANDS), DensePredictor(size=4), Boxes())
-
-
-def test_a_sub_processor_taking_a_value_no_earlier_step_returns_is_refused():
-    class Thresholded(RasterPostprocessor):
-        @chain_step()
-        def __call__(self, probabilities: xr.DataArray) -> xr.Dataset:
-            product = probabilities.to_dataset(name="class_id")
-            return product
-
-    with pytest.raises(TypeError, match="Thresholded takes 'probabilities'"):
-        RasterPipeline(
-            PixelModel(), Halve(BANDS), DensePredictor(size=4), Thresholded()
-        )
-
-
-def test_a_postprocessor_must_name_what_it_returns_product():
-    class Unnamed(RasterPostprocessor):
-        @chain_step()
-        def __call__(self, output: xr.DataArray) -> xr.Dataset:
-            class_map = output.to_dataset(name="class_id")
-            return class_map
-
-    with pytest.raises(TypeError, match="Unnamed must return a variable named"):
-        RasterPipeline(PixelModel(), Halve(BANDS), DensePredictor(size=4), Unnamed())
-
-
-def test_a_value_of_another_type_than_declared_is_refused_when_handed_over():
-    class Flattened(RasterPreprocessor):
-        @chain_step()
-        def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
-            sample = rasters["image"].to_dataset()
-            return sample
-
-    pipeline = RasterPipeline(
-        PixelModel(), Flattened(), DensePredictor(size=4), Strongest()
-    )
-
-    with pytest.raises(TypeError, match="output 'sample' expected DataTree"):
-        pipeline.predict(as_rasters(build_scene(times=None)))
 
 
 def test_merged_chips_predict_what_the_whole_raster_would():
@@ -238,7 +179,6 @@ class FusionModel(torch.nn.Module):
 
 def test_the_preprocessor_names_the_models_pixel_inputs():
     class Fused(RasterPreprocessor):
-        @chain_step()
         def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
             optical = rasters["s2"].to_dataset()[["red"]].astype("float32")
             radar = rasters["s1"].to_dataset()[["vv"]].astype("float32")
@@ -266,7 +206,6 @@ def test_the_preprocessor_names_the_models_pixel_inputs():
 class CloudMasked(RasterPreprocessor):
     """Passes a mask beside the model's input, as a cloud-masking model would."""
 
-    @chain_step()
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
         image = rasters["s2"].to_dataset()[BANDS].astype("float32")
         clear = (rasters["scl"]["scl"] != 9).to_dataset(name="clear")
@@ -322,20 +261,65 @@ def test_a_mask_is_applied_chunk_by_chunk_in_a_store(tmp_path):
     xr.testing.assert_identical(open_raster(store).compute(), expected)
 
 
-def test_a_product_that_is_not_a_raster_cannot_be_written_to_a_store(tmp_path):
-    class Boxes(RasterPostprocessor):
-        @chain_step()
-        def __call__(self, output: xr.DataArray) -> list:
-            product = ["box"]
-            return product
+class Footprint(RasterPostprocessor[xr.DataArray, gpd.GeoDataFrame]):
+    """A task whose product is shapes: one row, the predicted raster's footprint."""
 
+    def __call__(self, output: xr.DataArray, sample: xr.DataTree) -> gpd.GeoDataFrame:
+        grid = output.gs.geobox
+        product = gpd.GeoDataFrame(
+            {"bands": [output.sizes["band"]]},
+            geometry=[grid.extent.geom],
+            crs=grid.crs.to_wkt(),
+        )
+        return product
+
+
+def test_a_postprocessor_can_return_shapes():
+    raster = build_scene(times=None)
     pipeline = RasterPipeline(
-        PixelModel().eval(), Halve(BANDS), DensePredictor(size=4, stride=3), Boxes()
+        PixelModel().eval(), Halve(BANDS), DensePredictor(size=4, stride=3), Footprint()
+    )
+
+    product = pipeline.predict(as_rasters(raster))
+
+    assert product["bands"].tolist() == [3]
+    assert shapely.equals(product.geometry.iloc[0], raster.gs.geobox.extent.geom)
+
+
+def test_a_product_that_is_not_a_raster_cannot_be_written_to_a_store(tmp_path):
+    pipeline = RasterPipeline(
+        PixelModel().eval(), Halve(BANDS), DensePredictor(size=4, stride=3), Footprint()
     )
     rasters = as_rasters(build_scene(times=None))
 
-    assert pipeline.predict(rasters) == ["box"]
     with pytest.raises(TypeError, match="writes raster products"):
+        pipeline.predict_to_zarr(rasters, tmp_path / "product.zarr")  # pyright: ignore[reportAttributeAccessIssue]
+
+
+class WholeRaster(RasterPredictor[xr.DataArray]):
+    """Predicts a sample in one model call, cutting no chips."""
+
+    def __call__(self, model: torch.nn.Module, sample: xr.DataTree) -> xr.DataArray:
+        image = sample["image"].to_dataset()
+        pixels = torch.from_numpy(image.to_dataarray("band").values)[None]
+        with torch.inference_mode():
+            scores = model(image=pixels)[0].numpy()
+        output = xr.DataArray(
+            scores, dims=("band", "y", "x"), coords={"y": image.y, "x": image.x}
+        )
+        return output
+
+
+def test_a_predictor_that_cuts_no_chips_predicts_in_memory_only(tmp_path):
+    pipeline = RasterPipeline(
+        PixelModel().eval(), Halve(BANDS), WholeRaster(), Strongest()
+    )
+    rasters = as_rasters(build_scene(times=None))
+
+    product = pipeline.predict(rasters)
+
+    assert product["class_id"].dtype == "uint8"
+    with pytest.raises(NotImplementedError, match="WholeRaster states no chip size"):
         pipeline.predict_to_zarr(rasters, tmp_path / "product.zarr")
 
 
@@ -399,7 +383,6 @@ def test_predicting_to_a_store_reads_one_chunk_with_its_halo_at_a_time(tmp_path)
     shapes = []
 
     class Recorded(DensePredictor):
-        @chain_step()
         def __call__(self, model: torch.nn.Module, sample: xr.DataTree) -> xr.DataArray:
             shapes.append(tuple(sample.gs.common_geobox().shape))
             output = super().__call__(model, sample)
@@ -482,6 +465,7 @@ def test_a_release_states_each_sub_processor_and_every_argument(tmp_path):
     }
     assert config["postprocessor"]["name"] == "segmentation"
     assert config["ingestor"] is None
+    assert config["pipeline"] == "raster"
 
 
 def test_a_released_pipeline_reloads_and_predicts_the_same(tmp_path):
@@ -521,7 +505,6 @@ class Doubled(RasterPreprocessor):
     def __init__(self, bands):
         self.bands = bands
 
-    @chain_step()
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
         image = rasters["image"].to_dataset()[self.bands].astype("float32")
         sample = xr.DataTree.from_dict({"image": image * 2})
@@ -583,6 +566,33 @@ def test_a_release_naming_code_that_is_not_installed_says_which(tmp_path):
     release.save_pretrained(tmp_path / "release")
 
     with pytest.raises(ModuleNotFoundError, match="missing_project"):
+        load_pipeline(str(tmp_path / "release"))
+
+
+class Stacked(ChangePreprocessor):
+    def __call__(self, before: xr.DataTree, after: xr.DataTree) -> xr.DataTree:
+        sample = xr.DataTree.from_dict({"image": before["image"].to_dataset()})
+        return sample
+
+
+def test_only_a_raster_pipeline_can_be_released():
+    pipeline = ChangePipeline(
+        _segmentation_chain(),
+        Stacked(),
+        DensePredictor(size=16),
+        RegressionPostprocessor(names=["a", "b", "c"]),
+    )
+
+    with pytest.raises(TypeError, match="only a RasterPipeline can be released"):
+        ChainModel.from_pipeline(pipeline)  # pyright: ignore[reportArgumentType]
+
+
+def test_a_release_of_another_pipeline_variant_refuses_to_load(tmp_path):
+    release = ChainModel.from_pipeline(build_library_pipeline())
+    release.config.pipeline = "change"
+    release.save_pretrained(tmp_path / "release")
+
+    with pytest.raises(ValueError, match="carries a 'change' pipeline"):
         load_pipeline(str(tmp_path / "release"))
 
 

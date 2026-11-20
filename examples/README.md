@@ -13,10 +13,10 @@ results you can use in the next lesson.
 | [1 · Compare models](01_model.ipynb) | What should I change when the baseline misses things? | A second training run and concrete experiments to compare. |
 | [2 · Find a Sentinel-2 Item](02_sources.ipynb) | How do I find an observation and read just my region? | A Jakarta NDVI GeoTIFF on the source image grid. |
 | [3 · Fine-tune Prithvi on image chips](03_inputs.ipynb) | How does Prithvi perform on held-out scenes? | Test metrics, a training checkpoint and a project predictor. |
-| [4 · From a Sentinel-2 image to a land-cover map](04_pipeline.ipynb) | How do I turn a raw image into a class map in one call? | A reusable pipeline and dated forest maps with a catalog. |
+| [4 · Build a land-cover pipeline](04_pipeline.ipynb) | How do I turn the trained model into maps someone else can make? | A released pipeline and a dated forest map. |
 
 Notebooks 1 and 3 use the teaching data from notebook 0. Notebook 2 runs independently.
-Notebook 4 restores notebook 3’s checkpoint and repeats its predictor definition. Start a fresh kernel for
+Notebook 4 restores notebook 3’s checkpoint and repeats its predictor definition before replacing it with the library's. Start a fresh kernel for
 each lesson: files carry forward, Python variables do not.
 
 The **Explore further** sections suggest ways to extend the project, such as
@@ -34,7 +34,7 @@ Open the notebooks in Jupyter or VS Code, select the repository `.venv` as the
 kernel, and use `examples/` as the working directory. Run cells top to bottom.
 The teaching-data download is about 400 MB. CPU training is supported; the short
 runs demonstrate the workflow rather than produce a validated operational map.
-Notebook 2 searches over Jakarta and saves NDVI as a GeoTIFF. Notebook 4 uses the same search workflow to load forest imagery for prediction.
+Notebook 2 searches over Jakarta and saves NDVI as a GeoTIFF. Notebook 4 finds the forest's least cloudy August observation and reads it with the library's Sentinel-2 ingestor.
 
 Plots render in the notebook. TensorBoard and the Explorer server are optional
 snippets you can run separately. Rerunning training starts a fresh run unless
@@ -55,19 +55,24 @@ original source; retain their attribution when sharing derived work.
 
 Notebooks 0 and 1 use the same eight expert training pairs and two validation
 pairs. Both use the same class lookup and fill missing image values with zero.
-In notebook 3, `DynamicWorld.read_sample` draws a random 128 × 128 training
-crop and reads its mask on the same grid. The training loader batches two crops.
-For validation and test, `DynamicWorldEval.read_sample` returns the whole lazy
-image and its remapped mask. The DataModule yields one sample at a time. `Segmenter` calls `LandCoverPredictor` on the image and compares its
-merged logits with the mask, counting each labeled pixel once.
+In notebook 3, `DynamicWorld` returns a whole lazy image Dataset and its
+remapped label DataArray. `DynamicWorldTrain.read_sample` draws a random 128 × 128
+window with `gs.random_crop` and reads the mask on that grid. Its
+`__getitem__` converts the crop and mask to tensors.
+The training loader stacks two crops per batch. Validation and test yield
+one xarray pair at a time. `Segmenter` passes the image to `LandCoverPredictor`
+and scores the merged logits against the mask, counting each labeled pixel once.
 
 The predictor uses `RasterChipper` to read overlapping windows, passes up to
 16 chips per call to Prithvi and blends their logits on the original grid with
 `RasterMerger`. The merger holds one scene’s class logits in host memory.
 Prithvi EO 2.0 Tiny TL uses each chip’s center and acquisition date. The first
-run downloads about 130 MB of encoder weights. Notebook 4 uses the same
-predictor with preprocessing and class decoding, saves the pipeline and
-applies the reloaded pipeline to forest imagery.
+run downloads about 130 MB of encoder weights. Notebook 4 builds a pipeline
+step by step: `DensePreprocessor` prepares the bands as notebook 3's Dataset
+did, the predictor merges chip logits and `SegmentationPostprocessor` decodes
+them into a dated class map. It then swaps in `DensePredictor`, the library's
+version of the same predictor, so the saved release names library steps only,
+and applies the reloaded pipeline to forest imagery.
 
 The notebooks use `original_class_names` and `original_class_colors` for the
 stored annotation codes. After remapping, `class_names` and `class_colors`
@@ -77,10 +82,8 @@ attaches the training legend to each map it produces.
 
 Keep the train/validation/test splits fixed before cutting chips. Inspect
 geographic overlap before claiming generalization. Compare experiments on
-validation data and reserve the test split for final evaluation. The forest
-observations have no reference labels: use them to apply and inspect the model,
-not to measure its accuracy. Predicted differences between dates do not by
-themselves establish forest loss.
+validation data and reserve the test split for final evaluation. The forest observation has no reference labels. Use its map to inspect how
+the trained pipeline behaves on new imagery.
 
 ## Files that connect the lessons
 
@@ -88,13 +91,11 @@ themselves establish forest loss.
 | --- | --- |
 | `data/dynamic_world/` | Downloaded teaching images, labels, `scene.parquet` and `labels.yaml` |
 | `data/jakarta/ndvi.tif` | Notebook 2’s vegetation index |
-| `data/checkpoints/03_inputs/last.ckpt` | Notebook 3's final training checkpoint, restored in notebook 4 |
+| `data/landcover_model.pt` | Notebook 3's PyTorch model checkpoint, restored in notebook 4 |
 | `data/landcover_pipeline/` | Notebook 4's release of the model with its pipeline |
-| `data/khdtk_maps/` | Notebook 4's published land-cover maps and catalog |
+| `data/khdtk_maps/` | Notebook 4's dated forest map as a GeoTIFF and STAC Item |
 | `lightning_logs/` | Training curves for each notebook and checkpoints for notebooks 0 and 1 |
 
-Catalogs state their assets by absolute path, so a catalog opens from anywhere but must stay
-where its images were published; publish to the final folder.
 `gs.RasterChipper` reads windows on demand;
 merging predictions allocates full output maps. Prepare larger projects in batches.
 

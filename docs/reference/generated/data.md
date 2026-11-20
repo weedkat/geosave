@@ -627,6 +627,7 @@ fields appear as attributes, including their annotated types and defaults.
         - crs
         - lonlat
         - mgrs
+        - explore
         - locate
         - set_time
         - format
@@ -2291,6 +2292,10 @@ fields appear as attributes, including their annotated types and defaults.
         - get_info
         - copy
 
+::: geosave.geodata.viz.explore.layers.raster.FULL_SCENE_MAX_SIDE
+    options:
+      show_root_full_path: true
+
 ::: geosave.geodata.viz.explore.layers.raster.OVERVIEW_SIZE
     options:
       show_root_full_path: true
@@ -2327,6 +2332,7 @@ fields appear as attributes, including their annotated types and defaults.
         - is_rgb
         - legend
         - select_shown_bands
+        - covers_view
         - read_view_pixels
         - clear_cache
         - draw

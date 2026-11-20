@@ -8,19 +8,17 @@ a release's pipeline prepares inference input exactly as training did.
 import torch
 import xarray as xr
 
-from geosave.ml.chain import chain_step
 from geosave.ml.processing.raster.preprocessing.base import RasterPreprocessor
 
 
 class Reflectance(RasterPreprocessor):
     """Select Sentinel-2 bands in model order and decode stored reflectance."""
 
-    @chain_step()
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
         """Select the `image` bands in model order and decode stored reflectance lazily.
 
         Returns:
-            `sample`: one node, `image`, holding B02, B03, B04 and B08 as
+            One node, `image`, holding B02, B03, B04 and B08 as
             decoded reflectance on the raster's grid.
         """
         selected = rasters["image"].to_dataset()[["B02", "B03", "B04", "B08"]]

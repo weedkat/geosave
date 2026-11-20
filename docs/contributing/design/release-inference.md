@@ -31,31 +31,38 @@ Every sub-processor is entered by `__call__`:
 | postprocessor | `postprocessor(output, sample) -> product` | decoding, masking and building the product: a raster Dataset for per-pixel tasks (with the sample's time and optional mask), a GeoDataFrame for a task whose results are shapes |
 | pipeline | `predict(rasters)`, `predict_to_zarr(rasters, destination, chunks)` | running the model over raw rasters; the caller runs `pipeline.ingestor` |
 
-The contract between sub-processors is declared, not validated by a separate
-class. Each `__call__` carries `@chain_step()`: its annotated parameters name
-the values it takes, its returned variable names the value it hands on, and
-its docstring states that value in detail.
+The contract between sub-processors is the roles' signatures. Within one
+pipeline every handoff has one type; what varies by task, the predictor's
+`Output` and the postprocessor's `Product`, is a type parameter, so a type
+checker refuses a predictor and postprocessor that disagree.
 
-```python title="A sub-processor declares what it takes and returns"
-class DensePredictor(RasterPredictor):
-    @chain_step()
-    def __call__(self, model: nn.Module, sample: xr.DataTree) -> xr.DataArray:
-        ...
-        return output
+```python title="A task states its types in the class header"
+class DensePredictor(RasterPredictor[xr.DataArray]):
+    def __call__(self, model: nn.Module, sample: xr.DataTree) -> xr.DataArray: ...
+
+class SegmentationPostprocessor(RasterPostprocessor[xr.DataArray, xr.Dataset]):
+    def __call__(self, output: xr.DataArray, sample: xr.DataTree) -> xr.Dataset: ...
 ```
+
+```python title="RasterPipeline.predict"
+sample = self.preprocessor(rasters)
+output = self.predictor(self.model, sample)
+product = self.postprocessor(output, sample)
+```
+
+A new input shape gets its own pipeline, never an optional argument. Each
+declares only the roles whose input differs and reuses the rest:
 
 ```text
-pipeline supplies    rasters, model
-preprocessor         rasters        -> sample
-predictor            model, sample  -> output
-postprocessor        output, sample -> product
+RasterPipeline.predict(rasters)            RasterPreprocessor  RasterPredictor  RasterPostprocessor
+ChangePipeline.predict(before, after)      ChangePreprocessor  RasterPredictor  RasterPostprocessor
+PromptPipeline.predict(rasters, prompts)   RasterPreprocessor  PromptPredictor  PromptPostprocessor
 ```
 
-`RasterPipeline` refuses, when constructed, a sub-processor without a declared
-step, one that takes a value no earlier step returns, and one that takes a
-value as another type than it is returned as. Each value's outer type is
-checked again as it is handed over. Raw rasters are not validated: the
-release's model card states the rasters a model takes.
+A product is a raster Dataset or a GeoDataFrame. `predict_to_zarr` is
+declared for raster products only; a predictor that cuts no chips leaves
+`measure_chips` out and predicts in memory only. Raw rasters are not
+validated: the release's model card states the rasters a model takes.
 
 The `dense` predictor serves segmentation and regression:
 
@@ -83,12 +90,12 @@ ChainModel.from_pipeline(pipeline).save_pretrained("release")
 #     "preprocessor": {"name": "dense", "init_args": {...}},
 #     "predictor": {"name": "dense", "init_args": {...}},
 #     "postprocessor": {"name": "segmentation", "init_args": {...}},
-#     "ingestor": null
+#     "ingestor": null, "pipeline": "raster"
 model = AutoModel.from_pretrained("release")   # the model alone, a ChainModel
 pipeline = load_pipeline("release")            # pipeline.model is the native ModelChain, in eval mode
 ```
 
-`ARTIFACT_FORMAT_VERSION` is 4; loading rejects other format versions and warns
+`ARTIFACT_FORMAT_VERSION` is 5; only a raster pipeline is released so far. Loading rejects other format versions and warns
 for a different GeoSave version. Missing/unexpected weight keys are rejected.
 A release without a pipeline still loads as a model; `load_pipeline` raises
 `ValueError` for it. A chain's components must be library-registered. A

@@ -7,9 +7,9 @@ Lightning-based model development. Work with xarray Datasets and GeoDataFrames
 while keeping the coordinates, CRS, nodata, and band metadata needed to turn
 results back into usable maps.
 
-[Documentation](https://weedkat.github.io/geosave-engine/) ·
+[Documentation](https://weedkat.github.io/geosave/) ·
 [Examples](https://github.com/weedkat/geosave/tree/main/examples) ·
-[Installation](https://weedkat.github.io/geosave-engine/basics/install/)
+[Installation](https://weedkat.github.io/geosave/basics/install/)
 
 ![Sentinel-2 imagery and vegetation index near Davis, California](https://raw.githubusercontent.com/weedkat/geosave/main/docs/assets/vegetation.jpg)
 
@@ -55,7 +55,7 @@ python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosav
 
 Use `geosave[ml] @` for training or `geosave[all] @` for every extra.
 Replace `main` with a commit SHA to pin an experiment. See the
-[installation guide](https://weedkat.github.io/geosave-engine/basics/install/) for
+[installation guide](https://weedkat.github.io/geosave/basics/install/) for
 extras, development setup, and version checks.
 
 ## Make a vegetation map
@@ -85,9 +85,9 @@ land near Davis, California. `ndvi` decodes the bands' nodata and scale before
 calculating. An index shows spectral variation; one scene does not establish
 crop health, drought, or change.
 
-Follow the [vegetation tutorial](https://weedkat.github.io/geosave-engine/basics/first-raster/)
+Follow the [vegetation tutorial](https://weedkat.github.io/geosave/basics/first-raster/)
 for the map and interpretation, or the
-[zone comparison](https://weedkat.github.io/geosave-engine/advanced/vegetation-zones/)
+[zone comparison](https://weedkat.github.io/geosave/advanced/vegetation-zones/)
 to summarize NDVI and valid coverage for two areas in a CSV.
 
 ## Follow a land-cover project
@@ -98,18 +98,18 @@ train a baseline, acquire new imagery for existing labels, then predict and
 export maps for a forest area. Tiles are split before making training chips.
 The teaching download is about 400 MB; the short runs demonstrate a workflow,
 not a validated operational model. Parts of the notebooks still use removed
-APIs; check the [migration notice](https://weedkat.github.io/geosave-engine/examples/#real-land-cover-project)
-before running them. The [Lightning workspace starter](https://weedkat.github.io/geosave-engine/advanced/training/)
+APIs; check the [migration notice](https://weedkat.github.io/geosave/examples/#real-land-cover-project)
+before running them. The [Lightning workspace starter](https://weedkat.github.io/geosave/advanced/training/)
 uses current APIs.
 
 | Your next task | Guide |
 | --- | --- |
-| Download imagery for your area | [Search and download](https://weedkat.github.io/geosave-engine/advanced/download-imagery/) |
-| Explore imagery on a map | [Explorer](https://weedkat.github.io/geosave-engine/basics/explore/) |
-| Start with pretrained weights | [Pretrained models](https://weedkat.github.io/geosave-engine/advanced/pretrained/) |
-| Create an editable training project | [Workspaces](https://weedkat.github.io/geosave-engine/advanced/training/) |
-| Organize data, experiments and releases | [Three-repository workflow](https://weedkat.github.io/geosave-engine/mlops/) |
-| Look up a function | [API reference](https://weedkat.github.io/geosave-engine/reference/) |
+| Download imagery for your area | [Search and download](https://weedkat.github.io/geosave/advanced/download-imagery/) |
+| Explore imagery on a map | [Explorer](https://weedkat.github.io/geosave/basics/explore/) |
+| Start with pretrained weights | [Pretrained models](https://weedkat.github.io/geosave/advanced/pretrained/) |
+| Create an editable training project | [Workspaces](https://weedkat.github.io/geosave/advanced/training/) |
+| Organize data, experiments and releases | [Three-repository workflow](https://weedkat.github.io/geosave/mlops/) |
+| Look up a function | [API reference](https://weedkat.github.io/geosave/reference/) |
 
 ## Development
 
@@ -121,7 +121,7 @@ uv run pytest
 uv run zensical build
 ```
 
-See [contributing](https://weedkat.github.io/geosave-engine/contributing/architecture/)
+See [contributing](https://weedkat.github.io/geosave/contributing/architecture/)
 for architecture and contracts. Training workspaces own their Dataset,
 DataModule, and LightningModule; edit `src/templates/` to change future
 workspace generation.

@@ -9,74 +9,11 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave.ml.builders.criterion.CriterionSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-      inherited_members:
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-
-::: geosave.ml.builders.criterion.build_criterion
-    options:
-      show_root_full_path: true
-
 ::: geosave.ml.builders.optimizer.OPTIMIZERS
     options:
       show_root_full_path: true
 
-::: geosave.ml.builders.optimizer.OptimizerSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - groups
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-      inherited_members:
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-
-::: geosave.ml.builders.optimizer.build_optimizer
-    options:
-      show_root_full_path: true
-
 ::: geosave.ml.builders.scheduler.SCHEDULERS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.builders.scheduler.SchedulerSpec
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - interval
-        - frequency
-        - monitor
-        - strict
-        - scheduler_name
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-      inherited_members:
-        - name
-        - class_path
-        - init_args
-        - validate_selector
-
-::: geosave.ml.builders.scheduler.build_scheduler
     options:
       show_root_full_path: true
 

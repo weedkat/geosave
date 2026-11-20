@@ -122,7 +122,7 @@ def test_inputs_runs(inputs_lesson, data: Path) -> None:
     workdir, code = inputs_lesson
     assert all(cell.execution_count is not None for cell in code)
     assert "val_miou" in _scalars(workdir / "lightning_logs/03_inputs/version_0")
-    assert (data / "checkpoints/03_inputs/last.ckpt").is_file()
+    assert (data / "landcover_model.pt").is_file()
 
 
 def test_predictor_bounds_model_batches_and_restores_each_scene(tmp_path):
@@ -299,33 +299,27 @@ def test_catalog_examples_load_chips_and_restore_pixels(tmp_path):
 @pytest.mark.slow
 @pytest.mark.integration
 def test_pipeline_runs(inputs_lesson, tmp_path: Path, data: Path) -> None:
-    """Package the trained forest model as a pipeline and publish its maps."""
+    """Build the pipeline step by step, release library steps and map a forest observation."""
     import json
-
-    import yaml
-
-    import geosave as gs
 
     code = _run("04_pipeline.ipynb", tmp_path, data)
     assert all(cell.execution_count is not None for cell in code)
-    roundtrip = next(
-        cell for cell in code if "reloaded.predict(rasters).equals(cover)" in cell.source
-    )
-    assert roundtrip.outputs[-1].data["text/plain"] == "True"
+
+    for check in (
+        "pipeline.predict(rasters).identical(cover)",
+        "np.allclose(library_predictor(model, sample), logits, equal_nan=True)",
+        "reloaded.predict(rasters).equals(cover)",
+    ):
+        cell = next(cell for cell in code if check in cell.source)
+        assert cell.outputs[-1].data["text/plain"] == "True", check
 
     config = json.loads((data / "landcover_pipeline" / "config.json").read_text())
-    assert config["predictor"]["class_path"] == "__main__.LandCoverPredictor"
-    maps = gs.open_vector(data / "khdtk_maps" / "catalog.parquet")
-    assert sorted(maps["datetime"].dt.strftime("%Y-%m")) == [f"2019-{month:02}" for month in range(5, 11)]
+    assert config["pipeline"] == "raster"
+    assert config["ingestor"]["name"] == "sentinel2_l2a"
+    assert config["predictor"]["name"] == "dense"
+    assert any("forest_cover = reloaded.predict(forest_rasters)" in cell.source for cell in code)
+    assert list((data / "khdtk_maps").iterdir())
 
-    target = yaml.safe_load((data / "dynamic_world/labels.yaml").read_text())["dynamic_world"]
-    with gs.open_raster(maps.iloc[0]["assets"]["class_id"]["href"]) as cover:
-        flags = cover["class_id"].gs.flags
-        assert flags is not None
-        assert flags.classes == dict(enumerate(target["classes"]))
-        assert flags.colors == {
-            code: color.upper() for code, color in enumerate(target["colors"])
-        }
 
 
 @pytest.mark.parametrize("name", ["00_basics.ipynb", "01_model.ipynb"])

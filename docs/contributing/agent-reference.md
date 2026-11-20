@@ -91,8 +91,11 @@ Generated configs and scripts use separate method paths.
 
 Preparation shared by training and inference implements
 `ml/processing/raster/preprocessing/base.py`'s `RasterPreprocessor`.
-A sub-processor's `__call__` carries `@chain_step()` and returns a named
-variable (`sample`, `output`, `product`). A release stores each
+The roles' signatures are the contract between steps; a predictor and
+postprocessor state their task's types, such as
+`RasterPredictor[xr.DataArray]` and `RasterPostprocessor[xr.DataArray, xr.Dataset]`.
+A new input shape gets its own pipeline (`ChangePipeline`, `PromptPipeline`)
+instead of an optional argument. A release stores each
 sub-processor's spec, a library one by name and a project's own by class path,
 and `load_pipeline` rebuilds the raster pipeline around its model.
 

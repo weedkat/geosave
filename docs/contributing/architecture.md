@@ -142,14 +142,18 @@ per stage (`ENCODERS`, `DECODERS`, `HEADS`, `MONOLITHS`); `build.py` builds a
 chain from a recipe, filling `Published` values from earlier stages;
 `catalog.py` lists what is registered and what connects.
 
-`ml/processing/raster/` has one package per role: `ingestion`, `preprocessing`,
-`prediction` and `postprocessing`. Each `base.py` declares an abstract
-role and its registry. `pipeline.py` owns `RasterPipeline`, the orchestrator
-of inference, and its `predict` and `predict_to_zarr` entry points. A
-sub-processor is entered by `__call__`, which declares with `@chain_step()`
-the values it takes and returns by name; the pipeline checks that they
-connect when it is constructed and checks each value's type as it is handed
-over. Sources and prepared pixel inputs are named DataTree nodes; the
+`ml/processing/` has one package per input shape: `raster/` (one
+acquisition), `change/` (before and after) and `prompt/` (rasters and the
+shapes to look at). Each holds a `pipeline.py` and one package per role it
+declares: `raster/` has `ingestion`, `preprocessing`, `prediction` and
+`postprocessing`; `change/` declares only its preprocessor and reuses the
+raster predictor and postprocessor; `prompt/` reuses the raster preprocessor.
+Each `base.py` declares an abstract role and its registry. `RasterPipeline`
+orchestrates inference with `predict` and `predict_to_zarr`; the change and
+prompt pipelines are skeletons until a model needs them. A sub-processor is
+entered by `__call__`, and the roles' signatures are the contract between
+steps: the predictor's `Output` and the postprocessor's `Product` are type
+parameters a task fills in. Sources and prepared pixel inputs are named DataTree nodes; the
 predictor passes named tensors and requested context to the model and
 returns its values undecoded; the postprocessor masks, decodes and builds the
 product. The library provides `sentinel2_l2a` ingestion, `dense`
@@ -160,7 +164,7 @@ Projects subclass a role for their own.
 Transformers config and model of a `ModelChain`. `ChainModel.from_chain(chain)`
 releases a chain alone; `ChainModel.from_pipeline(pipeline)` adds each
 sub-processor's spec, read from the sub-processor (`ChainConfig.preprocessor`,
-`predictor`, `postprocessor`, `ingestor`; format version 4). Both refuse a
+`predictor`, `postprocessor`, `ingestor`, and `pipeline`, the variant; format version 5). Both refuse a
 component defined outside geosave. A library sub-processor is stored by name,
 a project's own by class path, which rebuilds wherever the project's code is
 installed. `AutoModel.from_pretrained` loads the model alone; `load_pipeline`

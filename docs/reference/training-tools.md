@@ -3,34 +3,20 @@
 Task modules and data modules use these builders and transforms. Add logging
 through Trainer. See [Train a model](../advanced/training.md).
 
-## Optimizer, scheduler, and loss builders
+## Optimizer, scheduler, and loss registries
 
-::: geosave.ml.builders.CriterionSpec
-    options:
-      inherited_members:
-        - name
-        - class_path
-        - init_args
+Configs select each one by registered name or `class_path`, with `init_args`.
+The Module builds it with the registry, passing live objects first:
 
-::: geosave.ml.builders.OptimizerSpec
-    options:
-      inherited_members:
-        - name
-        - class_path
-        - init_args
+```python
+optimizer = OPTIMIZERS.build(BuildSpec.model_validate(spec), self.parameters())
+```
 
-::: geosave.ml.builders.SchedulerSpec
-    options:
-      inherited_members:
-        - name
-        - class_path
-        - init_args
+::: geosave.ml.builders.CRITERIA
 
-::: geosave.ml.builders.build_criterion
+::: geosave.ml.builders.OPTIMIZERS
 
-::: geosave.ml.builders.build_optimizer
-
-::: geosave.ml.builders.build_scheduler
+::: geosave.ml.builders.SCHEDULERS
 
 ## Losses
 

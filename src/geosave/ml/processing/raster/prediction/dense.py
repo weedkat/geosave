@@ -8,12 +8,11 @@ from torch import nn
 from torch.utils.data import default_collate
 
 from geosave.geodata.sampling import ChipMode, MergeWindow, RasterChipper, RasterMerger
-from geosave.ml.chain import chain_step
 from geosave.ml.processing.raster.prediction.base import PREDICTORS, RasterPredictor
 
 
 @PREDICTORS.register("dense")
-class DensePredictor(RasterPredictor):
+class DensePredictor(RasterPredictor[xr.DataArray]):
     """Cut a sample into chips, predict them in batches and merge the outputs.
 
     A LightningModule simulates this on tensor batches with `TensorChipper`
@@ -65,7 +64,6 @@ class DensePredictor(RasterPredictor):
             return self.size, self.size
         return self.size, self.stride
 
-    @chain_step()
     def __call__(self, model: nn.Module, sample: xr.DataTree) -> xr.DataArray:
         """Return the model's merged output over the sample, reading it chip by chip.
 
@@ -78,7 +76,7 @@ class DensePredictor(RasterPredictor):
             sample: Model-ready rasters by name, lazy, on one grid.
 
         Returns:
-            `output`: the model's values as it returned them, float32
+            The model's values as it returned them, float32
             `(band, y, x)` on the sample's grid, one band per output channel
             (logits for segmentation). Overlapping chips are averaged by
             `window`; a pixel no chip covers is NaN. It carries the grid's

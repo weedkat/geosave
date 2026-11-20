@@ -12,12 +12,7 @@ if TYPE_CHECKING:
 
 
 class RasterPreprocessor(ABC):
-    """Turn raw rasters into a model-ready sample; shared by training and inference.
-
-    A subclass declares its `__call__` with `@chain_step()` and returns a
-    variable named `sample`: a pipeline hands that value to the predictor
-    and the postprocessor, checked against what each declares it takes.
-    """
+    """Turn raw rasters into a model-ready sample; shared by training and inference."""
 
     @abstractmethod
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
@@ -31,11 +26,11 @@ class RasterPreprocessor(ABC):
             rasters: One node per raw raster, as an ingestor returns them.
 
         Returns:
-            `sample`: one node per model input, under the name the model
-            takes it by, each node's variables its bands in model order, as
-            float32 in model units. A node the model does not take, such as
-            a boolean mask, is for the postprocessor. Every node sits on one
-            grid and keeps the acquisition's scalar `time`.
+            One node per model input, under the name the model takes it by,
+            each node's variables its bands in model order, as float32 in
+            model units. A node the model does not take, such as a boolean
+            mask, is for the postprocessor. Every node keeps the
+            acquisition's scalar `time`.
         """
 
 

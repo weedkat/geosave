@@ -33,13 +33,14 @@ It covers data inspection, model choices, acquisition, training and reuse.
 | [1 · Model](https://github.com/weedkat/geosave/blob/main/examples/01_model.ipynb) | Compose model stages and compare runs. |
 | [2 · Find a Sentinel-2 Item](https://github.com/weedkat/geosave/blob/main/examples/02_sources.ipynb) | Query Sentinel-2 over Jakarta, crop one Item, and compare natural color with NDVI, and save a GeoTIFF. |
 | [3 · Fine-tune Prithvi on image chips](https://github.com/weedkat/geosave/blob/main/examples/03_inputs.ipynb) | Train on random crops, predict up to 16 chips per batch, and merge logits on each image’s grid. |
-| [4 · From a Sentinel-2 image to a land-cover map](https://github.com/weedkat/geosave/blob/main/examples/04_pipeline.ipynb) | Restore the checkpoint, assemble and call the pipeline on a validation image, then save it and map the forest. |
+| [4 · Build a land-cover pipeline](https://github.com/weedkat/geosave/blob/main/examples/04_pipeline.ipynb) | Build a pipeline step by step, move the experiment's predictor into the library, release it and map a forest observation. |
 
 Run notebooks from `examples/` with a fresh kernel and the development
 environment from `uv sync`. Lessons 0 and 1 compare models on the same tiles.
 Lesson 2 saves a Jakarta NDVI GeoTIFF. Lesson 3 uses a Lightning DataModule
 for the training and evaluation splits and defines its predictor inline. Lesson 4
-restores the training checkpoint and uses the same predictor in its pipeline.
+restores the training checkpoint, checks the library's `DensePredictor` against that
+predictor and releases a pipeline of library steps.
 
 These short runs teach a workflow. Evaluate on independent geography or periods
 before making claims about model quality or land-cover change.

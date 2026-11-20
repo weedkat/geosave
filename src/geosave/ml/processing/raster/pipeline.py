@@ -1,17 +1,16 @@
-"""The raster pipeline: a caller gives raw rasters and gets the model's product."""
+"""The raster pipeline: a caller gives the rasters of one acquisition and gets the model's product."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import xarray as xr
 
 from geosave.geodata.io import create_zarr, write_zarr_region
 from geosave.geodata.sampling import find_chip_span
-from geosave.ml.chain.step import Step, type_name
 
 if TYPE_CHECKING:
+    import geopandas as gpd
     from torch import nn
     from upath import UPath
 
@@ -21,37 +20,29 @@ if TYPE_CHECKING:
     from geosave.ml.processing.raster.prediction.base import RasterPredictor
     from geosave.ml.processing.raster.preprocessing.base import RasterPreprocessor
 
-# Values a pipeline supplies itself; every other value a sub-processor takes
-# is one an earlier sub-processor returned.
-SUPPLIED = ("rasters", "model")
 
-
-class RasterPipeline:
-    """Orchestrate inference: raw rasters in, the model's product out.
+class RasterPipeline[Output, Product: (xr.Dataset, gpd.GeoDataFrame)]:
+    """Orchestrate inference over the rasters of one acquisition.
 
         rasters ──preprocessor──▶ sample ──predictor (model)──▶ output
             ──postprocessor (output, sample)──▶ product
 
-    Each step is a sub-processor called directly, and can be exchanged for
-    another of its role. Its `__call__` declares with `@chain_step()` the
-    values it takes and returns by name; the pipeline refuses sub-processors
-    whose values do not connect, and checks every value's type as it is
-    handed over. `predict` holds the whole product in memory;
-    `predict_to_zarr` writes a raster too large for that chunk by chunk.
+    The sub-processors' signatures are the contract between steps: the
+    preprocessor takes and returns a DataTree, the predictor returns the
+    `Output` its postprocessor takes, and the postprocessor returns the
+    `Product`, a raster Dataset or a GeoDataFrame. Several sensors on one
+    acquisition are several nodes of the same tree. `predict` holds the whole
+    product in memory; `predict_to_zarr` writes a raster product too large for
+    that chunk by chunk.
 
     Args:
         model: Model the predictor calls with its inputs by name.
         preprocessor: Builds the model-ready sample as training did.
         predictor: Runs the model over a sample of any size.
-        postprocessor: Turns the model's output into the product.
+        postprocessor: Turns the predictor's output into the product.
         ingestor: Loads the raw rasters this pipeline accepts; the pipeline
             carries it and never runs it. None for a pipeline whose caller
             supplies every raster.
-
-    Raises:
-        TypeError: A sub-processor's `__call__` declares no `@chain_step()`,
-            takes a value no earlier step returns, or takes it as another
-            type than it is returned as.
 
     Examples:
         >>> pipeline = RasterPipeline(
@@ -61,57 +52,54 @@ class RasterPipeline:
         ...     postprocessor=SegmentationPostprocessor(["land", "water"], ["#397d49", "#419bdf"]),
         ...     ingestor=Sentinel2Ingestor(bands=["B04", "B08"]),
         ... )
-        >>> rasters = pipeline.ingestor(region)[0]
-        >>> pipeline.predict(rasters)["class_id"].dtype
+        >>> for rasters in pipeline.ingestor(region):
+        ...     pipeline.predict(rasters)["class_id"].dtype
         dtype('uint8')
-        >>> pipeline.predict_to_zarr(rasters, "product.zarr", chunks=2048)
-        UPath('/abs/product.zarr')
     """
 
     def __init__(
         self,
         model: nn.Module,
         preprocessor: RasterPreprocessor,
-        predictor: RasterPredictor,
-        postprocessor: RasterPostprocessor,
+        predictor: RasterPredictor[Output],
+        postprocessor: RasterPostprocessor[Output, Product],
         ingestor: RasterIngestor | None = None,
     ) -> None:
-        check_steps(preprocessor, predictor, postprocessor)
-
         self.model = model
         self.preprocessor = preprocessor
         self.predictor = predictor
         self.postprocessor = postprocessor
         self.ingestor = ingestor
 
-    def predict(self, rasters: xr.DataTree) -> Any:
+    def predict(self, rasters: xr.DataTree) -> Product:
         """Predict the raw rasters of one acquisition in memory.
 
-        Memory holds the model's output for the whole raster; write a larger
-        raster with `predict_to_zarr`.
+        Memory holds the predictor's output for the whole raster; write a
+        larger raster with `predict_to_zarr`.
 
         Args:
             rasters: One node per raw raster, as the ingestor returns them.
 
         Returns:
-            The postprocessor's product: for a per-pixel task a Dataset on
-            the sample's grid, with the sample's scalar coordinates.
-
-        Raises:
-            TypeError: A sub-processor returned another type than it declares.
+            The postprocessor's product.
         """
-        sample = self.preprocess(rasters)
-        return self.predict_sample(sample)
+        sample = self.preprocessor(rasters)
+        output = self.predictor(self.model, sample)
+        product = self.postprocessor(output, sample)
+        return product
 
     def predict_to_zarr(
-        self, rasters: xr.DataTree, destination: Location, chunks: int = 2048
+        self: RasterPipeline[Any, xr.Dataset],
+        rasters: xr.DataTree,
+        destination: Location,
+        chunks: int = 2048,
     ) -> UPath:
         """Predict the raw rasters of one acquisition into a Zarr store, chunk by chunk.
 
         Each chunk is read with a halo: the pixels of every chip that touches
         it. The chunk is predicted with its halo and written without it, so
         the store holds what `predict` returns while memory holds one
-        chunk's model output.
+        chunk's output.
 
         Args:
             rasters: One node per raw raster, lazy, as the ingestor
@@ -119,16 +107,17 @@ class RasterPipeline:
             destination: Store to create, ending in `.zarr`.
             chunks: Height and width in pixels of a chunk, also the store's
                 chunk, rounded down to a multiple of the predictor's stride;
-                choose the largest whose model output fits memory.
+                choose the largest whose output fits memory.
 
         Returns:
             Path of the store.
 
         Raises:
             FileExistsError: The destination exists.
+            NotImplementedError: The predictor states no chip size.
             TypeError: The postprocessor's product is not a raster Dataset.
         """
-        sample = self.preprocess(rasters)
+        sample = self.preprocessor(rasters)
         grid = sample.gs.common_geobox()
         height, width = grid.shape
 
@@ -152,7 +141,9 @@ class RasterPipeline:
                 # A chunk is loaded once with its halo, not read chip by chip.
                 halo_grid = grid[halo_top:halo_bottom, halo_left:halo_right]
                 chunk = sample.gs.crop_to_grid(halo_grid).compute()
-                product = self.predict_sample(chunk)
+                output = self.predictor(self.model, chunk)
+                product = self.postprocessor(output, chunk)
+                # A loaded release is not type-checked; refuse a vector product here.
                 if not isinstance(product, xr.Dataset):
                     raise TypeError(
                         "predict_to_zarr writes raster products; this "
@@ -165,88 +156,3 @@ class RasterPipeline:
                     store = create_zarr(product, grid, destination, chunks=step)
                 write_zarr_region(product, store)
         return store
-
-    def preprocess(self, rasters: xr.DataTree) -> xr.DataTree:
-        """Build the lazy model-ready sample of one acquisition's raw rasters."""
-        values = run_step(self.preprocessor, {"rasters": rasters})
-        return cast("xr.DataTree", values["sample"])
-
-    def predict_sample(self, sample: xr.DataTree) -> Any:
-        """Predict and decode one preprocessed sample whole."""
-        values: dict[str, object] = {"model": self.model, "sample": sample}
-        values.update(run_step(self.predictor, values))
-        values.update(run_step(self.postprocessor, values))
-        return values["product"]
-
-
-def find_step(processor: object) -> Step:
-    """Return what a sub-processor's `__call__` declares it takes and returns.
-
-    Raises:
-        TypeError: Its `__call__` carries no `@chain_step()`.
-    """
-    step = getattr(type(processor).__call__, "_chain_step", None)
-    if not isinstance(step, Step):
-        raise TypeError(
-            f"{type(processor).__name__}.__call__ declares no step; decorate it "
-            f"with @chain_step()"
-        )
-    return step
-
-
-def run_step(processor: object, values: Mapping[str, object]) -> dict[str, object]:
-    """Call a sub-processor with the values its `__call__` takes by name.
-
-    Args:
-        processor: Sub-processor whose `__call__` declares a step.
-        values: Values available so far, by name.
-
-    Returns:
-        The values it returned, by the names its `__call__` declares.
-
-    Raises:
-        KeyError: A value it takes is absent.
-        TypeError: A value it takes or returns has another type than declared.
-    """
-    step = find_step(processor)
-    return cast("dict[str, object]", step.invoke(processor, values))
-
-
-def check_steps(
-    preprocessor: RasterPreprocessor,
-    predictor: RasterPredictor,
-    postprocessor: RasterPostprocessor,
-) -> None:
-    """Refuse sub-processors whose declared values do not connect in order.
-
-    Raises:
-        TypeError: A step takes a value no earlier step returns, or takes it
-            as another type than it is returned as; the preprocessor returns
-            no `sample`; or the postprocessor returns no `product`.
-    """
-    returned: dict[str, type] = {}
-    for processor in (preprocessor, predictor, postprocessor):
-        step = find_step(processor)
-        owner = type(processor).__name__
-
-        for name, kind in step.inputs.items():
-            if name in SUPPLIED:
-                continue
-            if name not in returned:
-                raise TypeError(
-                    f"{owner} takes {name!r}, which no earlier step returns; "
-                    f"returned so far: {list(returned)}"
-                )
-            if returned[name] != kind:
-                raise TypeError(
-                    f"{owner} takes {name!r} as {type_name(kind)}, but it is "
-                    f"returned as {type_name(returned[name])}"
-                )
-
-        if processor is preprocessor and "sample" not in step.outputs:
-            raise TypeError(f"{owner} must return a variable named `sample`")
-        returned.update(step.outputs)
-
-    if "product" not in returned:
-        owner = type(postprocessor).__name__
-        raise TypeError(f"{owner} must return a variable named `product`")

@@ -2,7 +2,6 @@
 
 import xarray as xr
 
-from geosave.ml.chain import chain_step
 from geosave.ml.processing.raster.preprocessing.base import (
     PREPROCESSORS,
     RasterPreprocessor,
@@ -55,7 +54,6 @@ class DensePreprocessor(RasterPreprocessor):
         self.std = std
         self.name = name
 
-    @chain_step()
     def __call__(self, rasters: xr.DataTree) -> xr.DataTree:
         """Prepare the named raster's bands as standardized float32, lazily.
 
@@ -66,7 +64,7 @@ class DensePreprocessor(RasterPreprocessor):
             rasters: Tree holding the raster under `name`.
 
         Returns:
-            `sample`: one node, `name`, whose variables are `bands` in model
+            One node, `name`, whose variables are `bands` in model
             order as float32 on the raster's grid: decoded, filled and
             standardized as the arguments say, with the raster's scalar
             coordinates.

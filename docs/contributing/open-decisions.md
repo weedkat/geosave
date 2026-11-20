@@ -93,7 +93,12 @@ card (lineage), once configs name the data repo revision.
 
 `RasterPipeline` orchestrates inference over rasters. Every step around the
 model is an interchangeable sub-processor, named by its input and entered by
-`__call__`; `@chain_step()` on it declares the values handed between steps. Each step
+`__call__`; the roles' signatures are the contract between steps, with the
+predictor's `Output` and the postprocessor's `Product` as type parameters
+(decided 2026-11-20, replacing `@chain_step()` on sub-processors). A new input
+shape gets its own pipeline: `ChangePipeline(before, after)` and
+`PromptPipeline(rasters, prompts)` are skeletons, with roles declared and no
+implementations until a model needs them; neither can be released yet. Each step
 is a package holding its abstract role (`base.py`) and its implementations, named by task
 (`dense.py` for per-pixel segmentation and regression); subclass where a
 model needs more.
@@ -101,7 +106,7 @@ The contract between steps carries no fixed names: the ingestor returns a
 DataTree of source rasters, the preprocessor returns a DataTree whose nodes
 are the model's pixel inputs, and the model is called with the batch by name.
 A release stores the sub-processors as `{name, init_args}` each, the ingestor
-optionally; `ARTIFACT_FORMAT_VERSION` is 3. This supersedes the earlier plain-function
+optionally, and the pipeline variant; `ARTIFACT_FORMAT_VERSION` is 5. This supersedes the earlier plain-function
 registries, the proposal to reuse ModelSpec as a declaration, and a registry
 of main processors. `workspace/dynamicworld` runs it end to end: train,
 `scripts/publish.py`, `scripts/predict_region.py`.

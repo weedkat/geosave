@@ -108,6 +108,7 @@ nav = [
         ] },
         { "Design notes" = [
             { "Direction" = "contributing/design/direction.md" },
+            { "GeoSave and rslearn" = "contributing/design/geosave-and-rslearn.md" },
             { "GeoDataTree and STAC publication" = "contributing/design/raster-tree.md" },
             { "Publish and load" = "contributing/design/publish-load.md" },
             { "Samples and chips" = "contributing/design/samples-chips.md" },

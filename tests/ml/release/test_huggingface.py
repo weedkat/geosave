@@ -61,7 +61,8 @@ def test_automodel_roundtrip_preserves_recipe_weights_outputs_and_mode(
     assert isinstance(restored, ChainModel)
     assert not restored.training
     assert list(restored.chain.stage_specs) == ["head"]
-    assert config["format_version"] == 4
+    assert config["format_version"] == 5
+    assert config["pipeline"] is None
     assert config["geosave_version"] == __version__
     assert "auto_map" not in config
     torch.testing.assert_close(

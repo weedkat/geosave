@@ -1,12 +1,5 @@
-from .criterion import CriterionSpec, build_criterion
-from .optimizer import OptimizerSpec, build_optimizer
-from .scheduler import SchedulerSpec, build_scheduler
+from .criterion import CRITERIA
+from .optimizer import OPTIMIZERS
+from .scheduler import SCHEDULERS
 
-__all__ = [
-    "CriterionSpec",
-    "OptimizerSpec",
-    "SchedulerSpec",
-    "build_criterion",
-    "build_optimizer",
-    "build_scheduler",
-]
+__all__ = ["CRITERIA", "OPTIMIZERS", "SCHEDULERS"]
