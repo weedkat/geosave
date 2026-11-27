@@ -11,6 +11,7 @@ from shapely.geometry import Point
 from geosave import GeoCatalog
 from geosave.geodata import io, stac
 from geosave.geodata.stac.catalog import concat_catalogs, create_catalog
+from geosave.geodata.stac.stamps import stamp_properties
 from tests.geodata.conftest import create_test_collection
 from tests.geodata.stac.conftest import entry
 from tests.geodata.stac.test_publish import publish_two_grids
@@ -87,7 +88,10 @@ def test_published_catalog_round_trips_through_geoparquet(tmp_path):
     assert restored[0].assets["red"].href == stored
     assert list(opened.gs.collections) == ["optical"]
     loaded = stac.load_native_datasets(
-        restored, chunks={}, with_properties=stac.list_properties(restored)
+        restored,
+        chunks={},
+        with_properties=[{"key": "eo:cloud_cover", "dtype": "float64"}],
+        stamps=["collection", stamp_properties],
     )
     sources = [fine, coarse]
     for (_, _, native), source in zip(loaded, sources, strict=True):
@@ -127,7 +131,9 @@ def test_catalog_rows_load_as_one_dataset(tmp_path):
     items, fine, _ = publish_two_grids(tmp_path)
     catalog = create_catalog(items)
 
-    scene = catalog.gs.to_dataset(chunks={}, like=fine, bands=["red", "nir"])
+    scene = catalog.gs.to_dataset(
+        chunks={}, like=fine, bands=["red", "nir"], stamps=["collection"]
+    )
 
     assert scene.gs.stac_collection.id == "optical"
     for name in ("red", "nir"):

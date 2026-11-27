@@ -17,17 +17,16 @@ from .core import (
 )
 from .io import open_raster, open_raster_tree, open_vector
 from .sampling import (
-    ChipLayout,
     RasterChipper,
     RasterMerger,
-    TensorChipper,
-    TensorMerger,
+    collate,
+    iter_samples,
     random_crop,
 )
 from geosave.geodata.io.gdal_env import configure_gdal
 from .errors import RasterValidationError, VectorValidationError
 from .core.raster.utils.statistics import class_percent, summary
-from .core.raster.utils.context import TENSOR_CONTEXT
+from .core.raster.utils.context import CONTEXT_READERS, ContextReader
 
 if TYPE_CHECKING:
     from . import features, stac
@@ -101,11 +100,10 @@ def __dir__() -> list[str]:
 __all__ = [
     "RasterValidationError",
     "VectorValidationError",
-    "ChipLayout",
     "RasterChipper",
     "RasterMerger",
-    "TensorChipper",
-    "TensorMerger",
+    "collate",
+    "iter_samples",
     "random_crop",
     "attrs",
     "GeoRegion",
@@ -131,5 +129,6 @@ __all__ = [
     "stac",
     "class_percent",
     "summary",
-    "TENSOR_CONTEXT",
+    "CONTEXT_READERS",
+    "ContextReader",
 ]

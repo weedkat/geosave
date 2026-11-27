@@ -90,7 +90,7 @@ reduced. `closed`, `label`, `origin` and `offset` follow native resample, and
 cell and, without interpolation, NaN pixels. Select with native `.sel` on
 labels, or on `start_datetime`/`end_datetime` for overlap. Pixels stay lazy.
 
-Class codes permit only `first` and `last`, without interpolation. Existing `cell_methods` are retained
+Class IDs permit only `first` and `last`, without interpolation. Existing `cell_methods` are retained
 and the temporal method is appended. Variance removes `units`; state the known
 squared units explicitly on its output. Native sum returns zero for an observed
 bin whose pixels are all missing. Reduction does not restore the input's integer
@@ -157,14 +157,14 @@ band.gs.validate(decoded)                # and no active CF packing
 scene.gs.validate(same_pixel_meaning)    # one packing, flags and units across variables
 tree.gs.validate(same_geobox)           # every raster node on the identical GeoBox
 observations.gs.validate(compatible_concat("time"))  # preflight without combining
-band.gs.validate(compatible_resampling("mean"))  # class codes need nearest, mode, first or last
+band.gs.validate(compatible_resampling("mean"))  # class IDs need nearest, mode, first or last
 ```
 
 | Rule | Checks | Used by |
 | --- | --- | --- |
 | `rules.common.georeferenced` | an ODC grid with a CRS | DataArray/Dataset `validate` |
 | `rules.dataarray.decoded` | no active CF packing | `composite` |
-| `rules.dataarray.compatible_resampling(method)` | class codes resampled only by nearest, mode, first or last | `reproject`, `composite` |
+| `rules.dataarray.compatible_resampling(method)` | class IDs resampled only by nearest, mode, first or last | `reproject`, `composite` |
 | `rules.dataset.same_pixel_meaning` | one packing, flags and units across variables | `to_array` |
 | `rules.datatree.raster_leaves` | raster data only on leaves with locally owned grids | DataTree `validate` |
 | `rules.datatree.same_grid` | matching CRS, resolution and pixel alignment; extents may differ | explicit validation |

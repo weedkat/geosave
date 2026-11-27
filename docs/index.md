@@ -42,11 +42,11 @@ preview
 | Inspect rasters and vectors on interactive maps | [Explorer](basics/explore.md) |
 | Crop, align, decode values and calculate indices | [Prepare imagery](advanced/crop-imagery.md) |
 | Search satellite observations by area and date | [STAC](advanced/stac.md) |
-| Read aligned training chips and blend model predictions | [Training samples](basics/training-chips.md), [raster prediction](advanced/release.md#run-with-a-raster-pipeline) |
+| Read aligned training chips and blend model predictions | [Training samples](basics/training-chips.md), [chip placement and merging](reference/chips.md) |
 | Compose models with supported pretrained encoders | [Models](advanced/pretrained.md) |
 | Train with ordinary PyTorch Datasets and Lightning | [Training](advanced/training.md) |
-| Save trained weights and raster-processing settings | [Model releases](advanced/release.md) |
-| Predict a region as a monitored Prefect flow | [Prediction flow](reference/workflow.md) |
+| Save trained weights and model architecture | [Model releases](advanced/release.md) |
+| Inspect the region workflow contract | [Prediction flow](reference/workflow.md) |
 
 ## Find your level
 

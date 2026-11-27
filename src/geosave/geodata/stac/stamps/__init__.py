@@ -1,34 +1,57 @@
-"""Stamps: named steps that write what STAC documents state onto a loaded Dataset.
+"""Optional metadata callables for STAC raster loads.
 
-A stamp takes the loaded Dataset and the Items behind it and returns the
-Dataset with metadata written, reading no pixels. `load_dataset` runs the
-stamps named in `stamps=`, in order; a later stamp overrides attrs an earlier
-one wrote. Each stamp registers itself with `@register_stamp` where it is
-defined; importing this package imports those modules.
+A stamp receives the loaded Dataset, its source Items and the load's ODC
+`stac_cfg`, which band stamps need to find a configured alias's asset. Pass a
+name from `STAMPS`, a callable, or a sequence of both in execution order.
 
 Examples:
-    >>> scene = stac.load_dataset(items, geobox=grid, stamps=[*DEFAULT_STAMPS, "sentinel_2"])
+    >>> from geosave.geodata.stac.stamps import stamp_raster
+    >>> scene = stac.load_dataset(items, geobox=grid, stamps=(stamp_raster, "eo"))
+    >>> scene = stac.load_dataset(items, geobox=grid, stac_cfg=cfg, stamps=["raster"])
 """
 
-from . import bands, collection  # noqa: F401  register their stamps
-from .registry import STAMPS, check_stamps, register_stamp, run_stamps
-from .source import LoadSource, Stamp
+from collections.abc import Callable, Sequence
 
-DEFAULT_STAMPS = (
-    "raster",
-    "eo",
-    "classification",
-    "rgb",
-    "title",
-    "collection",
-)
+import pystac
+import xarray as xr
+from odc.stac import ConversionConfig
+
+from .classification import stamp_classification
+from .collection import stamp_collection
+from .display import stamp_rgb, stamp_title
+from .eo import stamp_eo
+from .period import stamp_observation_period
+from .properties import stamp_properties
+from .raster import stamp_nodata, stamp_raster
+
+type Stamp = Callable[
+    [xr.Dataset, Sequence[pystac.Item], ConversionConfig | None], xr.Dataset
+]
+"""A function that adds metadata from the source Items to a loaded Dataset.
+
+It receives the Dataset, the Items and the load's ODC `stac_cfg`, or None."""
+
+STAMPS: dict[str, Stamp] = {
+    "classification": stamp_classification,
+    "collection": stamp_collection,
+    "eo": stamp_eo,
+    "observation_period": stamp_observation_period,
+    "properties": stamp_properties,
+    "raster": stamp_raster,
+    "rgb": stamp_rgb,
+    "title": stamp_title,
+}
 
 __all__ = [
-    "DEFAULT_STAMPS",
     "STAMPS",
-    "LoadSource",
     "Stamp",
-    "check_stamps",
-    "register_stamp",
-    "run_stamps",
+    "stamp_classification",
+    "stamp_collection",
+    "stamp_eo",
+    "stamp_nodata",
+    "stamp_observation_period",
+    "stamp_properties",
+    "stamp_raster",
+    "stamp_rgb",
+    "stamp_title",
 ]

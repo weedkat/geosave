@@ -62,7 +62,9 @@ def test_crop_cuts_every_group_of_a_tree_and_keeps_root_attrs() -> None:
     cropped = tree.gs.crop(_triangle())
 
     assert tuple(cropped.children) == ("optical", "dem")
-    assert all(node.gs.to_dataset().gs.geobox.shape == (3, 3) for node in cropped.leaves)
+    assert all(
+        node.gs.to_dataset().gs.geobox.shape == (3, 3) for node in cropped.leaves
+    )
     assert cropped["dem"].to_dataset().height.isel(time=0).values.tolist() == [
         [1, 0, 0],
         [1, 1, 0],
@@ -134,7 +136,8 @@ def _scene(times: int = 2):
 
 @pytest.mark.parametrize("mode", ["constant", "edge", "reflect", "wrap"])
 @pytest.mark.parametrize(
-    "window", [(-1, -2, 3, 3), (1, 1, 2, 2), (2, 3, 4, 4), (-3, -3, 10, 10), (3, 0, 4, 4)]
+    "window",
+    [(-1, -2, 3, 3), (1, 1, 2, 2), (2, 3, 4, 4), (-3, -3, 10, 10), (3, 0, 4, 4)],
 )
 def test_crop_to_grid_pads_as_numpy_pads_the_whole_raster_lazily(mode, window):
     scene = _scene()
@@ -187,12 +190,13 @@ def test_crop_to_grid_rejects_unaligned_or_disjoint_grids():
 
 def test_selected_chip_round_trips_through_geotiff(tmp_path):
     from geosave.geodata import open_raster
+    from geosave.geodata.io import write_cog
 
     scene = _scene(times=0)
     grid = scene.gs.geobox.translate_pix(2, 1).crop((3, 3))
     chip = scene.gs.crop_to_grid(grid, mode="edge")
     path = tmp_path / "chip.tif"
-    chip.red.gs.to_cog(path)
-    with open_raster(path) as restored:
-        assert restored.gs.geobox == grid
-        np.testing.assert_array_equal(restored.band_1.values, chip.red.values)
+    write_cog(chip[["red"]], path)
+    restored = open_raster(path)
+    assert restored.gs.geobox == grid
+    np.testing.assert_array_equal(restored.red.values, chip.red.values)

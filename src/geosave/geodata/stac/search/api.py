@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+from functools import cache, cached_property
 from typing import TYPE_CHECKING, Any
 
 import planetary_computer
 import pystac
-from pystac_client import Client
+from cql2 import Expr
+from pystac_client import Client, ConformanceClasses
 from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 from urllib3.util import Retry
@@ -20,6 +23,7 @@ if TYPE_CHECKING:
     from geosave.geodata import GeoDataFrame
 
 CDSE_URL = "https://stac.dataspace.copernicus.eu/v1/"
+CDSE_S3_URL = "https://eodata.dataspace.copernicus.eu"
 PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/"
 ELEMENT84_URL = "https://earth-search.aws.element84.com/v1/"
 
@@ -27,75 +31,58 @@ ELEMENT84_URL = "https://earth-search.aws.element84.com/v1/"
 class StacClient:
     """Search one STAC API and inspect its Collections.
 
-    Use `open(url)` for a STAC API, or a named provider constructor such as
-    `planetary_computer()`. Search GeoParquet files with `StacTable(path)`.
+    Connects on the first request, so a loader can take `patch_url` without
+    one. Built-in providers have constructors such as `planetary_computer()`.
+    Search GeoParquet files with `StacTable(path)`.
 
     Args:
-        client: Open pystac-client session.
-        patch_url: Called on every asset href when passed to a loader, for a
-            catalog whose files need a short-lived signature. Searched hrefs
-            stay as the catalog publishes them.
+        url: STAC API root URL.
+        patch_url: Called on every asset href a loader reads, for a catalog
+            whose files need a signature. Searched hrefs stay as the catalog
+            publishes them.
 
     Examples:
-        >>> client = StacClient.cdse()
-        >>> items = client.search_items(StacQuery(collections=["sentinel-2-l2a"]))
+        >>> client = StacClient("https://example.org/stac/v1")
+        >>> client.collections()
+        {'forest'}
+        >>> items = StacClient.cdse().search_items(StacQuery(collections=["sentinel-2-l2a"]))
     """
 
     def __init__(
-        self, client: Client, *, patch_url: Callable[[str], str] | None = None
+        self, url: str, *, patch_url: Callable[[str], str] | None = None
     ) -> None:
-        """Bind the caller-owned session.
-
-        Args:
-            client: Open pystac-client session.
-            patch_url: Called on every asset href a loader reads.
-        """
-        self._client = client
-        self._patch_url = patch_url
+        self.url = url
+        self.patch_url = patch_url
         self._collections: dict[str, pystac.Collection] = {}
 
-    @classmethod
-    def open(cls, url: str) -> StacClient:
-        """Connect to a STAC API at its root URL.
-
-        Args:
-            url: STAC API root URL. For built-in providers, use
-                `planetary_computer()`, `cdse()` or `element84()` instead.
-                For a GeoParquet path or URL, use `StacTable(path)`.
-
-        Returns:
-            Client for the STAC API, without provider-specific asset signing.
-
-        Examples:
-            >>> client = StacClient.open("https://example.org/stac/v1")
-            >>> client.collections()
-            {'forest'}
-        """
-        return cls(Client.open(url, stac_io=_default_io()))
+    @cached_property
+    def _session(self) -> Client:
+        return Client.open(self.url, stac_io=_default_io())
 
     @classmethod
     def cdse(cls) -> StacClient:
         """Connect to the Copernicus Data Space Ecosystem catalog.
 
+        Searching needs no account. Reading pixels signs each `s3://eodata`
+        href with the S3 keys in `CDSE_S3_ACCESS_KEY` and
+        `CDSE_S3_SECRET_KEY`, and needs the `cloud` extra.
+
         Returns:
             Client for the CDSE STAC API.
         """
-        return cls(Client.open(CDSE_URL, stac_io=_default_io()))
+        return cls(CDSE_URL, patch_url=_sign_cdse)
 
     @classmethod
     def planetary_computer(cls) -> StacClient:
         """Connect to the Microsoft Planetary Computer catalog, signing assets as they load.
 
         Its files need a SAS token that lasts about a day, so searches keep the
-        lasting hrefs a saved table can store, and a loader signs each when given patch_url=client.patch_url.
+        lasting hrefs a saved table can store, and a loader signs each one.
 
         Returns:
             Client for the Planetary Computer STAC API.
         """
-        return cls(
-            Client.open(PLANETARY_COMPUTER_URL, stac_io=_default_io()),
-            patch_url=planetary_computer.sign,
-        )
+        return cls(PLANETARY_COMPUTER_URL, patch_url=planetary_computer.sign)
 
     @classmethod
     def element84(cls) -> StacClient:
@@ -104,7 +91,7 @@ class StacClient:
         Returns:
             Client for the Earth Search STAC API.
         """
-        return cls(Client.open(ELEMENT84_URL, stac_io=_default_io()))
+        return cls(ELEMENT84_URL)
 
     def search(self, query: StacQuery | SearchParams) -> GeoDataFrame:
         """Run one search to completion as an item table.
@@ -135,6 +122,10 @@ class StacClient:
     def search_items(self, query: StacQuery | SearchParams) -> list[pystac.Item]:
         """Run one search to completion as pystac Items, for loaders.
 
+        A filter selects the same Items on every catalog. A server without the
+        Filter extension, such as Earth Search, ignores it and returns every
+        Item, so the filter is applied to the returned Items instead.
+
         Args:
             query: Query object, or raw pystac-client search parameters.
 
@@ -145,7 +136,21 @@ class StacClient:
         params: dict[str, Any] = dict(
             query.to_search_params() if isinstance(query, StacQuery) else query
         )
-        return list(self._client.search(**params).items())
+        if "filter" not in params or self._session.conforms_to(
+            ConformanceClasses.FILTER
+        ):
+            return list(self._session.search(**params).items())
+
+        expr = Expr(params.pop("filter"))
+        params.pop("filter_lang", None)
+        max_items = params.pop("max_items", None)
+        items = []
+        for item in self._session.search(**params).items():
+            if expr.matches(item.to_dict()):
+                items.append(item)
+            if max_items is not None and len(items) == max_items:
+                break
+        return items
 
     def collections(self) -> set[str]:
         """Name the collections this catalog offers.
@@ -153,7 +158,7 @@ class StacClient:
         Returns:
             Collection IDs.
         """
-        return {collection.id for collection in self._client.get_collections()}
+        return {collection.id for collection in self._session.get_collections()}
 
     def collection(self, collection: str) -> pystac.Collection:
         """Fetch one collection, reusing it after the first read.
@@ -173,7 +178,7 @@ class StacClient:
                 f"call collections() to see what is available"
             )
             try:
-                found = self._client.get_collection(collection)
+                found = self._session.get_collection(collection)
             except KeyError as error:  # a static catalog
                 raise missing from error
             except APIError as error:
@@ -184,17 +189,44 @@ class StacClient:
             self._collections[collection] = found
         return self._collections[collection]
 
-    @property
-    def patch_url(self) -> Callable[[str], str] | None:
-        """Return the provider signer to pass to load_dataset.
 
-        Search Items retain durable hrefs; the loader signs at read time.
-        """
-        return self._patch_url
+def _sign_cdse(href: str) -> str:
+    """Presign a CDSE `s3://eodata` href for an HTTPS read; other hrefs pass through."""
+    if not href.startswith("s3://eodata/"):
+        return href
+    access_key = os.environ.get("CDSE_S3_ACCESS_KEY")
+    secret_key = os.environ.get("CDSE_S3_SECRET_KEY")
+    if not access_key or not secret_key:
+        raise RuntimeError(
+            "reading CDSE pixels needs S3 keys in CDSE_S3_ACCESS_KEY and "
+            "CDSE_S3_SECRET_KEY"
+        )
+    s3 = _open_cdse_s3(access_key, secret_key)
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": "eodata", "Key": href.removeprefix("s3://eodata/")},
+        ExpiresIn=12 * 3600,
+    )
+
+
+@cache
+def _open_cdse_s3(access_key: str, secret_key: str) -> Any:
+    """Open one S3 client per key pair; a load signs every asset href."""
+    import botocore.session
+    from botocore.config import Config
+
+    return botocore.session.get_session().create_client(
+        "s3",
+        endpoint_url=CDSE_S3_URL,
+        region_name="default",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
 
 
 def _default_io() -> StacApiIO:
-    """Configure retries before a built-in catalog session is opened."""
+    """Configure retries before a catalog session is opened."""
     return StacApiIO(
         max_retries=Retry(
             total=5,

@@ -58,14 +58,14 @@ See [STAC loading](stac.md) and [catalog operations](catalog.md).
 
 | Object and call | Default return | With `compute=False` |
 | --- | --- | --- |
-| DataArray `.gs.to_cog(path)` or `.gs.to_gtiff(path)` | Native rioxarray result (normally `None`) | Native Dask result with chunked data and `lock=True` |
 | `io.write_cog(dataset, path)` or `io.write_geotiff(dataset, path)` | One file `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_zarr(path)` | One store `UPath` | Delayed yielding that UPath |
 | Dataset, DataArray, DataTree `.gs.to_netcdf(path)` | One file `UPath` | Delayed yielding that UPath |
 | `stac.publish_item(item, assets=assets, root=folder)` | Native Item; assets written | Not supported |
 
-Dataset `.gs.to_cog()` is unavailable. Use `io.write_cog(dataset, path)` for
-one file preserving variable names and band metadata. For dated assets use
+A GeoTIFF or COG has one writer each: `io.write_cog(dataset, path)` and
+`io.write_geotiff(dataset, path)` write each variable as a band, keeping its
+name and value metadata. Write one DataArray as `io.write_cog(band.to_dataset(), path)`. For dated assets use
 `stac.publish_item` with explicit Item/asset membership on independent grids. Asset paths
 follow `folder/Item/asset.tif`. Zarr and NetCDF retain a whole hierarchy in one store.
 

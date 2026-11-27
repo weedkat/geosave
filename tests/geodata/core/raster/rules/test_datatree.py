@@ -6,6 +6,7 @@ import pytest
 import xarray as xr
 
 from geosave.geodata.core.raster.rules.datatree import (
+    same_chunks,
     compatible_concat,
     compatible_merge,
     splittable,
@@ -174,3 +175,23 @@ def test_merge_rule_names_the_child_repeating_a_variable():
 
     assert error.value.path == "right"
     assert error.value.operation == "merge"
+
+
+def test_same_chunks_names_the_nodes_chunked_another_way():
+    raster = build_raster()
+    alike = xr.DataTree.from_dict(
+        {
+            "image": raster.chunk(y=1),
+            "label": raster[["red"]].chunk(y=1),
+            "/": xr.Dataset(),
+        }
+    )
+    same_chunks(alike)
+    # Pixels in memory are one chunking too.
+    same_chunks(xr.DataTree.from_dict({"image": raster, "label": raster[["red"]]}))
+
+    mixed = xr.DataTree.from_dict(
+        {"image": raster.chunk(y=1), "label": raster[["red"]]}
+    )
+    with pytest.raises(RasterValidationError, match=r"chunked 2 ways \(image; label\)"):
+        same_chunks(mixed)

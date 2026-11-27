@@ -5,304 +5,359 @@
 below are rendered directly from the implementation. Configuration input
 fields appear as attributes, including their annotated types and defaults.
 
-::: geosave.ml.chain.chain.ModelChain
+::: geosave.ml.pipeline.ingestion.base.IngestOutput
     options:
       show_root_full_path: true
       filters: []
       members:
-        - stage_specs
+        - sources
+        - metadata
+
+::: geosave.ml.pipeline.ingestion.base.Ingestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.Assets
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - VV
+        - VH
+        - HH
+        - HV
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.NODATA
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.POLARIZATIONS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.Provider
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - planetary_computer
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.Sentinel1RTCIngestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - name
+        - groups
+        - bands
+        - provider
+        - source
+        - client
+        - resolution
+        - crs
+        - resampling
+        - filter
+        - chunks
+        - time_chunks
+        - search
+        - load
+
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.Source
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - open_client
+        - collection
+        - assets
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.Assets
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - B01
+        - B02
+        - B03
+        - B04
+        - B05
+        - B06
+        - B07
+        - B08
+        - B8A
+        - B09
+        - B11
+        - B12
+        - SCL
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.Provider
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - planetary_computer
+        - element84
+        - cdse
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.QUALITY
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.REFLECTANCE
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.SCL_CLASSES
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.Sentinel2L2AIngestor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - name
+        - groups
+        - bands
+        - provider
+        - source
+        - client
+        - resolution
+        - crs
+        - resampling
+        - filter
+        - chunks
+        - time_chunks
+        - search
+        - load
+        - read_packing
+
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.Source
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - open_client
+        - collection
+        - assets
+        - baseline
+
+::: geosave.ml.pipeline.pipeline.Pipeline
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - ingestors
+        - preprocessor
+        - predictor
+        - postprocessor
+        - from_config
+        - to_config
+        - ingest
+
+::: geosave.ml.pipeline.postprocessing.base.PostprocessOutput
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - product
+        - metadata
+
+::: geosave.ml.pipeline.postprocessing.base.Postprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.pipeline.postprocessing.base.stack_windows
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.postprocessing.regression.RegressionPostprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - variables
+        - window
+        - split
+
+::: geosave.ml.pipeline.postprocessing.segmentation.SegmentationPostprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - window
+        - fill
+        - name
+        - classify
+
+::: geosave.ml.pipeline.prediction.base.ChipOutputs
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.pipeline.prediction.base.PredictOutput
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - chips
+        - outputs
+        - metadata
+
+::: geosave.ml.pipeline.prediction.base.Predictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+
+::: geosave.ml.pipeline.preprocessing.preprocessor.PreprocessOutput
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - windows
+        - metadata
+
+::: geosave.ml.pipeline.preprocessing.preprocessor.Preprocessor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - steps
+        - time_freq
+        - time_window
+        - time_stride
+        - time_keep
+        - time_missing
+
+::: geosave.ml.pipeline.preprocessing.steps.Composite
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - freq
+        - method
+        - dim
+        - interpolation
+        - closed
+        - label
+        - origin
+        - offset
+
+::: geosave.ml.pipeline.preprocessing.steps.MaskAndScale
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.pipeline.preprocessing.steps.Step
+    options:
+      show_root_full_path: true
+      filters: []
+      members: false
+
+::: geosave.ml.torch.chain.catalog.ConnectionRow
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - position
+        - name
+        - values
+
+::: geosave.ml.torch.chain.catalog.ModuleRow
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - family
+        - name
+        - cls
+        - forward
+        - publishes
+        - requires
+
+::: geosave.ml.torch.chain.catalog.build_connection_table
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.catalog.build_module_table
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.catalog.find_passed_names
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.catalog.find_required_arguments
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.catalog.list_models
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.chain.ModelChain
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - from_config
+        - config
         - inputs
         - forward
         - __repr__
         - to_mermaid
 
-::: geosave.ml.chain.routing.BoundStep
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - stage
-        - module
-        - method
-        - name
-
-::: geosave.ml.chain.routing.declared_steps
+::: geosave.ml.torch.chain.chain.check_chain
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.routing.dependencies
+::: geosave.ml.torch.chain.chain.format_forward
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.routing.ordered_steps
+::: geosave.ml.torch.chain.chain.format_hint
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.routing.required_inputs
+::: geosave.ml.torch.chain.chain.is_chain_module
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.step.Step
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - name
-        - inputs
-        - optional_inputs
-        - outputs
-        - returns_tuple
-        - result_type
-        - head
-        - invoke
-
-::: geosave.ml.chain.step.chain_step
+::: geosave.ml.torch.chain.chain.read_forward_inputs
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.step.terminal_step
+::: geosave.ml.torch.chain.chain.read_return_hint
     options:
       show_root_full_path: true
 
-::: geosave.ml.chain.step.type_name
+::: geosave.ml.torch.chain.chain.read_returns
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.build.build_model
+::: geosave.ml.torch.chain.published.Published
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.catalog.list_models
+::: geosave.ml.torch.chain.published.accepts
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.decoder.dpt.DPT
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - feature_channels
-        - readout
-        - readout_blocks
-        - reassemble_blocks
-        - fusion_blocks
-        - forward
-
-::: geosave.ml.components.decoder.unet.Unet
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - feature_channels
-        - encoder_adapter
-        - up_blocks
-        - final_up
-        - forward
-
-::: geosave.ml.components.encoder.clay.Clay
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - waves
-        - gsd
-        - encoder
-        - grid
-        - out_indices
-        - forward
-        - forward_pyramid
-
-::: geosave.ml.components.encoder.clay.MODEL_SOURCE
+::: geosave.ml.torch.chain.published.fill_published_arguments
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.encoder.clay.MODEL_SPECS
+::: geosave.ml.torch.chain.published.read_published
     options:
       show_root_full_path: true
 
-::: geosave.ml.components.encoder.clay.build_clay
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.encoder.clay.default_out_indices
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.encoder.dinov3.DINOv3
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - model
-        - out_indices
-        - forward
-        - forward_pyramid
-
-::: geosave.ml.components.encoder.dinov3.MODEL_SPECS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.encoder.prithvi.Prithvi
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - forward_pyramid
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - MODEL_SPECS
-        - out_indices
-        - model
-        - forward
-      inherited_members:
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - MODEL_SPECS
-        - out_indices
-        - model
-        - forward
-        - __init__
-
-::: geosave.ml.components.encoder.prithvi.PrithviTL
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - MODEL_SPECS
-        - forward_pyramid
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - out_indices
-        - model
-        - forward
-      inherited_members:
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - out_indices
-        - model
-        - forward
-
-::: geosave.ml.components.encoder.small_cnn.SmallCNN
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - pyramid_channels
-        - pyramid_strides
-        - input_size
-        - stem
-        - levels
-        - forward_pyramid
-
-::: geosave.ml.components.head.classification.ClassificationHead
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - num_classes
-        - dropout
-        - projection
-        - forward_logits
-
-::: geosave.ml.components.head.dense.DenseHead
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - input_size
-        - layers
-        - forward
-        - forward_logits
-
-::: geosave.ml.components.head.regression.RegressionHead
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - variables
-        - units
-        - input_size
-        - layers
-        - forward
-        - forward_logits
-      inherited_members:
-        - input_size
-        - layers
-        - forward
-        - forward_logits
-
-::: geosave.ml.components.head.segmentation.SegmentationHead
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - num_classes
-        - input_size
-        - layers
-        - forward
-        - forward_logits
-      inherited_members:
-        - input_size
-        - layers
-        - forward
-        - forward_logits
-
-::: geosave.ml.components.monolith.ibm_granite_biomass.GraniteGeospatialBiomass
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - model
-        - variables
-        - forward
-
-::: geosave.ml.components.published.Published
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.published.accepts
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.published.published_attrs
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.published.published_kwargs
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.registry.COMPONENTS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.registry.DECODERS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.registry.ENCODERS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.registry.HEADS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.components.registry.MONOLITHS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.factory.BuildSpec
+::: geosave.ml.torch.chain.registry.BuildSpec
     options:
       show_root_full_path: true
       filters: []
@@ -311,290 +366,382 @@ fields appear as attributes, including their annotated types and defaults.
         - class_path
         - init_args
         - validate_selector
+        - find_class
+        - complete
+        - build
+        - release
 
-::: geosave.ml.factory.Registry
+::: geosave.ml.torch.chain.registry.MODULES
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.chain.registry.Registry
     options:
       show_root_full_path: true
       filters: []
       members:
-        - base
         - imports
         - __getitem__
         - __iter__
         - __len__
-        - import_modules
+        - families
+        - find_family
         - register
-        - check_base
-        - resolve
-        - import_class
-        - get_spec
-        - read_spec
-        - build
 
-::: geosave.ml.factory.bind_init_args
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.change.pipeline.ChangePipeline
+::: geosave.ml.torch.modules.decoder.dpt.DPT
     options:
       show_root_full_path: true
       filters: []
       members:
-        - model
-        - preprocessor
-        - predictor
-        - postprocessor
-        - ingestor
-        - predict
-
-::: geosave.ml.processing.change.preprocessing.base.ChangePreprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave.ml.processing.change.preprocessing.base.PREPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.prompt.pipeline.PromptPipeline
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - model
-        - preprocessor
-        - predictor
-        - postprocessor
-        - ingestor
-        - predict
-
-::: geosave.ml.processing.prompt.postprocessing.base.POSTPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.prompt.postprocessing.base.PromptPostprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave.ml.processing.prompt.prediction.base.PREDICTORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.prompt.prediction.base.PromptPredictor
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave.ml.processing.raster.ingestion.base.INGESTORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.ingestion.base.RasterIngestor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - ingest_to_zarr
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.ASSET_KEYS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.COLLECTION
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.Sentinel2Ingestor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - bands
-        - resolution
-        - name
-        - scl
-        - catalog
-        - client
-        - search_items
-        - ingest_grid
-        - load
-        - split_nodes
-        - ingest_to_zarr
-      inherited_members:
-        - ingest_to_zarr
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.TILE_PROPERTIES
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.drop_superseded
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.ingestion.sentinel2.read_esa_packing
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.pipeline.RasterPipeline
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - model
-        - preprocessor
-        - predictor
-        - postprocessor
-        - ingestor
-        - predict
-        - predict_to_zarr
-
-::: geosave.ml.processing.raster.postprocessing.base.POSTPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.postprocessing.base.RasterPostprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave.ml.processing.raster.postprocessing.dense.NO_PREDICTION
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.postprocessing.dense.RegressionPostprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - names
-        - units
-        - mask
-
-::: geosave.ml.processing.raster.postprocessing.dense.SegmentationPostprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - classes
-        - colors
-        - mask
-
-::: geosave.ml.processing.raster.postprocessing.dense.copy_scalar_coords
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.postprocessing.dense.mask_product
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.postprocessing.thresholds.calibrate_thresholds
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.prediction.base.PREDICTORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.prediction.base.RasterPredictor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - measure_chips
-
-::: geosave.ml.processing.raster.prediction.dense.DensePredictor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - size
-        - stride
-        - mode
-        - window
-        - batch_size
-        - context
-        - nodes
-        - measure_chips
-
-::: geosave.ml.processing.raster.preprocessing.base.PREPROCESSORS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.processing.raster.preprocessing.base.RasterPreprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members: false
-
-::: geosave.ml.processing.raster.preprocessing.dense.DensePreprocessor
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - bands
-        - decode
-        - fill
-        - mean
-        - std
-        - name
-
-::: geosave.ml.release.huggingface.ARTIFACT_FORMAT_VERSION
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.release.huggingface.ChainConfig
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - model_type
-        - stages
-        - pipeline
-        - preprocessor
-        - predictor
-        - postprocessor
-        - ingestor
-        - format_version
-        - geosave_version
-
-::: geosave.ml.release.huggingface.ChainModel
-    options:
-      show_root_full_path: true
-      filters: []
-      members:
-        - config_class
-        - base_model_prefix
-        - chain
-        - from_chain
-        - from_pipeline
-        - wrap
+        - returns
+        - feature_channels
+        - readout
+        - readout_blocks
+        - reassemble_blocks
+        - fusion_blocks
         - forward
 
-::: geosave.ml.release.huggingface.StageConfig
+::: geosave.ml.torch.modules.decoder.unet.Unet
     options:
       show_root_full_path: true
       filters: []
       members:
-        - stage
-        - spec
+        - returns
+        - feature_channels
+        - encoder_adapter
+        - up_blocks
+        - final_up
+        - forward
 
-::: geosave.ml.release.huggingface.check_library_spec
+::: geosave.ml.torch.modules.encoder.clay.BaseClay
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - waves
+        - gsd
+        - encoder
+        - grid
+        - out_indices
+        - encode
+
+::: geosave.ml.torch.modules.encoder.clay.Clay
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - forward
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - waves
+        - gsd
+        - encoder
+        - grid
+        - out_indices
+        - encode
+      inherited_members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - waves
+        - gsd
+        - encoder
+        - grid
+        - out_indices
+        - encode
+        - __init__
+
+::: geosave.ml.torch.modules.encoder.clay.ClayTL
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - forward
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - waves
+        - gsd
+        - encoder
+        - grid
+        - out_indices
+        - encode
+      inherited_members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - waves
+        - gsd
+        - encoder
+        - grid
+        - out_indices
+        - encode
+        - __init__
+
+::: geosave.ml.torch.modules.encoder.clay.MODEL_SOURCE
     options:
       show_root_full_path: true
 
-::: geosave.ml.release.huggingface.load_pipeline
+::: geosave.ml.torch.modules.encoder.clay.MODEL_SPECS
     options:
       show_root_full_path: true
 
-::: geosave.ml.release.huggingface.read_deployable_spec
+::: geosave.ml.torch.modules.encoder.clay.build_clay
     options:
       show_root_full_path: true
 
-::: geosave.ml.release.huggingface.read_stages
+::: geosave.ml.torch.modules.encoder.clay.default_out_indices
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.modules.encoder.dinov3.BaseDINOv3
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - input_size
+        - model
+
+::: geosave.ml.torch.modules.encoder.dinov3.DINOv3
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - out_indices
+        - forward
+        - input_size
+        - model
+      inherited_members:
+        - input_size
+        - model
+
+::: geosave.ml.torch.modules.encoder.dinov3.DINOv3Embedding
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - embedding_channels
+        - forward
+        - input_size
+        - model
+      inherited_members:
+        - input_size
+        - model
+
+::: geosave.ml.torch.modules.encoder.dinov3.MODEL_SPECS
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.modules.encoder.prithvi.BasePrithvi
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - MODEL_SPECS
+        - out_indices
+        - model
+        - transpose_time_band
+
+::: geosave.ml.torch.modules.encoder.prithvi.Prithvi
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - MODEL_SPECS
+        - forward
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - out_indices
+        - model
+        - transpose_time_band
+      inherited_members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - out_indices
+        - model
+        - transpose_time_band
+        - __init__
+
+::: geosave.ml.torch.modules.encoder.prithvi.PrithviTL
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - MODEL_SPECS
+        - forward
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - out_indices
+        - model
+        - transpose_time_band
+      inherited_members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - out_indices
+        - model
+        - transpose_time_band
+
+::: geosave.ml.torch.modules.encoder.small_cnn.SmallCNN
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - pyramid_channels
+        - pyramid_strides
+        - input_size
+        - stem
+        - levels
+        - forward
+
+::: geosave.ml.torch.modules.head.classification.ClassificationHead
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - num_classes
+        - dropout
+        - projection
+        - forward
+
+::: geosave.ml.torch.modules.head.dense.DenseHead
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - input_size
+        - layers
+        - forward
+
+::: geosave.ml.torch.modules.head.regression.RegressionHead
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - variables
+        - units
+        - returns
+        - input_size
+        - layers
+        - forward
+      inherited_members:
+        - returns
+        - input_size
+        - layers
+        - forward
+
+::: geosave.ml.torch.modules.head.segmentation.SegmentationHead
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - num_classes
+        - returns
+        - input_size
+        - layers
+        - forward
+      inherited_members:
+        - returns
+        - input_size
+        - layers
+        - forward
+
+::: geosave.ml.torch.modules.monolith.ibm_granite_biomass.GraniteGeospatialBiomass
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - model
+        - variables
+        - forward
+
+::: geosave.ml.torch.prediction.predictor.TorchPredictor
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - model
+        - chip_size
+        - chip_overlap
+        - chip_mode
+        - chip_constant_value
+        - batch_size
+        - context
+        - device
+        - predict_chips
+
+::: geosave.ml.torch.typing.Centroid
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.ChainModule
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - returns
+        - forward
+
+::: geosave.ml.torch.typing.DayOfYear
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.Embedding
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.FeatureMap
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.Hour
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.Image
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.ImageSeries
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.PrefixTokens
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.Week
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.typing.Year
     options:
       show_root_full_path: true

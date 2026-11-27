@@ -6,14 +6,9 @@ from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from modules.pretraining import mim
-from modules.pretraining.mim.module import patch_mask
-from geosave.ml.chain import chain_step
-from tests.templates.tasks.pretraining.mim.test_data import Chips as Scenes
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _preprocessor,
-)
+from generated_kits.pretraining.mim import training as mim
+from generated_kits.pretraining.mim.training.module import patch_mask
+from tests.templates.tasks.pretraining.mim.test_data import FLIP, Chips as Scenes
 
 
 class Reconstructor(nn.Module):
@@ -23,8 +18,7 @@ class Reconstructor(nn.Module):
         super().__init__()
         self.scale = nn.Parameter(torch.tensor(1.0))
 
-    @chain_step(head=True)
-    def reconstruct(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return image.flatten(1, -3) * self.scale
 
 
@@ -101,7 +95,6 @@ def test_a_validation_batch_hides_the_same_patches_every_epoch() -> None:
 
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = mim.DataModule(
-        _preprocessor(),
         Scenes(),
         Scenes(),
         augmentations=FLIP,

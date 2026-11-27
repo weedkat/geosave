@@ -50,8 +50,8 @@ Use nearest-neighbor for categorical labels. Interpolating methods mix values
 and can suit continuous imagery. Resolution uses the target CRS's units:
 ten units in a geographic CRS means degrees, not metres.
 
-For example, an average of class codes for water and trees is not another
-meaningful class. Nearest-neighbor chooses an existing code. Continuous
+For example, an average of class IDs for water and trees is not another
+meaningful class. Nearest-neighbor chooses an existing class ID. Continuous
 measurements can use interpolation when that matches the analysis.
 
 A CRS alone does not fully specify a grid. An exact reference GeoBox fixes

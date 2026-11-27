@@ -31,7 +31,7 @@ def random_crop[T: (xr.DataArray, xr.Dataset, xr.DataTree)](
         >>> chip = gs.random_crop(image, size=128, seed=42)
         >>> target = label.gs.crop_to_grid(chip.gs.geobox)
     """
-    grid = obj.gs.common_geobox() if isinstance(obj, xr.DataTree) else obj.gs.geobox
+    grid = obj.gs.geobox
     if grid is None:
         raise RasterValidationError("A random crop requires a raster grid.")
 

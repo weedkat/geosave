@@ -1,8 +1,8 @@
-"""Torch tensor conversion shared by the `gs` raster accessors."""
+"""Conversions from raster pixels to PyTorch tensors."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -10,54 +10,74 @@ import numpy as np
 if TYPE_CHECKING:
     import torch
 
-# Pixel tensors of a tree's raster nodes, keyed by node path.
-type PixelTensors = dict[str, torch.Tensor]
 
-
-def as_tensor(
-    to_numpy: Callable[..., np.ndarray], dtype: str | torch.dtype | None
-) -> torch.Tensor:
-    """Read an accessor's model-input array as a writable, contiguous tensor.
-
-    Args:
-        to_numpy: The accessor's own `to_numpy`, which fixes the axis order.
-        dtype: Torch dtype or its string name. None keeps the pixel dtype. A
-            dtype NumPy cannot hold, such as bfloat16, reads as float32 first.
-
-    Returns:
-        Tensor laid out as `to_numpy` lays out its array.
+def resolve_torch_dtype(dtype: str | torch.dtype | None) -> torch.dtype | None:
+    """Return the torch dtype given, or the one named.
 
     Raises:
         ValueError: A dtype name is unknown.
-        TypeError: `dtype` is neither a torch dtype nor a name, or the pixel
-            dtype has no tensor equivalent.
+        TypeError: `dtype` is neither a torch dtype nor a name.
     """
     # Imported here so that importing geodata never pays for torch.
     import torch
 
-    if isinstance(dtype, str):
-        target = getattr(torch, dtype, None)
-        if not isinstance(target, torch.dtype):
-            raise ValueError(f"Unknown torch dtype {dtype!r}")
-    elif dtype is None or isinstance(dtype, torch.dtype):
-        target = dtype
-    else:
+    if dtype is None or isinstance(dtype, torch.dtype):
+        return dtype
+    if not isinstance(dtype, str):
         raise TypeError(f"{dtype!r} is not a torch dtype or the name of one")
 
-    # Read-only pixel buffers are copied, so tensor operations can safely write.
-    if target is None:
-        values = np.require(to_numpy(), requirements=["C", "W"])
-        try:
-            return torch.as_tensor(values)
-        except (TypeError, ValueError) as error:
-            raise TypeError(
-                f"Cannot convert numpy dtype {values.dtype} to a torch tensor"
-            ) from error
+    target = getattr(torch, dtype, None)
+    if not isinstance(target, torch.dtype):
+        raise ValueError(f"Unknown torch dtype {dtype!r}")
+    return target
 
+
+def find_numpy_dtype(dtype: torch.dtype | None) -> np.dtype | None:
+    """Return the NumPy dtype that reads pixels for a tensor of `dtype`.
+
+    A dtype NumPy cannot hold, such as bfloat16, reads as float32. None keeps
+    the pixel dtype.
+    """
+    import torch
+
+    if dtype is None:
+        return None
     try:
-        reading = torch.empty(0, dtype=target).numpy().dtype
+        return torch.empty(0, dtype=dtype).numpy().dtype
     except TypeError:
-        reading = np.dtype("float32")
-    return torch.as_tensor(
-        np.require(to_numpy(dtype=reading), requirements=["C", "W"]), dtype=target
-    )
+        return np.dtype("float32")
+
+
+def as_tensor(array: np.ndarray, dtype: torch.dtype | None = None) -> torch.Tensor:
+    """Convert an array to a writable, contiguous tensor.
+
+    Read-only buffers are copied, so tensor operations can safely write.
+
+    Args:
+        array: Array to convert.
+        dtype: Tensor dtype. None keeps the array dtype.
+
+    Raises:
+        TypeError: The array dtype has no tensor equivalent.
+    """
+    import torch
+
+    writable = np.require(array, requirements=["C", "W"])
+    try:
+        return torch.as_tensor(writable, dtype=dtype)
+    except (TypeError, ValueError) as error:
+        raise TypeError(
+            f"Cannot convert numpy dtype {array.dtype} to a torch tensor"
+        ) from error
+
+
+def as_tensors(arrays: Mapping[str, np.ndarray]) -> dict[str, torch.Tensor]:
+    """Convert named arrays to tensors as `as_tensor` does, keeping their names.
+
+    Raises:
+        TypeError: An array dtype has no tensor equivalent.
+    """
+    tensors = {}
+    for name, array in arrays.items():
+        tensors[name] = as_tensor(array)
+    return tensors

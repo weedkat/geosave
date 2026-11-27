@@ -162,13 +162,15 @@ def class_percent(bands: xr.DataArray | Iterable[xr.DataArray]) -> pd.Series:
         fill = band.gs.nodata
         present = band if fill is None else band.where(band != fill)
         # A fill class such as "unlabelled" is not a class of present pixels.
-        counted = [code for code in classes if code != fill]
+        counted = [class_id for class_id in classes if class_id != fill]
         counts.append(
-            xr.concat([(present == code).sum() for code in counted], dim="class")
+            xr.concat(
+                [(present == class_id).sum() for class_id in counted], dim="class"
+            )
         )
     (total,) = compute(sum(counts))
 
     fill = bands[-1].gs.nodata
-    names = [name for code, name in classes.items() if code != fill]
+    names = [name for class_id, name in classes.items() if class_id != fill]
     percent = 100.0 * total.values / total.values.sum()
     return pd.Series(percent, index=names, name="percent")

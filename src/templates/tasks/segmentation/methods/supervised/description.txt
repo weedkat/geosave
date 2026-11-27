@@ -1,0 +1,1 @@
+Supervised segmentation on paired image and label chips. Validation and test are project extension points.

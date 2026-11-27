@@ -1,17 +1,23 @@
-"""Merge chip predictions back onto the rasters their layout was laid over."""
+"""Merge chip predictions back onto the rasters the chips were cut from."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Literal
+from functools import cache
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import xarray as xr
-from odc.geo.xr import xr_coords
+from odc.geo.xr import wrap_xr
 
 from geosave.geodata.core.conventions import BAND_DIMENSION
+from geosave.geodata.io import storage
 
-from .layout import ChipLayout
+from .layout import ChipLocation, ChipSource
+
+if TYPE_CHECKING:
+    from geosave.geodata.io.storage import Location
+
+    from .chipper import RasterChipper
 
 # Tapers that weight a chip's centre over its rim, as scipy names them.
 type MergeWindow = Literal[
@@ -33,6 +39,7 @@ type MergeWindow = Literal[
 _WEIGHT_FLOOR = 1e-3
 
 
+@cache
 def create_chip_weights(window: MergeWindow, size: int) -> np.ndarray:
     """Weight each pixel of a chip by a 2D taper, never down to zero.
 
@@ -55,155 +62,185 @@ def create_chip_weights(window: MergeWindow, size: int) -> np.ndarray:
     from scipy.signal import get_window
 
     taper = get_window(window, size, fftbins=False)
-    weights = np.maximum(np.outer(taper, taper), _WEIGHT_FLOOR)
-    return weights.astype("float32")
+    weights = np.maximum(np.outer(taper, taper), _WEIGHT_FLOOR).astype("float32")
+    # Cached and shared between calls, so no caller may change it.
+    weights.flags.writeable = False
+    return weights
 
 
 class RasterMerger:
-    """Accumulate dense chip predictions and merge them per raster.
+    """Average overlapping dense chip predictions back onto the chipper's rasters.
 
-    The merger holds the layout, which knows each chip's raster and place,
-    so a prediction needs only its chip index and may arrive in any order.
-    Overlapping chips are averaged with the window's weights, and the padded
-    part of a chip that reaches past its raster is discarded. Merge logits or
-    probabilities, then decode.
+    Built from the chipper that cut the chips, as Tiler's `Merger(tiler)` is,
+    so it knows every raster's grid and the chip size before the first chip
+    arrives. Each chip predicts a `(band, size, size)` array on its own
+    pixels; chips of any raster may arrive in any order. The padded part of a
+    chip reaching past its raster is dropped.
 
-    Each raster's weighted sums are held in memory as float32 until `merge`,
-    which allocates the result beside them. `is_complete` says when a raster
-    has all its chips, and `discard` frees it once merged, so a long run
-    holds only the rasters still being predicted.
+    Without a store, each raster's weighted sums are held in memory as
+    float32. With a store, a folder, raster `i` accumulates in
+    `<store>/<i>.zarr`, so rasters larger than memory merge: each chip adds
+    into the chunks it covers.
 
     Args:
-        layout: The layout the predicted chips were cut by.
+        chips: The chipper the chips come from.
         window: Taper weighting each chip; `"boxcar"` averages overlaps evenly.
+        store: Folder to accumulate in; None holds the sums in memory.
 
     Examples:
-        >>> chipper = RasterChipper([tree], size=256, stride=224)
-        >>> merger = RasterMerger(chipper.layout, window="hann")
-        >>> for index in range(len(chipper)):
-        ...     merger.add(index, predict(chipper[index]))
-        >>> classes = merger.merge(0).argmax("band")
+        >>> chips = gs.RasterChipper(scenes, size=256, overlap=0.25)
+        >>> merger = gs.RasterMerger(chips, window="hann")
+        >>> for location, chip in chips:
+        ...     merger.add(location, predict(chip))
+        >>> scores = merger.merge()
+        >>> len(scores) == len(scenes)
+        True
     """
 
-    def __init__(self, layout: ChipLayout, *, window: MergeWindow = "boxcar") -> None:
-        self.layout = layout
-        self._chip_weights = create_chip_weights(window, layout.size)
-        raster_count = len(layout.geoboxes)
-        self._sums: list[np.ndarray | None] = [None] * raster_count
-        self._weights: list[np.ndarray | None] = [None] * raster_count
-        self._added = [0] * raster_count
+    def __init__(
+        self,
+        chips: RasterChipper[Any],
+        *,
+        window: MergeWindow = "boxcar",
+        store: Location | None = None,
+    ) -> None:
+        self.sources = chips.sources
+        self.size = chips.size
+        self.window: MergeWindow = window
+        self.store = None if store is None else storage.create_upath(store)
+        # Created when a raster's first chip arrives: the bands come from its output.
+        self.sums: list[Any] = [None] * len(self.sources)
+        self.weights: list[Any] = [None] * len(self.sources)
 
-    def add(self, index: int, prediction: np.ndarray) -> None:
-        """Accumulate one chip's prediction onto its raster.
+    def add(self, location: ChipLocation, prediction: np.ndarray) -> None:
+        """Add one chip's prediction, weighted by the window.
 
         Args:
-            index: The chip's index in the layout.
+            location: The location yielded with the chip.
             prediction: Values shaped `(band, size, size)`.
 
         Raises:
-            IndexError: The chip index is outside the chips.
-            ValueError: The prediction is not `(band, size, size)`, or its
-                band count differs from the raster's earlier chips.
+            ValueError: The prediction is not `(band, size, size)`, or the
+                chip was cut by another chipper.
+            FileExistsError: The raster's store already exists.
         """
-        size = self.layout.size
-        if prediction.ndim != 3 or prediction.shape[1:] != (size, size):
+        if prediction.ndim != 3 or prediction.shape[1:] != (self.size, self.size):
             raise ValueError(
-                f"prediction must be shaped (band, {size}, {size}), "
-                f"got {prediction.shape}"
+                f"RasterMerger needs dense chip outputs shaped "
+                f"(band, {self.size}, {self.size}); got {prediction.shape}"
             )
-
-        raster_index = self.layout.locate(index).raster_index
-        scene = self.layout.geoboxes[raster_index]
-        chip = self.layout.geobox(index)
-
-        sums = self._sums[raster_index]
-        weights = self._weights[raster_index]
-        if sums is None or weights is None:
-            sums = np.zeros((prediction.shape[0], *scene.shape), dtype="float32")
-            weights = np.zeros(tuple(scene.shape), dtype="float32")
-            self._sums[raster_index] = sums
-            self._weights[raster_index] = weights
-        if prediction.shape[0] != sums.shape[0]:
+        source = location.source
+        index = source.index
+        if index >= len(self.sources) or self.sources[index] != source:
             raise ValueError(
-                f"prediction has {prediction.shape[0]} bands; this raster's "
-                f"earlier chips had {sums.shape[0]}"
+                f"the chip names raster {index}, which this merger's chipper did not cut"
             )
+        if self.sums[index] is None:
+            self.sums[index], self.weights[index] = self.create_sums(
+                source, prediction.shape[0]
+            )
+        sums = self.sums[index]
+        weights = self.weights[index]
 
-        # The part of the chip on the raster, in the raster's pixels and the chip's.
-        scene_rows, scene_columns = scene.overlap_roi(chip)
-        chip_rows, chip_columns = chip.overlap_roi(scene)
-        weighted = prediction * self._chip_weights
-        sums[:, scene_rows, scene_columns] += weighted[:, chip_rows, chip_columns]
-        weights[scene_rows, scene_columns] += self._chip_weights[chip_rows, chip_columns]
-        self._added[raster_index] += 1
+        # Padding reaches past the bottom and right edges of the raster.
+        height, width = source.geobox.shape
+        rows = slice(location.top, min(location.top + self.size, height))
+        columns = slice(location.left, min(location.left + self.size, width))
+        taper = create_chip_weights(self.window, self.size)[
+            : rows.stop - rows.start, : columns.stop - columns.start
+        ]
+        values = prediction[:, : taper.shape[0], : taper.shape[1]] * taper
 
-    def merge_batch(
-        self, indices: Sequence[int], predictions: np.ndarray
-    ) -> list[tuple[int, xr.DataArray]]:
-        """Add a batch and return the rasters completed by its chips.
+        sums[:, rows, columns] = sums[:, rows, columns] + values
+        weights[rows, columns] = weights[rows, columns] + taper
 
-        Args:
-            indices: Layout indices in prediction order. Supply each chip once.
-            predictions: Values shaped `(batch, band, size, size)`.
+    def create_sums(self, source: ChipSource, bands: int) -> tuple[Any, Any]:
+        """Return one raster's zeroed sums `(band, y, x)` and weights `(y, x)`.
+
+        Raises:
+            FileExistsError: The raster's store already exists.
+        """
+        shape = tuple(source.geobox.shape)
+        if self.store is None:
+            sums = np.zeros((bands, *shape), dtype="float32")
+            weights = np.zeros(shape, dtype="float32")
+            return sums, weights
+
+        import zarr
+
+        path = self.store / f"{source.index}.zarr"
+        storage.refuse_existing(path, overwrite=False)
+        group = zarr.open_group(
+            str(path),
+            mode="w-",
+            zarr_format=3,
+            # zarr refuses empty storage_options for a local path.
+            storage_options=dict(path.storage_options) or None,
+        )
+        # Each chip rewrites the chunks it covers; compressing them costs more
+        # time than the staging store saves.
+        sums = group.create_array(
+            "sums",
+            shape=(bands, *shape),
+            chunks=(bands, self.size, self.size),
+            dtype="float32",
+            fill_value=0,
+            compressors=None,
+        )
+        weights = group.create_array(
+            "weights",
+            shape=shape,
+            chunks=(self.size, self.size),
+            dtype="float32",
+            fill_value=0,
+            compressors=None,
+        )
+        return sums, weights
+
+    def merge(self) -> tuple[xr.DataArray, ...]:
+        """Return each raster's weighted mean of its chips, once all are added.
+
+        In memory, the mean is divided into the sums, so the merger holds no
+        second raster-sized array and cannot be merged again.
 
         Returns:
-            Pairs of raster index and merged array in completion order.
-            Completed accumulators are released. Partial rasters carry into
-            the next batch.
-        """
-        if predictions.ndim != 4 or len(indices) != len(predictions):
-            raise ValueError("Pass one (band, size, size) prediction per chip index.")
-
-        completed = []
-        for index, prediction in zip(indices, predictions, strict=True):
-            self.add(index, prediction)
-            raster_index = self.layout.locate(index).raster_index
-            if self.is_complete(raster_index):
-                completed.append((raster_index, self.merge(raster_index)))
-                self.discard(raster_index)
-        return completed
-
-    def is_complete(self, raster_index: int) -> bool:
-        """Say whether every chip of a raster was added, each once.
+            One float32 DataArray `(band, y, x)` per input raster, in input
+            order, on that raster's grid and with its extent; NaN where no
+            chip reached. Lazy over the store when one is given.
 
         Raises:
-            IndexError: The layout has no such raster.
+            ValueError: No chip was added.
         """
-        return self._added[raster_index] == self.layout.count_chips(raster_index)
+        bands = None
+        for sums in self.sums:
+            if sums is not None:
+                bands = sums.shape[0]
+                break
+        if bands is None:
+            raise ValueError("no chip was added to merge")
 
-    def discard(self, raster_index: int) -> None:
-        """Free a raster's accumulated predictions, as after merging it.
+        merged = []
+        for index, source in enumerate(self.sources):
+            # A raster too small for one dropped chip has none; it stays NaN.
+            if self.sums[index] is None:
+                self.sums[index], self.weights[index] = self.create_sums(source, bands)
+            mean = self.divide(self.sums[index], self.weights[index])
+            dims = (BAND_DIMENSION, *source.geobox.dimensions)
+            raster = wrap_xr(mean, source.geobox, axis=1, dims=dims)
+            merged.append(raster.gs.write_extent(source.extent))
+        return tuple(merged)
 
-        Raises:
-            IndexError: The layout has no such raster.
-        """
-        self._sums[raster_index] = None
-        self._weights[raster_index] = None
-        self._added[raster_index] = 0
+    def divide(self, sums: Any, weights: Any) -> Any:
+        """Return the sums divided by their weights, NaN where the weight is zero."""
+        if self.store is not None:
+            import dask.array
 
-    def merge(self, raster_index: int = 0) -> xr.DataArray:
-        """Return one raster's merged predictions on its own grid.
-
-        Args:
-            raster_index: Position of the raster in the layout's `geoboxes`.
-
-        Returns:
-            float32 DataArray shaped `(band, y, x)` with the raster's
-            coordinates; NaN where no chip landed.
-
-        Raises:
-            IndexError: The layout has no such raster.
-            ValueError: No prediction was added for the raster.
-        """
-        sums = self._sums[raster_index]
-        weights = self._weights[raster_index]
-        if sums is None or weights is None:
-            raise ValueError(f"no prediction was added for raster {raster_index}")
+            lazy_sums = dask.array.from_zarr(sums)
+            lazy_weights = dask.array.from_zarr(weights)
+            # Dividing by NaN where no chip reached leaves NaN without a warning.
+            return lazy_sums / dask.array.where(lazy_weights > 0, lazy_weights, np.nan)
 
         covered = weights > 0
-        merged = np.full(sums.shape, np.nan, dtype="float32")
-        # Dividing into `merged` in place avoids whole-raster temporaries.
-        np.divide(sums, weights, out=merged, where=covered)
-        scene = self.layout.geoboxes[raster_index]
-        coords = xr_coords(scene, always_yx=True)
-        return xr.DataArray(merged, dims=(BAND_DIMENSION, "y", "x"), coords=coords)
+        np.divide(sums, weights, out=sums, where=covered)
+        sums[:, ~covered] = np.nan
+        return sums

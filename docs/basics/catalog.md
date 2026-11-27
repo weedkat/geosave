@@ -114,7 +114,7 @@ stac.create_catalog(items).gs.to_geoparquet("catalog/observations.parquet")
 ```
 
 A model's predictions are published the same way: see
-[Release and run a model](../advanced/release.md#publish-predictions).
+[model releases](../advanced/release.md).
 Select Item rows with ordinary GeoPandas operations before loading. For
 Collections, signed URLs and searching public catalogs, see the
 [STAC guide](../advanced/stac.md) and the [STAC reference](../reference/stac.md#publication).

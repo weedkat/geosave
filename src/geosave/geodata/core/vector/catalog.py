@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import geopandas as gpd
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from geosave.geodata.core.region import GeoRegion
     from geosave.geodata.stac.load import StacLoadOptions
+    from geosave.geodata.stac.stamps import Stamp
     from geosave.geodata.viz.explore import Explorer
 
 # A rule raises VectorValidationError when the table breaks it.
@@ -380,19 +381,25 @@ class GeoCatalog:
             self._data, path, overwrite=overwrite, **options
         )
 
-    def to_dataset(self, **options: Unpack[StacLoadOptions]) -> Dataset:
+    def to_dataset(
+        self,
+        *,
+        stamps: Sequence[Stamp | str] = (),
+        **options: Unpack[StacLoadOptions],
+    ) -> Dataset:
         """Load one collection's Item rows onto one grid, as `stac.load_dataset` does.
 
-        A shortcut for `stac.load_dataset(rows.gs.to_items(), ...)`, with its
-        default stamps. Use `stac.load_native_datasets` on the Items to keep
-        each native grid.
+        A shortcut for `stac.load_dataset(rows.gs.to_items(), ...)`. Use
+        `stac.load_native_datasets` on the Items to keep each native grid.
 
         Args:
+            stamps: Stamps in execution order, each a callable or its name
+                in `stac.stamps.STAMPS`.
             **options: Options of `odc.stac.load`, such as `geobox`, `like`,
                 `chunks` and `with_properties`.
 
         Returns:
-            Dataset with the rows' bands, period and Collection.
+            Dataset with the rows' bands and any requested metadata.
 
         Raises:
             VectorValidationError: The rows are not STAC Items, or name
@@ -405,7 +412,7 @@ class GeoCatalog:
         from geosave.geodata.stac.load import load_dataset
 
         self.validate(one_collection)
-        dataset = load_dataset(self.to_items(), **options)
+        dataset = load_dataset(self.to_items(), stamps=stamps, **options)
         return cast("Dataset", dataset)
 
     def to_items(self) -> list[pystac.Item]:

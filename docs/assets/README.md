@@ -37,7 +37,7 @@ The grid is EPSG:32614 at 10 metres.
 - Imagery: B04/B03/B02/B08 renamed and ordered as `red`, `green`, `blue`, `nir`.
   Stored uint16 values retain scale `0.0001`, offset `0` and nodata `0`.
 - Labels: expert reference classes from `classes.yaml`, stored as uint8,
-  with codes 0–9 and nodata `255`. Class names and colors are embedded.
+  with class IDs 0–9 and nodata `255`. Class names and colors are embedded.
 - Source snapshot: `fatmur/dynamicworld-300@5e65026ad47e1f02f9a48a3efee1028db3bb0d1a`.
 - Source: Tait et al. (2021),
   [Dynamic World training dataset](https://doi.org/10.1594/PANGAEA.933475),
@@ -45,7 +45,7 @@ The grid is EPSG:32614 at 10 metres.
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Contains modified Copernicus Sentinel data (2019). These are expert annotations,
-not model predictions. The teaching subset remaps the source annotation codes
+not model predictions. The teaching subset remaps the source annotation class IDs
 into its own zero-based class scheme.
 
 ## Tutorial figures

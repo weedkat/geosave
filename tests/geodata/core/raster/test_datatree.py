@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dask
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -18,6 +19,7 @@ from tests.conftest import place
 
 from shapely import from_wkt
 from odc.geo.geom import Geometry
+from shapely import Polygon
 
 
 def test_to_dataset_inherits_coordinates_and_attrs_without_reading_pixels():
@@ -369,19 +371,36 @@ def test_tree_has_independent_rasters_without_single_raster_properties():
     tree.gs.validate()
 
     assert not isinstance(tree.gs, GeoRaster)
-    for name in (
-        "geobox",
-        "crs",
-        "transform",
-        "region",
-        "times",
-        "timespan",
-        "spatial_dims",
-    ):
+    for name in ("crs", "transform", "region"):
         assert not hasattr(tree.gs, name)
+    # The shared grid and timeline are readable only when the leaves share them.
+    with pytest.raises(RasterValidationError, match="GeoBoxes"):
+        tree.gs.geobox
+    with pytest.raises(RasterValidationError, match="GeoBoxes"):
+        tree.gs.spatial_dims
+    with pytest.raises(ValueError, match="one timeline"):
+        tree.gs.times
 
     assert tree["projected"].gs.to_dataset().gs.geobox == projected.gs.geobox
     assert tree["geographic"].gs.to_dataset().gs.geobox == geographic.gs.geobox
+
+
+def test_a_tree_timespan_covers_every_dated_leaf_on_its_own_timeline():
+    early = build_raster(times=2)
+    late = build_raster(times=1).assign_coords(time=[pd.Timestamp("2031-01-01")])
+    static = build_raster()
+    tree = build_tree({"early": early, "late": late, "static": static})
+
+    start, _ = early.gs.timespan
+    assert tree.gs.timespan == (start, pd.Timestamp("2031-01-01").to_pydatetime())
+    assert build_tree({"static": static}).gs.timespan is None
+
+
+def test_a_tree_timespan_reads_the_periods_its_leaves_state():
+    monthly = build_raster(times=1).gs.write_time_bounds("MS")
+    tree = build_tree({"image": monthly})
+
+    assert tree.gs.timespan == monthly.gs.timespan
 
 
 @pytest.mark.integration
@@ -473,6 +492,61 @@ def test_reproject_moves_every_leaf_lazily():
     assert moved["s2"].attrs == {"title": "s2"}
 
 
+def test_composite_reduces_each_dated_node_on_its_own_timeline_lazily():
+    optical = build_raster(times=3).astype("float32")
+    radar = optical.isel(time=[0, 2]).assign_coords(
+        time=pd.to_datetime(["2025-06-02", "2025-07-02"])
+    )
+    labels = build_raster()[["red"]].rename(red="cover")
+    tree = xr.DataTree.from_dict(
+        {"s2": optical.chunk(), "s1": radar.chunk(), "labels": labels}
+    )
+
+    with dask.config.set(scheduler=_refuse):
+        monthly = tree.gs.composite("MS", "median")
+
+    assert (
+        monthly["s2"].time.values.tolist()
+        == pd.to_datetime(["2025-06-01"]).values.tolist()
+    )
+    assert monthly["s1"].time.size == 2
+    xr.testing.assert_identical(monthly["labels"].to_dataset(), labels)
+    expected = optical.gs.composite("MS", "median")
+    xr.testing.assert_allclose(monthly["s2"].to_dataset().compute(), expected.compute())
+
+
+def test_mask_and_scale_decodes_each_packed_node_lazily():
+    packed = build_raster(times=2, packed=True).chunk()
+    codes = build_raster(times=2)[["red"]].rename(red="scl").chunk()
+    tree = xr.DataTree.from_dict({"s2/reflectance": packed, "s2/quality": codes})
+    tree["s2"].attrs["title"] = "s2"
+
+    with dask.config.set(scheduler=_refuse):
+        decoded = tree.gs.mask_and_scale()
+
+    expected = packed.gs.mask_and_scale()
+    xr.testing.assert_identical(decoded["s2/reflectance"].to_dataset(), expected)
+    assert decoded["s2/quality"].scl.dtype == "uint16"
+    assert decoded["s2"].attrs == {"title": "s2"}
+    monthly = decoded.gs.composite("MS", "median")
+    assert monthly["s2/reflectance"].red.dtype == expected.red.dtype
+
+
+def test_composite_refuses_what_dataset_composite_refuses():
+    packed = xr.DataTree.from_dict({"s2": build_raster(times=2, packed=True)})
+    with pytest.raises(ValueError, match="mask_and_scale"):
+        packed.gs.composite("MS", "median")
+
+    shared = xr.DataTree.from_dict(
+        {
+            "/": xr.Dataset(coords={"time": build_raster(times=2).time}),
+            "s2": build_raster(times=2).drop_vars("time"),
+        }
+    )
+    with pytest.raises(ValueError, match="inherits `time`"):
+        shared.gs.composite("MS", "median")
+
+
 def test_a_reprojected_tree_chips_every_leaf_by_one_window():
     tree = build_stac_catalog()
     moved = tree.gs.reproject(tree["s2/2025-06-01/B04"].gs.to_dataset().gs.geobox)
@@ -518,32 +592,6 @@ def test_empty_tree_is_not_a_raster_tree():
         xr.DataTree().gs.validate()
 
 
-def test_sampling_keeps_source_positions_on_a_shared_unsorted_timeline():
-    source = build_raster(times=2).isel(time=[1, 0, 0]).chunk()
-    tree = xr.DataTree.from_dict({"image": source, "label": build_raster()})
-
-    with dask.config.set(scheduler=_refuse):
-        windows = tree.gs.sample("D", keep="last")
-
-    assert len(windows) == 2
-    for window, position in zip(windows, [2, 0], strict=True):
-        xr.testing.assert_identical(
-            window["image"].gs.to_dataset(), source.isel(time=[position])
-        )
-        xr.testing.assert_identical(
-            window["label"].gs.to_dataset(), tree["label"].gs.to_dataset()
-        )
-
-
-def test_sampling_rejects_independent_timelines_without_reading_pixels():
-    source = build_raster(times=2).chunk()
-    tree = xr.DataTree.from_dict({"a": source, "b": source.isel(time=[1, 0])})
-
-    with dask.config.set(scheduler=_refuse):
-        with pytest.raises(ValueError, match="one timeline"):
-            tree.gs.sample("D")
-
-
 def test_a_tree_converts_to_tensors_that_carry_their_grid():
     torch = pytest.importorskip("torch")
     from affine import Affine
@@ -553,53 +601,77 @@ def test_a_tree_converts_to_tensors_that_carry_their_grid():
     mask = (build_raster()[["red"]] > 1500).astype("uint8").rename(red="cover")
     tree = xr.DataTree.from_dict({"image": scene, "label": mask})
 
-    pixels, context = tree.gs.to_tensor(grid=True)
-    sample = {**pixels, **context}
+    pixels, context = tree.gs.to_tensor(context={"transform": "transform", "crs": "crs"})
 
-    assert list(sample) == ["image", "label", "transform", "crs"]
-    assert sample["image"].shape == (2, 2, 2, 2)
-    assert sample["image"].dtype == torch.float32
-    assert sample["label"].shape == (1, 2, 2)
-    assert sample["label"].dtype == torch.uint8
-    assert sample["crs"].item() == 32749
+    assert list(pixels) == ["image", "label"]
+    assert list(context) == ["transform", "crs"]
+    assert pixels["image"].shape == (2, 2, 2, 2)
+    assert pixels["image"].dtype == torch.float32
+    assert pixels["label"].shape == (1, 2, 2)
+    assert pixels["label"].dtype == torch.uint8
+    assert context["crs"].item() == 32749
     grid = GeoBox(
-        sample["image"].shape[-2:],
-        Affine(*sample["transform"].tolist()),
-        int(sample["crs"]),
+        pixels["image"].shape[-2:],
+        Affine(*context["transform"].tolist()),
+        int(context["crs"]),
     )
     assert grid == scene.gs.geobox
 
-    batch = torch.utils.data.default_collate([sample, sample])
-    assert batch["image"].shape == (2, 2, 2, 2, 2)
+    batch = torch.utils.data.default_collate([context, context])
     assert batch["transform"].shape == (2, 6)
     assert batch["crs"].tolist() == [32749, 32749]
 
 
-def test_tensors_carry_only_the_pixels_unless_asked():
-    pytest.importorskip("torch")
-
-    pixels, context = xr.DataTree.from_dict(
-        {"image": build_raster(times=2)}
-    ).gs.to_tensor()
-    sample = {**pixels, **context}
-
-    assert list(sample) == ["image"]
-
-
 def test_context_names_add_their_readers_tensors():
     torch = pytest.importorskip("torch")
-    from geosave.geodata import TENSOR_CONTEXT
+    from geosave.geodata import CONTEXT_READERS
 
     scene = build_raster(times=2)
     tree = xr.DataTree.from_dict({"image": scene})
 
-    pixels, context = tree.gs.to_tensor(context=["year", "centroid"])
-    sample = {**pixels, **context}
+    _, context = tree.gs.to_tensor(context={"year": "year", "centroid": "centroid"})
 
-    assert list(sample) == ["image", "year", "centroid"]
-    torch.testing.assert_close(sample["centroid"], TENSOR_CONTEXT["centroid"](tree))
-    with pytest.raises(KeyError, match="Unknown context"):
-        tree.gs.to_tensor(context=["elevation"])
+    assert list(context) == ["year", "centroid"]
+    torch.testing.assert_close(
+        context["centroid"], torch.from_numpy(CONTEXT_READERS["centroid"](tree))
+    )
+    with pytest.raises(KeyError, match="is not one of"):
+        tree.gs.to_tensor(context={"elevation": "elevation"})
+
+
+def test_a_tree_reads_pixels_by_node_path_and_context_by_key():
+    from geosave.geodata import CONTEXT_READERS
+
+    scene = build_raster(times=2).astype("float32")
+    mask = (build_raster()[["red"]] > 1500).astype("uint8").rename(red="cover")
+    tree = xr.DataTree.from_dict({"image": scene, "label": mask})
+
+    pixels, context = tree.gs.to_numpy(context={"latlon": "centroid", "week": "week"})
+
+    assert list(pixels) == ["image", "label"]
+    assert list(context) == ["latlon", "week"]
+    image = scene.gs.to_numpy()
+    label = mask.gs.to_numpy()
+    np.testing.assert_array_equal(pixels["image"], image)
+    np.testing.assert_array_equal(pixels["label"], label)
+    np.testing.assert_array_equal(context["latlon"], CONTEXT_READERS["centroid"](tree))
+    assert context["week"].shape == (2,)
+
+
+def test_a_tree_sample_reads_its_nodes_in_one_computation():
+    scene = build_raster(times=2).chunk()
+    tree = xr.DataTree.from_dict({"image": scene, "brightness": scene.mean("time")})
+    computations = []
+
+    def count(*args, **kwargs):
+        computations.append(args)
+        return dask.get(*args, **kwargs)
+
+    with dask.config.set(scheduler=count):
+        pixels = tree.gs.to_numpy()
+
+    assert len(computations) == 1
+    assert pixels["brightness"].shape == (2, 2, 2)
 
 
 CUSTOM_CRS = "+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=1,2,3 +units=m"
@@ -612,27 +684,20 @@ def test_tensors_need_one_grid_only_for_shared_spatial_context():
     scene = build_raster()
     coarse = scene.coarsen(x=2, y=2).mean()
     mixed = xr.DataTree.from_dict({"image": scene, "coarse": coarse})
-    pixels, context = mixed.gs.to_tensor()
+    pixels = mixed.gs.to_tensor()
     assert pixels["image"].shape[-2:] == (2, 2)
     assert pixels["coarse"].shape[-2:] == (1, 1)
-    assert context == {}
+    assert list(pixels) == ["image", "coarse"]
     with dask.config.set(scheduler=_refuse):
         with pytest.raises(RasterValidationError, match="GeoBoxes"):
-            mixed.chunk().gs.to_tensor(grid=True)
+            mixed.chunk().gs.to_tensor(context={"transform": "transform", "crs": "crs"})
         with pytest.raises(RasterValidationError, match="GeoBoxes"):
-            mixed.chunk().gs.to_tensor(context=["centroid"])
+            mixed.chunk().gs.to_tensor(context={"centroid": "centroid"})
     with pytest.raises(RasterValidationError):
         xr.DataTree().gs.to_tensor()
     with pytest.raises(ValueError, match="EPSG code"):
         tree = xr.DataTree.from_dict({"image": build_raster(crs=CUSTOM_CRS)})
-        tree.gs.to_tensor(grid=True)
-    pixels, context = xr.DataTree.from_dict({"crs": scene}).gs.to_tensor(grid=True)
-    assert pixels["crs"].ndim > 0
-    assert context["crs"].ndim == 0
-    pixels, context = xr.DataTree.from_dict({"centroid": scene}).gs.to_tensor(
-        context=["centroid"]
-    )
-    assert pixels["centroid"].shape != context["centroid"].shape
+        tree.gs.to_tensor(context={"transform": "transform", "crs": "crs"})
 
 
 def test_dimension_split_names_default_to_labels_and_duplicates_require_names():
@@ -744,10 +809,7 @@ def test_crop_to_grid_clips_shared_extent_at_its_owner():
     )
     assert cropped["image"].attrs == {}
     assert cropped.attrs["license"] == "CC0"
-    assert (
-        cropped.attrs["geospatial_bounds"]
-        == source.gs.crop_to_grid(target).attrs["geospatial_bounds"]
-    )
+    assert cropped.attrs["extent"] == source.gs.crop_to_grid(target).attrs["extent"]
     xr.testing.assert_identical(cropped.platform, tree.platform)
     xr.testing.assert_identical(tree, before)
 
@@ -780,3 +842,41 @@ def test_concat_policy_combines_dataset_attrs_and_keeps_first_variable_attrs():
     assert (
         raster.red.attrs["scale_factor"].dtype == source.red.attrs["scale_factor"].dtype
     )
+
+
+def test_tree_chunk_heights_are_shared_by_its_raster_leaves():
+    raster = build_raster()
+    tree = xr.DataTree.from_dict({"/image": raster, "/label": raster[["red"]]})
+
+    assert tree.gs.chunk_heights is None
+    assert tree.chunk(y=1).gs.chunk_heights == (1, 1)
+
+    mixed = xr.DataTree.from_dict(
+        {"/image": raster.chunk(y=1), "/label": raster[["red"]].chunk(y=2)}
+    )
+    with pytest.raises(RasterValidationError, match="chunked 2 ways"):
+        mixed.gs.chunk_heights
+
+
+def test_tree_spatial_dims_are_those_of_the_shared_geobox():
+    raster = build_raster()
+    tree = xr.DataTree.from_dict({"/image": raster, "/label": raster[["red"]]})
+
+    assert tree.gs.spatial_dims == ("y", "x")
+
+
+def test_tree_extent_is_the_union_of_its_leaves():
+    raster = build_raster()
+    grid = raster.gs.geobox.extent
+    corners = grid.exterior.coords
+    lower = Geometry(Polygon(corners[:3]), grid.crs)
+    upper = Geometry(Polygon([corners[0], corners[2], corners[3]]), grid.crs)
+    tree = xr.DataTree.from_dict(
+        {
+            "image": raster.gs.write_extent(lower),
+            "label": raster[["red"]].gs.write_extent(upper),
+        }
+    )
+
+    assert tree.gs.extent.area == pytest.approx(grid.area)
+    assert xr.DataTree.from_dict({"image": raster}).gs.extent is None

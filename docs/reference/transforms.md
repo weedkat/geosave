@@ -48,7 +48,7 @@ attrs; it does not establish that pixel values are scientifically compatible.
 
 `composite` reduces decoded observations into calendar bins. Each output cell
 states that bin, including empty bins, whose pixels remain NaN without
-interpolation. Native all-missing sums return zero. Class codes permit only
+interpolation. Native all-missing sums return zero. Class IDs permit only
 `first` and `last`, without interpolation.
 
 Interpolation accepts `linear` or `nearest`, fills interior pixel gaps after

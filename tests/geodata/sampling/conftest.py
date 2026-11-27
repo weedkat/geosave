@@ -27,7 +27,9 @@ GRID = GeoBox.from_bbox(
 )
 
 
-def build_scene(grid: GeoBox = GRID, times: pd.DatetimeIndex | None = DATES) -> xr.Dataset:
+def build_scene(
+    grid: GeoBox = GRID, times: pd.DatetimeIndex | None = DATES
+) -> xr.Dataset:
     """Build lazy `red` and `nir` bands on `grid`, over `times` or timeless."""
     coords = dict(xr_coords(grid, always_yx=True))
     dims = ("y", "x")
@@ -37,11 +39,15 @@ def build_scene(grid: GeoBox = GRID, times: pd.DatetimeIndex | None = DATES) -> 
         dims = ("time", "y", "x")
         shape = (len(times), *shape)
     pixels = np.arange(np.prod(shape), dtype="float32").reshape(shape)
-    scene = xr.Dataset({"red": (dims, pixels), "nir": (dims, pixels + 0.5)}, coords=coords)
+    scene = xr.Dataset(
+        {"red": (dims, pixels), "nir": (dims, pixels + 0.5)}, coords=coords
+    )
     return scene.chunk()
 
 
-def build_tree(grid: GeoBox = GRID, times: pd.DatetimeIndex | None = DATES) -> xr.DataTree:
+def build_tree(
+    grid: GeoBox = GRID, times: pd.DatetimeIndex | None = DATES
+) -> xr.DataTree:
     """Build an `image` node of two bands and a timeless `label` node on `grid`."""
     cover = np.arange(np.prod(grid.shape), dtype="uint8").reshape(tuple(grid.shape))
     coords = dict(xr_coords(grid, always_yx=True))

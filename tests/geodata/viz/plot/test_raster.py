@@ -33,11 +33,11 @@ def optical() -> xr.Dataset:
 
 @pytest.fixture
 def labels() -> xr.Dataset:
-    """Class map whose codes are sparse, as a real land-cover product's are."""
-    codes = np.array(
+    """Class map whose class IDs are sparse, as a real land-cover product's are."""
+    class_ids = np.array(
         [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
     )
-    raster = build_raster({"landcover": (("y", "x"), codes)}, geobox())
+    raster = build_raster({"landcover": (("y", "x"), class_ids)}, geobox())
     return raster.gs.write_flags(
         {0: "water", 1: "trees", 8: "snow"},
         {0: "#419bdf", 1: "#397d49", 8: "#b39fe1"},
@@ -98,10 +98,10 @@ class TestClassMap:
         hv.render(drawn)
 
     def test_absent_pixels_draw_as_no_class(self) -> None:
-        codes = np.array(
+        class_ids = np.array(
             [[0, 1, 8, 0], [1, 8, 0, 1], [8, 0, 1, 8], [0, 1, 8, 0]], dtype="uint8"
         )
-        raster = build_raster({"cover": (("y", "x"), codes)}, geobox(), nodata=0)
+        raster = build_raster({"cover": (("y", "x"), class_ids)}, geobox(), nodata=0)
         raster = raster.gs.write_flags(
             {1: "trees", 8: "snow"}, {1: "#397d49", 8: "#b39fe1"}, target=["cover"]
         )

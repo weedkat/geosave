@@ -1,0 +1,1 @@
+Run a small classifier offline with the included synthetic Dataset.

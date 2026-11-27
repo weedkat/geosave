@@ -22,14 +22,6 @@ NATIVE = {
     f"geosave.geodata.{name}"
     for name in ("DataArray", "DataTree", "Dataset", "GeoDataFrame")
 }
-# The inference path of geosave.ml; the rest of geosave.ml is training support.
-MODEL_PACKAGES = (
-    "geosave.ml.factory.",
-    "geosave.ml.chain.",
-    "geosave.ml.components.",
-    "geosave.ml.processing.",
-    "geosave.ml.release.",
-)
 AREAS = {
     "data": "Geospatial data",
     "models": "Models",
@@ -106,10 +98,10 @@ def area(path: str) -> str:
     """Choose a reference page from a definition's owning package."""
     if path.startswith("geosave_flows."):
         return "flows"
-    if path.startswith(MODEL_PACKAGES):
-        return "models"
-    if path.startswith("geosave.ml."):
+    if path.startswith("geosave.ml.torch.training."):
         return "training"
+    if path.startswith("geosave.ml."):
+        return "models"
     return "data"
 
 

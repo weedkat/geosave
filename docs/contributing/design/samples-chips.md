@@ -34,27 +34,24 @@ catalog. Reprojection, resampling and mosaicking stay ODC's.
 
 ```python title="Adaptation example — use prepared imagery and labels on one grid"
 tree = xr.DataTree.from_dict({"image": scene, "label": labels})
-windows = tree.gs.sample("MS", size=2, keep="last")
-chipper = gs.RasterChipper(windows, size=256, stride=224)
-merger = gs.RasterMerger(chipper.layout, window="hann")
-for index in range(len(chipper)):
-    pixels, context = chipper[index].gs.to_tensor()
-    sample = {**pixels, **context}
-    merger.add(index, predict(sample))  # NumPy (band, 256, 256)
-merged = merger.merge(0)                # DataArray on raster 0's grid
+windows = gs.iter_samples([tree], "MS", size=2, keep="last")
+chips = gs.RasterChipper(windows, size=256, overlap=32)
+for batch in chips.iter_batches(16):
+    pixels, context = batch.to_tensor(context={"transform": "transform", "crs": "crs"})
 ```
 
-`ChipLayout` owns input GeoBoxes, chip offsets, stride and edge placement.
-`RasterChipper` holds one-grid DataTrees and cuts them lazily. `RasterMerger` owns
-accumulators and shares the layout. The integer chip index preserves source
-identity even when two rasters have the same grid; its location is available
-through `chipper.layout.locate(index)`.
+Temporal sampling yields one calendar window at a time. Static layers are carried
+with each window. Nodes observed on their own dates, such as Sentinel-1 and
+Sentinel-2, meet in the same time buckets and keep their own observations,
+as BioMassters pairs a monthly Sentinel-1 mean with the best Sentinel-2 image
+of each month. The spatial iterator reads the current grid, cuts a lazy chip
+and yields its raster number and pixel offsets; `iter_batches` yields the
+chips loaded, in batches, reading one block of chunks at a time. An optional
+`RasterMerger` consumes those locations with each prediction.
+[Sampling reference](../../reference/chips.md).
 
-Temporal `.gs.sample` chooses one observation per calendar slot and returns
-windows of slots. Empty slots exclude a window; `keep` is `first` or `last`.
-`gs.random_crop(obj, size, seed)` draws an in-bounds GeoBox and returns the
-cropped xarray object. The training task can read an aligned segmentation
-mask with `label.gs.crop_to_grid(image_crop.gs.geobox)`.
+For random training crops use `gs.random_crop`. Read the corresponding label
+on the crop's grid with `label.gs.crop_to_grid(image_crop.gs.geobox)`.
 
 Dense merging preserves the full source grid, removes padding, floors taper
 weights at covered borders, and uses NaN for uncovered pixels. Predictions may
@@ -63,7 +60,7 @@ proposal are superseded by this shared-layout implementation.
 
 Open: accumulators occupy full arrays in memory. Larger outputs need streaming
 writes or a merger per output region. Vector reconstruction, nearest-observation
-slot selection and point-centred chip placement remain future work.
+bucket selection and point-centred chip placement remain future work.
 
 ## Outputs per task
 
@@ -93,7 +90,7 @@ still being migrated between flat and nested samples in templates. Projects
 retain chip indices for merging. For example:
 
 ```python
-class Sample(TypedDict):          # declared in each method's data.py
+class Sample(TypedDict):          # declared by the project's DataModule
     image: Tensor                 # (time, band, y, x) or (band, y, x)
     target: Tensor                # task-specific
     transform: Tensor             # float64 (6,): the chip GeoBox affine
@@ -122,10 +119,9 @@ Rules:
 - Geometric augmentation (flip, rotate) makes `transform` wrong. It runs in
   training only, on the GPU in the DataModule, where no georeferenced output
   is written. Validation, test and predict batches keep their grid.
-- `TENSOR_CONTEXT` readers derive requested entries such as `centroid`,
+- Context readers derive requested entries such as `transform`, `centroid`,
   `year`, `day_of_year`, `week` and `hour` from the actual raster at tensor
-  conversion. `DensePredictor` reads them per chip. TensorChipper adjusts
-  the chip transform but retains existing context; deciding when to
+  conversion. A raster chip supplies its own affine. Deciding when to
   recompute location after augmentation remains open.
 
 ## Sample rows
@@ -142,7 +138,7 @@ id            geometry   proj:code   proj:shape  proj:transform  start/end_datet
 
 | Step | Mechanism | Owner |
 | --- | --- | --- |
-| lay chips over a region | `ChipLayout` → one row per chip (`projection.build_fields`) | library (W6) |
+| lay chips over a region | `RasterChipper` locations → one row per chip (`projection.build_fields`) | library (W6) |
 | attach source Items | `gpd.sjoin(chip_rows, item_rows)` | pandas, in the project or flow |
 | time steps | group the joined rows by `pd.Grouper(key="datetime", freq=...)`; one list entry per step, `""` where a step has no Item | pandas; a small library function if two projects repeat it |
 | choose what is worth training on | columns filled while preparing (`valid_fraction`, class counts), filtered with pandas; `WeightedRandomSampler` for balance | project |
@@ -150,9 +146,10 @@ id            geometry   proj:code   proj:shape  proj:transform  start/end_datet
 | row → GeoBox | `projection.read_geobox` (reads `proj:*` from an asset today; needs the same for a row) | library |
 
 Open: how a time step is filled when several Items fall in it (first,
-least cloudy, a composite). Raster `.gs.sample` supports first/last selection
-and `.gs.composite` provides explicit reduction; catalog sample planning
-still needs to record the chosen source Item ids. A named rule (a callable over the step's rows) is the
+least cloudy, a composite). `gs.iter_samples` supports first/last selection
+and `.gs.composite` provides explicit reduction. A rule such as the least
+cloudy image belongs to ingestion or preprocessing, not to sampling. Catalog
+sample planning still needs to record the chosen source Item ids. A named rule (a callable over the step's rows) is the
 candidate if the release must state it for inference.
 
 ## Training data flow

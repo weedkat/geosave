@@ -3,7 +3,10 @@
 These methods are available as `data.gs` on an xarray `DataTree`.
 Raster data belongs on leaves; grouping nodes carry attrs and coordinates.
 Each leaf owns its grid coordinates; leaves may have different grids and timelines. Select a leaf and extract its
-Dataset to read its grid: `tree["s2/image"].gs.to_dataset().gs.geobox`.
+Dataset to read its grid: `tree["s2/image"].gs.to_dataset().gs.geobox`. When the
+leaves share one, `tree.gs.geobox` and `tree.gs.times` read the shared GeoBox and
+timeline, as `.gs.geobox` and `.gs.times` do on a Dataset; leaves on different
+dates meet in the same time buckets in `gs.iter_samples`.
 
 ```python
 tree = ds.gs.to_tree("s2", groups={"image": ["B04", "B03", "B02"], "mask": ["SCL"]})
@@ -50,7 +53,11 @@ Rules live in `geosave.geodata.core.raster.rules.datatree`. Concat uses
 `compatible_concat(dim)` through the same validation mechanism automatically.
 Validation reads metadata and coordinate indexes, never raster pixels; it does
 not change the tree or prepare incompatible representations.
-Crop/reprojection use native tree mapping without changing parent coordinates.
+Crop, reprojection, decoding and composites use native tree mapping without changing parent coordinates.
+`tree.gs.mask_and_scale()` decodes each node's own packing and fill; class IDs keep their dtype.
+`tree.gs.composite(freq, method)` reduces each dated leaf on its own timeline into the
+same calendar bins; leaves without `time` pass through, and a leaf that inherits `time`
+from its parent is refused.
 Crop-to-grid clips declared extent attrs at their existing owner, including groups. Numerical conversion allows different channel
 units, but requires matching dimensions and an explicit dtype when source dtypes
 differ. Prepare individual Dataset leaves before tree conversion if needed.

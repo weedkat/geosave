@@ -106,13 +106,13 @@ def test_composite_keeps_shared_properties_and_drops_per_scene_ones() -> None:
 
 
 def test_flag_values_refuse_a_reducer_that_ranks_them() -> None:
-    # min returns a real class code, which is why it reads as safe and is not:
+    # min returns a real class ID, which is why it reads as safe and is not:
     # it asserts an order over codes that carry none.
     coded = series(4, 5, 4, dtype="uint8").gs.write_flags(
         {4: "veg", 5: "water"}, target=["red"]
     )
 
-    with pytest.raises(ValueError, match="class codes"):
+    with pytest.raises(ValueError, match="class IDs"):
         coded.gs.mask_and_scale().gs.composite("MS", "min")
 
 
@@ -224,7 +224,7 @@ def test_composite_refuses_interpolation_of_class_codes():
     data = series(1, 3, 9).gs.write_flags(
         {1: "water", 3: "trees", 9: "cloud"}, target=["red"]
     )
-    with pytest.raises(ValueError, match="class codes"):
+    with pytest.raises(ValueError, match="class IDs"):
         data.gs.composite("MS", "first", interpolation="linear")
 
 

@@ -5,12 +5,15 @@ from types import SimpleNamespace
 import torch
 from torch.utils.data import Dataset
 
-from modules.classification import supervised
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _batch,
-    _preprocessor,
-)
+from generated_kits.classification.supervised import training as supervised
+
+
+FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
+
+
+def _batch() -> dict:
+    image = torch.arange(2 * 2 * 8 * 8, dtype=torch.float32).reshape(2, 2, 8, 8)
+    return {"inputs": {"image": image}}
 
 
 class Chips(Dataset[supervised.Sample]):
@@ -27,7 +30,7 @@ class Chips(Dataset[supervised.Sample]):
 
 
 def test_training_batches_move_pixels_and_preserve_class_targets(tmp_path) -> None:
-    data = supervised.DataModule(_preprocessor(), Chips(), Chips(), augmentations=FLIP)
+    data = supervised.DataModule(Chips(), Chips(), augmentations=FLIP)
     data.trainer = SimpleNamespace(training=True)
     batch = _batch()
     image = batch["inputs"]["image"].clone()

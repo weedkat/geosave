@@ -53,14 +53,6 @@ fields appear as attributes, including their annotated types and defaults.
     options:
       show_root_full_path: true
 
-::: geosave_flows.predict.ingest
-    options:
-      show_root_full_path: true
-
 ::: geosave_flows.predict.predict_region
-    options:
-      show_root_full_path: true
-
-::: geosave_flows.predict.predict_to_zarr
     options:
       show_root_full_path: true

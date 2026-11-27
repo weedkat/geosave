@@ -48,8 +48,8 @@ merging holds whole-raster accumulators unless a chunked output workflow is used
 
 [Large-raster processing](../advanced/large-data.md) selects an area before
 writing. [Training chips](../advanced/overlapping-chips.md) materializes model-sized windows.
-[Chunked prediction](../advanced/release.md#write-large-predictions-to-zarr)
-writes model outputs a region at a time.
+The processor design describes the memory cost of
+[assembling predictions](../contributing/design/release-inference.md#open-prediction-decisions).
 
 The [I/O reference](../reference/io.md#saved-raster-files) describes
 `compute=False` and writer-specific behavior.

@@ -43,7 +43,9 @@ def test_a_concatenated_footer_is_a_copy_and_conflicts_are_refused():
     catalog = create_catalog([entry("optical")], collections=[optical])
 
     combined = concat_catalogs([catalog, catalog])
-    combined.attrs["stac-geoparquet"]["collections"]["optical"]["description"] = "changed"
+    combined.attrs["stac-geoparquet"]["collections"]["optical"]["description"] = (
+        "changed"
+    )
 
     assert len(combined) == 2
     assert catalog.gs.collections["optical"].description == "Optical imagery"

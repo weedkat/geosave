@@ -1,65 +1,57 @@
-# Releases and pipelines
-
-Save and load the native model chain with Transformers, optionally with the
-pipeline that runs it over rasters. Lightning checkpoints remain training
-artifacts. See [Save and publish a model](../advanced/release.md).
+# Model releases and processors
 
 ## Releases
 
-::: geosave.ml.release
+A `ModelChain` built with `from_config` saves and loads through the Hugging
+Face Hub: `save_pretrained`, `push_to_hub` and `from_pretrained`.
+[Save and publish a model](../advanced/release.md).
 
-## Pipelines
+## Pipeline
 
-A pipeline orchestrates inference over what a caller has; there is one
-pipeline per input shape. It holds a model and its sub-processors:
-preprocessor, predictor, postprocessor and an optional ingestor. Each
-sub-processor is called directly, and the roles' signatures are the contract
-between steps: within one pipeline every handoff has one type. The
-predictor's output and the postprocessor's product are type parameters a task
-fills in, so a type checker refuses a predictor and postprocessor that
-disagree. Each step is a package holding its abstract role and the library's
-implementations; `dense` covers per-pixel segmentation and regression. A
-release stores a library sub-processor by name and a project's own by class
-path; only a raster pipeline can be released so far.
+`Pipeline` runs ingestors, a preprocessor, a predictor and a postprocessor
+over a `GeoRegion`. A release holds the pipeline and its model in one folder
+or Hub repository:
 
-```text
-RasterPipeline.predict(rasters)            one acquisition, any sensors
-ChangePipeline.predict(before, after)      two acquisitions of one place
-PromptPipeline.predict(rasters, prompts)   rasters and the shapes to look at
+```python
+pipeline.push_to_hub("org/landcover-s2")
+pipeline = Pipeline.from_pretrained("org/landcover-s2")
+model = ModelChain.from_pretrained("org/landcover-s2")   # the model alone
 ```
 
-::: geosave.ml.processing.raster.pipeline
+```text
+org/landcover-s2/
+├── pipeline.yaml        # the model's class and every stage's arguments
+├── config.json          # the ModelChain recipe
+├── model.safetensors
+└── README.md
+```
 
-::: geosave.ml.processing.raster.ingestion.base
+`pipeline.yaml` is `pipeline.to_config()` plus the model's class, so a
+pipeline built from instances releases too, when each stage's class is
+importable, keeps each constructor argument under an attribute of the same
+name, and takes only values a config can hold.
 
-::: geosave.ml.processing.raster.ingestion.sentinel2.Sentinel2Ingestor
+::: geosave.ml.pipeline.ingestion.base.Ingestor
+    options:
+      members:
+        - __call__
 
-::: geosave.ml.processing.raster.preprocessing.base
+::: geosave.ml.pipeline.pipeline.Pipeline
 
-::: geosave.ml.processing.raster.preprocessing.dense.DensePreprocessor
+::: geosave.ml.pipeline.ingestion.sentinel2_l2a.Sentinel2L2AIngestor
 
-::: geosave.ml.processing.raster.prediction.base
+::: geosave.ml.pipeline.ingestion.sentinel1_rtc.Sentinel1RTCIngestor
 
-::: geosave.ml.processing.raster.prediction.dense.DensePredictor
+::: geosave.ml.pipeline.preprocessing.preprocessor.Preprocessor
 
-::: geosave.ml.processing.raster.postprocessing.base
+::: geosave.ml.pipeline.preprocessing.steps
 
-::: geosave.ml.processing.raster.postprocessing.dense.SegmentationPostprocessor
+::: geosave.ml.pipeline.prediction.base.Predictor
 
-::: geosave.ml.processing.raster.postprocessing.dense.RegressionPostprocessor
+::: geosave.ml.torch.prediction.predictor.TorchPredictor
 
-### Change and prompt pipelines
+::: geosave.ml.pipeline.postprocessing.base.Postprocessor
 
-The change and prompt pipelines are skeletons: their roles are declared, and
-the library has no implementations of their own steps yet. A change pipeline
-reuses the raster predictor and postprocessor roles.
+::: geosave.ml.pipeline.postprocessing.segmentation.SegmentationPostprocessor
 
-::: geosave.ml.processing.change.pipeline
-
-::: geosave.ml.processing.change.preprocessing.base
-
-::: geosave.ml.processing.prompt.pipeline
-
-::: geosave.ml.processing.prompt.prediction.base
-
-::: geosave.ml.processing.prompt.postprocessing.base
+::: geosave.ml.pipeline.postprocessing.regression.RegressionPostprocessor

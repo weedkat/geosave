@@ -30,8 +30,8 @@ io.write_cog(scene[["red", "nir"]].isel(time=0), path)
 ```
 
 `io.write_cog` keeps each variable's name and value metadata as a band. The
-bands of one file need compatible pixel meaning. `scene["red"].gs.to_cog(path)`
-writes a single DataArray through native rioxarray. For different band
+bands of one file need compatible pixel meaning; write one DataArray as
+`io.write_cog(scene["red"].to_dataset(), path)`. For different band
 metadata or several dates, use a staged STAC publication of separate assets:
 
 ```python title="Adaptation example — use a Dataset with a time dimension"

@@ -1,4 +1,4 @@
-from geosave.ml.cli import GeosaveCLI
+from geosave.ml.torch.training.cli import GeosaveCLI
 
 
 if __name__ == "__main__":

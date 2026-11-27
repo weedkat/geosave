@@ -129,8 +129,7 @@ def general_tree_probe():
     pixels = {}
     for node in tree.leaves:
         if node.data_vars:
-            pixels[node.path], context = node.gs.to_dataset().gs.to_tensor()
-            assert context == {}
+            pixels[node.path] = node.gs.to_dataset().gs.to_tensor()
 
     assert pixels["/scene/image"].shape == (2, 4, 4)
     assert pixels["/scene/scl"].shape == (1, 2, 2)
@@ -155,7 +154,7 @@ def general_tree_probe():
 
 def processing_probe(tree):
     parent_coordinate_failure = refused(
-        lambda: RasterChipper([tree], size=2, mode="drop")[0]
+        lambda: next(iter(RasterChipper([tree], size=2, mode="drop")))
     )
     # Continue with equivalent leaf-local coordinates, the current design default.
     local_nodes = {"/": xr.Dataset(attrs=tree.attrs)}
@@ -165,14 +164,15 @@ def processing_probe(tree):
     tree = xr.DataTree.from_dict(local_nodes)
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args[0])):
-        chipper = RasterChipper([tree], size=2, stride=2, mode="drop")
-        chip = chipper[0]
+        _, chip = next(iter(RasterChipper([tree], size=2, overlap=0, mode="drop")))
     assert not tasks
 
-    pixels, context = chip.gs.to_tensor(grid=True)
+    tensors = chip.gs.to_tensor(context={"transform": "transform", "crs": "crs"})
+    context = [name for name in tensors if name in ("transform", "crs")]
+    pixels = {name: value for name, value in tensors.items() if name not in context}
     assert set(context) == {"transform", "crs"}
-    temporal = refused(lambda: chip.gs.to_tensor(context=["time"]))
-    sample = refused(lambda: tree.gs.sample("D"))
+    temporal = refused(lambda: chip.gs.to_tensor(context={"time": "time"}))
+    sample = refused(lambda: next(gs.iter_samples([tree], "D")))
 
     shifted = GeoBox((4, 4), Affine(10, 0, 500020, 0, -10, 9000040), "EPSG:32749")
     adjacent = xr.DataTree.from_dict({"a": raster(["a"]), "b": raster(["b"], shifted)})
@@ -192,19 +192,19 @@ def processing_probe(tree):
 def persistence_probe(tree):
     path = ROOT / "analysis.zarr"
     tree.gs.to_zarr(path)
-    with gs.open_raster_tree(path) as restored:
-        restored.gs.validate(same_geobox)
-        assert tuple(restored.children) == tuple(tree.children)
-        assert restored.attrs["license"] == "CC0"
-        for name in tree.children:
-            original = tree[name].gs.to_dataset()
-            actual = restored[name].gs.to_dataset()
-            assert actual.attrs == original.attrs
-            assert actual.sizes == original.sizes
-            for variable in original.data_vars:
-                np.testing.assert_array_equal(
-                    actual[variable].values, original[variable].values
-                )
+    restored = gs.open_raster_tree(path)
+    restored.gs.validate(same_geobox)
+    assert tuple(restored.children) == tuple(tree.children)
+    assert restored.attrs["license"] == "CC0"
+    for name in tree.children:
+        original = tree[name].gs.to_dataset()
+        actual = restored[name].gs.to_dataset()
+        assert actual.attrs == original.attrs
+        assert actual.sizes == original.sizes
+        for variable in original.data_vars:
+            np.testing.assert_array_equal(
+                actual[variable].values, original[variable].values
+            )
     RESULTS["zarr"] = {"groups_attrs_dimensions_pixels": "preserved"}
 
 
@@ -268,11 +268,11 @@ def publish_probe():
     assert len(written) == 5
 
     for path, source in files.items():
-        with gs.open_raster(path, mask_and_scale=False) as actual:
-            assert actual.gs.geobox == source.gs.geobox
-            for name in source.data_vars:
-                assert actual[name].dtype == source[name].dtype
-                np.testing.assert_array_equal(actual[name].values, source[name].values)
+        actual = gs.open_raster(path, mask_and_scale=False)
+        assert actual.gs.geobox == source.gs.geobox
+        for name in source.data_vars:
+            assert actual[name].dtype == source[name].dtype
+            np.testing.assert_array_equal(actual[name].values, source[name].values)
 
     items = describe_items(assets_by_item)
 

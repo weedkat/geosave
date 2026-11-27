@@ -17,27 +17,29 @@ from tests.conftest import build_dataarray
 from dask.callbacks import Callback
 
 
-UTM = "EPSG:32633"
-
-
 def test_a_band_reads_with_the_grid_trailing() -> None:
     box = geobox()
     scrambled = build_dataset(
         {"pixels": (("y", "x", "band"), np.zeros((8, 8, 3), "uint16"))}, box
     )["pixels"].assign_coords(band=["r", "g", "b"])
 
-    assert scrambled.gs.to_numpy().shape == (3, 8, 8)
+    pixels = scrambled.gs.to_numpy()
+
+    assert pixels.shape == (3, 8, 8)
 
 
 def test_a_band_carrying_no_band_axis_reads_without_one() -> None:
     band = optical()["B04"]
 
-    assert band.gs.to_numpy().shape == (2, 8, 8)
-    assert optical()[["B04"]].gs.to_numpy().shape == (2, 1, 8, 8)
+    pixels = band.gs.to_numpy()
+    stacked = optical()[["B04"]].gs.to_numpy()
+
+    assert pixels.shape == (2, 8, 8)
+    assert stacked.shape == (2, 1, 8, 8)
 
 
 def test_a_band_converts_without_gaining_a_band_axis(torch) -> None:
-    tensor, context = optical().B04.gs.to_tensor(grid=True)
+    tensor, context = optical().B04.gs.to_tensor(context={"transform": "transform", "crs": "crs"})
 
     assert list(context) == ["transform", "crs"]
 
@@ -144,7 +146,6 @@ def test_colorize_refuses_a_band_without_classes() -> None:
 
 
 def test_colorize_keeps_pixels_lazy_and_preserves_scalar_coordinates() -> None:
-    from dask.callbacks import Callback
 
     band = landcover({1: "water"}, {1: "#0000ff"})
     band = band.assign_coords(time=np.datetime64("2025-01-01")).chunk({"x": 1})
@@ -163,65 +164,6 @@ def test_class_codes_keep_their_values_and_legend_after_masking():
     assert np.isnan(raw.gs.mask_and_scale()[1])
     assert raw.gs.mask_and_scale().values[0] == 1
     assert raw.gs.mask_and_scale().gs.flags == raw.gs.flags
-
-
-@pytest.mark.parametrize("method", ["to_cog", "to_gtiff"])
-@pytest.mark.parametrize("multiband", [False, True])
-def test_array_export_uses_native_packing_grid_and_return(method, multiband, tmp_path):
-    import rasterio
-
-    source = build_raster(times=0, packed=True).red
-    if multiband:
-        source = xr.concat(
-            [source, source], dim=xr.IndexVariable("band", ["red", "nir"])
-        )
-    decoded = source.gs.mask_and_scale()
-    before = decoded.copy(deep=True)
-    path = tmp_path / "image.tif"
-
-    assert getattr(decoded.gs, method)(path, compress="LZW") is None
-    with rasterio.open(path) as stored:
-        expected = source.values if multiband else source.values[None]
-        np.testing.assert_array_equal(stored.read(), expected)
-        assert stored.dtypes == (str(source.dtype),) * stored.count
-        assert stored.transform == source.gs.transform
-        assert stored.scales == (source.gs.packing.scale_factor,) * stored.count
-        assert stored.offsets == (source.gs.packing.add_offset,) * stored.count
-        assert stored.nodata == source.gs.nodata
-        assert stored.compression.name == "lzw"
-        if method == "to_cog":
-            assert stored.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
-    # Native writes replace the destination and return None.
-    assert getattr(decoded.gs, method)(path) is None
-    xr.testing.assert_identical(decoded, before)
-    assert decoded.encoding == before.encoding
-
-
-def test_array_gtiff_uses_native_dask_execution(tmp_path):
-    source = build_raster(times=0).red.chunk({"x": 1, "y": 1})
-    path = tmp_path / "image.tif"
-    tasks = []
-    with Callback(pretask=lambda *args: tasks.append(args[0])):
-        pending = source.gs.to_gtiff(path, lock=True, compute=False)
-    assert tasks == []
-    # Native rioxarray creates the header before deferring pixel writes.
-    assert path.exists()
-    pending.compute(scheduler="synchronous")
-    import rasterio
-
-    with rasterio.open(path) as stored:
-        np.testing.assert_array_equal(stored.read(1), source.values)
-
-
-@pytest.mark.parametrize("method", ["to_cog", "to_gtiff"])
-def test_array_export_keeps_native_third_dimension_behavior(method, tmp_path):
-    import rasterio
-
-    source = build_raster(times=2).red
-    path = tmp_path / "dates.tif"
-    getattr(source.gs, method)(path)
-    with rasterio.open(path) as stored:
-        np.testing.assert_array_equal(stored.read(), source.values)
 
 
 def test_stacking_and_splitting_keep_dataset_attrs_apart_from_pixel_meaning() -> None:

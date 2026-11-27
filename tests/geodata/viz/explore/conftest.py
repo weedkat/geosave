@@ -10,6 +10,7 @@ from tests.conftest import build_dataset, build_dataset as build_raster
 from tests.geodata.viz.conftest import ORIGIN, create_grid
 from tests.geodata.conftest import create_file_items, create_test_collection
 
+
 @pytest.fixture(autouse=True)
 def bokeh_backend():
     """Load the backend the layers draw with; only an Explorer loads it itself."""

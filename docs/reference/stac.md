@@ -8,7 +8,33 @@ See [Search and load STAC data](../advanced/stac.md) for examples.
 
 ::: geosave.geodata.stac
     options:
-      members: [StacClient, StacQuery, StacTable, StacLoadOptions, load_dataset, load_native_datasets, group_bands_by_grid, list_properties, create_catalog]
+      members: [StacClient, StacQuery, StacTable, StacLoadOptions, load_dataset, load_native_datasets, group_bands_by_grid, create_catalog]
+
+### Metadata stamps
+
+Every load applies `stamp_nodata` to declare ODC's output fill. Without
+`stamps`, it runs just that step. Pass stamps in execution order, each a name
+or a function, such as `stamps=["eo", my_stamp]`.
+Each receives the current Dataset, the selected PySTAC Items and the load's
+`stac_cfg`, and returns the Dataset for the next step.
+
+`geosave.geodata.stac.stamps.STAMPS` is the dictionary of built-in names.
+
+| Name | Metadata written |
+| --- | --- |
+| `nodata` | Effective output fill for each band. The loader applies this automatically. |
+| `raster` | Declared scale, offset and units for each band. |
+| `eo` | Spectral band metadata and descriptions. |
+| `classification` | Class values, names and declared colours. |
+| `properties` | Item properties requested through `with_properties`, as marked coordinates. |
+| `observation_period` | Start and end coordinates for each time plane. |
+| `rgb` | RGB composite from band common names. |
+| `title` | A single-band asset's title as its band's long name. |
+| `collection` | Linked STAC Collection and Item extension schemas. |
+
+::: geosave.geodata.stac.stamps
+    options:
+      members: [STAMPS, stamp_nodata, stamp_raster, stamp_eo, stamp_classification, stamp_properties, stamp_observation_period, stamp_rgb, stamp_title, stamp_collection]
 
 ## Publication
 

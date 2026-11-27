@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 import math
 
 import pytest
@@ -7,16 +8,13 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from modules.regression import mean_teacher
+from generated_kits.regression.mean_teacher import training as mean_teacher
 from tests.templates.tasks.regression.mean_teacher.test_data import (
+    FLIP,
     Scenes as UnlabeledValues,
 )
 from tests.templates.tasks.regression.supervised.test_data import Chips as Values
 from tests.templates.tasks.regression.supervised.test_module import STAGES
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _preprocessor,
-)
 
 
 def _module(**options) -> mean_teacher.Module:
@@ -86,7 +84,7 @@ class _Batches(Dataset):
 
 def test_lightning_fits_a_few_steps(tmp_path) -> None:
     module = mean_teacher.Module(
-        model_chain=STAGES, optimizer={"name": "sgd", "init_args": {"lr": 0.1}}
+        model_chain=STAGES, optimizer=partial(torch.optim.SGD, lr=0.1)
     )
     trainer = Trainer(
         accelerator="cpu",
@@ -110,7 +108,7 @@ def test_teacher_ema_runs_once_per_optimizer_step_with_accumulation(tmp_path):
             super().__init__(
                 model_chain=STAGES,
                 ema=0.5,
-                optimizer={"name": "sgd", "init_args": {"lr": 0.1}},
+                optimizer=partial(torch.optim.SGD, lr=0.1),
             )
             self.student_steps = []
 
@@ -141,7 +139,6 @@ def test_teacher_ema_runs_once_per_optimizer_step_with_accumulation(tmp_path):
 
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = mean_teacher.DataModule(
-        _preprocessor(),
         Values(),
         Values(),
         augmentations=FLIP,

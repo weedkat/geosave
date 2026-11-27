@@ -36,16 +36,23 @@ def test_geodata_loads_no_torch():
 
 @pytest.mark.slow
 def test_model_core_loads_no_lightning():
-    imports = (
-        "geosave.ml.chain, geosave.ml.components.build, geosave.ml.components.head, "
-        "geosave.ml.processing.raster.pipeline"
+    loaded = _run(
+        """
+import sys
+from geosave.ml.torch import ModelChain
+
+ModelChain.from_config({
+    "head": {"name": "segmentation", "init_args": {"feature_channels": 4, "num_classes": 2}},
+})
+print("lightning" in sys.modules)
+"""
     )
-    assert not _loads(imports, "lightning")
+    assert loaded == "False"
 
 
 @pytest.mark.slow
-def test_ml_package_loads_no_torch():
-    assert not _loads("geosave.ml", "torch")
+def test_framework_free_ml_loads_no_torch():
+    assert not _loads("geosave.ml, geosave.ml.torch", "torch")
 
 
 @pytest.mark.slow
@@ -59,5 +66,5 @@ def test_library_loads_no_flows_or_prefect():
 
 
 @pytest.mark.slow
-def test_release_loads_no_lightning():
-    assert not _loads("geosave.ml.release", "lightning")
+def test_the_chain_loads_no_lightning():
+    assert not _loads("geosave.ml.torch.chain", "lightning")

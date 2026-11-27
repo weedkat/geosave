@@ -28,6 +28,17 @@ what a model accepts.
 place its pixels. Resolution alone does not identify a grid. General DataTrees
 have caller-defined nodes; `RasterStac` separately owns the publication layout.
 
+**Stage**: One step of the processing pipeline: ingest, preprocess, predict,
+postprocess or publish. Only the predictor stage depends on an ML framework.
+_Avoid_: role, sub-processor, step
+
+**Module**: An `nn.Module` that a `ModelChain` composes, such as an encoder,
+decoder, head or monolith. A recipe names each module and its construction
+spec; a release stores them in order. The LightningModule that owns training
+is the task module, not a chain module.
+_Avoid_: component, stage (for a model part)
+
+
 **Recipe**: The former ModelSpec YAML declaration of processing calls.
 ModelSpec is disabled. Registered processing roles now describe ingestion,
 preprocessing and postprocessing; release integration is still open. See
@@ -136,8 +147,9 @@ stored value stands for. `scl.cf == "cloud_high"` selects pixels by meaning. A
 does not define.
 
 **Declared extent**:
-ACDD `geospatial_bounds` with its CRS: the place data describes, independent of
-the **grid extent** its pixels cover.
+GeoSave's `extent` attr with its `extent_crs` (`attrs.Extent`, read as
+`gs.extent`): the place data describes, independent of the **grid extent** its
+pixels cover. A merged prediction declares its source raster's extent.
 
 **Collection metadata**:
 The STAC Collection and extension URIs a Dataset retains in root attrs.
@@ -157,10 +169,10 @@ One calendar interval in raster temporal sampling. First/last selection keeps
 one observation per slot; an empty slot excludes a window.
 
 **Window**:
-Consecutive calendar slots of a prepared raster, returned by `.gs.sample`.
+Consecutive calendar slots of a prepared raster, yielded by `gs.samples`.
 
 **Chip**:
-One fixed-size pixel window of a prepared raster. `RasterChipper` cuts chips along the spatial dimensions without choosing a CRS, resolution, or extent; `RasterMerger` places predictions back by chip index.
+One fixed-size pixel window of a prepared raster. `RasterChipper` cuts chips along the spatial dimensions without choosing a CRS, resolution, or extent; `RasterMerger` places predictions back by the yielded `ChipLocation`.
 _Avoid_: tile, patch, crop
 
 **Composite**:

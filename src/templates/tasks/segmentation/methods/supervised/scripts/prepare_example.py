@@ -1,0 +1,48 @@
+"""Prepare sample reflectance: python scripts/prepare_example.py."""
+
+from pathlib import Path
+import sys
+
+import dask.array as da
+import xarray as xr
+from odc.geo.geobox import GeoBox
+from odc.geo.xr import xr_coords
+
+import geosave  # noqa: F401  registers the .gs accessors
+
+
+def sample_raster() -> xr.Dataset:
+    """Return a small lazy raster with four packed Sentinel-2 bands."""
+    grid = GeoBox.from_bbox((0, 0, 40, 40), crs="EPSG:32633", resolution=10)
+    optical = xr.Dataset(
+        {
+            name: (
+                ("y", "x"),
+                da.full((4, 4), value, chunks=(2, 2), dtype="uint16"),
+            )
+            for name, value in (
+                ("B02", 1000),
+                ("B03", 1500),
+                ("B04", 2000),
+                ("B08", 6000),
+            )
+        }
+    ).assign_coords(xr_coords(grid))
+    for variable in optical.data_vars.values():
+        variable.attrs.update(scale_factor=0.0001, add_offset=0.0)
+    return optical
+
+
+def main() -> None:
+    """Prepare lazy reflectance and compute only to display the sample pixels."""
+    workspace = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(workspace))
+    from processing.preprocessing import Reflectance
+
+    sources = xr.DataTree.from_dict({"image": sample_raster()})
+    prepared = Reflectance().preprocess(sources)
+    print(prepared["image"].to_dataset().compute())
+
+
+if __name__ == "__main__":
+    main()

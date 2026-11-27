@@ -4,11 +4,11 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from . import stamps as stamps
     from .catalog import concat_catalogs, create_catalog
     from .load import (
         StacLoadOptions,
         group_bands_by_grid,
-        list_properties,
         load_dataset,
         load_native_datasets,
     )
@@ -26,7 +26,6 @@ _LAZY = {
     "StacLoadOptions": ".load",
     "load_dataset": ".load",
     "group_bands_by_grid": ".load",
-    "list_properties": ".load",
     "load_native_datasets": ".load",
     "StacItem": ".publish",
     "publish_item": ".publish",
@@ -34,6 +33,8 @@ _LAZY = {
 
 
 def __getattr__(name: str) -> Any:
+    if name == "stamps":
+        return import_module(".stamps", __name__)
     if name in _LAZY:
         return getattr(import_module(_LAZY[name], __name__), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -44,6 +45,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "stamps",
     "StacClient",
     "StacQuery",
     "StacTable",
@@ -52,7 +54,6 @@ __all__ = [
     "StacLoadOptions",
     "load_dataset",
     "group_bands_by_grid",
-    "list_properties",
     "load_native_datasets",
     "StacItem",
     "publish_item",

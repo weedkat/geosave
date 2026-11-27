@@ -26,10 +26,9 @@ if TYPE_CHECKING:
     from affine import Affine
     from odc.geo import CRS, BoundingBox, Resolution, SomeCRS, SomeResolution
     from odc.geo.geobox import GeoBox
+    from odc.geo.geom import Geometry
 
-    from geosave.geodata.utils.datetime import DateRange, Freq
-
-    from .utils.windows import Keep
+    from geosave.geodata.utils.datetime import DateRange
 
     from geosave.geodata.core.region import GeoRegion
 
@@ -156,65 +155,25 @@ class RasterTime[DataT: xr.DataArray | xr.Dataset]:
 
     @property
     def times(self) -> pd.DatetimeIndex | None:
-        """Read the time coordinate labels.
+        """Read the labels of the `time` dimension.
 
         Returns:
-            Labels in axis order, or None for timeless data.
+            Labels in axis order, or None without a `time` dimension. A scalar
+            `time` coordinate dates one observation; it is not a timeline.
+
+        Raises:
+            TypeError: The `time` dimension does not hold datetimes.
 
         Examples:
             >>> ds.gs.times.strftime("%Y%m%d").tolist()
             ['20250601', '20250611']
         """
-        labels = self.time_coordinate
-        if labels is None:
+        if TIME_COORDINATE not in self._data.dims:
             return None
-        return pd.DatetimeIndex(np.atleast_1d(labels.values))
-
-    def sample(
-        self,
-        freq: Freq,
-        *,
-        size: int = 1,
-        stride: int = 1,
-        keep: Keep = "last",
-    ) -> list[DataT]:
-        """Sample the time axis into windows of consecutive slots, lazily.
-
-        Each window is one model input in time: this raster at `size` slots
-        of length `freq` in a row. Cut it in space with `RasterChipper`.
-        A slot holding several observations keeps one of them; blend them
-        with `composite` first when that is wanted. A window holding an empty
-        slot is left out. Only the time labels are read.
-
-        Args:
-            freq: Length of one slot, as a pandas offset alias such as "MS".
-            size: Slots per window, the length of each window's time axis.
-            stride: Slots between the starts of consecutive windows.
-            keep: The observation a slot keeps when several fall in it.
-
-        Returns:
-            One raster per window, in time order; `start_datetime` and
-            `end_datetime` follow their time labels.
-
-        Raises:
-            ValueError: The raster has no datetime `time` dimension, `size`
-                or `stride` is below 1, or `keep` is unknown.
-
-        Examples:
-            >>> pairs = scene.gs.sample("MS", size=2, keep="last")
-            >>> pairs[0].time.dt.strftime("%m-%d").values.tolist()
-            ['06-28', '07-23']
-        """
-        from .utils.windows import window_times
-
-        times = self.times
-        if times is None or TIME_COORDINATE not in self._data.dims:
-            raise ValueError("sample needs a datetime `time` dimension")
-
-        windows = []
-        for positions in window_times(times, freq, size=size, stride=stride, keep=keep):
-            windows.append(self._data.isel({TIME_COORDINATE: positions}))
-        return windows
+        times = self._data.get_index(TIME_COORDINATE)
+        if not isinstance(times, pd.DatetimeIndex):
+            raise TypeError(f"the `time` dimension holds {times.dtype}, not datetimes")
+        return times
 
     def write_time_bounds(
         self,
@@ -337,6 +296,34 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray](ABC):
         """Name the horizontal spatial dimension, as `.odc.xdim` does."""
         dims = self.spatial_dims
         return None if dims is None else dims[1]
+
+    @property
+    def chunk_heights(self) -> tuple[int, ...] | None:
+        """Return the Dask chunk heights down the grid, or None when pixels are not in Dask.
+
+        Raises:
+            ValueError: Variables are chunked differently, as
+                `Dataset.chunksizes` raises.
+
+        Examples:
+            >>> scene.chunk(y=512).gs.chunk_heights
+            (512, 512)
+        """
+        return self._data.chunksizes.get(self.ydim)
+
+    @property
+    def chunk_widths(self) -> tuple[int, ...] | None:
+        """Return the Dask chunk widths across the grid, or None when pixels are not in Dask.
+
+        Raises:
+            ValueError: Variables are chunked differently, as
+                `Dataset.chunksizes` raises.
+
+        Examples:
+            >>> scene.chunk(x=512).gs.chunk_widths
+            (512, 512)
+        """
+        return self._data.chunksizes.get(self.xdim)
 
     def validate(self, *rules: raster_rules.Rule[DataT]) -> None:
         """Require a grid ODC recognizes, with a CRS, then every rule, without reading pixels.
@@ -493,6 +480,19 @@ class GeoRaster[DataT: xr.Dataset | xr.DataArray](ABC):
     @abstractmethod
     def timespan(self) -> DateRange | None:
         """Read inclusive temporal coverage using the concrete raster's rules."""
+
+    @property
+    def extent(self) -> Geometry | None:
+        """Read the place this raster declares it covers, or None when it declares none.
+
+        Unlike `region`, it never falls back to the pixel grid.
+
+        Examples:
+            >>> ds.gs.write_extent(city).gs.extent == city
+            True
+        """
+        extent = attrs.Extent.from_attrs(self._data.attrs)
+        return None if extent is None else extent.to_geometry()
 
     @property
     @abstractmethod

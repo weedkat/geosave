@@ -38,17 +38,19 @@ def raster_leaves(tree: xr.DataTree) -> None:
             )
 
         try:
-            local = node.to_dataset(inherit=False)
+            local_coords = set(node.to_dataset(inherit=False).coords)
             effective = node.to_dataset(inherit="all_coords")
             grid_coords = set(effective.gs.spatial_dims or ())
             if effective.odc.crs_coord is not None:
                 grid_coords.add(effective.odc.crs_coord.name)
-            inherited = grid_coords.intersection(effective.coords) - set(local.coords)
+            inherited = grid_coords.intersection(effective.coords) - local_coords
             if inherited:
                 raise RasterValidationError(
                     f"Grid coordinates must belong to the raster leaf: {sorted(inherited, key=str)}"
                 )
-            georeferenced(local)
+            # No grid coordinate is inherited, so the leaf's own grid is the
+            # effective one; ODC locates it once per leaf.
+            georeferenced(effective)
         except RasterValidationError as error:
             error.path = node.relative_to(tree)
             raise
@@ -111,6 +113,33 @@ def same_geobox(tree: xr.DataTree) -> None:
         f"Nodes are on {len(nodes_by_geobox)} GeoBoxes ({'; '.join(lines)}). Align "
         "them with tree.gs.reproject(geobox).",
         path=list(nodes_by_geobox.values())[1][0],
+    )
+
+
+def same_chunks(tree: xr.DataTree) -> None:
+    """Require one Dask chunking of the grid across the data nodes.
+
+    Raises:
+        RasterValidationError: Nodes are chunked differently along their grid;
+            the error names each.
+    """
+    nodes_by_chunks: dict[tuple | None, list[str]] = {}
+    for node in tree.subtree:
+        if not node.data_vars:
+            continue
+        raster = node.to_dataset(inherit=False)
+        chunks = (raster.gs.chunk_heights, raster.gs.chunk_widths)
+        nodes_by_chunks.setdefault(chunks, []).append(node.relative_to(tree))
+    if len(nodes_by_chunks) <= 1:
+        return
+
+    lines = []
+    for paths in nodes_by_chunks.values():
+        lines.append(", ".join(paths))
+    raise RasterValidationError(
+        f"Nodes are chunked {len(nodes_by_chunks)} ways ({'; '.join(lines)}). "
+        "Rechunk them alike with tree.chunk(y=..., x=...).",
+        path=list(nodes_by_chunks.values())[1][0],
     )
 
 

@@ -39,7 +39,7 @@ Examples:
 from __future__ import annotations
 
 
-from typing import TYPE_CHECKING, Any, Literal, Unpack, cast
+from typing import TYPE_CHECKING, Any, Literal, Unpack, cast, overload
 
 import cf_xarray  # noqa: F401  — registers the .cf accessor
 import numpy as np
@@ -52,7 +52,12 @@ import geosave.geodata.attrs as attrs
 from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
 )
-from geosave.geodata.core.raster.utils.tensor import as_tensor
+from geosave.geodata.core.raster.utils.tensor import (
+    as_tensor,
+    as_tensors,
+    find_numpy_dtype,
+    resolve_torch_dtype,
+)
 
 from .datatree import check_node_name
 from .base import GeoRaster, RasterStacProperties, RasterTime
@@ -72,9 +77,10 @@ if TYPE_CHECKING:
 
     import holoviews as hv
     import torch
-    from .utils.context import ContextTensors
     from numpy.typing import DTypeLike
     from odc.geo import SomeCRS
+
+    from .utils.context import ContextReader, ContextTensors
 
     from geosave.geodata import DataArray, Dataset, DataTree
     from dask.delayed import Delayed
@@ -159,7 +165,7 @@ class GeoDataset(
 
         Args:
             freq: Pandas offset alias, such as "MS".
-            method: Native reducer; class codes permit only first or last.
+            method: Native reducer; class IDs permit only first or last.
             dim: Datetime dimension to resample, default "time".
             interpolation: Fill interior pixel gaps with linear or nearest
                 interpolation after reduction. None keeps gaps. Lazy output is
@@ -179,7 +185,7 @@ class GeoDataset(
 
         Raises:
             ValueError: The selected datetime dimension is absent, active CF attrs require explicit
-                `mask_and_scale()`, or class codes would be reduced numerically.
+                `mask_and_scale()`, or class IDs would be reduced numerically.
         """
 
         bands = {}
@@ -260,7 +266,8 @@ class GeoDataset(
         """Read the STAC Collection this raster was loaded from, None where it states none.
 
         Examples:
-            >>> stac.load_dataset(items, geobox=grid).gs.stac_collection.id
+            >>> ds = stac.load_dataset(items, geobox=grid, stamps=[stac.stamps.stamp_collection])
+            >>> ds.gs.stac_collection.id
             'sentinel-2-l2a'
         """
         import pystac
@@ -275,7 +282,8 @@ class GeoDataset(
         """Read the STAC extension schema URIs this raster declares; empty where none.
 
         Examples:
-            >>> stac.load_dataset(items, geobox=grid).gs.stac_extensions
+            >>> ds = stac.load_dataset(items, geobox=grid, stamps=[stac.stamps.stamp_collection])
+            >>> ds.gs.stac_extensions
             ['https://stac-extensions.github.io/eo/v1.1.0/schema.json']
         """
         stated = attrs.StacCollection.from_attrs(self._data.attrs)
@@ -340,7 +348,7 @@ class GeoDataset(
 
         Raises:
             ValueError: This object sits on no locatable grid, a variable does
-                not span the grid, or `resampling` would blend class codes.
+                not span the grid, or `resampling` would blend class IDs.
 
         Examples:
             >>> ds.gs.reproject("EPSG:3857").gs.crs.epsg
@@ -411,17 +419,18 @@ class GeoDataset(
     ) -> Dataset:
         """Take the pixels of an aligned grid, padding where it leaves this raster.
 
-        Unlike `reproject`, nothing is resampled or computed.
+        The crop preserves the pixel grid. Dask-backed pixels stay lazy, including
+        padding. A file opened with `chunks=None` can read pixels during padding.
 
         Args:
             geobox: Grid sharing this raster's CRS and pixel size, offset by
-                whole pixels, such as `chips.geobox(key)`. It may extend past
+                whole pixels, such as `ds.gs.geobox[:128, :128]`. It may extend past
                 the raster edges.
             mode: How pixels outside the raster are filled, as in `numpy.pad`.
             constant_value: Fill for `"constant"`, keeping the dtype.
 
         Returns:
-            Lazy Dataset on exactly `geobox`. A declared extent is clipped to it;
+            Dataset on exactly `geobox`. A declared extent is clipped to it;
             time and other coordinates, nodata and other attrs are kept.
 
         Raises:
@@ -458,9 +467,8 @@ class GeoDataset(
         """
         from geosave.geodata.core.region import GeoRegion
 
-        extent = attrs.ACDDExtent.from_attrs(self._data.attrs)
-        if extent is not None:
-            return GeoRegion(extent.to_geometry(), timespan=self.timespan)
+        if self.extent is not None:
+            return GeoRegion(self.extent, timespan=self.timespan)
         geometry = None
         for name in self.variables:
             variable = self._data[name]
@@ -496,11 +504,9 @@ class GeoDataset(
             True
         """
         if extent is None:
-            written = attrs.clear_attrs(self._data, attrs.ACDDExtent)
+            written = attrs.clear_attrs(self._data, attrs.Extent)
         else:
-            written = attrs.stamp_attrs(
-                self._data, attrs.ACDDExtent.from_geometry(extent)
-            )
+            written = attrs.stamp_attrs(self._data, attrs.Extent.from_geometry(extent))
         for name, variable in written.data_vars.items():
             if variable.gs.spatial_dims is not None:
                 written[name] = variable.gs.write_extent(extent)
@@ -517,17 +523,25 @@ class GeoDataset(
             with `geometry`, cleared where they do not meet.
         """
         raster = self._data
-        extent = attrs.ACDDExtent.from_attrs(raster.attrs)
+        extent = attrs.Extent.from_attrs(raster.attrs)
         if extent is not None:
             narrowed = extent.clip(geometry)
             if narrowed is None:
-                raster = attrs.clear_attrs(raster, attrs.ACDDExtent)
+                raster = attrs.clear_attrs(raster, attrs.Extent)
             else:
                 raster = attrs.stamp_attrs(raster, narrowed)
         else:
             raster = raster.copy(deep=False)
+
+        # Only variables declaring their own extent change; assigning them in
+        # one call aligns the Dataset once instead of once per variable.
+        clipped_bands = {}
         for name in self.variables:
-            raster[name] = raster[name].gs.clip_extent(geometry)
+            band = raster[name]
+            if attrs.Extent.from_attrs(band.attrs) is not None:
+                clipped_bands[name] = band.gs.clip_extent(geometry)
+        if clipped_bands:
+            raster = raster.assign(clipped_bands)
         return cast("Dataset", raster)
 
     def _target_variables(self, target: list[str] | None) -> list[str]:
@@ -888,89 +902,115 @@ class GeoDataset(
             xlabel=xlabel,
         )
 
-    def to_numpy(self, *, dtype: DTypeLike | None = None) -> np.ndarray:
-        """Stack every variable this raster carries into one model-input array.
+    @overload
+    def to_numpy(
+        self, *, dtype: DTypeLike | None = None, context: None = None
+    ) -> np.ndarray: ...
+
+    @overload
+    def to_numpy(
+        self,
+        *,
+        dtype: DTypeLike | None = None,
+        context: Mapping[str, ContextReader[xr.Dataset] | str],
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]: ...
+
+    def to_numpy(
+        self,
+        *,
+        dtype: DTypeLike | None = None,
+        context: Mapping[str, ContextReader[xr.Dataset] | str] | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, dict[str, np.ndarray]]:
+        """Read the variables stacked, as a model reads one sample, and the requested context.
 
         Every axis besides the grid leads, then the variables, then the grid
         pair — torchgeo's `[T, C, H, W]`. No batch axis is added, so one raster
         is one sample. Order the variables with xarray before stacking them.
+        Context is read before any pixel.
 
         Args:
-            dtype: Cast applied to each variable before stacking. None keeps the source
-                dtype, which every variable must then share.
+            dtype: Cast applied to each variable before stacking. None keeps the
+                source dtype, which every variable must then share.
+            context: Model input names mapped to the readers of their arrays.
+                A reader is a function of this Dataset, or its name in
+                `CONTEXT_READERS`, such as `"transform"`, `"crs"` or
+                `"centroid"`. None reads no context.
 
         Returns:
-            Array shaped `(*axes, band, y, x)`.
+            Pixels shaped `(*axes, band, y, x)`; with `context`, the pixels and
+            the context arrays keyed as `context`.
 
         Raises:
-            ValueError: This raster carries no variables, they carry different
-                non-spatial dimensions, or they differ in dtype while `dtype`
-                is None.
+            RasterValidationError: The raster is not georeferenced or not
+                `stackable` after the cast.
+            KeyError: A reader name is not in `CONTEXT_READERS`.
+            ValueError: A reader refuses the raster.
 
         Examples:
             >>> ds[["B04", "B08"]].gs.to_numpy().shape
             (2, 2, 256, 256)
+            >>> pixels, context = ds.gs.to_numpy(context={"centroid": "centroid"})
         """
-        self.validate()
-        variables = list(self._data.data_vars.values())
-        if not variables:
-            raise ValueError("Model input needs at least one raster variable")
-        if BAND_DIMENSION in self._data.dims:
-            raise ValueError(
-                "Rename the existing band dimension before stacking variables"
-            )
-        first = variables[0]
-        for variable in variables[1:]:
-            if variable.dims != first.dims:
-                raise ValueError(
-                    "Model channels must have matching dimensions; broadcast explicitly"
-                )
-            if dtype is None and variable.dtype != first.dtype:
-                raise ValueError(
-                    "Model channels have different dtypes; provide dtype explicitly"
-                )
+        from .utils.context import read_context
 
         raster = self._data if dtype is None else self._data.astype(dtype)
+        raster.gs.validate(dataset_rules.stackable)
+        values = None if context is None else read_context(self._data, context)
+
+        spatial = cast("tuple[str, str]", self.spatial_dims)
         array = raster.to_array(dim=BAND_DIMENSION)
-        return array.transpose(
-            ..., BAND_DIMENSION, *cast("tuple[str, str]", self.spatial_dims)
-        ).values
+        pixels = array.transpose(..., BAND_DIMENSION, *spatial).values
+        if values is None:
+            return pixels
+        return pixels, values
+
+    @overload
+    def to_tensor(
+        self, *, dtype: str | torch.dtype | None = None, context: None = None
+    ) -> torch.Tensor: ...
+
+    @overload
+    def to_tensor(
+        self,
+        *,
+        dtype: str | torch.dtype | None = None,
+        context: Mapping[str, ContextReader[xr.Dataset] | str],
+    ) -> tuple[torch.Tensor, ContextTensors]: ...
 
     def to_tensor(
         self,
         *,
         dtype: str | torch.dtype | None = None,
-        grid: bool = False,
-        context: Sequence[str] = (),
-    ) -> tuple[torch.Tensor, ContextTensors]:
-        """Read pixels and return requested context separately as tensors.
+        context: Mapping[str, ContextReader[xr.Dataset] | str] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, ContextTensors]:
+        """Read the stacked variables and the requested context as `to_numpy` does, as tensors.
 
         Args:
             dtype: Torch dtype or its string name. None keeps the pixel dtype.
-            grid: Include affine `transform` and EPSG `crs` tensors in context.
-            context: Names in `TENSOR_CONTEXT` to read alongside the pixels.
+                A dtype NumPy cannot hold, such as bfloat16, reads as float32.
+            context: Model input names mapped to readers, as for `to_numpy`.
 
         Returns:
-            Pixel tensor shaped `(*axes, band, y, x)` and a dictionary of context
-            tensors. The dictionary is empty when no context or grid is requested.
+            Pixel tensor shaped `(*axes, band, y, x)`; with `context`, the pixel
+            tensor and the context tensors keyed as `context`.
 
         Raises:
-            KeyError: A context name is unknown.
-            ValueError: A dtype is unknown, the raster cannot be converted, or
-                the requested grid has no EPSG code.
-            TypeError: The dtype is invalid or has no tensor equivalent.
+            RasterValidationError: As for `to_numpy`.
+            KeyError: As for `to_numpy`.
+            ValueError: A dtype name is unknown, or as for `to_numpy`.
+            TypeError: The dtype is invalid or an array has no tensor equivalent.
 
         Examples:
-            >>> pixels, context = raster.gs.to_tensor(dtype="float32")
+            >>> pixels = raster.gs.to_tensor(dtype="float32")
+            >>> pixels, context = raster.gs.to_tensor(context={"centroid": "centroid"})
         """
-        from .utils.context import read_context
+        target = resolve_torch_dtype(dtype)
+        numpy_dtype = find_numpy_dtype(target)
+        if context is None:
+            return as_tensor(self.to_numpy(dtype=numpy_dtype), target)
 
-        pixels = as_tensor(self.to_numpy, dtype)
-        entries = {}
-        if grid or context:
-            tree = xr.DataTree.from_dict({"pixels": self._data})
-            entries = read_context(tree, grid=grid, context=context)
-        return pixels, entries
+        pixels, values = self.to_numpy(dtype=numpy_dtype, context=context)
+        return as_tensor(pixels, target), as_tensors(values)
 
     def mask_and_scale(self) -> Dataset:
         """Decode the Dataset's CF values, coordinates and relationships lazily.

@@ -42,7 +42,7 @@ image_plot
 labels = gs.open_raster("training-labels.tif")
 ```
 
-The labels keep integer class codes. `255` means no annotation.
+The labels keep integer class IDs. `255` means no annotation.
 Their colors come from the embedded class legend: trees, crops, scrub and
 bare ground are categories, not image intensities. Compare their boundaries
 with the image before preparing samples.
@@ -59,7 +59,7 @@ label_plot
 They share the same pixel grid. A DataTree keeps them as separate named
 Datasets, so their dtypes and metadata stay separate.
 The names `image` and `labels` identify the two parts of each sample.
-RasterChipper applies one window to both, so they stay aligned.
+The chip iterator applies one window to both, so they stay aligned.
 
 ```python
 import xarray as xr
@@ -67,25 +67,24 @@ import xarray as xr
 inputs = image.gs.mask_and_scale()
 tree = xr.DataTree.from_dict({"image": inputs, "labels": labels})
 chips = gs.RasterChipper([tree], size=128)
-len(chips)
+location, chip = next(iter(chips))
+(location.top, location.left)
 ```
 
 ```text
-4
+(0, 0)
 ```
 
 Decoding turns stored image numbers into reflectance. Labels stay unchanged.
 This matters because image scaling describes a measurement, while scaling
-class codes would change their meaning.
+class IDs would change their meaning.
 The 256 × 256 scene gives four 128 × 128 chips; planning them reads no pixels.
 
 ## 4. Read one sample
 
 ```python
-chip = chips[0]
-pixels, context = chip.gs.to_tensor()
-sample = {**pixels, **context}
-{name: tuple(tensor.shape) for name, tensor in sample.items()}
+pixels = chip.gs.to_tensor()
+{name: tuple(tensor.shape) for name, tensor in pixels.items()}
 ```
 
 ```text

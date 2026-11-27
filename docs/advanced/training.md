@@ -1,69 +1,56 @@
 # Train in an editable Lightning workspace
 
-Generate a project, run one training epoch, then adapt its Python files to
-your data and model.
-
-**You need:** `geosave[ml]`. The supplied Lightning starter runs offline.
-
-## Generate and run the starter
+Install `geosave[ml]`, then create the offline Lightning starter and run its
+synthetic Dataset through a training and validation epoch.
 
 ```bash
 geosave create demo --task lightning --method boilerplate
 cd demo
-python main.py fit --config configs/lightning-boilerplate.yaml --trainer.max_epochs 1
+python main.py fit --config configs/boilerplate.yaml --trainer.max_epochs 1
 ```
 
-The starter trains its supplied example Dataset. Lightning reports:
+The first run saves its resolved configuration, checkpoint, and TensorBoard
+events in `artifacts/lightning-boilerplate/version_0/`. Subsequent runs use
+new version folders.
 
-```text
-`Trainer.fit` stopped: `max_epochs=1` reached.
+## Connect real imagery
+
+```bash
+geosave create landcover --task segmentation --method supervised
+cd landcover
 ```
 
-The first run writes its configuration, checkpoint and TensorBoard events to
-`artifacts/lightning-boilerplate/version_0/`. Later runs use new version folders.
+Open the generated README for the expected image bands, target format and
+supported stages. Set the paired image and label paths in
+`configs/supervised.yaml`, then run `python main.py fit --config configs/supervised.yaml`.
+This starter trains on aligned chips. Validation and test await a project
+evaluation implementation.
 
-## Find the files you edit
-
-| File | Purpose |
+| File | Where to make a change |
 | --- | --- |
-| `datasets.py` | Read one sample with inputs and targets. |
-| `data.py` | Build loaders and apply shared transforms. |
-| `module.py` | Define the model, loss, metrics and optimizer. |
-| `processing.py`, where supplied | Share raster preparation with inference. |
-| YAML config | Select components and training settings. |
-| `main.py` | Run the LightningCLI entry point. |
+| `configs/supervised.yaml` | Model, optimizer, split Datasets, callbacks and run settings. |
+| `training/datasets.py` | Read and prepare one sample from the project's data source. |
+| `training/datamodule.py` | Build DataLoaders and apply training augmentation. |
+| `training/module.py` | Compute the training objective and metrics. |
+| `processing/` | Ingest source imagery, prepare model inputs, predict, postprocess or write the output. |
+| `pipeline.py` | Connect those stages for inference with a trained model. |
 
-Generated files belong to your project. Updating GeoSave does not rewrite them.
-Generation does not install packages or create a dependency lockfile.
+Share input preparation between the Dataset and Pipeline. Keep training
+augmentation in the DataModule. The Pipeline can run on an ordinary model
+without constructing a Lightning trainer. Some starters provide stage stubs
+for project-specific work. [Recipe status](../reference/training.md)
 
-## Connect geospatial data
-
-Choose [model components](models.md) and reuse the same
-[preprocessor](model-inputs.md) for training and inference. Your Dataset returns
-the named inputs that the model expects. Choose geographic or temporal splits
-before reading training chips.
-
-The Lightning starter uses synthetic samples to verify the training setup.
-Geospatial recipes still need migration or project implementation; check
-[recipe status](../reference/training.md). There is no verified complete
-raster-training starter to copy yet.
-
-Use `geosave add-task` inside a workspace to add another method.
-See the [CLI reference](../reference/cli.md) for selectors and file behavior,
-and [training concepts](../concepts/training.md) for sample and target contracts.
+A starter is copied once. Its files belong to the project, including any
+additional Datasets or methods you add. See [CLI inputs](../reference/cli.md)
+and [training contracts](../concepts/training.md).
 
 ## Save and share your work
 
-Keep checkpoints for resuming training. Use [native releases](release.md)
-for inference with registered GeoSave stages and pipeline settings.
-The generic `geosave publish` command is a placeholder; use the release API.
-
-Archive code, effective configuration, data revision, dependency lockfile,
-metrics and selected checkpoints with the experiment. Keep data, experiments
-and inference releases separate; [MLOps](../mlops/index.md) shows the three
-repositories and how their revisions connect.
-
-The supervised-segmentation publication script can archive training and export
-a chain to separate Hub repositories. It currently exports a chain without a
-raster pipeline. Other task publication scripts still need migration; see
-[release status](../contributing/open-decisions.md#template-and-notebook-migrations).
+Keep the effective config, code and data revisions, dependency versions, and
+checkpoint together so another user can continue the run. The supervised
+segmentation starter includes `scripts/publish.py` for releasing the trained
+chain as a tagged version with its lineage in the model card, and optionally
+archiving the run in a separate training repository.
+Use `python scripts/publish.py --help` inside that workspace for its arguments.
+The editable Pipeline lives with the project source. See
+[model releases](release.md) and [experiment provenance](../mlops/index.md).

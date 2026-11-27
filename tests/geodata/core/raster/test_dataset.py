@@ -145,7 +145,7 @@ def test_stacking_refuses_conflicting_packing_without_reading_pixels(attributes)
             {"flag_values": [1, 2], "flag_meanings": "water land"},
         ),
     ],
-    ids=["units", "class-codes"],
+    ids=["units", "class-class_ids"],
 )
 def test_stacking_rejects_different_pixel_meaning_before_reading(left, right):
     from dask.callbacks import Callback
@@ -172,9 +172,9 @@ def test_nodata_reads_back_what_was_written() -> None:
 
 def _classes() -> xr.Dataset:
     box = geobox()
-    codes = np.zeros(box.shape, "uint8")
+    class_ids = np.zeros(box.shape, "uint8")
     return build_dataset(
-        {"label": (("y", "x"), codes), "other": (("y", "x"), codes)}, box
+        {"label": (("y", "x"), class_ids), "other": (("y", "x"), class_ids)}, box
     )
 
 
@@ -268,8 +268,8 @@ def test_stacking_requires_explicit_broadcast_for_static_channels() -> None:
 
     with pytest.raises(ValueError, match="dimensions"):
         mixed.gs.to_numpy()
-    prepared = mixed.broadcast_like(source)
-    assert prepared.gs.to_numpy().shape == (2, len(mixed.data_vars), 8, 8)
+    stacked = mixed.broadcast_like(source).gs.to_numpy()
+    assert stacked.shape == (2, len(mixed.data_vars), 8, 8)
 
 
 def test_stacking_requires_explicit_dtype_for_mixed_channels() -> None:
@@ -284,18 +284,23 @@ def test_to_numpy_casts_variables_onto_one_dtype() -> None:
     source = optical()
     mixed = source.assign(ndvi=source.B04.astype("float32"))
 
-    assert mixed.gs.to_numpy(dtype="float32").dtype == np.dtype("float32")
+    stacked = mixed.gs.to_numpy(dtype="float32")
+
+    assert stacked.dtype == np.dtype("float32")
 
 
 def test_to_tensor_keeps_the_pixel_dtype_and_the_to_numpy_layout(torch) -> None:
-    tensor, context = optical().gs.to_tensor(grid=True, context=["centroid"])
+    tensor, context = optical().gs.to_tensor(
+        context={"transform": "transform", "crs": "crs", "centroid": "centroid"}
+    )
 
     assert list(context) == ["transform", "crs", "centroid"]
 
     assert tensor.dtype is torch.uint16
     assert tuple(tensor.shape) == (2, 2, 8, 8)
     assert tensor.is_contiguous()
-    torch.testing.assert_close(tensor, torch.tensor(optical().gs.to_numpy()))
+    pixels = optical().gs.to_numpy()
+    torch.testing.assert_close(tensor, torch.tensor(pixels))
 
 
 def build_bands(*colours: str | None) -> xr.Dataset:
@@ -424,8 +429,8 @@ def test_extent_survives_band_selection_without_changing_pixels(city):
     written = source.gs.write_extent(city)
 
     assert written.red.data is source.red.data
-    assert "geospatial_bounds" not in source.attrs
-    assert "geospatial_bounds" not in source.red.attrs
+    assert "extent" not in source.attrs
+    assert "extent" not in source.red.attrs
     assert written.gs.geobox == source.gs.geobox
     assert written.gs.region.extent == city
     assert written.red.gs.region.extent == city
@@ -467,7 +472,8 @@ def test_model_channels_allow_distinct_units_and_require_explicit_dtype():
     source["nir"] = source.nir.astype("float32")
     with pytest.raises(ValueError, match="dtype"):
         source.gs.to_numpy()
-    assert source.gs.to_numpy(dtype="float32").dtype == np.float32
+    pixels = source.gs.to_numpy(dtype="float32")
+    assert pixels.dtype == np.float32
     source["nir"] = source.nir.expand_dims(layer=[1])
     with pytest.raises(ValueError, match="dimensions"):
         source.gs.to_numpy(dtype="float32")

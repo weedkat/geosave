@@ -65,7 +65,8 @@ def open_raster(
 
     Returns:
         Dataset for the file or selected group. Use `open_raster_tree` to open
-        a Zarr or NetCDF hierarchy. Close the result to release handles.
+        a Zarr or NetCDF hierarchy. File handles close with the result;
+        `close()` releases them early, such as before overwriting the file.
         Opening does not reproject.
 
     Raises:
@@ -288,7 +289,8 @@ def open_raster_tree(
 
     Returns:
         DataTree preserving the groups, including a root-only tree for a
-        store without children. Close the result to release handles.
+        store without children. File handles close with the result;
+        `close()` releases them early, such as before overwriting the file.
         Opening does not reproject.
 
     Raises:

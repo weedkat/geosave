@@ -61,8 +61,8 @@ Where each part lives, in memory and in a file::
 
 Who writes the cells::
 
-    stac.load_dataset                  its Items' earliest start to latest end;
-                                       an Item stating only `datetime`, that instant
+    stamp_observation_period           earliest stated start and latest stated end
+                                       in an ODC time plane, or its time label
     gs.composite(freq)                 the resample bin
     gs.write_time_bounds("MS")         one freq step per label
     a cell ends where the next starts (CF convention)
@@ -76,6 +76,7 @@ property: ODC names `eo:cloud_cover` as `eo_cloud_cover`, or as the request's
     ...     items, geobox=grid, groupby="id", chunks={},
     ...     with_properties=[{"key": "eo:cloud_cover", "dtype": "float64"},
     ...                      {"key": "platform", "dtype": "str"}],
+    ...     stamps=[stac.stamps.stamp_properties],
     ... )
     >>> scene
     <xarray.Dataset> Size: 188B
@@ -89,8 +90,6 @@ property: ODC names `eo:cloud_cover` as `eo_cloud_cover`, or as the request's
         spatial_ref     int32 4B 32633
     Data variables:
         red             (time, y, x) uint16 24B dask.array<chunksize=(1, 2, 3), meta=np.ndarray>
-    Attributes:
-        stac_extensions:  ["https://stac-extensions.github.io/projection/v2.0.0/s...
     >>> scene["eo_cloud_cover"].attrs
     {'units': '1', 'stac_property': 'eo:cloud_cover'}
     >>> scene.gs.stac_properties
@@ -98,13 +97,12 @@ property: ODC names `eo:cloud_cover` as `eo_cloud_cover`, or as the request's
 
 Who writes each property::
 
-    with_properties=[...]       ODC loads it as a (time,) data variable, one
-                                value per step (fused Items: numbers averaged,
-                                text joined with ","); the "properties" stamp
-                                moves it to a coordinate and marks it
+    with_properties=[...]       ODC loads a (time,) data variable per property
+    stamp_properties            moves the loaded variables to coordinates
+                                and marks them with their STAC keys
     gs.write_stac_property      a (time,) or scalar coordinate, by hand
 
-The Collection and the schemas the properties need are Dataset attrs::
+The optional `stamp_collection` writes Dataset attrs::
 
     scene.attrs["stac_collection"]          JSON Collection, without links
     scene.attrs["stac_extensions"]          JSON extension schema URIs

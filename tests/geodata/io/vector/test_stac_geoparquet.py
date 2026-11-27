@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 
-
 import geopandas as gpd
 import pyarrow.parquet as pq
 import pystac
@@ -159,5 +158,3 @@ def test_an_edited_geometry_changes_the_bbox_written(tmp_path):
     )
 
     assert restored["bbox"][0] == pytest.approx(entry.bbox[0] + 1.0)
-
-

@@ -1,46 +1,21 @@
-"""Select a task and one of its training methods."""
-
-from pathlib import Path
+"""Choose a starter from the installed catalog."""
 
 import questionary as qu
 import typer
 
 from .prompts import prompt_select
 from .templates import get_methods, get_tasks, read_method_description
-from .workspace import has_method, project_task
 
 
-def select_method(
-    root: Path, task: str | None, method: str | None, *, allow_blank: bool
-) -> tuple[str, str | None]:
-    """Choose missing task/method options and validate before writing files.
-
-    Args:
-        root: Destination workspace, used to disable existing methods.
-        task: Explicit task, or None to prompt.
-        method: Explicit method, or None to prompt.
-        allow_blank: Whether shared startup alone is an available choice.
-
-    Returns:
-        Task and method, with None as the method for a blank workspace.
-
-    Raises:
-        typer.BadParameter: A selection is invalid or already exists.
-    """
-    selected = project_task(root)
-    if selected is not None:
-        if task is not None and task != selected:
-            raise typer.BadParameter(
-                f"This project owns {selected!r}; create a separate project for {task!r}."
-            )
-        task = selected
-    tasks = get_tasks()
-    if allow_blank:
-        tasks.insert(0, "blank")
+def select_method(task: str | None, method: str | None) -> tuple[str, str | None]:
+    """Prompt for missing choices, automatically selecting a task's sole method."""
+    tasks = ["blank", *get_tasks()]
     if task is None:
         task = prompt_select("Select a task:", tasks)
     if task not in tasks:
-        raise typer.BadParameter(f"Task {task!r} is not a valid task.")
+        raise typer.BadParameter(
+            f"Unknown task {task!r}. Choose from {', '.join(tasks)}."
+        )
     if task == "blank":
         if method is not None:
             raise typer.BadParameter("A blank workspace has no training method.")
@@ -48,22 +23,15 @@ def select_method(
 
     methods = get_methods(task)
     if method is None:
-        choices = []
-        for name in methods:
-            exists = has_method(root, task, name)
-            choices.append(
-                qu.Choice(
-                    name,
-                    value=name,
-                    description=read_method_description(task, name),
-                    disabled="already exists" if exists else None,
-                )
-            )
-        if all(has_method(root, task, name) for name in methods):
-            raise typer.BadParameter(f"All methods for {task!r} already exist.")
+        if len(methods) == 1:
+            return task, methods[0]
+        choices = [
+            qu.Choice(name, value=name, description=read_method_description(task, name))
+            for name in methods
+        ]
         method = prompt_select(f"Select a training method for {task}:", choices)
     if method not in methods:
-        raise typer.BadParameter(f"Method {method!r} is not valid for task {task!r}.")
-    if has_method(root, task, method):
-        raise typer.BadParameter(f"{task}/{method} already exists in {root}.")
+        raise typer.BadParameter(
+            f"Unknown method {method!r} for {task!r}. Choose from {', '.join(methods)}."
+        )
     return task, method

@@ -41,7 +41,7 @@ be explicit. See [metadata](metadata.md) before combining packed imagery.
 | Discover observations | `StacClient.search` | Item table, without raster pixels. |
 | Load on an exact grid | `stac.load_dataset(items, geobox=grid)` | Dataset on the supplied GeoBox. |
 | Retain native asset grids | `stac.load_native_datasets(items)` | One `(crs, resolution, Dataset)` per native grid. |
-| Read model-sized windows | `RasterChipper([tree], size=256)` | Lazy raster windows; explicit conversion reads pixels. |
+| Read model-sized windows | `RasterChipper(tree, size=256)` | Lazy raster windows; explicit conversion reads pixels. `iter_batches` yields loaded chips for model input, reading one block of chunks at a time. |
 | Publish dated raster assets | `stac.publish_item(item, assets=assets, root=folder)` | Written COGs and a native Item; compose with `create_catalog`. |
 
 Catalog sampling is currently unavailable. Select observations with GeoPandas
@@ -59,20 +59,20 @@ flowchart LR
     samples --> batches[DataLoader: batches]
     batches --> training[LightningModule + Trainer]
     training --> checkpoint[Training checkpoint]
-    training --> release[Model release + pipeline]
-    release --> product[Prediction raster on the source grid]
+    training --> release[Registered modules and weights]
 ```
 
-Your Dataset owns reads, band order, target codes and split selection. RasterChipper
-is optional; it cuts prepared one-grid DataTrees. A DataModule can organize loaders and device-side transforms;
+Your Dataset owns reads, band order, target class IDs and split selection. `gs.RasterChipper`
+cuts a DataArray, Dataset or single-grid DataTree into spatial windows.
+A DataModule can organize loaders and device-side transforms;
 the LightningModule owns loss and metrics, and Trainer runs the loop.
 Start with the [Lightning training guide](../advanced/training.md).
 
 Prepare inputs with the same code at training and inference. A native model
-release saves registered stage construction and weights, and optionally a
-pipeline: ingest, preparation, prediction and decoding classes that run the
-model chip by chip over a raster. See [model inputs](../advanced/model-inputs.md)
-and [releases](../advanced/release.md#run-with-a-raster-pipeline).
+release saves registered module construction and weights. A Python processor
+groups the sources and prepares the model's raster layers.
+[Model inputs](../advanced/model-inputs.md) · [Model releases](../advanced/release.md).
+
 ModelSpec is unavailable. Generated recipes now use explicit preprocessors;
 their Dataset and integration readiness varies. See
 [workspace method status](../reference/training.md).

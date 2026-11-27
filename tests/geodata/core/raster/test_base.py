@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from odc.geo.geom import Geometry
+from shapely import Polygon
 
 
 from geosave.geodata import GeoDataset
@@ -74,7 +76,7 @@ def test_gs_reads_native_spatial_names() -> None:
         held.gs.validate()
         assert held.gs.geobox == foreign.odc.geobox
     tree.gs.validate()
-    assert tree.gs.common_geobox() == foreign.odc.geobox
+    assert tree.gs.geobox == foreign.odc.geobox
 
 
 def test_a_band_read_from_disk_uses_native_cf_precision(tmp_path) -> None:
@@ -332,3 +334,48 @@ def test_property_coordinates_round_trip_through_files(
 
     assert back.gs.stac_properties == raster.gs.stac_properties
     assert back["eo:cloud_cover"].values.tolist() == [0.4, 12.1, 3.0]
+
+
+def test_times_read_only_a_datetime_time_dimension():
+    scene = build_raster(times=2)
+
+    assert scene.gs.times.equals(scene.indexes["time"])
+    assert scene.isel(time=0).gs.times is None
+    assert scene.rename_dims(time="observation").gs.times is None
+    with pytest.raises(TypeError, match="not datetimes"):
+        scene.assign_coords(time=[0, 1]).gs.times
+
+
+def test_a_tree_reads_the_timeline_its_dated_leaves_share():
+    scene = build_raster(times=2)
+    tree = xr.DataTree.from_dict({"image": scene, "label": build_raster()})
+
+    assert tree.gs.times.equals(scene.indexes["time"])
+    assert xr.DataTree.from_dict({"label": build_raster()}).gs.times is None
+    with pytest.raises(ValueError, match="one timeline"):
+        xr.DataTree.from_dict({"a": scene, "b": scene.isel(time=[1, 0])}).gs.times
+
+
+def test_chunk_heights_follow_dask_and_are_none_in_memory():
+    raster = build_raster(times=2)
+
+    assert raster.gs.chunk_heights is None
+    assert raster.red.gs.chunk_heights is None
+
+    chunked = raster.chunk(time=1, y=1, x=2)
+    assert chunked.gs.chunk_heights == (1, 1)
+    assert chunked.red.gs.chunk_heights == (1, 1)
+
+
+def test_extent_is_declared_only_never_the_grid():
+    raster = build_raster()
+    triangle = Geometry(
+        Polygon(raster.gs.geobox.extent.exterior.coords[:3]), raster.gs.crs
+    )
+
+    assert raster.gs.extent is None
+    assert raster.red.gs.extent is None
+    located = raster.gs.write_extent(triangle)
+    assert located.gs.extent == triangle
+    assert located.red.gs.extent == triangle
+    assert located.gs.write_extent(None).gs.extent is None

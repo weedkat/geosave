@@ -30,7 +30,7 @@ def decoded(band: xr.DataArray) -> None:
 def compatible_resampling(method: str) -> Rule[xr.DataArray]:
     """Build the rule that the band's values allow resampling with `method`.
 
-    Class codes allow only methods that pick an existing value: nearest or
+    Class IDs allow only methods that pick an existing value: nearest or
     mode in space, first or last in time. Other values allow any method.
 
     Args:
@@ -42,13 +42,13 @@ def compatible_resampling(method: str) -> Rule[xr.DataArray]:
 
     Examples:
         >>> landcover.gs.validate(compatible_resampling("bilinear"))
-        RasterValidationError: Raster 'landcover': Its class codes need ...
+        RasterValidationError: Raster 'landcover': Its class IDs need ...
     """
 
     def check(band: xr.DataArray) -> None:
         if band.gs.is_categorical and method not in _VALUE_PRESERVING:
             raise RasterValidationError(
-                f"Its class codes need nearest, mode, first or last, not "
+                f"Its class IDs need nearest, mode, first or last, not "
                 f"{method!r}, which would compute values that name no class.",
                 variable=band.name,
             )

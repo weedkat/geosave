@@ -29,8 +29,11 @@ selected = client.search_items(query)
 
 `search_items` returns native PySTAC Items; `search` returns a GeoDataFrame.
 Use `StacClient.planetary_computer()`, `.element84()` or `.cdse()` for
-built-in providers. Use `StacClient.open("https://example.org/stac/v1")`
+built-in providers. Use `StacClient("https://example.org/stac/v1")`
 for another API; this does not configure provider-specific asset signing.
+A client connects on its first request. A filter selects the same Items on
+every API: where a server ignores it, such as Earth Search, it is applied to
+the returned Items.
 Collection IDs and band names depend on the provider. A scene-wide cloud score
 does not guarantee clear pixels in your area.
 
@@ -46,7 +49,7 @@ grid = GeoBox.from_bbox(
 )
 cube = stac.load_dataset(
     selected, geobox=grid, bands=["B04", "B08"], chunks={},
-    patch_url=client.patch_url,
+    patch_url=client.patch_url, stamps=["raster"],
 )
 ```
 
@@ -66,12 +69,34 @@ It reads the Items supplied without repeating the search. Options are
 | `chunks={}` or sizes | Build Dask-backed pixel reads. |
 | `resampling="nearest"` or a band mapping | Choose ODC resampling explicitly. |
 
-Loading retains stored digital numbers (DN). Decode with
-`cube.gs.mask_and_scale()` before physical calculations. The loader rejects
-selected sources with conflicting scale/offset declarations.
-The Collection is the one the Items link to, as `item.get_collection()`
-resolves it: searched Items reach it through their catalog, catalog rows carry
-it, and a hand-built Item names it with `item.set_collection(collection)`.
+Loading retains stored digital numbers (DN). Here `stamp_raster` translates
+the scale, offset and units the assets declare, checking that contributing
+Items agree on each band's calibration. Decode those declarations with
+`cube.gs.mask_and_scale()` before physical calculations. When a product needs
+calibration from other fields, its Ingestor supplies the corresponding stamp.
+
+Every load applies `stamp_nodata` to declare the output fill. Omit `stamps`
+or pass `None` for the ODC grid, time axis and bands with that fill. For
+additional metadata, pass one built-in name, one function, or a sequence of
+both in execution order. The same argument works with `load_native_datasets`
+and `rows.gs.to_dataset`.
+
+```python
+def my_stamp(ds, items, stac_cfg):
+    return ds.assign_attrs(selected_item_count=len(items))
+
+described = stac.load_dataset(
+    selected, geobox=grid, bands=["B04"], chunks={}, patch_url=client.patch_url,
+    stamps=["eo", my_stamp],
+)
+```
+
+`"eo"` reads the band's spectral metadata. Then `my_stamp` receives that
+Dataset, the original PySTAC Items and the load's `stac_cfg`. The built-in names are the keys of
+`stac.stamps.STAMPS`.
+
+Band stamps find a band alias defined in an ODC `stac_cfg` through the same
+configuration the load used, so `stamps=["raster"]` works with aliases too.
 
 ## Keep each asset's native grid
 
@@ -121,11 +146,24 @@ reads vector files and Item GeoParquet tables, rather than STAC JSON catalogs.
 
 ## Preserve properties and Collection definitions
 
-Pass `with_properties=["eo:cloud_cover"]` to `load_dataset` to retain a
-property per time plane. ODC names it `eo_cloud_cover`; the coordinate's
-`stac_property` attr keeps the STAC key, and `cube.gs.stac_properties` maps each
-key to its coordinate. Text properties need `{"key": ..., "dtype": "str"}`.
-Collection metadata lives separately in `cube.gs.stac_collection`.
+Choose the metadata the resulting Dataset needs.
+
+```python
+observations = stac.load_dataset(
+    selected, geobox=grid, bands=["B04"], chunks={}, patch_url=client.patch_url,
+    with_properties=["eo:cloud_cover", {"key": "platform", "dtype": "str"}],
+    stamps=["properties", "observation_period", "collection"],
+)
+```
+
+`observations.gs.stac_properties` maps the original STAC keys to their
+coordinate names. The observation period stamp writes `start_datetime` and
+`end_datetime`. The Collection stamp resolves the Items' linked Collection
+and makes it available as `observations.gs.stac_collection`. ODC's native
+`with_properties` option alone gives you properties as data variables.
+For Items with start and end dates, include `PERIOD_REQUESTS` from
+`geosave.geodata.stac.stamps.period` in `with_properties` so ODC fuses the
+endpoints for each time plane.
 
 A time plane built from several Items holds ODC's fused value: numbers
 averaged, text joined with ",". Cropping does not recalculate scene cloud cover;

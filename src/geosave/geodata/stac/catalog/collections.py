@@ -78,7 +78,9 @@ def merge_collections(
         if kept_collection is None:
             # `to_dict` builds new containers, so the copy shares nothing.
             collection_dict = collection.to_dict(transform_hrefs=False)
-            collections_by_id[collection.id] = pystac.Collection.from_dict(collection_dict)
+            collections_by_id[collection.id] = pystac.Collection.from_dict(
+                collection_dict
+            )
             continue
 
         kept_definition = _read_definition(kept_collection)

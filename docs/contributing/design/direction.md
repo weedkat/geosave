@@ -1,5 +1,8 @@
 # Direction: architecture, contracts and data flow
 
+The pipeline examples below describe the reviewed revision. The current
+[processor contract](release-inference.md) starts with collection ingestion and raster preparation.
+
 Updated against library source on 2026-11-16. Implemented contracts live in
 [architecture](../architecture.md). This page retains design questions and
 rationale; proposed APIs are not promises of available behavior. Details:
@@ -28,7 +31,7 @@ region or raster -> processor (ingest, preprocess, RasterChipper, model, RasterM
 ```
 
 Native Item rows, Datasets, DataTrees and task-owned sample dictionaries cross
-these boundaries. `ChipLayout` records the raster and placement of each chip;
+these boundaries. `ChipLocation` records the source raster and placement of each chip;
 GeoBoxes state exact grids. A release stores the processor that runs its
 model; the `dense` predictor is the library-owned prediction loop.
 
@@ -40,11 +43,11 @@ model; the `dense` predictor is the library-owned prediction loop.
 | Load | `rows.gs.to_dataset(geobox=grid, chunks={})` or `stac.load_dataset(items, ...)` | native-grid return shape remains a design question |
 | Open and operate | native xarray, raster accessors, features and visualization | see G1–G9 |
 | Publish | `stac.publish_item(item, assets=..., root=...)` | identity and metadata limitations in publish-load |
-| Cut and merge | `RasterChipper([tree])`, `RasterMerger(chipper.layout)` | streaming output, vector outputs |
+| Cut and merge | `chipper = RasterChipper(tree, size=256, overlap=0.25)`, `RasterMerger(window="hann")` | streaming output, vector outputs |
 | Plan sample rows | project pandas operations | persisted sample-catalog contract |
 | Store | project preparation | store invalidation and record identity |
 | Train | project Dataset, DataModule, Module and LightningCLI | implement placeholder Datasets and finish template sample integration |
-| Release | `ChainModel.from_chain(chain)` or `ChainModel.from_pipeline(pipeline)` | project-owned data/experiment lineage |
+| Release | `chain.save_pretrained(folder)`, `chain.push_to_hub(repo)`, `ModelChain.from_pretrained(repo)` | project-owned data/experiment lineage |
 | Predict | `load_pipeline(repo).predict(rasters) / predict_to_zarr(rasters, destination)` | catalog orchestration, streaming output and vector outputs |
 
 ## 4. Design groups
@@ -130,25 +133,22 @@ worth arguing, and flags (coupling, complexity, bugs).
 
 ### G5 Loading and metadata stamps (`stac/load.py`, `stac/stamps`)
 
-- **Contract**: Items + ODC options → Dataset; what the STAC documents state
-  is written onto it without reading pixels.
-- **Pattern**: ordered pipeline of named steps from a registry:
-  `load_dataset(items, stamps=[*DEFAULT_STAMPS, "sentinel_2"])`,
-  `Stamp = Callable[[Dataset, LoadSource], Dataset]`.
-- **Rules kept from the stamp design** (2026-11-13): a stamp reads only STAC,
-  never another stamp's output; names only, no callables in the call; a later
-  stamp overrides attrs; each stamp checks its own consistency; an unknown
-  name raises before loading; only scalar property values become coordinates;
-  a coordinate is a property exactly when it carries `stac_property`.
-- **Alternatives**: fixed private helpers (the previous state: no place to
-  add provider fixes); callables passed directly (not selectable from YAML).
-- **Flags**:
+- `load_dataset(items, stamps=())` returns the pixels on ODC's grid and
+  timeline after `stamp_nodata` declares each raster's effective output fill.
+- A stamp takes the current Dataset, the source Items and the load's
+  `stac_cfg`, and returns a Dataset. The caller passes names and callables in
+  execution order, for example `stamps=["eo", my_stamp]`. As with `CONTEXT_READERS`, `resolve_fn` looks
+  up strings in the public `STAMPS` dictionary and passes functions through.
+  The Ingestor chooses the sequence and owns any source-specific stamps.
+- The caller passes `with_properties` to ODC to obtain values aligned with
+  the loaded observations. Property and period stamps consume those values. A coordinate marked
+  with `stac_property` retains its original Item property key.
+- Loading details
   - **Repeated time labels.** `groupby="id"` gives one step per Item, so two
     tiles of one pass share a label (`time` index not unique). Positional tree
     splitting preserves these separately; supply unique names and explicit Item IDs.
   - `load_native_datasets` returns `(crs, resolution, dataset)` tuples; the
     Dataset states both.
-  - Not yet written: the `sentinel_2` stamp; per-step shared properties.
 
 ### G6 Publication (`stac/publish.py`)
 
@@ -222,8 +222,9 @@ worth arguing, and flags (coupling, complexity, bugs).
 - **Contract**: Item rows + spec → **sample rows**: Item rows whose `proj:*`
   state the chip GeoBox, whose period is the time window, and whose
   properties list the source Items per time step.
-- **Pattern**: `ChipLayout` owns grids and chip indices; `RasterChipper` cuts trees
-  and `RasterMerger` reconstructs by the same layout. Proposed catalog planning
+- **Pattern**: `RasterChipper` cuts trees and names each chip's source raster
+  (input position, grid, timespan); `RasterMerger` reconstructs from the chip
+  locations alone. Proposed catalog planning
   uses pandas (`sjoin`, `Grouper`); "meaningful" is a
   filter over measured columns (`valid_fraction`, class counts, `split`).
 - **Alternatives**: torchgeo-style samplers over an R-tree index (random
@@ -236,8 +237,8 @@ worth arguing, and flags (coupling, complexity, bugs).
 ### G11 The Sample and data loading ([samples-chips](samples-chips.md))
 
 - **Contract**: tree tensor conversion → named tensor dict: pixel tensors,
-  optional `transform` float64 (6,), `crs` int64 EPSG code and explicitly
-  requested `TENSOR_CONTEXT` entries. Collates with
+  context tensors keyed by model input, such as `transform` float64 (6,)
+  and `crs` int64 EPSG code. Collates with
   torch's default; the GeoBox rebuilds from the batch.
 - **Pattern**: TypedDict per task; one torch Dataset per data source,
   project-owned; the store (LitData) is an optimization holding the same
@@ -245,30 +246,40 @@ worth arguing, and flags (coupling, complexity, bugs).
 - **Alternatives**: a Sample dataclass (does not collate); carrying only a
   row index (every consumer needs the table); torchgeo's `GeoDataset`
   (brings its own CRS/bounds indexing parallel to ODC).
-- **Current**: `TENSOR_CONTEXT` computes requested time/location entries from
+- **Current**: context readers, named in `CONTEXT_READERS` or passed as
+  functions, compute requested grid, time and location entries from
   the raster at tensor conversion. Geometry-changing augmentation does not
   update that context; see [training contracts](../../concepts/training.md).
 
 ### G12 Model construction (`ml/components`, `ml/chain`)
 
-- **Contract**: a mapping of stage specs → `ModelChain` (`nn.Module`) with
+- **Contract**: a mapping of module specs → `ModelChain` (`nn.Module`) with
   named inputs: `model(image=..., temporal_coords=...)`.
-- **Pattern**: registry + factory (`register_model`, `build_model`,
-  `BuildSpec`); dataflow routing by declared names (`@chain_step`);
-  constructor wiring through `Published` attributes.
+- **Pattern**: registry + factory (`MODULES`, `BuildSpec`); modules run as a
+  pipe in the order written, each reading the previous module's outputs by
+  name, or else the chain's inputs; constructor wiring through `Published`
+  attributes from the nearest earlier module. Branches and fusion live inside
+  a module.
 - **Alternatives**: (a) fixed composition with three Protocols
-  (`Encoder → Decoder → Head`): simpler and type-checkable, but optional
-  context inputs and multi-source encoders need special cases; (b) plain
+  (`Encoder → Decoder → Head`): simpler and type-checkable, but context
+  inputs and multi-source encoders need special cases; (b) plain
   `nn.Module` per model with no chain: no reuse of decoders and heads.
 - **Flags**:
-  - Step outputs are discovered by parsing method source with `ast`
-    (`chain/step.py`). It is the cleverest mechanism in the library;
-    `outputs=(...)` on the decorator already states the same thing
-    explicitly and could be required.
-  - `chain/` owns routing. Worth it only if models with optional
-    context and several inputs are a goal. They are (Prithvi-TL, Clay,
-    S1 + S2), so keep, but simplify discovery.
-  - Detection has no head or stage yet; `ImageAugmenter` already handles
+  - Output names are read from forward's `return a, b` with `ast`
+    (`chain/signature.py`). A module that only ends a chain may return an
+    expression.
+  - 2026-11-24: `@chain_step` and graph routing were replaced by plain
+    `forward` calls in recipe order. The old "earliest available" step
+    choice could not pick between output variants and could silently skip
+    a module; named step methods bypassed `nn.Module.__call__`.
+  - 2026-11-24: graph solving, name families and branch containers were
+    replaced by a pipe in written order. Each module reads only the previous
+    module's outputs or the chain's inputs, so construction wiring and data
+    flow follow one order; branches and fusion live inside a module.
+  - Forward inputs are all required: a defaulted parameter is refused. A module that runs with or without context is two classes
+    (`Prithvi`/`PrithviTL`, `Clay`/`ClayTL`), so `chain.inputs` states
+    everything a chain reads and a misnamed context key fails loudly.
+  - Detection has no head module yet; `ImageAugmenter` already handles
     boxes.
 
 ### G13 Training (`ml`, `templates`)
@@ -356,10 +367,10 @@ worth arguing, and flags (coupling, complexity, bugs).
 | Accessor facade | G1, G4 | no wrapper classes around xarray or pandas |
 | Rule functions | G1, G4 | no rule classes |
 | Pydantic value / declaration | G2 attrs, G17 configs, `BuildSpec` | not for values that never leave the process |
-| Frozen dataclass | `GeoRegion`, `StacQuery`, `LoadSource` | |
+| Frozen dataclass | `GeoRegion`, `StacQuery` | |
 | TypedDict | G11 Sample; option bags mirroring a dependency's kwargs | not for library-internal structure |
-| Named registry + factory | G5 stamps, G12 stages, processing roles, builders | only when names come from config |
-| Pipeline of named steps | G5 stamps | preparation is a Prefect flow, not a library pipeline class |
+| Named registry + factory | G12 modules, processing roles, builders | only when names come from config |
+| Named or direct callables | G5 stamps | ordered by the caller after the automatic nodata stamp |
 | Codec pair | G3 | |
 | Builder | G6 `StacItem` | |
 | Strategy table | G15 decoders; G10 step-fill rule if needed | |

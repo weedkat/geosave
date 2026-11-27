@@ -1,10 +1,10 @@
 """STAC Items as a stac-geoparquet table: its layout, rules, Collections and Items.
 
-    layout.py       columns, footer key, Arrow form
-    hrefs.py        absolute asset hrefs
-    collections.py  footer Collections; concat_catalogs
-    rules.py        stac_items, stac_collections, one_collection
-    items.py        create_catalog, to_items
+layout.py       columns, footer key, Arrow form
+hrefs.py        absolute asset hrefs
+collections.py  footer Collections; concat_catalogs
+rules.py        stac_items, stac_collections, one_collection
+items.py        create_catalog, to_items
 """
 
 from .collections import (

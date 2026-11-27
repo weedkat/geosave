@@ -80,8 +80,8 @@ def _labelled():
     from tests.conftest import build_dataset
 
     grid = GeoBox.from_bbox((0, 0, 40, 40), "EPSG:32633", resolution=10)
-    codes = np.array([[0, 1, 0, 1]] * 4, "uint8")
-    return build_dataset({"label": (("y", "x"), codes)}, grid).gs.write_flags(
+    class_ids = np.array([[0, 1, 0, 1]] * 4, "uint8")
+    return build_dataset({"label": (("y", "x"), class_ids)}, grid).gs.write_flags(
         {0: "bg", 1: "palm"}, {0: "#000000", 1: "#00ff00"}
     )
 

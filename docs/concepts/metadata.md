@@ -11,7 +11,7 @@ and, for labels, class meanings. GeoSave keeps these on native xarray objects.
 | Units, scaling, nodata and class legend | Each variable's attrs. |
 | Dataset identity and provenance | Root attrs, including ACDD fields. |
 | Observation period | `start_datetime` and `end_datetime` coordinates. |
-| Source Collection | Root STAC metadata when provided by loading. |
+| Source Collection | Root STAC metadata when the caller selects `stamp_collection`. |
 
 Metadata groups read related attrs as one validated value. There is no second
 metadata store. An absent group returns `None`; an invalid declaration raises.
@@ -21,7 +21,7 @@ codes have different meanings, even on the same grid. Dataset metadata instead
 describes the observation or product as a whole.
 
 The [value guide](../basics/attrs.md) uses real imagery and labels to show why
-measurements and class codes must stay separate.
+measurements and class IDs must stay separate.
 
 ## Declaring meaning does not change pixels
 
@@ -29,7 +29,7 @@ Writing nodata, scaling or a legend describes existing values. It does not
 replace pixels, recode classes or apply a physical conversion.
 
 For example, declaring `255` as nodata means existing `255` pixels are missing.
-It does not turn another code into `255`. The declaration must fit the dtype.
+It does not turn another value into `255`. The declaration must fit the dtype.
 
 Metadata writers return a new object while sharing pixel data. Assign their
 result when you want to keep a declaration.
@@ -71,13 +71,13 @@ Matching shapes or compatible attrs alone do not establish compatible values.
 Native xarray concatenation and merging use their own `combine_attrs` policy.
 GeoSave's stacking conversions use `drop_conflicts`: conflicting keys are
 dropped; a key present in only one input can remain. This policy does not check
-whether two class codebooks mean the same thing.
+whether two class legends mean the same thing.
 
 Band stacking additionally checks active pixel declarations. Decode imagery
 explicitly when inputs use different stored representations. Preserve
 categorical targets separately.
 
-A class code can mean trees in one dataset and water in another. Keeping the
+A class ID can mean trees in one dataset and water in another. Keeping the
 first legend or dropping conflicting attrs cannot resolve that difference;
 the project must establish one class mapping before combining the labels.
 

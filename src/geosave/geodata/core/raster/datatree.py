@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Unpack, cast
+from typing import TYPE_CHECKING, Unpack, cast, overload
 
+import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import xarray as xr
 from odc.geo.geobox import GeoBox
 
+
 from . import rules as raster_rules
 from .rules import datatree as tree_rules
-from geosave.geodata.core.conventions import TIME_COORDINATE
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
+    from typing import Literal
     from xarray.core.types import CombineAttrsOptions
 
+    import pandas as pd
     import geopandas as gpd
-    from .utils.context import ContextTensors
-    from .utils.tensor import PixelTensors
+    import torch
+
+    from .utils.context import ContextReader, ContextTensors
     from odc.geo import SomeCRS, SomeResolution
     from odc.geo.geom import Geometry
 
@@ -30,8 +34,11 @@ if TYPE_CHECKING:
     from upath import UPath
     from .transform.extent import Padding
     from .transform.warp import Resampling
-    from .utils.windows import Keep
-    from geosave.geodata.utils.datetime import Freq
+    from datetime import datetime, timedelta
+
+    from geosave.geodata.utils.datetime import DateRange, Freq
+
+    from .transform.temporal import Interpolation, Reducer
 
 
 def check_node_name(name: str) -> None:
@@ -53,23 +60,184 @@ class GeoDataTree:
         """Bind the native tree without imposing a shared grid or timeline."""
         self._data = data
 
-    def common_geobox(self) -> GeoBox:
-        """Return the GeoBox every raster leaf must share.
+    @property
+    def geobox(self) -> GeoBox:
+        """Read the GeoBox every raster leaf shares.
 
-        Leaves may sit on different grids, so the tree has no `geobox`; a
-        consumer needing one pixel grid asks for the shared one.
+        Leaves may sit on different grids; reading the tree's grid requires
+        them to share one.
 
         Raises:
             RasterValidationError: The tree is invalid or its raster leaves
                 sit on different GeoBoxes.
 
         Examples:
-            >>> tree.gs.common_geobox().shape
-            (512, 512)
+            >>> tree.gs.geobox.shape
+            Shape2d(x=512, y=512)
         """
         self.validate(tree_rules.same_geobox)
+        return cast("GeoBox", self._read_first_raster().gs.geobox)
+
+    @property
+    def spatial_dims(self) -> tuple[str, str] | None:
+        """Read the spatial axes of the GeoBox every raster leaf shares, vertical then horizontal.
+
+        Raises:
+            RasterValidationError: The tree is invalid or its raster leaves
+                sit on different GeoBoxes.
+
+        Examples:
+            >>> tree.gs.spatial_dims
+            ('y', 'x')
+        """
+        self.validate(tree_rules.same_geobox)
+        return self._read_first_raster().gs.spatial_dims
+
+    @property
+    def chunk_heights(self) -> tuple[int, ...] | None:
+        """Read the Dask chunk heights every raster leaf shares, or None when pixels are not in Dask.
+
+        Raises:
+            RasterValidationError: The tree is invalid or its raster leaves
+                are chunked differently.
+
+        Examples:
+            >>> tree.chunk(y=512).gs.chunk_heights
+            (512, 512)
+        """
+        self.validate(tree_rules.same_chunks)
+        return self._read_first_raster().gs.chunk_heights
+
+    @property
+    def chunk_widths(self) -> tuple[int, ...] | None:
+        """Read the Dask chunk widths every raster leaf shares, or None when pixels are not in Dask.
+
+        Raises:
+            RasterValidationError: The tree is invalid or its raster leaves
+                are chunked differently.
+
+        Examples:
+            >>> tree.chunk(x=512).gs.chunk_widths
+            (512, 512)
+        """
+        self.validate(tree_rules.same_chunks)
+        return self._read_first_raster().gs.chunk_widths
+
+    @property
+    def extent(self) -> Geometry | None:
+        """Read the place the raster leaves declare together: the union of their extents.
+
+        Returns:
+            The union, in the first declaring leaf's CRS, or None when no leaf
+            declares an extent.
+
+        Examples:
+            >>> tree.gs.crop(city).gs.extent == city
+            True
+        """
+        union = None
+        for node in self._data.leaves:
+            if not node.data_vars:
+                continue
+            leaf_extent = node.gs.to_dataset().gs.extent
+            if leaf_extent is None:
+                continue
+            if union is None:
+                union = leaf_extent
+            else:
+                # A declared extent always carries its CRS.
+                union = union.union(leaf_extent.to_crs(cast("SomeCRS", union.crs)))
+        return union
+
+    def _read_first_raster(self) -> Dataset:
+        """Read the first raster leaf, which stands for all when a rule makes them alike."""
         first = next(node for node in self._data.leaves if node.data_vars)
-        return cast("GeoBox", first.gs.to_dataset().gs.geobox)
+        return first.gs.to_dataset()
+
+    @property
+    def times(self) -> pd.DatetimeIndex | None:
+        """Read the `time` labels every dated raster leaf shares.
+
+        Returns:
+            Labels in axis order, or None when no leaf has a `time` dimension.
+
+        Raises:
+            TypeError: A leaf's `time` dimension does not hold datetimes.
+            ValueError: Dated leaves hold different labels.
+
+        Examples:
+            >>> tree.gs.times.strftime("%m-%d").tolist()
+            ['06-03', '06-28']
+        """
+        times = None
+        for node in self._data.leaves:
+            node_times = node.gs.to_dataset().gs.times
+            if node_times is None:
+                continue
+            if times is None:
+                times = node_times
+            elif not node_times.equals(times):
+                raise ValueError(
+                    f"node {node.path!r} has its own time labels; this operation "
+                    "needs every dated node on one timeline"
+                )
+        return times
+
+    @property
+    def time_coordinate(self) -> xr.DataArray | None:
+        """Read the `time` coordinate every dated raster leaf shares.
+
+        Returns:
+            The shared coordinate, or None when no leaf is dated. A scalar
+            coordinate dates one observation, as for a Dataset.
+
+        Raises:
+            ValueError: Dated leaves hold different `time` coordinates.
+
+        Examples:
+            >>> scene.gs.time_coordinate.values
+            numpy.datetime64('2025-06-03T00:00:00.000000000')
+        """
+        time = None
+        for node in self._data.leaves:
+            node_time = node.gs.to_dataset().gs.time_coordinate
+            if node_time is None:
+                continue
+            if time is None:
+                time = node_time
+            elif not node_time.variable.equals(time.variable):
+                raise ValueError(
+                    f"node {node.path!r} has its own `time`; this operation needs "
+                    "every dated node on one timeline"
+                )
+        return time
+
+    @property
+    def timespan(self) -> DateRange | None:
+        """Return the earliest start and latest end over every dated raster leaf.
+
+        Leaves may hold their own dates, such as two sensors observed on
+        different days. Each leaf's span is its Dataset's `timespan`: the
+        periods its `start_datetime` and `end_datetime` state, else its first
+        and last label. Reads coordinates only, never pixels.
+
+        Returns:
+            The span, or None when no leaf is dated.
+
+        Examples:
+            >>> window.gs.timespan
+            (datetime.datetime(2025, 6, 3, 0, 0), datetime.datetime(2025, 7, 23, 0, 0))
+        """
+        starts = []
+        ends = []
+        for node in self._data.leaves:
+            span = node.gs.to_dataset().gs.timespan
+            if span is not None:
+                starts.append(span[0])
+                ends.append(span[1])
+        if not starts:
+            return None
+        return min(starts), max(ends)
 
     def to_dataset(self) -> Dataset:
         """Read this node with all inherited coordinates and Dataset attrs.
@@ -430,9 +598,9 @@ class GeoDataTree:
             constant_value: Fill for `"constant"`, keeping each dtype.
 
         Returns:
-            New lazy tree with every raster node on exactly `geobox`. Declared
-            extents are clipped at their existing owner, including shared group
-            attrs. Group coordinates are unchanged.
+            New tree with every raster node on exactly `geobox`. Declared extents
+            are clipped at their existing owner, including shared group attrs.
+            Group coordinates are preserved. Dask-backed pixels stay lazy through padding.
 
         Raises:
             ValueError: A raster has no regular grid, or `geobox` is not
@@ -455,89 +623,192 @@ class GeoDataTree:
 
         return cast("DataTree", tree.map_over_datasets(cut))
 
-    def sample(
-        self,
-        freq: Freq,
-        *,
-        size: int = 1,
-        stride: int = 1,
-        keep: Keep = "last",
-    ) -> list[DataTree]:
-        """Sample the shared time axis into windows of consecutive slots, lazily.
+    @overload
+    def to_numpy(self, *, context: None = None) -> dict[str, np.ndarray]: ...
 
-        Each window is this tree at `size` slots of length `freq` in a row,
-        as `Dataset.gs.sample` cuts one raster. A node without a time
-        axis, such as a static label, is in every window whole.
+    @overload
+    def to_numpy(
+        self, *, context: Mapping[str, ContextReader[DataTree] | str]
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]: ...
 
-        Args:
-            freq: Length of one slot, as a pandas offset alias such as "MS".
-            size: Slots per window, the length of each window's time axis.
-            stride: Slots between the starts of consecutive windows.
-            keep: The observation a slot keeps when several fall in it.
+    def to_numpy(
+        self, *, context: Mapping[str, ContextReader[DataTree] | str] | None = None
+    ) -> dict[str, np.ndarray] | tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Read each raster node's pixels, keyed by node path, and the requested context.
 
-        Returns:
-            One tree per window, in time order.
-
-        Raises:
-            ValueError: No node has a datetime `time` dimension, the dated
-                nodes do not share one time axis, `size` or `stride` is below
-                1, or `keep` is unknown.
-
-        Examples:
-            >>> windows = tree.gs.sample("MS", size=2)
-            >>> chipper = RasterChipper(windows, size=256)
-        """
-        from .utils.context import read_timeline
-        from .utils.windows import window_times
-
-        self.validate()
-        times = read_timeline(self._data)
-
-        windows = []
-        for positions in window_times(times, freq, size=size, stride=stride, keep=keep):
-            window = self._data.isel(
-                {TIME_COORDINATE: positions}, missing_dims="ignore"
-            )
-            windows.append(cast("DataTree", window))
-        return windows
-
-    def to_tensor(
-        self, *, grid: bool = False, context: Sequence[str] = ()
-    ) -> tuple[PixelTensors, ContextTensors]:
-        """Read node pixels and return requested context separately as tensors.
+        Each raster node's pixels are stacked as `Dataset.gs.to_numpy` stacks
+        them and keyed by the node's path, the model parameter they feed.
+        Context is read before any pixel; all nodes are then read in one
+        computation.
 
         Args:
-            grid: Include affine `transform` and EPSG `crs` tensors in context.
-            context: Names in `TENSOR_CONTEXT` to read alongside the pixels.
+            context: Model parameter names mapped to the readers of their
+                arrays. A reader is a function of this tree, or its name in
+                `CONTEXT_READERS`, such as `"transform"`, `"crs"` or
+                `"centroid"`. None reads no context.
 
         Returns:
-            A dictionary of pixel tensors keyed by node path and a dictionary
-            of context tensors, empty when no grid or context is requested.
+            Pixel arrays keyed by node path; with `context`, the pixel arrays
+            and the context arrays keyed as `context`.
 
         Raises:
-            RasterValidationError: The tree is invalid or requested grid context differs.
-            KeyError: A context name is unknown.
-            ValueError: A raster cannot be converted, or requested context is invalid.
+            RasterValidationError: The tree is invalid or grid context meets
+                leaves on different grids.
+            KeyError: A reader name is not in `CONTEXT_READERS`.
+            ValueError: A raster cannot be stacked, or a reader refuses the tree.
 
         Examples:
-            >>> pixels, context = tree.gs.to_tensor(grid=True, context=["centroid"])
-            >>> sample = {**pixels, **context}
+            >>> tree.gs.to_numpy()["image"].shape
+            (1, 4, 256, 256)
+            >>> pixels, context = tree.gs.to_numpy(context={"centroid": "centroid"})
         """
         from .utils.context import read_context
-        from .utils.tensor import as_tensor
 
         self.validate()
+        values = None if context is None else read_context(self._data, context)
 
-        entries = read_context(self._data, grid=grid, context=context)
+        tree = self._data.compute()
+        pixels = {}
+        for node in tree.subtree:
+            if node.data_vars:
+                path = node.relative_to(tree)
+                pixels[path] = tree[path].gs.to_dataset().gs.to_numpy()
+        if values is None:
+            return pixels
+        return pixels, values
 
-        layers = {}
+    @overload
+    def to_tensor(self, *, context: None = None) -> dict[str, torch.Tensor]: ...
+
+    @overload
+    def to_tensor(
+        self, *, context: Mapping[str, ContextReader[DataTree] | str]
+    ) -> tuple[dict[str, torch.Tensor], ContextTensors]: ...
+
+    def to_tensor(
+        self, *, context: Mapping[str, ContextReader[DataTree] | str] | None = None
+    ) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], ContextTensors]:
+        """Read each raster node's pixels and the requested context as `to_numpy` does, as tensors.
+
+        Args:
+            context: Model parameter names mapped to readers, as for `to_numpy`.
+
+        Returns:
+            Pixel tensors keyed by node path; with `context`, the pixel tensors
+            and the context tensors keyed as `context`.
+
+        Raises:
+            RasterValidationError: As for `to_numpy`.
+            KeyError: As for `to_numpy`.
+            ValueError: As for `to_numpy`.
+            TypeError: An array's dtype has no tensor equivalent.
+
+        Examples:
+            >>> pixels, context = tree.gs.to_tensor(context={"centroid": "centroid"})
+            >>> logits = model(**pixels, **context)
+        """
+        from .utils.tensor import as_tensors
+
+        if context is None:
+            return as_tensors(self.to_numpy())
+
+        pixels, values = self.to_numpy(context=context)
+        return as_tensors(pixels), as_tensors(values)
+
+    def mask_and_scale(self) -> DataTree:
+        """Decode every raster node's CF values with `Dataset.gs.mask_and_scale`.
+
+        Each node decodes its own packing and fill. Nodes without either, such
+        as class IDs, keep their values and dtype. A decoded variable's dtype
+        follows its packing, as `xarray.decode_cf` sets it.
+
+        Returns:
+            Lazy tree with unchanged grouping metadata and decoded raster leaves.
+
+        Examples:
+            >>> decoded = tree.gs.mask_and_scale()
+            >>> monthly = decoded.gs.composite("MS", "median")
+        """
+        self.validate()
+
+        def decode(raster: xr.Dataset) -> xr.Dataset:
+            if not raster.data_vars:
+                return raster
+            return raster.gs.mask_and_scale()
+
+        return cast("DataTree", self._data.map_over_datasets(decode))
+
+    def composite(
+        self,
+        freq: Freq,
+        method: Reducer,
+        *,
+        dim: str = "time",
+        interpolation: Interpolation | None = None,
+        closed: Literal["left", "right"] | None = None,
+        label: Literal["left", "right"] | None = None,
+        origin: str | datetime = "start_day",
+        offset: str | timedelta | None = None,
+    ) -> DataTree:
+        """Composite every raster node with `Dataset.gs.composite`.
+
+        Each dated node is reduced on its own timeline into the same calendar
+        bins, so two sensors observed on different dates meet in one bin.
+        Variables without `dim`, such as a static elevation or label, pass
+        through unchanged.
+
+        Args:
+            freq: Pandas offset alias, such as "MS".
+            method: One native reducer for every dated node; class IDs
+                permit only first or last.
+            dim: Datetime dimension to resample, default "time".
+            interpolation: Fill interior pixel gaps after reduction, as for
+                `Dataset.gs.composite`. None keeps gaps.
+            closed: Inclusive bin edge, following native resample defaults.
+            label: Bin label edge, following native resample defaults.
+            origin: Native resample origin.
+            offset: Shift applied to the origin.
+
+        Returns:
+            Lazy tree with unchanged grouping metadata and each dated node on
+            its bins, stated by `start_datetime`/`end_datetime`.
+
+        Raises:
+            ValueError: A dated node holds packed values that need
+                `mask_and_scale()` first, class IDs would be reduced
+                numerically, or a node inherits `dim` from its parent.
+
+        Examples:
+            >>> monthly = tree.gs.composite("MS", "median")
+        """
+        self.validate()
         for node in self._data.subtree:
-            if not node.data_vars:
-                continue
-            node_path = node.relative_to(self._data)
-            raster = node.gs.to_dataset()
-            layers[node_path] = as_tensor(raster.gs.to_numpy, None)
-        return layers, entries
+            inherited = node.to_dataset(inherit=True).xindexes
+            own = node.to_dataset(inherit=False).xindexes
+            if node.data_vars and dim in inherited and dim not in own:
+                raise ValueError(
+                    f"node {node.path!r} inherits `{dim}` from its parent; "
+                    f"give each dated node its own `{dim}` before compositing"
+                )
+
+        tree = self._data.copy(deep=False)
+        tree.dataset = self.to_dataset()
+
+        def reduce(raster: xr.Dataset) -> xr.Dataset:
+            if not raster.data_vars:
+                return raster
+            return raster.gs.composite(
+                freq,
+                method,
+                dim=dim,
+                interpolation=interpolation,
+                closed=closed,
+                label=label,
+                origin=origin,
+                offset=offset,
+            )
+
+        return cast("DataTree", tree.map_over_datasets(reduce))
 
     def reproject(
         self,

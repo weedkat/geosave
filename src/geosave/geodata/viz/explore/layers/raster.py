@@ -287,8 +287,8 @@ class RasterLayer(Layer):
             return None
         swatches = {}
         colors = self.data[self.band].gs.class_colors or {}
-        for code, title in legend.classes.items():
-            swatches[str(title)] = colors[code]
+        for class_id, title in legend.classes.items():
+            swatches[str(title)] = colors[class_id]
         return swatches
 
     @property

@@ -50,21 +50,28 @@ uv run pre-commit run --all-files
 src/geosave/
 ├── cli/          # CLI and AI workspace generation
 ├── geodata/      # raster/vector data, I/O, STAC, transforms, metadata
-└── ml/           # model chains, components, processors, releases, and training support
+└── ml/           # framework-free pipeline stages; one subpackage per ML framework
 
 src/geosave/ml/
-├── factory.py    # BuildSpec and Registry: every name/class-path builder
-├── chain/        # ModelChain and @chain_step: how a built chain runs
-├── components/   # build_model, list_models, Published; encoder/decoder/head/monolith
-├── processing/   # RasterPipeline and its sub-processors: ingestor, preprocessor, predictor, postprocessor
-├── release/      # ChainModel and load_pipeline (Transformers, Hugging Face Hub)
-└── builders/ criterion/ metrics/ transforms/ callbacks/ cli.py  # training support
+├── pipeline/     # Pipeline and its framework-free stages, one package per stage:
+│   ├── ingestion/        # one ingestor per source collection
+│   ├── preprocessing/    # one preprocessor per model input
+│   ├── prediction/       # the predictor contract; predictors live with their framework
+│   ├── postprocessing/   # one postprocessor per task
+│   └── publishing/       # one publisher per product format
+└── torch/        # everything that imports torch
+    ├── chain/        # the module contract (Published, forward type hints), its registry,
+    │                 # ModelChain, configured construction and list_models
+    ├── modules/      # the library's modules: encoder/decoder/head/monolith
+    ├── prediction/   # TorchPredictor: runs a model over chips in the pipeline
+    ├── training/     # optim, criterion, metrics, transforms, callbacks, cli
+    └── typing.py     # ChainModule (the module contract) and the types modules pass (Image, FeatureMap, ...)
 
 src/geosave/geodata/
 ├── core/         # concrete raster/vector accessors, conventions and GeoRegion
 ├── attrs/        # attr groups: keys that mean one value together (nodata, packing, legend, ...); ACDD
 ├── io/           # raster/ (Dataset <-> file, codecs/), vector/ (GeoDataFrame <-> file); storage.py turns every path or URL into a UPath
-├── sampling/     # ChipLayout; RasterChipper/RasterMerger for rasters, TensorChipper/TensorMerger for batches in a Module step
+├── sampling/     # temporal samples, chip locations, RasterChipper and RasterMerger
 ├── stac/         # search, ODC loading and stamps, catalog conversion, Item publication
 └── features/     # spectral indices and masks
 
@@ -77,7 +84,7 @@ docs/contributing/  # architecture, open decisions, maintenance ledger and desig
 ```
 
 `src/templates/` is the source for generated workspace files.
-It contains `common/` startup and `tasks/` templates copied by `geosave add-task`.
+Keep template files at their final destination-relative paths for `geosave create`.
 Public geospatial I/O lives in `geodata/io/`. Internal helpers stay with their
 owning package.
 
@@ -87,7 +94,9 @@ own variant-specific checks and traversal. Internal functions used across
 modules have plain names; underscore names are module-local. Supported public
 API is declared explicitly, not inferred from implementation filenames.
 
-Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called). Inside `ml`, `factory <- chain <- components <- processing <- release`; this inference path never imports the training support (`builders`, `callbacks`, `cli`, ...).
+Dependencies point one way: `geodata <- ml`, and `geosave <- geosave_flows`; `geosave` never imports `geosave_flows` or Prefect. `geodata` imports no torch at import time (`.gs.to_tensor()` imports it when called). `ml.pipeline` imports no ML framework; each framework is one subpackage of `ml` (today `ml.torch`), and a new framework is a sibling, never a branch inside `pipeline`. Inside `ml.torch`, `chain <- modules <- prediction`; this inference path never imports `ml.torch.training`.
+
+Naming: a **stage** is one step of the processing pipeline (ingest, preprocess, predict, postprocess, publish); a **module** is an `nn.Module` that a `ModelChain` composes (encoder, decoder, head, monolith); a module's **forward** is what the chain calls on it.
 
 Every location is a `Location` (path, URL or UPath) with typed `StorageOptions`, so local and remote storage take one code path; `io/storage.py` owns that conversion.
 
@@ -147,17 +156,9 @@ LightningCLI    -> workspace entry point and configuration
 Logger          -> experiment logging
 ```
 
-A training setup is a project-owned LightningModule, DataModule and Dataset,
-kept in `modules/<task>/<method>/` in the generated workspace. Source templates
-live in `src/templates/tasks/<task>/<method>/`. The library's `ml/` holds reusable
-builders, criterion, metrics, transforms, callbacks and CLI support.
-
-Each method's `data.py` declares its sample contract. Keep generated methods
-independent: editing one must not change another method's files. Each method's
-`processing.py` holds its `Preprocessor`, shared by its datasets, DataModule and
-a release's processor. Use the
-[contributor guidance](docs/contributing/agent-reference.md#machine-learning)
-for training and template work.
+The generated workspace owns its `training/` kit, `processing/` stages,
+and `pipeline.py`. For template layout, sample contracts and shared training
+support, see the [ML contributor guide](docs/contributing/agent-reference.md#machine-learning).
 
 ## Tests
 

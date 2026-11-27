@@ -15,11 +15,10 @@ Examples:
 from typing import TYPE_CHECKING
 
 from geosave.geodata import (
-    ChipLayout,
     RasterChipper,
     RasterMerger,
-    TensorChipper,
-    TensorMerger,
+    collate,
+    iter_samples,
     DataArray,
     Dataset,
     DataTree,
@@ -51,11 +50,10 @@ __all__ = [
     "GeoDataset",
     "GeoDataTree",
     "GeoCatalog",
-    "ChipLayout",
     "RasterChipper",
     "RasterMerger",
-    "TensorChipper",
-    "TensorMerger",
+    "collate",
+    "iter_samples",
     "GeoCatalogItem",
     "StacClient",
     "StacQuery",

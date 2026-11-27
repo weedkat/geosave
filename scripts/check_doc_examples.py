@@ -56,7 +56,6 @@ def check_result(page: str, values: dict) -> None:
         assert values["ndvi"].gs.geobox == values["scene"].gs.geobox
         assert values["scene"].red.chunks is not None
         assert values["ndvi"].chunks is not None
-        values["scene"].close()
     elif page == "basics/first-raster.md":
         scene = values["scene"]
         ndvi = values["ndvi"]
@@ -64,23 +63,23 @@ def check_result(page: str, values: dict) -> None:
         assert ndvi.chunks is not None
         decoded = scene.gs.mask_and_scale()
         expected = (decoded.nir - decoded.red) / (decoded.nir + decoded.red)
-        with gs.open_raster("output/ndvi.tif") as saved:
-            assert saved.gs.geobox == scene.gs.geobox
-            # The file stores float32; compare at that precision.
-            np.testing.assert_allclose(
-                saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
-            )
+        saved = gs.open_raster("output/ndvi.tif")
+        assert saved.gs.geobox == scene.gs.geobox
+        # The file stores float32; compare at that precision.
+        np.testing.assert_allclose(
+            saved.ndvi.values, expected.values, atol=1e-6, equal_nan=True
+        )
     elif page == "advanced/vegetation-zones.md":
         summary = values["summary"]
         assert summary.index.tolist() == ["West", "East"]
         assert (summary["coverage"] > 0.9).all()
-        with gs.open_raster("output/vegetation-zones/ndvi.tif") as saved:
-            assert saved.gs.geobox == values["scene"].gs.geobox
-            assert np.isnan(saved.ndvi.gs.nodata)
+        saved = gs.open_raster("output/vegetation-zones/ndvi.tif")
+        assert saved.gs.geobox == values["scene"].gs.geobox
+        assert np.isnan(saved.ndvi.gs.nodata)
     elif page == "basics/rasters.md":
-        with gs.open_raster("output/ndvi.tif") as saved:
-            assert saved.ndvi.shape == (337, 267)
-            assert saved.gs.geobox == values["scene"].gs.geobox
+        saved = gs.open_raster("output/ndvi.tif")
+        assert saved.ndvi.shape == (337, 267)
+        assert saved.gs.geobox == values["scene"].gs.geobox
     elif page == "basics/attrs.md":
         assert values["labels"].label.gs.flags.classes[1] == "trees"
         assert values["labels"].label.gs.nodata == 255
@@ -95,24 +94,25 @@ def check_result(page: str, values: dict) -> None:
         )
     elif page == "basics/io.md":
         for name in ("scene.tif", "scene.zarr", "scene.nc"):
-            with gs.open_raster(Path("output") / name) as saved:
-                assert set(saved.data_vars) == {"red", "nir"}
-                assert saved.gs.geobox == values["image"].gs.geobox
-                for band in ("red", "nir"):
-                    source = values["image"][band]
-                    np.testing.assert_array_equal(saved[band].values, source.values)
-                    assert saved[band].dtype == source.dtype
-                    assert saved[band].gs.nodata == source.gs.nodata
-                    assert saved[band].gs.packing == source.gs.packing
+            saved = gs.open_raster(Path("output") / name)
+            assert set(saved.data_vars) == {"red", "nir"}
+            assert saved.gs.geobox == values["image"].gs.geobox
+            for band in ("red", "nir"):
+                source = values["image"][band]
+                np.testing.assert_array_equal(saved[band].values, source.values)
+                assert saved[band].dtype == source.dtype
+                assert saved[band].gs.nodata == source.gs.nodata
+                assert saved[band].gs.packing == source.gs.packing
     elif page == "basics/vectors.md":
         from geopandas.testing import assert_geodataframe_equal
 
         assert_geodataframe_equal(values["reopened"], values["selected"])
     elif page == "advanced/overlapping-chips.md":
-        assert len(values["chips"]) == 9
+        assert (values["location"].top, values["location"].left) == (96, 96)
         assert values["sample"]["image"].shape == (4, 128, 128)
         assert values["sample"]["labels"].shape == (1, 128, 128)
         assert values["sample"]["labels"].dtype == torch.uint8
+        assert values["images"][0].shape == (4, 128, 128)
         assert values["chip"]["image"].gs.geobox == values["chip"]["labels"].gs.geobox
         expected = values["labels"].gs.crop_to_grid(values["chip"].gs.geobox)
         np.testing.assert_array_equal(
@@ -154,58 +154,47 @@ def check_result(page: str, values: dict) -> None:
         image = values["sample"]["image"]
         assert image.shape == (2, 337, 267)
         assert image.dtype == torch.float32
-        with gs.open_raster("sample-scene.tif") as source:
-            expected = source[["red", "nir"]].gs.mask_and_scale().fillna(0)
-            np.testing.assert_allclose(
-                image.numpy(), expected.gs.to_numpy(dtype="float32")
-            )
+        source = gs.open_raster("sample-scene.tif")
+        expected = source[["red", "nir"]].gs.mask_and_scale().fillna(0)
+        pixels = expected.gs.to_numpy(dtype="float32")
+        np.testing.assert_allclose(image.numpy(), pixels)
     elif page == "advanced/crop-imagery.md":
-        with gs.open_raster("prepared/ndvi.tif") as saved:
-            assert saved.gs.geobox == values["area"].gs.geobox
-            assert saved.ndvi.shape == (169, 134)
+        saved = gs.open_raster("prepared/ndvi.tif")
+        assert saved.gs.geobox == values["area"].gs.geobox
+        assert saved.ndvi.shape == (169, 134)
     elif page == "advanced/large-data.md":
         assert values["ndvi"].chunks is not None
-        with gs.open_raster(values["store"]) as saved:
-            assert saved.gs.geobox == values["area"].gs.geobox
-            np.testing.assert_allclose(
-                saved.ndvi.values,
-                values["ndvi"].values,
-                equal_nan=True,
-            )
+        saved = gs.open_raster(values["store"])
+        assert saved.gs.geobox == values["area"].gs.geobox
+        np.testing.assert_allclose(
+            saved.ndvi.values,
+            values["ndvi"].values,
+            equal_nan=True,
+        )
     elif page == "advanced/release.md":
-        import xarray as xr
-
-        xr.testing.assert_identical(values["product"], values["reloaded_product"])
-        with gs.open_raster("sample-scene.tif") as source:
-            assert values["product"].gs.geobox == source.gs.geobox
-        classes = values["product"]["class_id"]
-        assert classes.dtype == np.uint8
-        assert classes.gs.nodata == 255
-        assert classes.gs.flags.classes == {0: "water", 1: "vegetation", 2: "bare"}
-        with gs.open_raster(values["store"]) as saved:
-            assert saved.gs.geobox == values["product"].gs.geobox
-            assert saved.class_id.dtype == classes.dtype
-            assert saved.class_id.gs.nodata == classes.gs.nodata
-            assert saved.class_id.gs.flags == classes.gs.flags
-            assert np.isin(saved.class_id.values, [0, 1, 2]).all()
+        image = torch.ones(1, 2, 64, 64)
+        with torch.no_grad():
+            expected = values["chain"](image=image)
+            restored = values["model"](image=image)
+        torch.testing.assert_close(restored, expected)
     elif page == "basics/training-chips.md":
         sample = values["sample"]
-        assert len(values["chips"]) == 4
+        assert (values["location"].top, values["location"].left) == (0, 0)
         assert set(sample) == {"image", "labels"}
         assert tuple(sample["image"].shape) == (4, 128, 128)
         assert tuple(sample["labels"].shape) == (1, 128, 128)
         assert sample["image"].is_floating_point()
         assert sample["labels"].dtype == torch.uint8
         assert torch.isfinite(sample["image"]).all()
-        with gs.open_raster("training-labels.tif") as labels:
-            expected = labels.label.isel(y=slice(0, 128), x=slice(0, 128))
-            np.testing.assert_array_equal(sample["labels"][0].numpy(), expected.values)
-            assert values["chip"].gs.geobox == expected.gs.geobox
+        labels = gs.open_raster("training-labels.tif")
+        expected = labels.label.isel(y=slice(0, 128), x=slice(0, 128))
+        np.testing.assert_array_equal(sample["labels"][0].numpy(), expected.values)
+        assert values["chip"].gs.geobox == expected.gs.geobox
     elif page == "advanced/download-imagery.md":
-        with gs.open_raster("imagery/scene.tif") as saved:
-            assert saved.gs.geobox == values["scene"].gs.geobox
-            assert set(saved.data_vars) == {"red", "green", "blue", "nir"}
-            assert np.isfinite(saved.red.values).any()
+        saved = gs.open_raster("imagery/scene.tif")
+        assert saved.gs.geobox == values["scene"].gs.geobox
+        assert set(saved.data_vars) == {"red", "green", "blue", "nir"}
+        assert np.isfinite(saved.red.values).any()
 
 
 def save_xarray_previews(values: dict) -> None:

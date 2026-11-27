@@ -1,28 +1,25 @@
-# Training recipes
+# Training kits
 
-Lightning Modules, DataModules, Datasets, and sample definitions are generated
-project code. They are no longer imported from `geosave.ml.tasks`.
-DataModules build explicit preprocessors and take caller-owned Datasets.
-See [workspaces](../advanced/training.md) for generation and
-[training behavior](../concepts/training.md) for the recipes' initial contracts.
+Each starter supplies its own editable `training` package and a
+`configs/<method>.yaml` file. Start with the project's README for the inputs
+and a training command. Use `geosave create NAME --task TASK --method METHOD`
+to select a kit. [Workspace walkthrough](../advanced/training.md)
 
-| Task / method | Generated package | Current starting point |
+| Task | Method | Supplied behavior |
 | --- | --- | --- |
-| `lightning` / `boilerplate` | `modules.boilerplate` | Offline synthetic Dataset and training configuration. |
-| `segmentation` / `supervised` | `modules.supervised` | Paired raster Dataset; its flat samples still conflict with Module steps expecting nested `inputs`. Integration is unfinished. |
-| `segmentation` / `fixmatch` | `modules.fixmatch` | Implement labeled and unlabeled Datasets; supplied examples raise `NotImplementedError`. |
-| `regression` / `supervised`, `mean-teacher` | `modules.supervised`, `modules.mean_teacher` | Implement the supplied Dataset placeholders. |
-| `classification` / `supervised` | `modules.supervised` | Implement the supplied Dataset placeholder. |
-| `pretraining` / `mim` | `modules.mim` | Experimental reconstruction method with a Dataset placeholder. |
+| `lightning` | `boilerplate` | Offline synthetic Dataset, training and validation. |
+| `segmentation` | `supervised` | Reads aligned image/label rasters and trains on labeled chips. Validation and test raise `NotImplementedError` pending the evaluation input contract. |
+| `segmentation` | `fixmatch` | Confidence-gated training with weak and strong views. Supply unlabeled samples. |
+| `classification` | `supervised` | One class per sample. Implement the project Dataset reader. |
+| `regression` | `supervised` | Continuous targets with missing values. Implement the project Dataset reader. |
+| `regression` | `mean-teacher` | Labeled and unlabeled samples with an exponential-moving-average teacher. Implement the project Dataset readers. |
+| `pretraining` | `mim` | Experimental masked image reconstruction. Implement the project Dataset reader. |
 
-Each package contains `module.py`, `data.py`, and `datasets.py`. Semi-supervised
-recipes include their own supervised base. These implementations are editable;
-training behavior does not need a library PR. New inference architectures still
-need deployment support under the existing registered release contract.
+In geospatial starters, `pipeline.py` connects the project modules in
+`processing/` for ingestion, preprocessing, prediction, postprocessing and
+persistence. Unfinished stages raise `NotImplementedError` when called.
+The synthetic Lightning starter only needs its training kit.
 
-The [training guide](../advanced/training.md) runs the Lightning boilerplate.
-ModelSpec remains unavailable; it is no longer the dependency blocking the
-template DataModules.
-
-Reusable metrics, builders, transforms, losses, and callbacks remain library
-APIs; see [training tools](training-tools.md) and [metrics](metrics.md).
+For the sample shapes and learning objectives, see [training contracts](../concepts/training.md).
+Library-owned registries, metrics, transforms, losses and callbacks are
+documented under [training tools](training-tools.md).

@@ -50,7 +50,8 @@ Args:
 
 Returns:
     Dataset for the file or selected group. Use `open_raster_tree` to open
-    a Zarr or NetCDF hierarchy. Close the result to release handles.
+    a Zarr or NetCDF hierarchy. File handles close with the result;
+    `close()` releases them early, such as before overwriting the file.
     Opening does not reproject.
 
 Raises:

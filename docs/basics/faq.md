@@ -14,8 +14,8 @@ Normal ecosystem operations remain available.
 
 ## Which installation do I need?
 
-The base package covers geodata. Add `ml` for tensors and training,
-`hub` for model releases, or `flows` for the Prefect prediction flow.
+The base package covers geodata. Add `ml` for tensors, training and model
+releases, or `flows` for the Prefect prediction flow.
 See [installation](install.md) for commands and optional backends.
 
 ## Does opening imagery read every pixel?

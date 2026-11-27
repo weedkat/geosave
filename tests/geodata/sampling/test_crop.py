@@ -20,7 +20,7 @@ def test_seeded_crop_shares_one_window_across_raster_types():
         group = gs.random_crop(tree, (3, 5), seed=42)
     assert not tasks
     assert image.gs.geobox.shape.yx == (3, 5)
-    assert image.gs.geobox == band.gs.geobox == group.gs.common_geobox()
+    assert image.gs.geobox == band.gs.geobox == group.gs.geobox
     xr.testing.assert_identical(image["red"], band)
     xr.testing.assert_identical(group["image/red"], band)
     assert band.attrs == scene["red"].attrs

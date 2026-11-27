@@ -1,153 +1,156 @@
-"""Grid and non-pixel model inputs read beside a raster's tensors.
+"""Readers of non-pixel model inputs, such as the grid, location and dates.
 
-`.gs.to_tensor(context=[...])` looks each name up in `TENSOR_CONTEXT` and
-stores the reader's tensor under that name. Add a reader to add a name:
+A reader takes the raster and returns one numpy array. `.gs.to_numpy(context=...)`
+and `.gs.to_tensor(context=...)` return each reader's array beside the pixels, keyed
+by the model parameter it feeds. A reader is given as a function, or by its name in
+`CONTEXT_READERS` so that a configuration can select it:
 
-    TENSOR_CONTEXT["elevation"] = read_mean_elevation
+    pixels, context = chip.gs.to_tensor(
+        context={"centroid": "centroid", "elevation": read_elevation}
+    )
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
-import xarray as xr
 
+from geosave.geodata.utils.functions import resolve_fn
+from geosave.geodata.utils.rasters import Raster
 
 if TYPE_CHECKING:
     import torch
+    from odc.geo.geobox import GeoBox
 
-# Tensors read beside the pixels, keyed by their `TENSOR_CONTEXT` name.
+# Tensors read beside the pixels, keyed by the model input they feed.
 type ContextTensors = dict[str, torch.Tensor]
 
-
-def read_timeline(tree: xr.DataTree) -> pd.DatetimeIndex:
-    """Return the dated nodes' one timeline, in axis order.
-
-    Raises:
-        ValueError: No node is dated, or dated nodes hold different labels.
-    """
-    times = None
-    for node in tree.leaves:
-        if not node.data_vars:
-            continue
-        node_times = node.gs.to_dataset().gs.times
-        if node_times is None:
-            continue
-        if times is None:
-            times = node_times
-        elif not node_times.equals(times):
-            raise ValueError(
-                f"node {node.path!r} has its own time labels; this operation needs "
-                "every dated node on one timeline"
-            )
-    if times is None:
-        raise ValueError("time context needs a node with a datetime `time` dimension")
-    return times
+# Reads one context array from a raster.
+type ContextReader[T: Raster] = Callable[[T], np.ndarray]
 
 
-def read_time(tree: xr.DataTree) -> torch.Tensor:
-    """Return int64 nanoseconds since 1970 of each frame, shaped `(time,)`."""
-    import torch
+def _read_timeline(raster: Raster) -> pd.DatetimeIndex:
+    """Return the date of each frame: the `time` axis, else one scalar date.
 
-    # `asi8` counts in the index's own unit; the contract is nanoseconds.
-    nanoseconds = read_timeline(tree).as_unit("ns").asi8.copy()
-    return torch.as_tensor(nanoseconds)
-
-
-def read_year(tree: xr.DataTree) -> torch.Tensor:
-    """Return int64 year of each frame, shaped `(time,)`."""
-    import torch
-
-    years = [when.year for when in read_timeline(tree)]
-    return torch.tensor(years, dtype=torch.int64)
-
-
-def read_day_of_year(tree: xr.DataTree) -> torch.Tensor:
-    """Return int64 day of year of each frame, from 1, shaped `(time,)`."""
-    import torch
-
-    days = [when.dayofyear for when in read_timeline(tree)]
-    return torch.tensor(days, dtype=torch.int64)
-
-
-def read_week(tree: xr.DataTree) -> torch.Tensor:
-    """Return int64 ISO week of each frame, shaped `(time,)`."""
-    import torch
-
-    weeks = read_timeline(tree).isocalendar().week
-    return torch.as_tensor(weeks.to_numpy(dtype="int64"))
-
-
-def read_hour(tree: xr.DataTree) -> torch.Tensor:
-    """Return int64 hour of each frame, shaped `(time,)`."""
-    import torch
-
-    hours = [when.hour for when in read_timeline(tree)]
-    return torch.tensor(hours, dtype=torch.int64)
-
-
-def read_centroid(tree: xr.DataTree) -> torch.Tensor:
-    """Return float32 latitude and longitude of the grid's centre, in degrees.
+    A single observation dates itself with a scalar `time` coordinate; it is
+    one frame of context, though it forms no axis to sample.
 
     Raises:
-        ValueError: The tree has no georeferenced grid.
+        ValueError: Dated tree leaves hold different labels, or the raster has
+            neither a `time` dimension nor one scalar date.
     """
-    import torch
+    times = raster.gs.times
+    if times is not None:
+        return times
 
-    geobox = tree.gs.common_geobox()
+    time = raster.gs.time_coordinate
+    if time is None or time.ndim != 0:
+        raise ValueError(
+            "time context needs a datetime `time` dimension or one scalar date"
+        )
+    return pd.DatetimeIndex([time.values])
+
+
+def _read_geobox(raster: Raster) -> GeoBox:
+    """Return the raster's georeferenced grid.
+
+    Raises:
+        ValueError: The raster has no grid or its grid has no CRS.
+    """
+    geobox = raster.gs.geobox
     if geobox is None or geobox.crs is None:
-        raise ValueError("centroid needs a georeferenced grid")
-    centre = geobox.extent.centroid.to_crs("EPSG:4326")
+        raise ValueError("grid context needs a georeferenced grid")
+    return geobox
+
+
+def read_transform(raster: Raster) -> np.ndarray:
+    """Return the six float64 affine coefficients, `(a, b, c, d, e, f)`.
+
+    float64 keeps sub-metre placement at UTM northings, so the transform is
+    never cast with the pixels.
+    """
+    return np.array(_read_geobox(raster).transform[:6], dtype="float64")
+
+
+def read_crs(raster: Raster) -> np.ndarray:
+    """Return the grid's int64 EPSG code, a scalar.
+
+    Raises:
+        ValueError: The CRS has no EPSG code.
+    """
+    crs = _read_geobox(raster).crs
+    if crs is None or crs.epsg is None:
+        raise ValueError(f"context `crs` is an EPSG code; reproject {crs} to one first")
+    return np.array(crs.epsg, dtype="int64")
+
+
+def read_centroid(raster: Raster) -> np.ndarray:
+    """Return float32 latitude and longitude of the grid's centre, in degrees."""
+    centre = _read_geobox(raster).extent.centroid.to_crs("EPSG:4326")
     longitude, latitude = centre.coords[0]
-    return torch.tensor([latitude, longitude], dtype=torch.float32)
+    return np.array([latitude, longitude], dtype="float32")
 
 
-TENSOR_CONTEXT: dict[str, Callable[[xr.DataTree], torch.Tensor]] = {
+def read_time(raster: Raster) -> np.ndarray:
+    """Return int64 nanoseconds since 1970 of each frame, shaped `(time,)`."""
+    # `asi8` counts in the index's own unit; the contract is nanoseconds.
+    return _read_timeline(raster).as_unit("ns").asi8.copy()
+
+
+def read_year(raster: Raster) -> np.ndarray:
+    """Return int64 year of each frame, shaped `(time,)`."""
+    return _read_timeline(raster).year.to_numpy(dtype="int64")
+
+
+def read_day_of_year(raster: Raster) -> np.ndarray:
+    """Return int64 day of year of each frame, from 1, shaped `(time,)`."""
+    return _read_timeline(raster).dayofyear.to_numpy(dtype="int64")
+
+
+def read_week(raster: Raster) -> np.ndarray:
+    """Return int64 ISO week of each frame, shaped `(time,)`."""
+    return _read_timeline(raster).isocalendar().week.to_numpy(dtype="int64")
+
+
+def read_hour(raster: Raster) -> np.ndarray:
+    """Return int64 hour of each frame, shaped `(time,)`."""
+    return _read_timeline(raster).hour.to_numpy(dtype="int64")
+
+
+CONTEXT_READERS: dict[str, ContextReader[Raster]] = {
+    "transform": read_transform,
+    "crs": read_crs,
+    "centroid": read_centroid,
     "time": read_time,
     "year": read_year,
     "day_of_year": read_day_of_year,
     "week": read_week,
     "hour": read_hour,
-    "centroid": read_centroid,
 }
 
 
-def read_context(
-    tree: xr.DataTree,
-    *,
-    grid: bool,
-    context: Sequence[str],
-) -> ContextTensors:
-    """Read requested grid and context values as tensors.
+def read_context[T: Raster](
+    raster: T, readers: Mapping[str, ContextReader[T] | str]
+) -> dict[str, np.ndarray]:
+    """Read each requested context array from `raster`.
 
     Args:
-        tree: The rasters the layers were read from.
-        grid: Add `transform`, the six float64 affine coefficients, and `crs`,
-            the int64 EPSG code.
-        context: Names in `TENSOR_CONTEXT`.
+        raster: Raster the readers read.
+        readers: Model input names mapped to readers, each a function of the
+            raster or its name in `CONTEXT_READERS`.
+
+    Returns:
+        Context arrays keyed as `readers`.
 
     Raises:
-        KeyError: A context name is not in `TENSOR_CONTEXT`.
-        ValueError: The grid CRS has no EPSG code, or a reader refuses the tree.
+        KeyError: A reader name is not in `CONTEXT_READERS`.
+        ValueError: A reader refuses the raster.
     """
-    import torch
-
-    entries = {}
-    if grid:
-        geobox = tree.gs.common_geobox()
-        if geobox is None or geobox.crs is None:
-            raise ValueError("grid entries need a georeferenced grid")
-        if geobox.crs.epsg is None:
-            raise ValueError(
-                f"tensor `crs` is an EPSG code; reproject {geobox.crs} to one first"
-            )
-        entries["transform"] = torch.tensor(geobox.transform[:6], dtype=torch.float64)
-        entries["crs"] = torch.tensor(geobox.crs.epsg, dtype=torch.int64)
-    for name in context:
-        if name not in TENSOR_CONTEXT:
-            raise KeyError(f"Unknown context {name!r}; known: {sorted(TENSOR_CONTEXT)}")
-        entries[name] = TENSOR_CONTEXT[name](tree)
-
-    return entries
+    values = {}
+    for name, reader in readers.items():
+        read = resolve_fn(reader, CONTEXT_READERS)
+        values[name] = read(raster)
+    return values

@@ -78,6 +78,7 @@ dependencies = [
 [project.optional-dependencies]
 ml = [
     "huggingface-hub>=1.0.0",
+    "safetensors>=0.4.3",
     "kornia>=0.8.2",
     "lightning>=2.3.3",
     "tensorboard>=2.14.0",
@@ -86,14 +87,13 @@ ml = [
     "torch>=2.6",
     "torchmetrics>=1.9",
 ]
-hub = ["geosave[ml]", "transformers>=5.17.0,<6"]
-flows = ["geosave[hub]", "prefect>=3.8.6"]
+flows = ["geosave[ml]", "prefect>=3.8.6"]
 cloud = ["gcsfs>=2026.3.0", "s3fs>=2026.3.0"]
 mlflow = ["mlflow>=2.17.2"]
-all = ["geosave[ml,hub,flows,cloud,mlflow]"]
+all = ["geosave[ml,flows,cloud,mlflow]"]
 
 [project.urls]
-Documentation = "https://weedkat.github.io/geosave-engine/"
+Documentation = "https://weedkat.github.io/geosave/"
 Issues = "https://github.com/weedkat/geosave/issues"
 Source = "https://github.com/weedkat/geosave"
 

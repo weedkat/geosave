@@ -53,7 +53,6 @@ def test_built_wheel_generates_every_recipe_outside_source_tree(tmp_path):
     assert install.returncode == 0, install.stderr
 
     script = """
-import os
 from pathlib import Path
 import geosave
 from typer.testing import CliRunner
@@ -63,20 +62,20 @@ from geosave.cli.core.templates import get_tasks, get_methods
 installed = Path('installed').resolve()
 assert Path(geosave.__file__).is_relative_to(installed)
 runner = CliRunner()
-result = runner.invoke(app, ['create', 'demo', '--task', 'blank'])
-assert result.exit_code == 0, result.output
-os.chdir('demo')
-assert Path('.gitignore').is_file()
-assert Path('.env.example').is_file()
-count = 0
+projects = []
 for task in get_tasks():
     for method in get_methods(task):
-        result = runner.invoke(app, ['add-task', '--task', task, '--method', method])
+        project = Path(f"demo-{task}-{method}")
+        result = runner.invoke(app, ['create', str(project), '--task', task, '--method', method])
         assert result.exit_code == 0, result.output
-        assert Path(f'modules/{task}/{method.replace("-", "_")}/module.py').is_file()
-        count += 1
-assert count > 0
-assert len(list(Path('configs').glob('*.yaml'))) == count
+        assert (project / '.env.example').is_file()
+        assert (project / '.gitignore').is_file()
+        assert (project / 'training/__init__.py').is_file()
+        assert (project / 'configs' / f'{method}.yaml').is_file()
+        if task != 'lightning':
+            assert (project / 'pipeline.py').is_file()
+        projects.append(project)
+assert len(projects) == 7
 """
     env = dict(os.environ, PYTHONPATH=str(installed))
     result = subprocess.run(

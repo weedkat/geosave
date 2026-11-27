@@ -21,7 +21,7 @@ results back into usable maps.
   interactive maps or create static plots.
 - **Prepare useful datasets.** Align inputs explicitly, calculate spectral
   indices, preserve nodata, and save GeoTIFF, Zarr, NetCDF, or GeoParquet.
-- **Use pretrained model components.** Build models with supported encoders,
+- **Use pretrained modules.** Build models with supported encoders,
   decoders, and heads, including geospatial foundation-model integrations.
 - **Train and map predictions.** Make chips from aligned xarray Datasets,
   train with Lightning, and merge chip predictions onto their source grids.
@@ -75,9 +75,9 @@ urlretrieve(
     "scene.tif",
 )
 Path("output").mkdir(exist_ok=True)
-with gs.open_raster("scene.tif") as scene:
-    ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
-    io.write_cog(ndvi.to_dataset(), "output/ndvi.tif")
+scene = gs.open_raster("scene.tif")
+ndvi = gs.features.ndvi(scene, nir="nir", red="red").rename("ndvi")
+io.write_cog(ndvi.to_dataset(), "output/ndvi.tif")
 ```
 
 Open `output/ndvi.tif` in your GIS. The sample is a 752 KiB crop of agricultural
@@ -92,15 +92,11 @@ to summarize NDVI and valid coverage for two areas in a CSV.
 
 ## Follow a land-cover project
 
-[The notebook series](https://github.com/weedkat/geosave/tree/main/examples)
-uses real Sentinel-2 imagery and expert-annotated labels: inspect class balance,
-train a baseline, acquire new imagery for existing labels, then predict and
-export maps for a forest area. Tiles are split before making training chips.
-The teaching download is about 400 MB; the short runs demonstrate a workflow,
-not a validated operational model. Parts of the notebooks still use removed
-APIs; check the [migration notice](https://weedkat.github.io/geosave/examples/#real-land-cover-project)
-before running them. The [Lightning workspace starter](https://weedkat.github.io/geosave/advanced/training/)
-uses current APIs.
+The notebooks use expert-annotated Sentinel-2 scenes to train a baseline and
+fine-tune Prithvi on image chips. Save the trained model and its class legend,
+then load them in a GeoSave pipeline to publish a dated forest map. The
+teaching download is about 840 MB. The Jakarta NDVI lesson runs independently
+and needs only a small satellite crop. [Start the notebook series](examples/README.md).
 
 | Your next task | Guide |
 | --- | --- |

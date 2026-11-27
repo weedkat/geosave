@@ -99,7 +99,11 @@ class GeoCatalogItem:
         import shapely
         from stac_geoparquet import to_dict
 
-        from geosave.geodata.stac.catalog import build_item, read_collections, stac_items
+        from geosave.geodata.stac.catalog import (
+            build_item,
+            read_collections,
+            stac_items,
+        )
 
         self.validate(stac_items)
         item_dict = to_dict(self._row.to_dict())

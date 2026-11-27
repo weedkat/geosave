@@ -65,7 +65,7 @@ properties and decode policy when loading.
 | Pixels and grid | Each asset states its grid; load onto that exact GeoBox to avoid resampling. The catalog tutorial checks pixel values and placement. |
 | Time | Items state instants or periods. A period reloads using its start; a distinct original time label is not preserved. |
 | Packing and nodata | Asset raster metadata and file encoding describe stored values; loading retains stored values until explicitly decoded. |
-| Item properties | Supplied native Item properties are preserved; explicitly select any values from marked coordinates. Request them with `with_properties` on load. |
+| Item properties | Supplied native Item properties are preserved; choose output values from marked coordinates. Request source properties with `with_properties` and apply `stamp_properties` when loading. |
 | Shared scalar property | Repeated in Items and loaded as a coordinate along time. |
 | Collection | Carried separately from Item properties and stored in the table metadata. Its extent is not recomputed from written Items. |
 | Arbitrary Dataset attrs | Not automatically published as Item properties. |

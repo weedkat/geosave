@@ -1,4 +1,4 @@
-"""Load selected STAC Items with ODC and stamp what their documents state."""
+"""Load pixels from selected STAC Items and apply explicit metadata stamps."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, TypedDict, Unpack, cast
 
-import numpy as np
 import odc.stac
 import pystac
 import xarray as xr
@@ -14,20 +13,10 @@ from odc.geo import CRS, MaybeCRS, Resolution, SomeResolution
 from odc.geo.geobox import GeoBox, GeoboxAnchor
 from odc.loader.types import Band_DType, RasterSource, ReaderDriverSpec
 from odc.stac import ConversionConfig
-from odc.stac.model import ParsedItem, PropertyLoadRequest
+from odc.stac.model import ParsedItem
 
-from geosave.geodata.core.conventions import END_DATETIME, START_DATETIME
-from geosave.geodata.stac.stamps import (
-    DEFAULT_STAMPS,
-    LoadSource,
-    check_stamps,
-    run_stamps,
-)
-from geosave.geodata.stac.stamps.properties import (
-    PERIOD_REQUESTS,
-    stamp_period,
-    stamp_properties,
-)
+from geosave.geodata.stac.stamps import STAMPS, Stamp, stamp_nodata
+from geosave.geodata.utils.functions import resolve_fn
 
 
 class StacLoadOptions(TypedDict, total=False):
@@ -37,10 +26,10 @@ class StacLoadOptions(TypedDict, total=False):
     raster's grid, or `crs` and `resolution` with a region (`bbox`, `lon`/`lat`,
     `x`/`y`, `geopolygon`, `intersects`).
 
-    `with_properties` loads one value per time step, which `load_dataset`
-    makes a coordinate marked with its STAC key. Every load also requests
-    `start_datetime` and `end_datetime`, so those two keys are taken. ODC's request
-    defaults apply:
+    `with_properties` loads one data variable per requested Item property,
+    with one value per time step. Pass `stamps=[stamp_properties]`
+    to promote these variables to coordinates marked with their STAC keys. ODC's
+    request defaults apply:
 
         "eo:cloud_cover"                          eo_cloud_cover, float32
         {"key": "eo:cloud_cover", "dtype": "float64"}   keeps 24.001125 exact
@@ -50,8 +39,11 @@ class StacLoadOptions(TypedDict, total=False):
     A step fusing several Items averages numbers and joins text with ",";
     pass `fuser` to combine them otherwise.
 
-    `dtype` and `nodata` apply to the bands only, after loading: ODC would
-    apply them to the properties too.
+    ODC resamples into the requested pixel `dtype` and maps missing pixels to
+    the output `nodata`. A scalar `dtype` also applies to property variables.
+    Omit it to keep the dtypes in the property requests. In odc-loader 0.6.4,
+    per-band dtype mappings are supported for eager loads and fail during
+    Dask chunk planning.
 
     The Items must intersect the grid, as a search over the same region
     returns them: ODC 0.5.2 fails on properties when the last step's Items
@@ -90,104 +82,63 @@ class StacLoadOptions(TypedDict, total=False):
 def load_dataset(
     items: Iterable[pystac.Item],
     *,
-    stamps: Sequence[str] = DEFAULT_STAMPS,
+    stamps: Sequence[Stamp | str] = (),
     **options: Unpack[StacLoadOptions],
 ) -> xr.Dataset:
-    """Load selected Items with ODC, then stamp what their documents state.
+    """Load the selected Items' pixels onto one ODC grid.
 
-    No search occurs: choose the Items before loading. The Collection is the
-    one the Items link to (`item.get_collection()`); searched Items and
-    catalog rows carry it.
-    ODC loads as it does natively: it chooses the grid from `geobox`, `like`
-    or `crs`/`resolution` with a region, else guesses it from the Items; pass
-    `chunks={}` or sizes for a lazy load.
-    Each step's period, from its Items' earliest start to latest end, becomes
-    the `start_datetime`/`end_datetime` cells, and each `with_properties`
-    request a coordinate marked `stac_property`.
-    The named stamps then write metadata, reading no pixels. Band metadata
-    keeps the published digital numbers; decode them with `.gs.mask_and_scale()`.
+    Choose the grid with `geobox`, `like`, or `crs` and `resolution` with
+    a region. ODC derives a grid from the Items when these are omitted.
+    Pass `chunks={}` or sizes for a lazy load. ODC groups Items into time
+    steps and fuses their pixels. Every load applies `stamp_nodata` to write
+    each band's effective fill as CF `_FillValue` before any optional stamps.
 
     Args:
         items: Selected Items; generators are consumed once.
-        stamps: Registered stamps to run, in order; see `stac.stamps`.
+        stamps: Stamps in execution order, each a callable or its name in
+            `stac.stamps.STAMPS`. Each receives the Dataset, the Items and the
+            `stac_cfg` option.
         **options: Options of `odc.stac.load`.
 
     Returns:
-        The Dataset ODC loads, with `start_datetime`, `end_datetime` and the
-        requested properties as `(time,)` coordinates, and what the stamps
-        write: by default band metadata and the Collection.
+        The ODC Dataset with the metadata written by the requested stamps.
 
     Raises:
-        KeyError: A stamp name is not registered; raised before loading.
+        KeyError: A stamp name is absent from `STAMPS`.
         ValueError: ODC refuses the Items or options, such as an empty
-            selection or a grid it cannot guess, or a stamp refuses them,
-            such as differing source scales/offsets of one band.
+            selection or a grid it cannot infer.
 
     Examples:
-        >>> scene = stac.load_dataset(items, geobox=grid, chunks={}, with_properties=["eo:cloud_cover"])
+        >>> scene = stac.load_dataset(
+        ...     items, geobox=grid, chunks={}, with_properties=["eo:cloud_cover"],
+        ...     stamps=["properties"],
+        ... )
         >>> scene["eo_cloud_cover"].attrs
         {'units': '1', 'stac_property': 'eo:cloud_cover'}
         >>> labels = stac.load_dataset(label_items, like=scene, chunks={})
     """
-    check_stamps(stamps)
+    selected = [resolve_fn(stamp, STAMPS) for stamp in stamps]
     items = list(items)
 
-    # ODC loads each property as a band, so its `dtype` and `nodata` would
-    # apply to them too; the bands get both once the properties are coordinates.
-    dtype = options.pop("dtype", None)
-    nodata = options.pop("nodata", None)
-    properties = [*(options.get("with_properties") or []), *PERIOD_REQUESTS]
-    options["with_properties"] = properties
-    ds = odc.stac.load(items, **options)
+    # ODC inserts its property requests into the provided config.
+    stac_cfg = options.get("stac_cfg")
+    if stac_cfg is not None and options.get("with_properties") is not None:
+        options["stac_cfg"] = dict(stac_cfg)
 
-    source = LoadSource(items, PropertyLoadRequest.from_user_input(properties))
+    dataset = odc.stac.load(items, **options)
+    dataset = stamp_nodata(dataset, items, stac_cfg)
 
-    # compulsory stamps: period and properties, which the user may also request
-    ds = stamp_properties(ds, source)
-    ds = stamp_period(ds)
+    for stamp in selected:
+        dataset = stamp(dataset, items, stac_cfg)
 
-    ds = _cast_bands(ds, dtype, nodata)
-
-    return run_stamps(ds, source, stamps)
-
-
-def list_properties(items: Iterable[pystac.Item]) -> list[dict[str, str]]:
-    """List a `with_properties` request for each scalar property the Items state.
-
-    Numbers load as float64 and text as str, so values keep what the Items
-    state instead of ODC's float32 default. The datetime and period keys are
-    left out, since every load reads them; so are booleans, lists and objects.
-
-    Args:
-        items: Items whose properties to request.
-
-    Returns:
-        Requests in ODC's form, in the order the Items first state each key.
-
-    Examples:
-        >>> stac.list_properties(items)
-        [{'key': 'eo:cloud_cover', 'dtype': 'float64'}, {'key': 'platform', 'dtype': 'str'}]
-        >>> scene = stac.load_dataset(items, with_properties=stac.list_properties(items))
-    """
-    # Every load reads the datetime and the period itself.
-    time_keys = ("datetime", START_DATETIME, END_DATETIME)
-    requests_by_key: dict[str, dict[str, str]] = {}
-    for item in items:
-        for key, value in item.properties.items():
-            if key in time_keys or key in requests_by_key:
-                continue
-            # bool is an int subclass, and a flag is not a number to average.
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, str):
-                requests_by_key[key] = {"key": key, "dtype": "str"}
-            elif isinstance(value, (int, float)):
-                requests_by_key[key] = {"key": key, "dtype": "float64"}
-    return list(requests_by_key.values())
+    return dataset
 
 
 def group_bands_by_grid(
-    items: Iterable[pystac.Item], bands: str | Sequence[str] | None = None
+    items: Iterable[pystac.Item],
+    bands: str | Sequence[str] | None = None,
+    *,
+    stac_cfg: ConversionConfig | None = None,
 ) -> tuple[tuple[CRS, Resolution, list[str]], ...]:
     """Group the selected bands by the CRS and resolution their `proj:*` states.
 
@@ -198,6 +149,7 @@ def group_bands_by_grid(
     Args:
         items: Items whose bands to group, as ODC parses them.
         bands: Bands to group, as `odc.stac.load` selects them; None groups all.
+        stac_cfg: ODC configuration used to identify assets and aliases.
 
     Returns:
         One `(crs, resolution, bands)` per grid, finest first.
@@ -209,7 +161,7 @@ def group_bands_by_grid(
         EPSG:32633 Resolution(x=20, y=-20) ['B05', 'B06', 'B07', 'B8A', 'B11', 'B12']
     """
     bands_by_grid: dict[tuple[CRS, Resolution], list[str]] = {}
-    for parsed_item in odc.stac.parse_items(items):
+    for parsed_item in odc.stac.parse_items(items, cfg=stac_cfg):
         for band, band_source in parsed_item.resolve_bands(bands).items():
             # ODC names every band of the collection; None is one this Item lacks.
             if not isinstance(band_source, RasterSource):
@@ -235,7 +187,7 @@ def group_bands_by_grid(
 def load_native_datasets(
     items: Iterable[pystac.Item],
     *,
-    stamps: Sequence[str] = DEFAULT_STAMPS,
+    stamps: Sequence[Stamp | str] = (),
     **options: Unpack[StacLoadOptions],
 ) -> tuple[tuple[CRS, Resolution, xr.Dataset], ...]:
     """Load the selected Items once per native grid, so no band is resampled.
@@ -248,7 +200,7 @@ def load_native_datasets(
 
     Args:
         items: Selected Items of one collection.
-        stamps: Registered stamps, as for `load_dataset`.
+        stamps: Names or callables applied to each Dataset, as for `load_dataset`.
         **options: Options of `odc.stac.load`, as for `load_dataset`; `bands`
             selects which bands to group.
 
@@ -262,34 +214,11 @@ def load_native_datasets(
     items = list(items)
 
     loaded = []
-    for crs, resolution, bands in group_bands_by_grid(items, options.get("bands")):
+    groups = group_bands_by_grid(
+        items, options.get("bands"), stac_cfg=options.get("stac_cfg")
+    )
+    for crs, resolution, bands in groups:
         options["bands"] = bands
         native = load_dataset(items, stamps=stamps, **options)
         loaded.append((crs, resolution, native))
     return tuple(loaded)
-
-
-def _cast_bands(
-    ds: xr.Dataset, dtype: Band_DType | None, nodata: float | None
-) -> xr.Dataset:
-    """Cast the bands to `dtype`, then rewrite each band's fill to `nodata`, as ODC would.
-
-    Only data variables change; coordinates keep their dtypes. A band
-    without a fill keeps its pixels.
-    """
-    if isinstance(dtype, Mapping):
-        for name, band_dtype in dtype.items():
-            ds[name] = ds[name].astype(band_dtype)
-    elif dtype is not None:
-        ds = ds.astype(dtype)
-
-    if nodata is None:
-        return ds
-    for name, band in list(ds.data_vars.items()):
-        fill = band.attrs.get("nodata")
-        if fill is None:
-            continue
-        # A NaN fill never equals itself.
-        missing = band.isnull() if np.isnan(fill) else band == fill
-        ds[name] = band.where(~missing, nodata).assign_attrs(nodata=nodata)
-    return ds

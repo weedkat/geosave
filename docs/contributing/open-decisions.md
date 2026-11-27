@@ -39,22 +39,51 @@ unsupported by `gs.geobox`.
 
 ## Sampling and stores
 
-Implemented: raster temporal `.gs.sample`, spatial `ChipLayout`, lazy
-`RasterChipper`, and dense `RasterMerger(chipper.layout)`. See
+Implemented: temporal `gs.iter_samples(rasters, freq)` with `missing="skip"`
+or `"raise"`, matching a tree's dated nodes by time bucket; iterable
+`RasterChipper` with pixel or fractional spatial overlap; `iter_batches`,
+which reads one block of chunks at a time; and `RasterMerger`, which places each
+prediction by its chip location's source, leaving NaN predictions to
+overlapping chips. See
 [the sampling reference](../reference/chips.md).
 
 Remaining work:
 
-- Stream merges beyond memory; current accumulators occupy full output arrays.
-  `RasterMerger.is_complete` and `discard` free a raster once its last chip is
-  merged, so only rasters in progress are held.
+- Same-resolution dense logits use the chipper's locations and input grids.
+  Placement for model outputs at a different resolution remains open.
+- Large output grids: implemented. `RasterMerger(store=...)` keeps a raster's
+  sums and weights in Zarr, chips in any order; a dense postprocessor given a
+  store uses `<store>/<window index>.zarr`. A Sentinel-2 tile merges in 0.6 GB
+  of memory at about 27 ms per 256-pixel, 9-class chip, since each chip
+  rewrites the up to four chunks it touches; a write-back chunk cache would cut
+  that if staged merging becomes the bottleneck.
+  Without a store a merger holds the whole raster, about 4.8 GB plus 4.3 GB for nine classes on a 10980² Sentinel-2
+  tile. The pipeline passes `<run store>/product`.
+- A window's product is dated by its chips' `source.timespan`: its bucket bounds
+  when `write_time_bounds` stated them, otherwise its first and last
+  acquisition.
+- A merged prediction declares its source raster's extent (`ChipSource.extent`,
+  written by `RasterMerger.merge`). Open: how a vector product, such as
+  `vectorize` output, keeps that extent; a GeoDataFrame has no attr group for it.
+- A window too small for one chip under `mode="drop"` yields no chip, so it
+  has no product; a pipeline must notice it.
+- Pixels on a raster's outer edge are only covered by chip rims, so they get
+  context from one side only.
 - Vector outputs: classification footprints, detection coordinates and duplicate
   removal, instance reconstruction.
 - Persist sample rows, source identity and prepared-store record indices.
 - Decide store invalidation when preprocessing changes.
 - Support additional temporal selection policies only when required; current
-  windows select the first or last observation per nonempty slot.
-- Multi-grid sample preparation and labels with independent timelines.
+  windows select the first or last observation per nonempty bucket. Choosing an
+  observation by quality, such as the least cloudy, belongs to ingestion or
+  preprocessing.
+- Windows anchored on an event or a dated label, rather than time buckets,
+  beyond selecting the label's period with `.sel(time=...)` first.
+- Chips centred on sparse labels (GEDI footprints, field plots), skipping chips
+  outside an area of interest, non-square chips, inputs at several
+  resolutions, and model output at another resolution.
+- Built-in time context (`time`, `day_of_year`, ...) needs one timeline; a
+  project with several sensors passes its own context reader function.
 
 A library preloading helper is not required by the current contract. Project
 Datasets may read on demand or use a prepared store. Preserve grid and time
@@ -62,109 +91,66 @@ metadata with records; see [samples and chips](design/samples-chips.md).
 
 ## Processing, release and inference
 
-Implemented 2026-11-16:
+`GeoRegion -> Ingestor -> collection subtree` is the implemented handoff.
+`ml.pipeline.Pipeline` names the five stages; the contracts after ingestion
+are designed one stage at a time. Each source owns its observation dates and grid.
+The model author supplies the matching and preparation policy.
+[Pipeline data flow](design/release-inference.md).
+
+`pipeline(region, store=None)` is the one way to make a product. Ingestors
+return their collections lazily; the pipeline loads them into memory, or, with
+a store folder, stages every collection in `<store>/sources.zarr` in one
+computation and reopens it lazily. The postprocessor stages its product under
+`<store>/product`. Zarr staging is internal to a run; publication comes after
+the pipeline. A run over several regions gives each region its own folder. An
+existing store is refused. Reusing one for a retry needs a completion marker
+written after the last chunk: a store left partial by an interrupted write
+opens without error and reads its missing chunks as fill.
+
+Open decisions include prompt inputs, detection outputs, pipeline input from
+files, resuming a run from its store and the publisher. Native
+`ChainModel.from_chain` releases remain available for trained model weights.
+
+## ML frameworks
+
+Of the five pipeline stages, only the predictor depends on an ML framework:
 
 ```text
-ml/processing/raster/pipeline.py    RasterPipeline(model, preprocessor, predictor, postprocessor, ingestor=None)
-                                    predict(rasters), predict_to_zarr(rasters, destination, chunks)
-ml/processing/raster/ingestion/      base.py RasterIngestor; sentinel2.py Sentinel2Ingestor ("sentinel2_l2a")
-ml/processing/raster/preprocessing/  base.py RasterPreprocessor; dense.py DensePreprocessor ("dense"): bands, decode, fill, mean/std
-ml/processing/raster/prediction/     base.py RasterPredictor; dense.py DensePredictor ("dense"): RasterChipper -> model(**inputs) -> RasterMerger
-ml/processing/raster/postprocessing/ base.py RasterPostprocessor; dense.py SegmentationPostprocessor ("segmentation"),
-                                     RegressionPostprocessor ("regression"); thresholds.py
-ml/release                  ChainConfig.preprocessor/predictor/postprocessor/ingestor, from_chain(chain),
-                            from_pipeline(pipeline), load_pipeline(repo)
+ingest      GeoRegion          -> raw DataTree              framework-free
+preprocess  raw DataTree       -> prepared rasters          framework-free
+predict     model, prepared    -> scores on the input grid  per framework
+postprocess scores             -> product                   framework-free
+publish     product, Location  -> STAC Item                 framework-free
 ```
 
-A release names only library components. A library sub-processor is stored by
-name; a project's own by class path, loading where the project's code is installed.
+Each framework is one subpackage of `ml`. `ml.torch` exists; scikit-learn
+would be a sibling holding its predictor (pixel table through
+`xr.apply_ufunc`, no chipping) and release (skops). A prototype pixel
+predictor returned the same lazy `(band, y, x)` scores the torch chip predictor
+returns, and the segmentation template's postprocessor accepted them unchanged.
 
-Hugging Face repos, one audience each (decided 2026-11-15):
+Open:
 
-```text
-org/<name>-data       dataset repo   raw/ processed/ labels; not LitData stores
-org/<name>-training   model repo, private   workspace code + artifacts/<run>/*.ckpt, one commit per run
-org/<name>            model repo, public    config.json + model.safetensors + model card
-```
-
-LitData stores are preloads tailored to one model; they stay local or in a
-bucket. Later: record the data and training commits in the release's model
-card (lineage), once configs name the data repo revision.
-
-`RasterPipeline` orchestrates inference over rasters. Every step around the
-model is an interchangeable sub-processor, named by its input and entered by
-`__call__`; the roles' signatures are the contract between steps, with the
-predictor's `Output` and the postprocessor's `Product` as type parameters
-(decided 2026-11-20, replacing `@chain_step()` on sub-processors). A new input
-shape gets its own pipeline: `ChangePipeline(before, after)` and
-`PromptPipeline(rasters, prompts)` are skeletons, with roles declared and no
-implementations until a model needs them; neither can be released yet. Each step
-is a package holding its abstract role (`base.py`) and its implementations, named by task
-(`dense.py` for per-pixel segmentation and regression); subclass where a
-model needs more.
-The contract between steps carries no fixed names: the ingestor returns a
-DataTree of source rasters, the preprocessor returns a DataTree whose nodes
-are the model's pixel inputs, and the model is called with the batch by name.
-A release stores the sub-processors as `{name, init_args}` each, the ingestor
-optionally, and the pipeline variant; `ARTIFACT_FORMAT_VERSION` is 5. This supersedes the earlier plain-function
-registries, the proposal to reuse ModelSpec as a declaration, and a registry
-of main processors. `workspace/dynamicworld` runs it end to end: train,
-`scripts/publish.py`, `scripts/predict_region.py`.
-
-`predict_to_zarr(rasters, destination, chunks)` predicts chunk by chunk.
-Chunks start on multiples of the predictor's stride and each is read with a
-halo (`sampling.find_chip_span`: the pixels of every chip touching it, plus
-what a reflection reads at the raster's end), predicted, cropped back to the
-chunk and written into its region of one Zarr store (`create_zarr`,
-`write_zarr_region`). The chunk's chips are then the whole raster's, so the
-store equals `predict` for padding modes; `shift`, `drop` and `wrap` layouts
-are not reproduced exactly. Memory holds one chunk's output. `predict` is in
-memory with no chunk concept; `predict_path` and `predict_region` were
-removed, and the caller runs `processor.ingestor`; `RasterIngestor` is an
-abstract class whose `ingest_to_zarr` writes each acquisition to a store first.
-
-Deployment (2026-11-16): the whole processor runs on the server. A release
-accepts a project's sub-processor by `class_path` (`check_deployable_spec`);
-it rebuilds wherever the project's code is installed, so the server image is
-built from the workspace. The segmentation template's `scripts/.../serve.py`
-is a LitServe API taking `{"rasters": store, "destination": store}` and
-calling `predict_to_zarr`. LitServe is not a dependency of geosave. Open:
-the other templates have no `serve.py`; a region request that ingests first;
-loading a release without the project's code (shipping `processing.py`). A LitData preload of input chips was tried and
-removed: it did not lower memory, and in deployment the model sits behind
-LitServe, tensors in and tensors out. Open: nothing checks that hand-built rasters match what the
-ingestor would return (bands, packing, resolution); one acquisition per store,
-no time cube yet; chunks are predicted one after another; serving the model remotely (`DensePredictor.predict` reads the
-model's device); the templates' DataModules still call their own preprocessor's `normalize`, which the library no longer has;
-missing inputs/time
-steps. `monitor` was replaced 2026-11-16 by the `geosave_flows.predict.predict_region`
-flow, whose tasks are plain `@task` functions; progress inside one raster is not a task. See
-[release and inference](design/release-inference.md).
-
-`calibrate_thresholds` remains a stub. The built-in segmentation postprocessor
-accepts class names/colors and uses argmax; it does not yet accept thresholds.
-A future calibrated decoder needs its thresholds persisted with its settings.
-Decode merged predictions; do not average integer class ids.
+- The pipeline is standalone and releases stay model-only: the caller loads
+  the release (`ModelChain.from_pretrained(repo)`) and passes the model to
+  `TorchPredictor`. Loading a release from a pipeline YAML file is open. The
+  prepared tree's raster node paths are the model's input names.
+- Training per framework: the torch path is Lightning on chips; a scikit-learn
+  path would sample a pixel table at labels with the same preprocessor.
+- The install extra is still named `ml`, not after its framework.
 
 ## Template and notebook migrations
 
-ModelSpec is unavailable. Template DataModules now build explicit preprocessors
-and take project Datasets; they no longer import ModelSpec. Most task Datasets
-remain placeholders. Supervised segmentation has a paired raster Dataset and
-scene-merging evaluation, but its Dataset/DataModule supply flat named samples
-while Module steps still read nested `inputs`; complete that integration before
-claiming a full training run. See [recipe status](../reference/training.md).
+Geospatial workspaces now ship their editable Pipeline stages. Portable
+Pipeline export/loading, project-specific readers, and the unfinished inference
+stages remain open. Supervised segmentation trains on paired raster chips.
+Its validation and test hooks require an evaluation input contract.
+See [kit status](../reference/training.md) and the generated README.
 
-Its publication script supports separate release and private training repos;
-other generated publication scripts still combine workspace archives with the
-release. Migrate them to the [three-repository workflow](../mlops/index.md).
-
-Lesson 1 now uses `geosave.ml`, stage registries and the `(pixels, context)`
-tensor return. Model construction, forward/backward and one training/validation
-batch were checked with local teaching rasters; the full six-epoch run was not.
-Removed model/chip APIs in lessons 3 and 4 remain separate migration work; see
-[examples](../examples.md). Do not treat the notebook series as verified by
-executable Markdown tutorials.
+Lessons 0 and 1 place predicted class maps on the input image's grid with
+odc-geo's `wrap_xr`. Lessons 3 and 4 use `gs.RasterChipper` and the same
+project scene function. Lesson 4 releases the chain and label scheme and
+keeps the processor in Python. [Examples](../examples.md).
 
 ## Explorer and architecture
 
@@ -177,18 +163,13 @@ executable Markdown tutorials.
   direction is already `geodata <- ml` and `geosave <- geosave_flows`, with
   inference isolated from training support inside `ml`.
 - Per-Item band metadata and provider-specific decoding need a contract when
-  scale/offset differs along time. Loading currently refuses conflicting packing.
+  scale/offset differs along time. The raster stamp refuses conflicting published packing.
 
 ## Workspaces
 
-`workspace/dynamicworld` (checked 2026-11-15) registers its ingestor and
-preprocessor in `modules/processing.py`, measures normalization statistics with
-`scripts/compute_statistics.py`, preloads chips into a LitData store,
-and releases and predicts through `scripts/publish.py` and
-`scripts/predict_region.py`. Its validation still merges chips in the Module
-with its own `RasterMerger`; the agreed pattern is the segmentation template's:
-`TensorChipper` and `TensorMerger` in the step, with the release
-`DensePredictor`'s chip settings.
+Dynamic World and the supervised segmentation template train with named model
+inputs and an integer target. Both await a whole-scene evaluation contract.
+The Dynamic World publisher still uses the retired raster pipeline.
 
 `workspace/gedi-biomass` still calls the removed `gs.Chips`
 (`modules/preparation.py`, `modules/prediction.py`, its Dataset); migrate it to `RasterChipper` and a processor, or archive it.

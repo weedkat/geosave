@@ -13,6 +13,8 @@ shared pixels do not appear on both sides of the evaluation.
 ## Plan overlapping samples
 
 ```python
+from itertools import islice
+
 import xarray as xr
 
 import geosave as gs
@@ -23,26 +25,21 @@ tree = xr.DataTree.from_dict({
     "image": image.gs.mask_and_scale(),
     "labels": labels,
 })
-chips = gs.RasterChipper([tree], size=128, stride=96, mode="shift")
-len(chips)
-```
-
-```text
-9
+chips = gs.RasterChipper([tree], size=128, overlap=0.25, mode="shift")
 ```
 
 Adjacent windows start 96 pixels apart, sharing at least 32 pixels. At the
 scene boundary, `shift` moves the last windows inward to keep them inside
 the image. Planning windows reads no pixels.
 
-`size` controls the patch seen by the model; `stride` controls how far the
-window moves. Here the last move can be shorter than 96 pixels because the
+`overlap=0.25` shares a quarter of each 128-pixel side, equivalent to
+`overlap=32`. The last move can be shorter than 96 pixels because the
 256-pixel scene does not divide evenly into those steps.
 
 ## Inspect the middle pair
 
 ```python
-chip = chips[4]
+location, chip = next(islice(chips, 4, None))
 chip_plot = chip["image"].to_dataset().gs.plot(
     rgb=("red", "green", "blue"), xlabel="",
 ) + chip["labels"].to_dataset().gs.plot("label", xlabel="")
@@ -51,20 +48,27 @@ chip_plot
 
 ![The same overlapping window in imagery and land-cover labels](../assets/overlapping-chip.png)
 
-Image and label boundaries stay aligned. Indexing returns a lazy window;
+Image and label boundaries stay aligned. Iteration returns a lazy window;
 plotting or converting it reads its pixels.
 
 ```python
-pixels, context = chip.gs.to_tensor()
-sample = {**pixels, **context}
-{name: tuple(value.shape) for name, value in sample.items()}
+pixels = chip.gs.to_tensor()
+{name: tuple(value.shape) for name, value in pixels.items()}
 ```
 
 ```text
 {'image': (4, 128, 128), 'labels': (1, 128, 128)}
 ```
 
-For prediction over a whole scene, use a [raster pipeline](release.md#run-with-a-raster-pipeline).
-It handles chip batching and blends overlapping scores before decoding the
-output. See the [sampling reference](../reference/chips.md) for edge modes and
-the merger contract when implementing a custom prediction workflow.
+To feed every chip to a model, `chips.iter_batches(4)` yields the chips four
+at a time, and `batch.to_tensor()` stacks the same tensors. It reads one block
+of chunks at a time, so pixels that overlapping chips share are read once:
+
+```python
+for batch in chips.iter_batches(4):
+    images = batch.to_tensor()["image"]
+```
+
+The sampling package owns chip placement and overlap weighting.
+[Sampling reference](../reference/chips.md) ·
+[Open prediction decisions](../contributing/design/release-inference.md#open-prediction-decisions)

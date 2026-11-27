@@ -7,13 +7,12 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from modules.segmentation import fixmatch
+from generated_kits.segmentation.fixmatch import training as fixmatch
 from tests.templates.tasks.segmentation.fixmatch.test_data import (
     Scenes as UnlabeledLabels,
 )
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
-    _preprocessor,
 )
 from tests.templates.tasks.segmentation.supervised.test_data import (
     Chips as Labels,
@@ -116,7 +115,6 @@ def test_lightning_fits_a_few_steps(tmp_path) -> None:
 
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = fixmatch.DataModule(
-        _preprocessor(),
         Labels(),
         Labels(),
         augmentations=FLIP,
@@ -127,7 +125,8 @@ def test_trainer_consumes_model_ready_samples(tmp_path):
     module = fixmatch.Module(model_chain=STAGES)
     trainer = Trainer(
         accelerator="cpu",
-        fast_dev_run=True,
+        max_steps=1,
+        limit_val_batches=0,
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
@@ -137,4 +136,4 @@ def test_trainer_consumes_model_ready_samples(tmp_path):
     trainer.fit(module, datamodule=data)
     assert trainer.global_step == 1
     assert torch.isfinite(trainer.callback_metrics["train_loss"])
-    assert set(Labels()[0]) == {"inputs", "target", "transform", "crs"}
+    assert set(Labels()[0]) == {"inputs", "target"}

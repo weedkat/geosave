@@ -13,14 +13,13 @@ for the closest match to the examples. It requires Git as well as Python:
 python -m pip install --upgrade "geosave @ git+https://github.com/weedkat/geosave.git@main"
 ```
 
-For tensors, model stages and the CPU training tutorial, use the complete ML command:
+For tensors, network modules and the CPU training tutorial, use the complete ML command:
 
 ```bash
 python -m pip install --upgrade "geosave[ml] @ git+https://github.com/weedkat/geosave.git@main"
 ```
 
-Choose `geosave[hub]` for native model releases or `geosave[all]` for every
-optional dependency. To reproduce a project, replace `main` with its commit
+Choose `geosave[all]` for every optional dependency. To reproduce a project, replace `main` with its commit
 SHA and record the environment. An earlier packaged preview may have different APIs.
 
 ## Other installation sources
@@ -59,9 +58,8 @@ loading, writing, and the `geosave` CLI. ModelSpec is currently disabled. Add ex
 
 | Extra | Adds | Needed for |
 | --- | --- | --- |
-| `ml` | torch, Lightning, Kornia, timm, TerraTorch, torchmetrics, TensorBoard | Model stages, training tasks, `.gs.to_tensor` |
-| `hub` | `ml` + Transformers | Saving and loading native model releases |
-| `flows` | `hub` + Prefect | The `geosave_flows` prediction flow |
+| `ml` | torch, Lightning, Kornia, timm, TerraTorch, torchmetrics, TensorBoard, Hugging Face Hub | Network modules, training tasks, model releases, `.gs.to_tensor` |
+| `flows` | `ml` + Prefect | The `geosave_flows` prediction flow |
 | `cloud` | s3fs, gcsfs | `s3://` and `gs://` paths |
 | `mlflow` | MLflow | The MLflow logger added when `MLFLOW_TRACKING_URI` is set |
 | `all` | every extra above | Notebooks and the examples series |
@@ -74,8 +72,7 @@ Importing GeoSave never imports torch.
 
 ## Model releases
 
-Save and load native Transformers releases with the `hub` extra, which includes
-`ml`. Use `geosave[hub]` on the source install command or `[hub]` on the wheel.
+Saving and loading model releases needs the `ml` extra.
 
 Individual pretrained encoders may download weights on first use. The
 [first raster](first-raster.md) works offline after downloading its small sample;

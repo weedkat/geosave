@@ -5,19 +5,7 @@
 below are rendered directly from the implementation. Configuration input
 fields appear as attributes, including their annotated types and defaults.
 
-::: geosave.ml.builders.criterion.CRITERIA
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.builders.optimizer.OPTIMIZERS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.builders.scheduler.SCHEDULERS
-    options:
-      show_root_full_path: true
-
-::: geosave.ml.callbacks.segmentation.DensePredictionLogger
+::: geosave.ml.torch.training.callbacks.segmentation.DensePredictionLogger
     options:
       show_root_full_path: true
       filters: []
@@ -28,15 +16,15 @@ fields appear as attributes, including their annotated types and defaults.
         - on_validation_batch_end
         - on_test_batch_end
 
-::: geosave.ml.cli.ARTIFACTS_ROOT
+::: geosave.ml.torch.training.cli.ARTIFACTS_ROOT
     options:
       show_root_full_path: true
 
-::: geosave.ml.cli.DEFAULT_MODEL_NAME
+::: geosave.ml.torch.training.cli.DEFAULT_MODEL_NAME
     options:
       show_root_full_path: true
 
-::: geosave.ml.cli.GeosaveCLI
+::: geosave.ml.torch.training.cli.GeosaveCLI
     options:
       show_root_full_path: true
       filters: []
@@ -44,7 +32,7 @@ fields appear as attributes, including their annotated types and defaults.
         - add_arguments_to_parser
         - before_instantiate_classes
 
-::: geosave.ml.criterion.ohem.ProbOhemCrossEntropy2d
+::: geosave.ml.torch.training.criterion.ohem.ProbOhemCrossEntropy2d
     options:
       show_root_full_path: true
       filters: []
@@ -55,26 +43,43 @@ fields appear as attributes, including their annotated types and defaults.
         - criterion
         - forward
 
-::: geosave.ml.metrics.multiclass.MulticlassMetrics
+::: geosave.ml.torch.training.metrics.base.TaskMetrics
     options:
       show_root_full_path: true
       filters: []
       members:
-        - metric_map
-        - modes
-        - default_metrics
+        - defaults
 
-::: geosave.ml.metrics.regression.RegressionMetrics
+::: geosave.ml.torch.training.metrics.classification.ClassificationMetrics
     options:
       show_root_full_path: true
       filters: []
-      members: false
+      members:
+        - defaults
 
-::: geosave.ml.transforms.augmenter.DataKey
+::: geosave.ml.torch.training.metrics.regression.RegressionMetrics
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - defaults
+
+::: geosave.ml.torch.training.metrics.semantic_segmentation.SemanticSegmentationMetrics
+    options:
+      show_root_full_path: true
+      filters: []
+      members:
+        - defaults
+
+::: geosave.ml.torch.training.optim.configure.configure_optimizers
     options:
       show_root_full_path: true
 
-::: geosave.ml.transforms.augmenter.ImageAugmenter
+::: geosave.ml.torch.training.transforms.augmenter.DataKey
+    options:
+      show_root_full_path: true
+
+::: geosave.ml.torch.training.transforms.augmenter.ImageAugmenter
     options:
       show_root_full_path: true
       filters: []
@@ -82,11 +87,11 @@ fields appear as attributes, including their annotated types and defaults.
         - pipeline
         - forward
 
-::: geosave.ml.transforms.augmenter.build_augmentation_pipeline
+::: geosave.ml.torch.training.transforms.augmenter.build_augmentation_pipeline
     options:
       show_root_full_path: true
 
-::: geosave.ml.transforms.mixing.CutMix
+::: geosave.ml.torch.training.transforms.mixing.CutMix
     options:
       show_root_full_path: true
       filters: []
@@ -94,6 +99,6 @@ fields appear as attributes, including their annotated types and defaults.
         - p
         - forward
 
-::: geosave.ml.transforms.mixing.cutmix_boxes
+::: geosave.ml.torch.training.transforms.mixing.cutmix_boxes
     options:
       show_root_full_path: true

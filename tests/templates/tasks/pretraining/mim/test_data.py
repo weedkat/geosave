@@ -5,12 +5,10 @@ from types import SimpleNamespace
 import torch
 from torch.utils.data import Dataset
 
-from modules.pretraining import mim
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _batch,
-    _preprocessor,
-)
+from generated_kits.pretraining.mim import training as mim
+
+
+FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
 
 
 class Chips(Dataset[mim.Sample]):
@@ -28,7 +26,6 @@ class Chips(Dataset[mim.Sample]):
 def _data(tmp_path, training: bool, **options: object) -> mim.DataModule:
     """Build only the batch pipelines."""
     data = mim.DataModule(
-        preprocessor=_preprocessor(standardize=True),
         train=Chips(),
         val=Chips(),
         **options,
@@ -38,17 +35,16 @@ def _data(tmp_path, training: bool, **options: object) -> mim.DataModule:
 
 
 def _unlabeled(times: int = 0) -> mim.Sample:
-    batch = _batch(times)
-    return {"inputs": batch["inputs"]}
+    shape = (2, times, 2, 8, 8) if times else (2, 2, 8, 8)
+    image = torch.arange(torch.Size(shape).numel(), dtype=torch.float32).reshape(shape)
+    return {"inputs": {"image": image}}
 
 
-def test_training_batches_are_augmented_then_transformed(tmp_path) -> None:
+def test_training_batches_share_geometry_across_all_instants(tmp_path) -> None:
     data = _data(tmp_path, True, augmentations=FLIP)
     image = _unlabeled(times=3)["inputs"]["image"]
-    mean = torch.tensor([1.0, 2.0]).reshape(1, 1, 2, 1, 1)
-    std = torch.tensor([2.0, 4.0]).reshape(1, 1, 2, 1, 1)
 
     batch = data.on_after_batch_transfer(_unlabeled(times=3), 0)
 
-    torch.testing.assert_close(batch["inputs"]["image"], (image.flip(-1) - mean) / std)
+    torch.testing.assert_close(batch["inputs"]["image"], image.flip(-1))
     assert set(batch) == {"inputs"}

@@ -1,20 +1,46 @@
-"""Lay fixed-size chips over raster grids, without reading a pixel."""
+"""Where chips sit on their rasters, and how chips are laid along an axis."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
-from operator import index as to_integer
+from dataclasses import dataclass, field
+from itertools import accumulate
+from numbers import Integral, Real
 from typing import Literal
 
 from affine import Affine
 from odc.geo.geobox import GeoBox
+from odc.geo.geom import Geometry
+
+from geosave.geodata.utils.datetime import DateRange
 
 # How chips meet a raster's edge: reaching past it and filled as `numpy.pad`
 # fills, moved inward to sit flush with it, or left out when incomplete.
 type ChipMode = Literal["reflect", "edge", "wrap", "constant", "shift", "drop"]
 
-_CHIP_MODES = ("reflect", "edge", "wrap", "constant", "shift", "drop")
+CHIP_MODES = ("reflect", "edge", "wrap", "constant", "shift", "drop")
+
+
+@dataclass(frozen=True, slots=True)
+class ChipSource:
+    """The raster chips are cut from: its position in the input, grid, dates and extent.
+
+    One instance is shared by all of a raster's chips. It compares by index,
+    grid and dates, so a copy made by pickling, such as through a DataLoader
+    worker, still names the same raster.
+
+    Attributes:
+        index: Position of the raster or temporal window in the chipper's
+            input, from 0.
+        geobox: The raster's grid.
+        timespan: The time the raster covers, or None for a timeless raster.
+        extent: The place the raster declares it covers, which a merger
+            writes back onto its predictions; None when it declares none.
+    """
+
+    index: int
+    geobox: GeoBox
+    timespan: DateRange | None
+    extent: Geometry | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,25 +48,174 @@ class ChipLocation:
     """Where one chip sits: its raster, and the pixel of its top-left corner.
 
     Attributes:
-        raster_index: Position of the chip's raster in `ChipLayout.geoboxes`.
+        source: The raster the chip was cut from.
         top: Row of the chip's first pixel in that raster.
         left: Column of the chip's first pixel in that raster.
     """
 
-    raster_index: int
+    source: ChipSource
     top: int
     left: int
 
+    def geobox(self, size: int) -> GeoBox:
+        """Return the chip's own grid, padded part included."""
+        grid = self.source.geobox
+        transform = grid.transform * Affine.translation(self.left, self.top)
+        return GeoBox((size, size), transform, grid.crs)
+
+
+@dataclass(frozen=True, slots=True)
+class ChipBlock:
+    """Raster pixels read in one computation, and the chips cut from them.
+
+    Attributes:
+        rows: The block's rows in the grid every chip lies on.
+        columns: The block's columns in that grid.
+        locations: The chips lying wholly inside the block, row by row.
+    """
+
+    rows: slice
+    columns: slice
+    locations: list[ChipLocation]
+
+    def find_chip_pixels(
+        self, location: ChipLocation, size: int
+    ) -> tuple[slice, slice]:
+        """Return the rows and columns of one of the block's chips, within the block."""
+        top = location.top - self.rows.start
+        left = location.left - self.columns.start
+        return slice(top, top + size), slice(left, left + size)
+
+
+def lay_chips_geobox(chip_rows: list[list[ChipLocation]], size: int) -> GeoBox:
+    """Return the grid every chip lies on: the raster's, extended where chips reach past its edge.
+
+    Args:
+        chip_rows: One raster's chip locations, row by row.
+        size: Chip height and width in pixels.
+
+    Returns:
+        The raster's grid from its first pixel to the far edge of the last chip.
+    """
+    raster_geobox = chip_rows[0][0].source.geobox
+    last_chip = chip_rows[-1][-1]
+    shape = (last_chip.top + size, last_chip.left + size)
+    return GeoBox(shape, raster_geobox.transform, raster_geobox.crs)
+
+
+def find_block_ends(
+    chunk_lengths: tuple[int, ...] | None, length: int, min_length: int
+) -> list[int]:
+    """Return where blocks end along one axis: at Dask chunk ends, `min_length` apart or more.
+
+    A block spanning several chunks leaves fewer chips crossing its edge, and
+    those chips are the ones that read a chunk again.
+
+    Args:
+        chunk_lengths: Chunk lengths along the axis, or None for pixels in memory.
+        length: Pixels along the axis.
+        min_length: Fewest pixels a block spans, except the last.
+
+    Returns:
+        Block ends, ascending, the last at `length`.
+
+    Examples:
+        >>> find_block_ends((256, 256, 256, 256, 102), 1126, min_length=896)
+        [1024, 1126]
+        >>> find_block_ends(None, 1126, min_length=896)
+        [1126]
+    """
+    if chunk_lengths is None:
+        return [length]
+
+    block_ends = []
+    block_start = 0
+    for chunk_end in accumulate(chunk_lengths):
+        if chunk_end - block_start >= min_length or chunk_end == length:
+            block_ends.append(chunk_end)
+            block_start = chunk_end
+    return block_ends
+
+
+def lay_chip_blocks(
+    chip_rows: list[list[ChipLocation]],
+    block_row_ends: list[int],
+    block_column_ends: list[int],
+    size: int,
+) -> list[ChipBlock]:
+    """Group chips into blocks, each chip in the first block that holds it whole.
+
+    A block starts at its first chip and ends at a block end, so it spans at
+    most one block length and one chip in each direction.
+
+    Args:
+        chip_rows: One raster's chip locations, row by row.
+        block_row_ends: Where blocks end down the rows, as `find_block_ends`
+            returns them; the last is at least the lower edge of the last chip.
+        block_column_ends: Where blocks end across the columns; the last is
+            at least the right edge of the last chip.
+        size: Chip height and width in pixels.
+
+    Returns:
+        Blocks in raster order, together holding every chip once.
+
+    Examples:
+        >>> blocks = lay_chip_blocks(chip_rows, [512, 1064], [512, 1064], size=224)
+        >>> blocks[1].rows, blocks[1].columns
+        (slice(0, 512, None), slice(336, 1064, None))
+    """
+    blocks = []
+    pending_rows = list(chip_rows)
+    for block_row_end in block_row_ends:
+        # Chip rows ending in these block rows; later block rows read the rest.
+        strip_locations = []
+        while pending_rows and pending_rows[0][0].top + size <= block_row_end:
+            strip_locations.extend(pending_rows.pop(0))
+
+        for block_column_end in block_column_ends:
+            locations = []
+            later_locations = []
+            for location in strip_locations:
+                if location.left + size <= block_column_end:
+                    locations.append(location)
+                else:
+                    later_locations.append(location)
+            strip_locations = later_locations
+            if not locations:
+                continue
+
+            top = min(location.top for location in locations)
+            left = min(location.left for location in locations)
+            rows = slice(top, block_row_end)
+            columns = slice(left, block_column_end)
+            blocks.append(ChipBlock(rows, columns, locations))
+    return blocks
+
+
+def resolve_overlap(size: int, overlap: int | float) -> int:
+    """Resolve a pixel count or a fraction of the chip width to whole pixels."""
+    if size < 1:
+        raise ValueError("chip size must be at least 1")
+    if isinstance(overlap, bool) or not isinstance(overlap, Real):
+        raise TypeError("overlap must be an integer pixel count or a float fraction")
+    if isinstance(overlap, Integral):
+        if not 0 <= overlap < size:
+            raise ValueError(f"pixel overlap must be between 0 and {size - 1}")
+        return int(overlap)
+    if not 0 <= overlap < 1:
+        raise ValueError("fractional overlap must be in [0, 1)")
+    return int(size * overlap)
+
 
 def lay_chip_offsets(
-    length: int, *, size: int, stride: int, mode: ChipMode
+    length: int, *, size: int, overlap: int | float = 0, mode: ChipMode
 ) -> list[int]:
     """Lay chips along one axis and return each one's first pixel.
 
     Args:
         length: Pixels along the axis.
         size: Pixels of one chip.
-        stride: Pixels between the starts of consecutive chips.
+        overlap: Shared pixels per axis, or a fraction of `size` rounded down.
         mode: How the last chip meets the end of the axis.
 
     Returns:
@@ -53,15 +228,18 @@ def lay_chip_offsets(
         ValueError: `"shift"` is asked of an axis shorter than one chip.
 
     Examples:
-        >>> lay_chip_offsets(10, size=4, stride=4, mode="reflect")
+        >>> lay_chip_offsets(10, size=4, mode="reflect")
         [0, 4, 8]
-        >>> lay_chip_offsets(10, size=4, stride=4, mode="shift")
+        >>> lay_chip_offsets(10, size=4, mode="shift")
         [0, 4, 6]
-        >>> lay_chip_offsets(10, size=4, stride=4, mode="drop")
+        >>> lay_chip_offsets(10, size=4, mode="drop")
         [0, 4]
     """
+    step = size - resolve_overlap(size, overlap)
+    if mode not in CHIP_MODES:
+        raise ValueError(f"mode must be one of {CHIP_MODES}, got {mode!r}")
     if mode == "drop":
-        return list(range(0, length - size + 1, stride))
+        return list(range(0, length - size + 1, step))
 
     if mode == "shift":
         if length < size:
@@ -69,162 +247,10 @@ def lay_chip_offsets(
                 f"the raster spans {length} pixels, fewer than one chip of "
                 f"{size}; use a smaller size or a padding mode"
             )
-        offsets = list(range(0, length - size + 1, stride))
+        offsets = list(range(0, length - size + 1, step))
         if offsets[-1] != length - size:
             offsets.append(length - size)
         return offsets
 
-    offsets = [0]
-    while offsets[-1] + size < length:
-        offsets.append(offsets[-1] + stride)
-    return offsets
-
-
-def find_chip_span(
-    start: int, stop: int, length: int, *, size: int, stride: int
-) -> tuple[int, int]:
-    """Find the pixels covered by every chip touching a span of one axis.
-
-    Chips sit on multiples of `stride`, as `lay_chip_offsets` lays them with
-    a padding mode. A span that starts on a multiple of `stride` and is
-    chipped together with this halo gets the same chips as the whole axis.
-
-    Args:
-        start: First pixel of the span; a multiple of `stride`.
-        stop: Pixel after the span's last.
-        length: Pixels along the axis.
-        size: Pixels of one chip.
-        stride: Pixels between the starts of consecutive chips.
-
-    Returns:
-        First pixel, on a multiple of `stride`, and the pixel after the
-        last, clipped to the axis. At the end of the axis the span also
-        holds the pixels a reflection fills the last chip from.
-
-    Examples:
-        >>> find_chip_span(6, 12, 20, size=4, stride=3)
-        (3, 13)
-        >>> find_chip_span(0, 6, 20, size=4, stride=3)
-        (0, 7)
-    """
-    # The first chip reaching into the span starts after `start - size`.
-    first = max(0, ((start - size) // stride + 1) * stride)
-    # The last chip touching the span starts on or before its last pixel.
-    last = ((stop - 1) // stride) * stride
-
-    # A chip reaching past the end is filled by reflecting the pixels before
-    # it, so those are read too, from a chip start so the layout stays aligned.
-    reach = last + size - length
-    if reach > 0:
-        mirrored = max(0, length - 1 - reach)
-        first = min(first, (mirrored // stride) * stride)
-    return first, min(last + size, length)
-
-
-class ChipLayout:
-    """Where every chip sits on a sequence of raster grids.
-
-    Chips are numbered raster by raster, row by row. The layout holds grids
-    only, so it is what a `RasterChipper` cuts by, what a `RasterMerger` places
-    predictions by, and what a stored set of chips needs to be merged later
-    without its rasters.
-
-    Args:
-        geoboxes: Pixel grid of each raster; they may differ in grid and size.
-        size: Chip height and width in pixels.
-        stride: Pixels between chip starts; None takes `size`, so chips do
-            not overlap.
-        mode: How chips meet a raster's edge. `"reflect"`, `"edge"`, `"wrap"`
-            and `"constant"` let the last chips reach past the edge;
-            `"shift"` moves the last chips inward, flush with the edge;
-            `"drop"` leaves incomplete chips out.
-
-    Raises:
-        ValueError: `size` or `stride` is below 1, `mode` is unknown, or
-            `"shift"` meets a raster smaller than one chip.
-
-    Examples:
-        >>> layout = ChipLayout([scene.gs.geobox], size=256, stride=224)
-        >>> layout.locate(1)
-        ChipLocation(raster_index=0, top=0, left=224)
-        >>> layout.geobox(1).shape
-        Shape2d(x=256, y=256)
-    """
-
-    def __init__(
-        self,
-        geoboxes: Sequence[GeoBox],
-        *,
-        size: int,
-        stride: int | None = None,
-        mode: ChipMode = "reflect",
-    ) -> None:
-        if stride is None:
-            stride = size
-        if size < 1 or stride < 1:
-            raise ValueError("chip size and stride must be at least 1")
-        if mode not in _CHIP_MODES:
-            raise ValueError(f"mode must be one of {_CHIP_MODES}, got {mode!r}")
-
-        self.geoboxes = tuple(geoboxes)
-        self.size = size
-        self.stride = stride
-        self.mode: ChipMode = mode
-
-        self._locations: list[ChipLocation] = []
-        self._chip_counts: list[int] = []
-        for raster_index, geobox in enumerate(self.geoboxes):
-            locations = self._lay_chips(raster_index, geobox)
-            self._locations.extend(locations)
-            self._chip_counts.append(len(locations))
-
-    def _lay_chips(self, raster_index: int, geobox: GeoBox) -> list[ChipLocation]:
-        """Lay one raster's chips, row by row."""
-        tops = lay_chip_offsets(
-            geobox.shape.y, size=self.size, stride=self.stride, mode=self.mode
-        )
-        lefts = lay_chip_offsets(
-            geobox.shape.x, size=self.size, stride=self.stride, mode=self.mode
-        )
-        locations = []
-        for top in tops:
-            for left in lefts:
-                locations.append(ChipLocation(raster_index, top, left))
-        return locations
-
-    def __len__(self) -> int:
-        """Return the number of chips across every raster."""
-        return len(self._locations)
-
-    def count_chips(self, raster_index: int) -> int:
-        """Return the number of chips laid over one raster.
-
-        Raises:
-            IndexError: The layout has no such raster.
-        """
-        return self._chip_counts[raster_index]
-
-    def locate(self, index: int) -> ChipLocation:
-        """Return a chip's raster and corner pixel.
-
-        Raises:
-            IndexError: The chip index is outside the chips.
-        """
-        index = to_integer(index)
-        if index < 0:
-            index += len(self)
-        if index < 0 or index >= len(self):
-            raise IndexError("chip index out of range")
-        return self._locations[index]
-
-    def geobox(self, index: int) -> GeoBox:
-        """Return a chip's pixel grid, padded part included.
-
-        Raises:
-            IndexError: The chip index is outside the chips.
-        """
-        location = self.locate(index)
-        scene = self.geoboxes[location.raster_index]
-        # A chip may reach past the raster, where slicing its GeoBox cannot go.
-        transform = scene.transform * Affine.translation(location.left, location.top)
-        return GeoBox((self.size, self.size), transform, scene.crs)
+    # Include the first chip that reaches or passes the far edge.
+    return list(range(0, max(0, length - size) + step, step))

@@ -128,10 +128,9 @@ class RasterRegionConfig(ConfigModel):
 
         Returns:
             Geographic region and the raster's existing pixel grid.
-            The raster is closed after its metadata is read.
         """
-        with io.open_raster(self.path) as raster:
-            return raster.gs.region, raster.gs.geobox
+        raster = io.open_raster(self.path)
+        return raster.gs.region, raster.gs.geobox
 
 
 RegionConfig = Annotated[

@@ -1,16 +1,16 @@
 # Build a land-cover model
 
 Create a segmentation model for four-band imagery and ten land-cover classes.
-Compose existing stages, then train the resulting PyTorch module in your project.
+Compose existing modules, then train the resulting PyTorch module in your project.
 
 **You need:** `geosave[ml]`. This small baseline needs no pretrained download.
 
 ## Compose the model
 
 ```python
-from geosave.ml import build_model
+from geosave.ml.torch import ModelChain
 
-model = build_model({
+config = {
     "encoder": {
         "name": "small_cnn",
         "init_args": {"in_channels": 4, "input_size": 128},
@@ -20,7 +20,9 @@ model = build_model({
         "name": "segmentation",
         "init_args": {"num_classes": 10},
     },
-})
+}
+
+model = ModelChain.from_config(config)
 ```
 
 ```mermaid
@@ -40,7 +42,7 @@ per class at each pixel. The resulting model takes batches shaped
 `(batch, 4, 128, 128)` and returns `(batch, 10, 128, 128)`.
 
 These are randomly initialized weights. Train them before interpreting outputs
-as land-cover predictions. The class order must match your label codes;
+as land-cover predictions. The class order must match your label class IDs;
 unannotated pixels belong to the training task's ignore policy.
 
 The four input bands and ten classes match the
@@ -51,7 +53,7 @@ this model, in the order `red`, `green`, `blue`, `nir`.
 
 ## Use it in a project
 
-Use the same stage mapping as `model_chain` in a
+Use the same module mapping as `model_chain` in a
 [segmentation workspace configuration](../reference/training.md), or put
 `model` inside your own LightningModule. It is an ordinary PyTorch module.
 
@@ -65,6 +67,6 @@ Replace the encoder with one suited to your bands, dates and available
 weights. Follow [pretrained models](pretrained.md) for supported combinations.
 The decoder and head must match the encoder's feature contract.
 
-Custom stages and registration belong in the
+Custom modules and registration belong in the
 [model-chain reference](../reference/model-chain.md). See
 [training contracts](../concepts/training.md) for targets, loss and metrics.

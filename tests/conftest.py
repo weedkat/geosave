@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import dask.array as da
 import pytest
@@ -116,24 +114,6 @@ def headless_browser(monkeypatch):
 
 
 def pytest_configure(config):
-    # Keep catalogue namespaces distinct across task-specific recipe tests.
-    # tests/cli exercises the flattened, single-task generated workspaces.
-    from geosave.cli.core.templates import TASKS_DIR, get_methods, get_tasks
-    from geosave.cli.core.copy import safe_copy
-    from geosave.cli.core.workspace import create_workspace
-
-    folder = TemporaryDirectory(prefix="geosave-test-recipes-")
-    root = Path(folder.name)
-    create_workspace(root)
-    for task in get_tasks():
-        for method in get_methods(task):
-            safe_copy(
-                TASKS_DIR / task / method, root, skip_all=True,
-                exclude={"__pycache__", "description.txt"},
-            )
-    sys.path.insert(0, str(root))
-    config.add_cleanup(lambda: sys.path.remove(str(root)))
-    config.add_cleanup(folder.cleanup)
     env_file = Path(__file__).parent / ".env"
     if env_file.exists():
         load_dotenv(env_file, override=True)

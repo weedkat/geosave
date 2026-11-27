@@ -60,7 +60,7 @@ def read_attrs(band: RasterBand) -> ClassificationAttrs:
         for entry in classes
         if entry.color_hint is not None
     }
-    # CFFlags spells `classes` into CF codes and names, and `colors` into hints.
+    # CFFlags spells `classes` into CF flag values and names, and `colors` into hints.
     flags = attrs.CFFlags.model_validate(
         {"classes": {entry.value: entry.name for entry in classes}, "colors": colors}
     )

@@ -1,18 +1,15 @@
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 import torch
 from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from modules.regression import supervised
-from geosave.ml.chain import chain_step
-from tests.templates.tasks.regression.supervised.test_data import Chips as Values
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _preprocessor,
-)
+from generated_kits.regression.supervised import training as supervised
+from tests.templates.tasks.regression.supervised.test_data import FLIP, Chips as Values
 
 
 class Scale(nn.Module):
@@ -23,16 +20,14 @@ class Scale(nn.Module):
         self.variables = ["biomass"]
         self.factor = nn.Parameter(torch.tensor(1.0))
 
-    @chain_step(head=True)
-    def values(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return image[:, :1] * self.factor
 
 
 class Unnamed(nn.Module):
     """Predict without naming its variables."""
 
-    @chain_step(head=True)
-    def values(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return image
 
 
@@ -101,7 +96,7 @@ class _Chips(Dataset):
 
 def test_lightning_fits(tmp_path) -> None:
     module = supervised.Module(
-        model_chain=STAGES, optimizer={"name": "sgd", "init_args": {"lr": 0.5}}
+        model_chain=STAGES, optimizer=partial(torch.optim.SGD, lr=0.5)
     )
     trainer = Trainer(
         accelerator="cpu",
@@ -126,7 +121,7 @@ def test_lightning_fits(tmp_path) -> None:
 
 
 class EndToEnd(nn.Module):
-    """An end-to-end regressor: forward only, no chain_step."""
+    """An end-to-end regressor with its own layers."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -170,7 +165,6 @@ class SparseValues(Dataset[supervised.Sample]):
 
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = supervised.DataModule(
-        _preprocessor(),
         Values(),
         Values(),
         augmentations=FLIP,

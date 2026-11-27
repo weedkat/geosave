@@ -1,76 +1,33 @@
-# Command-line inputs and outputs
+# Create a workspace
+
+`geosave create` copies an editable starter into a directory. For an
+interactive selection, run:
 
 ```bash
-geosave --help
-geosave create --help
-geosave add-task --help
-geosave publish --help
+geosave create landcover
 ```
 
-These commands show the installed version's accepted inputs. Use the
-[workspace guide](../advanced/training.md) for a complete activity.
-
-## Create a project
+For the same operation in a script, supply the task and method:
 
 ```bash
-geosave create demo --task lightning --method boilerplate
+geosave create landcover --task segmentation --method supervised
 ```
 
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `NAME` | Interactive prompt | Destination directory. |
-| `--task`, `-t` | Interactive selection | `segmentation`, `regression`, `classification`, `pretraining`, `lightning`, or `blank`. |
-| `--method`, `-m` | Interactive selection | A method supported by the selected task. No method for `blank`. |
-| `--force` | Off | Permit a non-empty destination while preserving existing startup files. |
+| Input | Behavior |
+| --- | --- |
+| `NAME` | Destination directory. Prompted when omitted. |
+| `--task`, `-t` | Select a task, or `blank` for only the common startup files. |
+| `--method`, `-m` | Select a method belonging to the task. A task with a single method selects it automatically. |
+| `--force` | Permit creation in a nonempty directory. Unrelated files are preserved. A conflicting destination path stops creation before copying. |
 
-The output is an editable project with local training implementations, config,
-and method-specific scripts. It does not train or download data. Task/method
-validation happens before writing files. Geospatial recipes need project data
-or integration work;
-see [method availability](training.md).
+The [recipe catalog](training.md) lists the available task and method
+pairs. The selections identify the files to copy. You can organize additional
+methods, Datasets and experiments however you like after creation.
 
-## Add a task and method
+The starter's README describes its expected inputs and supported operations.
+Training runs through `python main.py fit --config configs/<method>.yaml`.
+Geospatial starters include an editable `pipeline.py` and `processing/`
+package. Their README identifies any unfinished stages.
 
-```bash
-cd demo
-geosave add-task --task segmentation --method fixmatch
-```
-
-`--task` / `-t` and `--method` / `-m` have the same selectors as creation,
-without the blank option. Existing methods are disabled in the selector;
-explicitly selecting an existing method reports an error without changing files.
-Run inside a workspace containing `main.py`. Each method gets separate local
-Python, config, processing-document, and script paths. Shared startup files are
-not copied again. Existing incidental files trigger overwrite/skip prompts.
-
-## Publish a model
-
-`geosave publish [CHECKPOINT] --repo ORG/NAME` is a placeholder: it prints that
-it is not implemented yet and exits with status 1. Use
-[the model release API](../advanced/release.md) for trained registered chains.
-The supervised-segmentation script supports separate release and training
-repositories; [workspace publication status](../advanced/training.md#save-and-share-your-work)
-describes its scope and the older scripts' limitations.
-
-## Shared options
-
-`--help` displays help and exits on every command. At the top level,
-`--show-completion` prints shell completion code and `--install-completion`
-installs it for the current shell. The CLI currently calls automatic `.env` discovery, which can start from
-the installed library rather than your workspace. Export required settings
-explicitly until workspace lookup is corrected; generated training startup
-does not itself load `.env`.
-
-## Project ownership and outputs
-
-A project has one data preparation workflow and one AI task. Selecting a task
-writes `project.yaml` with `task` and `data` fields. `add-task` can add another
-method for that task; selecting a different task requires another project.
-With the task recorded, `geosave add-task --method fixmatch` uses it directly.
-Generated methods live in `modules/<method>/`, with scripts under
-`scripts/<method>/`. The template catalogue remains grouped by task and method.
-The project README owns the task explanation, experiment plan and results.
-
-TensorBoard runs live in `artifacts/<model_name>/version_N/`; leave checkpoint
-`dirpath` unset to save under that run's `checkpoints/`. Local inference exports
-belong in `release/`, and native `push_to_hub(repo_id)` publishes directly.
+See the [training walkthrough](../advanced/training.md) for an offline run and
+[model releases](../advanced/release.md) for exporting a trained chain.

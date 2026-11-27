@@ -1,28 +1,36 @@
-"""Cut model-sized chips from rasters or tensor samples, and merge predictions back."""
+"""Sample temporal windows, cut raster chips and merge dense predictions."""
 
-from .chipper import RasterChipper
+from .chipper import ChipBatch, RasterChipper
+from .collate import collate
 from .crop import random_crop
 from .layout import (
-    ChipLayout,
     ChipLocation,
     ChipMode,
-    find_chip_span,
+    ChipSource,
+    ChipBlock,
+    find_block_ends,
+    lay_chip_blocks,
     lay_chip_offsets,
+    lay_chips_geobox,
 )
 from .merger import MergeWindow, RasterMerger, create_chip_weights
-from .tensor import TensorChipper, TensorMerger
+from .temporal import iter_samples
 
 __all__ = [
-    "ChipLayout",
+    "ChipBatch",
     "ChipLocation",
     "ChipMode",
+    "ChipSource",
+    "ChipBlock",
     "MergeWindow",
     "RasterChipper",
     "RasterMerger",
-    "TensorChipper",
-    "TensorMerger",
+    "collate",
     "create_chip_weights",
-    "find_chip_span",
+    "iter_samples",
+    "find_block_ends",
+    "lay_chip_blocks",
     "lay_chip_offsets",
+    "lay_chips_geobox",
     "random_crop",
 ]

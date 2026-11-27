@@ -8,12 +8,12 @@ be traced back to the code, training run and inputs that produced it.
 | --- | --- |
 | **Data** · `forest-data` | Raw/processed imagery, labels, observation indexes, splits, preparation scripts, provenance and licenses. |
 | **Experiment workspace** · `forest-training` | Dataset/Module code, notebooks, configs, dependency lockfile, metrics and selected Lightning checkpoints. |
-| **Model release** · `forest` | `config.json`, trained weights, pipeline settings and a model card linking the data and experiment commits. |
+| **Model release** · `forest` | `config.json`, trained weights, and a model card linking the data and experiment commits. |
 
-Each project owns one data preparation workflow and one AI task, with several
-methods and experiment configs allowed for that task. `project.yaml` records
-the task and data directory; the project README explains inputs, outputs,
-evaluation, experiment plans and results. Methods live in `modules/<method>/`.
+The project README explains its inputs, targets, evaluation and first run.
+A generated geospatial starter holds its selected kit in `training/`,
+experiment settings in `configs/`, and inference code in `pipeline.py` and
+`processing/`. The project owner decides how to organize other methods or data.
 
 The same data snapshot can support several experiments. Training records keep
 the code and results needed to compare those runs. A release promotes the
@@ -31,7 +31,8 @@ forest-data/
 └── README.md                 provenance and preparation
 
 forest-training/
-├── modules/  configs/  notebooks/
+├── training/  configs/
+├── pipeline.py  processing/
 ├── pyproject.toml  uv.lock
 ├── artifacts/<name>/version_N/  config, TensorBoard events and checkpoints/
 └── release/                     optional local model exports
@@ -46,7 +47,7 @@ forest/
 flowchart TB
     data["Data repo<br/>imagery, labels, splits @ commit"]
     experiment["Experiment repo<br/>code, config, checkpoint @ commit"]
-    release["Model repo<br/>weights, pipeline, model card @ commit"]
+    release["Model repo<br/>weights, model card @ commit"]
     data -->|pinned snapshot| experiment
     experiment -->|selected trained chain| release
     data -.->|data revision| release
@@ -55,7 +56,7 @@ flowchart TB
 
 ## 1. Freeze the data
 
-Check image/label alignment, band meaning, units, nodata and class codes.
+Check image/label alignment, band meaning, units, nodata and class IDs.
 Keep reusable preparation with the data; keep model-specific normalization
 and augmentation with the experiment. See [alignment](../advanced/align-rasters.md) and
 [value metadata](../basics/attrs.md).
@@ -99,10 +100,20 @@ A Lightning checkpoint resumes training; a GeoSave release packages inference.
 
 The model card should name the exact **data commit**, **experiment commit and
 checkpoint**, GeoSave version, input bands/units, output meanings, evaluation
-results, limitations and licenses. Record the release commit for deployment.
-GeoSave does not fill in this lineage automatically.
+results, limitations and licenses. The supervised-segmentation
+[publication script](../advanced/training.md#save-and-share-your-work) archives the
+run, writes `base_model`, `datasets` and the training commit into the card,
+and tags the release; evaluation, limitations and licenses stay yours to add.
 
-Native releases require library-registered components and sub-processors.
-See [release and inference](../advanced/release.md). The supervised-segmentation
-[publication script](../advanced/training.md#save-and-share-your-work) separates release
-and training archives; other generated scripts still need migration.
+Keep **one model per release repo** and tag each version:
+
+```text
+org/forest            v1.0, v1.1        same inputs and classes, better weights → a new tag
+org/forest-300m       separate repo     a size variant
+org/cropland          base_model: org/forest   another task or region → a new repo
+```
+
+A change that would break a caller pinned to a version (other classes, bands
+or training region) is a new repo, not a new tag. Deploy by tag:
+`ModelChain.from_pretrained("org/forest", revision="v1.0")`.
+See [release and inference](../advanced/release.md).

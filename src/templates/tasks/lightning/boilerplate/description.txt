@@ -1,1 +1,0 @@
-Runnable ordinary Lightning example with deterministic synthetic data.

@@ -7,13 +7,17 @@ import pytest
 import torch
 from torch.utils.data import Dataset
 
-from modules.regression import mean_teacher
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _batch,
-    _preprocessor,
-)
+from generated_kits.regression.mean_teacher import training as mean_teacher
 from tests.templates.tasks.regression.supervised.test_data import Chips
+
+
+FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
+
+
+def _batch() -> dict:
+    image = torch.arange(2 * 2 * 8 * 8, dtype=torch.float32).reshape(2, 2, 8, 8)
+    return {"inputs": {"image": image}}
+
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
 
@@ -36,7 +40,6 @@ def test_strong_augmentations_cannot_move_geometry(tmp_path):
 def _training(tmp_path: Path, **options: object) -> mean_teacher.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
     data = mean_teacher.DataModule(
-        preprocessor=_preprocessor(),
         train=Chips(),
         val=Chips(),
         unlabeled=Scenes(),

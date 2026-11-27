@@ -10,7 +10,7 @@ a small encoder with acquisition-time and location inputs.
 ## Choose an encoder
 
 ```python
-from geosave.ml import list_models
+from geosave.ml.torch import list_models
 
 list_models().loc["encoder", ["forward", "requires"]]
 ```
@@ -18,12 +18,14 @@ list_models().loc["encoder", ["forward", "requires"]]
 Output:
 
 ```text
-                                                             forward                 requires
+                                                                          forward                 requires
 name
-clay      forward_pyramid(image, centroid=None, week=None, hour=None)  in_channels, waves, gsd
-dinov3                                        forward_pyramid(image)
-prithvi                                       forward_pyramid(image)
-prithvi_tl          forward_pyramid(image, centroid, year, day_of_year)
+clay                                     forward(image) -> pyramid, prefix_tokens  in_channels, waves, gsd
+clay_tl            forward(image, centroid, week, hour) -> pyramid, prefix_tokens  in_channels, waves, gsd
+dinov3                                   forward(image) -> pyramid, prefix_tokens
+prithvi                                  forward(image) -> pyramid, prefix_tokens
+prithvi_tl  forward(image, centroid, year, day_of_year) -> pyramid, prefix_tokens
+small_cnn                                               forward(image) -> pyramid
 ```
 
 These names select GeoSave adapters. `model_name` selects an architecture
@@ -34,12 +36,13 @@ variant within an adapter. Choose using the data you can supply:
 | `dinov3` | One image, with RGB or additional channels. | `image` | `in_channels`, `input_size`; RGB checkpoint kernels are adapted for additional channels. Match RGB channel semantics when retaining those slices. | `True` |
 | `prithvi` | Multispectral imagery, with one or several temporal frames. | `image` | HLS `bands`, `num_frames`, and `input_size`. | `False` |
 | `prithvi_tl` | Multispectral imagery with acquisition time and location. | `image`, `centroid`, `year`, `day_of_year` | HLS `bands`, `num_frames`, `input_size`, and context from the same raster. | `False` |
-| `clay` | One multispectral image with known wavelengths and ground resolution. | `image`, `centroid`, `week`, `hour` | `in_channels`, ordered `waves` in micrometres, `gsd` in metres, and a square chip compatible with the patch size. | `False` |
+| `clay` | One multispectral image with known wavelengths and ground resolution. | `image` | `in_channels`, ordered `waves` in micrometres, `gsd` in metres, and a square chip compatible with the patch size. | `False` |
+| `clay_tl` | As `clay`, with the location and time of one frame. | `image`, `centroid`, `week`, `hour` | As `clay`, plus context from the same raster. | `False` |
 
 Prithvi provides v1 100 and v2 300/600 variants; Prithvi TL provides v2
 tiny/100/300/600 variants. DINOv3 offers the timm variants listed by its
 constructor. Clay offers tiny/small/base/large architectures, with a published
-checkpoint for large. See the [stage reference](../reference/model-stages.md)
+checkpoint for large. See the [module reference](../reference/model-modules.md)
 for exact variant names, patch-size constraints, and local checkpoint options.
 
 For a small geospatial starting point, use the Tiny TL recipe below. Its
@@ -49,7 +52,7 @@ this checks the interface, while a trained experiment determines model quality.
 Model comparisons, experiment protocols, and measured results are planned for
 a separate benchmark repository.
 
-The staged recipe remains the construction API. Named encoder selection does
+The module recipe remains the construction API. Named encoder selection does
 not select or resample raster bands; prepare the channels and context for that
 encoder before calling the chain. The [model notebook](../examples.md) teaches
 composition with a small custom model before introducing larger encoders.
@@ -57,17 +60,17 @@ composition with a small custom model before introducing larger encoders.
 ## Assemble the model
 
 **This constructor downloads encoder weights from Hugging Face on the first
-run.** To try the same architecture offline, change `pretrained` to `False`
-before calling `build_model`; every stage will then start with random weights.
+run.** To try the same architecture offline, set `pretrained` to `False` in
+the encoder configuration. Every module will then start with random weights.
 
 ```python
 import pandas as pd
 import torch
 import xarray as xr
 
-from geosave.ml import build_model
+from geosave.ml.torch import ModelChain
 
-stages = {
+config = {
     "encoder": {
         "name": "prithvi_tl",
         "init_args": {
@@ -84,16 +87,16 @@ stages = {
         "init_args": {"num_classes": 2},
     },
 }
-chain = build_model(stages).eval()
+chain = ModelChain.from_config(config).eval()
 ```
 
 The encoder receives the published weights. The U-Net decoder and segmentation
 head are newly initialized, so this chain still needs labeled training data.
 Class `0` means background and class `1` means crop, following `classes` order.
 
-The encoder publishes its pyramid channels and strides to the decoder; the
-decoder publishes its output channel count to the head. `build_model` supplies
-those constructor arguments automatically. Put stages in encoder → decoder →
+The encoder publishes its pyramid channels and strides to the decoder. The
+decoder publishes its output channel count to the head. `ModelChain.from_config`
+supplies those constructor arguments automatically. Put modules in encoder → decoder →
 head order, and keep the head last for the segmentation training task.
 
 Prithvi defaults to `pretrained=False`; set it explicitly to load weights.
@@ -130,9 +133,9 @@ trained crop classifier. Supply prepared, normalized imagery for real data.
 | `year` | `(batch, 1)` int64 | Year of each frame |
 | `day_of_year` | `(batch, 1)` int64 | Day of year of each frame, from 1 |
 
-These are context entries `.gs.to_tensor(context=["centroid", "year",
-"day_of_year"])` writes beside the pixels; `geosave.geodata.TENSOR_CONTEXT`
-holds their readers. For multiple frames, set `num_frames` accordingly and
+These are context entries `.gs.to_tensor(context={"centroid": "centroid", ...})`
+returns beside the pixels; `geosave.geodata.CONTEXT_READERS` holds the readers
+by name, and any function of the raster can stand in for one. For multiple frames, set `num_frames` accordingly and
 supply an image shaped `(batch, time, band, y, x)` with `year` and
 `day_of_year` shaped `(batch, time)`.
 
@@ -156,8 +159,8 @@ def prepare_inputs(scene):
     mean = image.new_tensor([0.1087, 0.1342, 0.1433, 0.2734, 0.1958, 0.1363])
     std = image.new_tensor([0.2248, 0.2179, 0.2178, 0.1850, 0.1242, 0.1049])
     image = (image - mean.reshape(1, 6, 1, 1)) / std.reshape(1, 6, 1, 1)
-    names = ["centroid", "year", "day_of_year"]
-    pixels, context = reflectance.gs.to_tensor(context=names)
+    readers = {"centroid": "centroid", "year": "year", "day_of_year": "day_of_year"}
+    _, context = reflectance.gs.to_tensor(context=readers)
     sample = {"image": image, **context}
     return torch.utils.data.default_collate([sample])
 

@@ -57,12 +57,13 @@ bands
 
 Plotting, `.compute()` and tensor conversion read pixels into memory.
 Select first, and convert model-sized windows with
-[RasterChipper](overlapping-chips.md). Dask chunks control work scheduling; they do not
+[RasterChipper](overlapping-chips.md); its `iter_batches` reads one block of
+chips at a time, so pixels neighbouring chips share are read once. Dask chunks control work scheduling; they do not
 guarantee a fixed memory limit for every operation.
 
-Whole-scene prediction also needs output memory. Use
-[chunked prediction to Zarr](release.md#write-large-predictions-to-zarr)
-when a model's full output will not fit.
+Whole-scene prediction also needs output memory. GeoSave provides region
+writes for raster stores. Bounded prediction assembly remains an
+[open design question](../contributing/design/release-inference.md#open-prediction-decisions).
 
 See [lazy execution](../concepts/lazy-data.md) for computation rules and the
 [I/O reference](../reference/io.md#saved-raster-files) for deferred writes.

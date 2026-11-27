@@ -5,7 +5,7 @@ site_author = "Fatah Muria"
 docs_dir = "docs"
 site_dir = "site"
 extra_css = ["assets/stylesheets/docs.css"]
-site_url = "https://weedkat.github.io/geosave-engine"
+site_url = "https://weedkat.github.io/geosave"
 
 copyright = "Copyright © 2026 GeoSave contributors"
 
@@ -78,7 +78,7 @@ nav = [
         ] },
         { "Models" = [
             { "Chains and registry" = "reference/model-chain.md" },
-            { "Encoders, decoders, and heads" = "reference/model-stages.md" },
+            { "Encoders, decoders, and heads" = "reference/model-modules.md" },
             { "Releases and processors" = "reference/model-release.md" },
         ] },
         { "Training" = [

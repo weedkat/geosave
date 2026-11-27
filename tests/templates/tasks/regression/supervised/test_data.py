@@ -5,12 +5,15 @@ from types import SimpleNamespace
 import torch
 from torch.utils.data import Dataset
 
-from modules.regression import supervised
-from tests.templates.tasks.segmentation.supervised.test_data import (
-    FLIP,
-    _batch,
-    _preprocessor,
-)
+from generated_kits.regression.supervised import training as supervised
+
+
+FLIP = [{"name": "RandomHorizontalFlip", "init_args": {"p": 1.0}}]
+
+
+def _batch() -> dict:
+    image = torch.arange(2 * 2 * 8 * 8, dtype=torch.float32).reshape(2, 2, 8, 8)
+    return {"inputs": {"image": image}}
 
 
 class Chips(Dataset[supervised.Sample]):
@@ -28,9 +31,7 @@ class Chips(Dataset[supervised.Sample]):
 
 def _training(tmp_path, **options: object) -> supervised.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
-    data = supervised.DataModule(
-        preprocessor=_preprocessor(), train=Chips(), val=Chips(), **options
-    )
+    data = supervised.DataModule(train=Chips(), val=Chips(), **options)
     data.trainer = SimpleNamespace(training=True)  # type: ignore[assignment]
     return data
 

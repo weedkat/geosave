@@ -7,12 +7,11 @@ import pytest
 import torch
 from torch.utils.data import Dataset
 
-from modules.segmentation import fixmatch
+from generated_kits.segmentation.fixmatch import training as fixmatch
 from tests.templates.tasks.segmentation.supervised.test_data import (
     FLIP,
     Chips,
     _batch,
-    _preprocessor,
 )
 
 NOISE = [{"name": "RandomGaussianNoise", "init_args": {"std": 0.5, "p": 1.0}}]
@@ -36,7 +35,6 @@ def test_strong_augmentations_cannot_move_geometry(tmp_path):
 def _training(tmp_path: Path, **options: object) -> fixmatch.DataModule:
     """Build only the batch pipelines of a module that is fitting."""
     data = fixmatch.DataModule(
-        preprocessor=_preprocessor(),
         train=Chips(),
         val=Chips(),
         unlabeled=Scenes(),
@@ -47,7 +45,7 @@ def _training(tmp_path: Path, **options: object) -> fixmatch.DataModule:
 
 
 def _unlabeled(times: int = 0) -> fixmatch.Unlabeled:
-    inputs = dict(_batch(times)["inputs"])
+    inputs = _batch(times)["inputs"]
     inputs["location_coords"] = torch.ones(2, 2)
     return {"inputs": inputs}
 

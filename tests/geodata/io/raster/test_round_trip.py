@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import xarray as xr
+from odc.geo.geom import Geometry
+from shapely import Polygon
 
 from geosave.geodata import attrs, io
 from tests.geodata.conftest import build_raster
@@ -15,13 +17,18 @@ def build_described_raster() -> xr.Dataset:
 
     Returns:
         Raster holding `red`, `nir` and `blue` over one instant, with packing,
-        an RGB display, a title, a time cell, units and per-band attrs.
+        an RGB display, a declared extent, a title, a time cell, units and
+        per-band attrs.
     """
     raster = build_raster(times=1).gs.write_packing(
         attrs.CFPacking(scale_factor=1e-4, fill_value=0)
     )
     raster = raster.assign(blue=raster.red)
     raster = attrs.stamp_attrs(raster, attrs.Display(rgb=["red", "nir", "blue"]))
+    # A triangle inside the grid, as a crop to a polygon declares it.
+    grid = raster.gs.geobox.extent
+    corners = grid.exterior.coords[:3]
+    raster = raster.gs.write_extent(Geometry(Polygon(corners), grid.crs))
     raster = raster.assign_attrs(title="Forest")
     raster = raster.assign_coords(
         start_datetime=("time", raster.time.values),
@@ -82,3 +89,14 @@ def test_a_store_reads_back_the_tree_written(tmp_path, write, suffix) -> None:
         assert list(restored.children) == ["optical", "radar"]
         for name in written.children:
             assert_same_raster(restored[name].to_dataset(), written[name].to_dataset())
+
+
+@pytest.mark.parametrize(
+    ("write", "suffix"), [(io.write_zarr, ".zarr"), (io.write_netcdf, ".nc")]
+)
+def test_a_store_reads_back_the_declared_extent(tmp_path, write, suffix) -> None:
+    written = build_described_raster()
+
+    with io.open_raster(write(written, tmp_path / f"scene{suffix}")) as restored:
+        assert restored.gs.extent == written.gs.extent
+        assert restored.red.gs.extent == written.gs.extent

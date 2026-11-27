@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 
-from typing import Any, TYPE_CHECKING, Literal, Unpack, cast
+from typing import TYPE_CHECKING, Literal, Unpack, cast, overload
 
 import rioxarray  # noqa: F401 registers .rio
 import cf_xarray  # noqa: F401  — registers the .cf accessor
 import numpy as np
 import odc.geo.xr  # noqa: F401  — registers the .odc accessor
 import xarray as xr
+from odc.geo.geobox import GeoBox
 
 import geosave.geodata.attrs as attrs
 
 from geosave.geodata.core.conventions import (
     BAND_DIMENSION,
 )
-from geosave.geodata.core.raster.utils.tensor import as_tensor
+from geosave.geodata.core.raster.utils.tensor import (
+    as_tensor,
+    as_tensors,
+    find_numpy_dtype,
+    resolve_torch_dtype,
+)
 
 
 from .base import GeoRaster, RasterStacProperties, RasterTime
@@ -35,11 +41,10 @@ if TYPE_CHECKING:
 
     import holoviews as hv
     import torch
-    from .utils.context import ContextTensors
     from numpy.typing import DTypeLike
+    from .utils.context import ContextReader, ContextTensors
 
     from odc.geo import SomeCRS
-    from odc.geo.geobox import GeoBox
 
     from geosave.geodata import DataArray, Dataset, GeoDataFrame
     from dask.delayed import Delayed
@@ -82,7 +87,7 @@ class GeoDataArray(
 
         Args:
             freq: Pandas offset alias, such as "MS".
-            method: Native reducer; class codes permit only first or last.
+            method: Native reducer; class IDs permit only first or last.
             dim: Datetime dimension to resample, default "time".
             interpolation: Fill interior pixel gaps with linear or nearest
                 interpolation after reduction. None keeps gaps. Lazy output is
@@ -102,7 +107,7 @@ class GeoDataArray(
 
         Raises:
             ValueError: The selected datetime dimension is absent, active CF attrs require explicit
-                `mask_and_scale()`, or class codes would be reduced numerically.
+                `mask_and_scale()`, or class IDs would be reduced numerically.
         """
         from .transform.temporal import composite
 
@@ -192,7 +197,7 @@ class GeoDataArray(
 
     @property
     def is_categorical(self) -> bool:
-        """Say whether values are class codes that blending or ranking would destroy.
+        """Say whether values are class IDs that blending or ranking would destroy.
 
         Dtype does not say: Sentinel-2 reflectance and a land cover map are
         both integers. CF flags (`flag_values` or `flag_masks` with
@@ -256,7 +261,7 @@ class GeoDataArray(
 
         Raises:
             ValueError: This object sits on no locatable grid, a variable does
-                not span the grid, or `resampling` would blend class codes.
+                not span the grid, or `resampling` would blend class IDs.
 
         Examples:
             >>> ds.gs.reproject("EPSG:3857").gs.crs.epsg
@@ -334,17 +339,18 @@ class GeoDataArray(
     ) -> DataArray:
         """Take the pixels of an aligned grid, padding where it leaves this raster.
 
-        Unlike `reproject`, nothing is resampled or computed.
+        The crop preserves the pixel grid. Dask-backed pixels stay lazy, including
+        padding. A file opened with `chunks=None` can read pixels during padding.
 
         Args:
             geobox: Grid sharing this raster's CRS and pixel size, offset by
-                whole pixels, such as `chips.geobox(key)`. It may extend past
+                whole pixels, such as `da.gs.geobox[:128, :128]`. It may extend past
                 the raster edges.
             mode: How pixels outside the raster are filled, as in `numpy.pad`.
             constant_value: Fill for `"constant"`, keeping the dtype.
 
         Returns:
-            Lazy DataArray on exactly `geobox`. A declared extent is clipped to it;
+            DataArray on exactly `geobox`. A declared extent is clipped to it;
             time and other coordinates, nodata and other attrs are kept.
 
         Raises:
@@ -381,9 +387,8 @@ class GeoDataArray(
         """
         from geosave.geodata.core.region import GeoRegion
 
-        extent = attrs.ACDDExtent.from_attrs(self._data.attrs)
-        if extent is not None:
-            return GeoRegion(extent.to_geometry(), timespan=self.timespan)
+        if self.extent is not None:
+            return GeoRegion(self.extent, timespan=self.timespan)
         self.validate()
         geobox = cast("GeoBox", self.geobox)
         return GeoRegion(geobox.extent, timespan=self.timespan)
@@ -402,8 +407,8 @@ class GeoDataArray(
             ValueError: The extent is invalid, empty, lacks a CRS or is not 2D.
         """
         if extent is None:
-            return attrs.clear_attrs(self._data, attrs.ACDDExtent)
-        return attrs.stamp_attrs(self._data, attrs.ACDDExtent.from_geometry(extent))
+            return attrs.clear_attrs(self._data, attrs.Extent)
+        return attrs.stamp_attrs(self._data, attrs.Extent.from_geometry(extent))
 
     def clip_extent(self, geometry: Geometry) -> DataArray:
         """Narrow the declared extent to a geometry, as a crop narrows coverage.
@@ -415,12 +420,12 @@ class GeoDataArray(
             Shallow copy whose declared extent is the intersection, cleared
             when the two do not meet. Without a declared extent, unchanged.
         """
-        extent = attrs.ACDDExtent.from_attrs(self._data.attrs)
+        extent = attrs.Extent.from_attrs(self._data.attrs)
         if extent is None:
             return cast("DataArray", self._data)
         clipped = extent.clip(geometry)
         if clipped is None:
-            return attrs.clear_attrs(self._data, attrs.ACDDExtent)
+            return attrs.clear_attrs(self._data, attrs.Extent)
         return attrs.stamp_attrs(self._data, clipped)
 
     def write_nodata(self, value: float | int | None) -> DataArray:
@@ -537,63 +542,110 @@ class GeoDataArray(
             return attrs.clear_attrs(self._data, attrs.EOBand)
         return attrs.stamp_attrs(self._data, attrs.EOBand(**fields))
 
-    def to_numpy(self, *, dtype: DTypeLike | None = None) -> np.ndarray:
-        """Read the pixels as one numpy array, the grid pair last.
+    @overload
+    def to_numpy(
+        self, *, dtype: DTypeLike | None = None, context: None = None
+    ) -> np.ndarray: ...
+
+    @overload
+    def to_numpy(
+        self,
+        *,
+        dtype: DTypeLike | None = None,
+        context: Mapping[str, ContextReader[xr.DataArray] | str],
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]: ...
+
+    def to_numpy(
+        self,
+        *,
+        dtype: DTypeLike | None = None,
+        context: Mapping[str, ContextReader[xr.DataArray] | str] | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, dict[str, np.ndarray]]:
+        """Read the pixels with the grid pair last, and the requested context.
+
+        Context is read before any pixel.
 
         Args:
             dtype: Cast applied to the pixels. None keeps their own dtype.
+            context: Model input names mapped to the readers of their arrays.
+                A reader is a function of this DataArray, or its name in
+                `CONTEXT_READERS`, such as `"transform"`, `"crs"` or
+                `"centroid"`. None reads no context.
 
         Returns:
-            Array shaped `(*axes, y, x)`, other axes in this array's order.
+            Pixels shaped `(*axes, y, x)`, other axes in this array's order;
+            with `context`, the pixels and the context arrays keyed as `context`.
+
+        Raises:
+            RasterValidationError: The raster is not georeferenced.
+            KeyError: A reader name is not in `CONTEXT_READERS`.
+            ValueError: A reader refuses the raster.
 
         Examples:
             >>> ds["ndvi"].gs.to_numpy().shape
             (2, 256, 256)
+            >>> pixels, context = ds["ndvi"].gs.to_numpy(context={"crs": "crs"})
         """
+        from .utils.context import read_context
+
         self.validate()
+        values = None if context is None else read_context(self._data, context)
 
         # Models read the grid pair last, as torch's [..., H, W].
         spatial = cast("tuple[str, str]", self.spatial_dims)
-        pixels = self._data.transpose(..., *spatial).values
-        return pixels if dtype is None else pixels.astype(dtype)
+        raster = self._data if dtype is None else self._data.astype(dtype)
+        pixels = raster.transpose(..., *spatial).values
+        if values is None:
+            return pixels
+        return pixels, values
+
+    @overload
+    def to_tensor(
+        self, *, dtype: str | torch.dtype | None = None, context: None = None
+    ) -> torch.Tensor: ...
+
+    @overload
+    def to_tensor(
+        self,
+        *,
+        dtype: str | torch.dtype | None = None,
+        context: Mapping[str, ContextReader[xr.DataArray] | str],
+    ) -> tuple[torch.Tensor, ContextTensors]: ...
 
     def to_tensor(
         self,
         *,
         dtype: str | torch.dtype | None = None,
-        grid: bool = False,
-        context: Sequence[str] = (),
-    ) -> tuple[torch.Tensor, ContextTensors]:
-        """Read pixels and return requested context separately as tensors.
+        context: Mapping[str, ContextReader[xr.DataArray] | str] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, ContextTensors]:
+        """Read the pixels and the requested context as `to_numpy` does, as tensors.
 
         Args:
             dtype: Torch dtype or its string name. None keeps the pixel dtype.
-            grid: Include affine `transform` and EPSG `crs` tensors in context.
-            context: Names in `TENSOR_CONTEXT` to read alongside the pixels.
+                A dtype NumPy cannot hold, such as bfloat16, reads as float32.
+            context: Model input names mapped to readers, as for `to_numpy`.
 
         Returns:
-            Pixel tensor shaped `(*axes, y, x)` and a dictionary of context
-            tensors. The dictionary is empty when no context or grid is requested.
+            Pixel tensor shaped `(*axes, y, x)`; with `context`, the pixel
+            tensor and the context tensors keyed as `context`.
 
         Raises:
-            KeyError: A context name is unknown.
-            ValueError: A dtype is unknown, the raster cannot be converted, or
-                the requested grid has no EPSG code.
-            TypeError: The dtype is invalid or has no tensor equivalent.
+            RasterValidationError: As for `to_numpy`.
+            KeyError: As for `to_numpy`.
+            ValueError: A dtype name is unknown, or as for `to_numpy`.
+            TypeError: The dtype is invalid or an array has no tensor equivalent.
 
         Examples:
-            >>> pixels, context = raster.gs.to_tensor(dtype="float32")
+            >>> pixels = raster.gs.to_tensor(dtype="float32")
+            >>> pixels, context = raster.gs.to_tensor(context={"centroid": "centroid"})
         """
-        from .utils.context import read_context
+        target = resolve_torch_dtype(dtype)
+        numpy_dtype = find_numpy_dtype(target)
+        if context is None:
+            return as_tensor(self.to_numpy(dtype=numpy_dtype), target)
 
-        pixels = as_tensor(self.to_numpy, dtype)
-        entries = {}
-        if grid or context:
-            tree = xr.DataTree.from_dict(
-                {"pixels": self._data.to_dataset(name="pixels")}
-            )
-            entries = read_context(tree, grid=grid, context=context)
-        return pixels, entries
+        pixels, values = self.to_numpy(dtype=numpy_dtype, context=context)
+        return as_tensor(pixels, target), as_tensors(values)
 
     def mask_and_scale(self) -> DataArray:
         """Decode CF packing with xarray, keeping coordinates and lazy pixels.
@@ -613,20 +665,6 @@ class GeoDataArray(
         result = xr.DataArray(decoded, coords=array.coords, name=array.name)
         result.encoding = decoded.encoding
         return cast("DataArray", result)
-
-    def to_cog(self, path: Location, **options: Any) -> Any:
-        """Write through ``DataArray.rio.to_raster(driver="COG")``.
-
-        Args:
-            path: Destination understood by Rasterio.
-            **options: Native rioxarray writing options and GDAL creation options.
-
-        Returns:
-            The native result: normally None, or a Dask result when writing a
-            chunked array with ``lock`` and ``compute=False``. Rioxarray owns
-            overwrite, metadata, and execution behavior.
-        """
-        return self._data.rio.to_raster(path, driver="COG", **options)
 
     def to_zarr(
         self,
@@ -718,20 +756,6 @@ class GeoDataArray(
             **write_options,
         )
 
-    def to_gtiff(self, path: Location, **options: Any) -> Any:
-        """Write through ``DataArray.rio.to_raster(driver="GTiff")``.
-
-        Args:
-            path: Destination understood by Rasterio.
-            **options: Native rioxarray writing options and GDAL creation options.
-
-        Returns:
-            The native result: normally None, or a Dask result when writing a
-            chunked array with ``lock`` and ``compute=False``. Rioxarray owns
-            overwrite, metadata, and execution behavior.
-        """
-        return self._data.rio.to_raster(path, driver="GTiff", **options)
-
     def vectorize(
         self,
         *,
@@ -820,8 +844,8 @@ class GeoDataArray(
     def colorize(self, dim: str = BAND_DIMENSION) -> DataArray:
         """Bake the class colours this band carries into display channels.
 
-        Reads `CFFlags`, colouring each pixel by the class its code names. The
-        result holds colour rather than codes, so it draws without a legend;
+        Reads `CFFlags`, colouring each pixel by the class its class ID names. The
+        result holds colour rather than class IDs, so it draws without a legend;
         prefer `plot` where a named colorbar is wanted.
 
         Args:

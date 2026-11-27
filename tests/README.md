@@ -24,7 +24,7 @@ tests/                         Source owner
 │   ├── utils/                 Shared geographic and display utilities
 │   └── viz/                   Static plots and interactive exploration
 ├── ml/                        src/geosave/ml/
-├── templates/tasks/           src/templates/tasks/ (recipe hierarchy)
+├── templates/tasks/           generated project kits, grouped by task and method
 ├── cli/                       src/geosave/cli/
 ├── flows/                     src/geosave_flows/
 ├── examples/                  Consumer workflows in examples/
@@ -57,12 +57,12 @@ distinct failure at one of these boundaries.
 
 | Caller workflow | Protection that warrants coverage | Suites |
 | --- | --- | --- |
-| Assemble and execute a model | Native values, shapes and gradients flow through stages and chains; a recipe executes its selected dependency graph once. | [components](ml/components/), [chain](ml/chain/), [factory](ml/test_factory.py) |
-| Train and evaluate | Builders create usable components; metrics measure the intended task; augmentation transforms images and targets together; callbacks expose predictions. | [ML](ml/) |
+| Assemble and execute a model | Native values, shapes and gradients flow through modules and chains; a recipe executes its selected dependency graph once. | [modules](ml/torch/modules/), [chain](ml/torch/chain/), [factory](ml/test_factory.py) |
+| Train and evaluate | Builders create usable modules; metrics measure the intended task; augmentation transforms images and targets together; callbacks expose predictions. | [training](ml/torch/training/) |
 | Generate and run a task recipe | Classification, segmentation, regression and pretraining retain their own target, loss, checkpoint and prediction semantics. | [templates](templates/tasks/) |
-| Release and reload a model | Saved configuration and weights reconstruct a usable model; a saved processor rebuilds and predicts a raster as before saving. | [release](ml/release/), [processing](ml/processing/) |
+| Release and reload a model | Saved configuration and weights reconstruct a usable model. Collection readers preserve dates and grids through lazy input preparation. | [chain](ml/torch/chain/), [pipeline](ml/pipeline/) |
 | Create a workspace | CLI output is usable and preserves user files; packaged templates can be discovered and instantiated. | [CLI](cli/), root packaging tests |
-| Orchestrate geospatial work | A flow predicts a configured region with a released pipeline and records its tasks. | [flows](flows/) |
+| Orchestrate geospatial work | Region configurations rebuild their native geometry and grid. The deployment entry point reports its pending product contract. | [flows](flows/) |
 | Follow a documented example | Consumer code still completes its real workflow through public APIs. | [examples](examples/) |
 | Import only the needed layer | Geodata does not pull in training dependencies; model and orchestration boundaries remain usable independently. | Root import and layering tests |
 

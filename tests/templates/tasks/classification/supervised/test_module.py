@@ -5,12 +5,10 @@ from lightning.pytorch import Trainer
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from modules.classification import supervised
-from geosave.ml.chain import chain_step
-from tests.templates.tasks.classification.supervised.test_data import Chips as Classes
-from tests.templates.tasks.segmentation.supervised.test_data import (
+from generated_kits.classification.supervised import training as supervised
+from tests.templates.tasks.classification.supervised.test_data import (
     FLIP,
-    _preprocessor,
+    Chips as Classes,
 )
 
 
@@ -22,8 +20,7 @@ class Classifier(nn.Module):
         self.num_classes = num_classes
         self.projection = nn.Linear(bands, num_classes)
 
-    @chain_step(head=True)
-    def logits(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return self.projection(image.mean(dim=(-2, -1)))
 
 
@@ -33,8 +30,7 @@ STAGES = {
 
 
 class Uncounted(nn.Module):
-    @chain_step(head=True)
-    def logits(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return image.mean(dim=(-2, -1))
 
 
@@ -51,7 +47,7 @@ class _Chips(Dataset):
 
 
 def test_lightning_fits_validates_and_tests(tmp_path) -> None:
-    module = supervised.Module(model_chain=STAGES, metrics=["accuracy.macro"])
+    module = supervised.Module(model_chain=STAGES, metrics=["accuracy_macro"])
     trainer = Trainer(
         accelerator="cpu",
         max_epochs=1,
@@ -77,7 +73,6 @@ def test_lightning_fits_validates_and_tests(tmp_path) -> None:
 
 def test_trainer_consumes_model_ready_samples(tmp_path):
     data = supervised.DataModule(
-        _preprocessor(),
         Classes(),
         Classes(),
         augmentations=FLIP,

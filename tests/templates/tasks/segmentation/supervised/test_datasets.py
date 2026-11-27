@@ -4,7 +4,7 @@ import numpy as np
 from odc.geo.geobox import GeoBox
 
 from geosave.geodata.io import write_cog
-from modules.segmentation.supervised.datasets import RasterDataset
+from generated_kits.segmentation.supervised.training.datasets import RasterDataset
 from tests.conftest import build_dataset
 
 BANDS = ["B02", "B03", "B04", "B08"]
@@ -18,7 +18,9 @@ def test_a_raster_pair_reads_as_reflectance_and_class_ids(tmp_path):
     )
     for variable in image.data_vars.values():
         variable.attrs.update(scale_factor=0.0001, add_offset=0.0)
-    labels = build_dataset({"class_id": (("y", "x"), np.eye(8, dtype="uint8"))}, grid)
+    class_ids = np.eye(8, dtype="uint8")
+    class_ids[0, 0] = 255
+    labels = build_dataset({"class_id": (("y", "x"), class_ids)}, grid)
     write_cog(image, tmp_path / "image.tif")
     write_cog(labels, tmp_path / "label.tif")
 
@@ -26,15 +28,17 @@ def test_a_raster_pair_reads_as_reflectance_and_class_ids(tmp_path):
         images=[str(tmp_path / "image.tif")],
         targets=[str(tmp_path / "label.tif")],
         preprocessor={
-            "class_path": "modules.segmentation.supervised.processing.Reflectance"
+            "class_path": "generated_kits.segmentation.supervised.processing.preprocessing.Reflectance"
         },
         num_classes=2,
-        context=["centroid"],
+        context={"transform": "transform", "crs": "crs", "centroid": "centroid"},
     )
     sample = dataset[0]
 
-    assert sample["image"].shape == (4, 8, 8)
-    assert np.allclose(sample["image"].numpy(), 0.2)
-    assert sample["target"].tolist() == np.eye(8, dtype="int64").tolist()
-    assert sample["crs"].item() == 32633
-    assert sample["centroid"].shape == (2,)
+    assert set(sample) == {"inputs", "target"}
+    inputs = sample["inputs"]
+    assert inputs["image"].shape == (4, 8, 8)
+    assert np.allclose(inputs["image"].numpy(), 0.2)
+    np.testing.assert_array_equal(sample["target"].numpy(), class_ids)
+    assert inputs["crs"].item() == 32633
+    assert inputs["centroid"].shape == (2,)

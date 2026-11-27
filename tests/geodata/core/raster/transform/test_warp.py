@@ -39,7 +39,7 @@ def scene() -> xr.Dataset:
 
 
 def landcover() -> xr.Dataset:
-    """Build a raster whose values are class codes."""
+    """Build a raster whose values are class IDs."""
     box = utm_box()
     coded = build_raster({"landcover": (("y", "x"), np.ones(box.shape, "uint8"))}, box)
     return coded.gs.write_flags({1: "water", 2: "urban"}, target=["landcover"])
@@ -60,7 +60,7 @@ def test_a_warped_raster_reports_the_crs_it_landed_on() -> None:
 
 @pytest.mark.parametrize("resampling", ["bilinear"])
 def test_a_blending_kernel_refuses_class_codes(resampling: Resampling) -> None:
-    with pytest.raises(ValueError, match="class codes"):
+    with pytest.raises(ValueError, match="class IDs"):
         landcover().gs.reproject(WGS84, resampling=resampling)
 
 

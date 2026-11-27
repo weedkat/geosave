@@ -14,16 +14,16 @@ GeoPandas objects; their own methods retain upstream behavior.
 | Match another image's grid | `.gs.reproject(...)`. [Reprojection](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.reproject) |
 | Decode nodata, scale and offset | `.gs.mask_and_scale()`. [Value metadata](../basics/attrs.md#decode-imagery-to-reflectance) |
 | Calculate NDVI or another index | `gs.features.ndvi(...)`. [Features and masks](features.md) |
-| Convert selected bands to arrays or tensors | `.gs.to_numpy`, `.gs.to_tensor`. [Dataset conversion](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.to_numpy) |
-| Window time, cut chips or merge predictions | `.gs.sample`, `gs.RasterChipper`, `gs.RasterMerger`. [Chips](chips.md) |
+| Convert selected bands to arrays or tensors | `.gs.to_numpy`, `.gs.to_tensor`, with `context=` for model context. [Dataset conversion](dataset-accessor.md#geosave.geodata.core.raster.dataset.GeoDataset.to_numpy) |
+| Place a prediction on its grid | odc-geo's `wrap_xr(array, geobox)`. [Place a prediction](chips.md#place-a-prediction-on-its-grid) |
+| Window time, cut chips or merge predictions | `gs.iter_samples`, `gs.RasterChipper`, `gs.RasterMerger`. [Chips](chips.md) |
 | Reduce observations into calendar bins | `.gs.composite`. [Composites](rasters.md#composites-and-time-selection) |
 | Save rasters and schedule writes | `io.write_cog`, `.gs.to_zarr`, `.gs.to_netcdf`. [Writer returns](io.md#saved-raster-files) |
 | Search observations or load STAC Items | `gs.StacClient`, `stac.load_dataset`, `stac.group_bands_by_grid`. [STAC](stac.md) |
 | Publish a dated Dataset | `stac.publish_item(...)`. [Catalog operations](catalog.md) |
-| Build a model from stages | `geosave.ml.build_model`. [Chains and registry](model-chain.md) |
-| Save and load model weights | `ChainModel`. [Releases](model-release.md) |
-| Predict a raster with a released model | `RasterPipeline`, `load_pipeline`, `DensePredictor`. [Pipelines](model-release.md#pipelines) |
-| Write a large prediction | `pipeline.predict_to_zarr(rasters, path, chunks=...)`. [Chunked output](../advanced/release.md#write-large-predictions-to-zarr) |
+| Build a model from configured modules | `ModelChain.from_config(config)`. [Chains and registry](model-chain.md#construction) |
+| Save and load model weights | `ModelChain.save_pretrained`, `from_pretrained`. [Releases](model-release.md) |
+| Read a source collection | `Ingestor`, `Sentinel2L2AIngestor`, `Sentinel1RTCIngestor`. [Pipeline](model-release.md#pipeline) |
 
 ## Look up methods for your object
 
@@ -35,7 +35,7 @@ are separate. Inherited GeoSave methods are included on each accessor page.
 | Area | APIs |
 | --- | --- |
 | [Data](geodata.md) | Accessors, readers, writers, features, metadata and STAC. |
-| [Models](model-chain.md) | Chains, [stages](model-stages.md) and native [releases](model-release.md). |
+| [Models](model-chain.md) | Chains, [modules](model-modules.md) and native [releases](model-release.md). |
 | [Training](ml.md) | Losses, metrics, transforms, callbacks and Lightning tools. |
 | [CLI](cli.md) | Workspace commands and generated files. |
 | [Prediction flow](workflow.md) | Prefect flow over a released pipeline, and its region configs. |

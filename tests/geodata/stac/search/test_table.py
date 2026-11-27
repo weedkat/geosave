@@ -91,6 +91,7 @@ def test_a_table_states_its_collections(catalog) -> None:
 def test_a_source_loads_from_a_table(catalog, scene) -> None:
     folder, _ = catalog
     from geosave.geodata.stac.load import load_dataset
+    from geosave.geodata.stac.stamps import stamp_collection
 
     client = StacTable(str(folder))
     items = client.search_items(
@@ -98,7 +99,7 @@ def test_a_source_loads_from_a_table(catalog, scene) -> None:
     )
     loaded = load_dataset(
         items,
-        collection=client.collection("forest"),
+        stamps=(stamp_collection,),
         geobox=scene.gs.geobox,
         bands=["red", "nir"],
         groupby="time",

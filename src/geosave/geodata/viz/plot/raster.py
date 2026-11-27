@@ -186,9 +186,9 @@ def _draw_swatches(band: xr.DataArray) -> hv.Overlay:
     return hv.Overlay(
         [
             hv.Points([(np.nan, np.nan)], label=name).opts(
-                color=colors[code], marker="s", s=80, backend="matplotlib"
+                color=colors[class_id], marker="s", s=80, backend="matplotlib"
             )
-            for code, name in (flags.classes or {}).items()
+            for class_id, name in (flags.classes or {}).items()
         ]
     )
 

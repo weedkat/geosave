@@ -9,6 +9,7 @@ import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
+from affine import Affine
 from odc.geo.geom import BoundingBox
 from odc.geo.geobox import GeoBox
 
@@ -16,6 +17,14 @@ from geosave.geodata import io, open_raster, stac
 from geosave.geodata.features import ndvi
 from geosave.geodata.stac import StacQuery
 from geosave.geodata.stac.load import group_bands_by_grid, load_dataset
+from geosave.geodata.stac.stamps import (
+    STAMPS,
+    stamp_collection,
+    stamp_observation_period,
+    stamp_properties,
+    stamp_raster,
+)
+from geosave.geodata.stac.stamps.period import PERIOD_REQUESTS
 from tests.conftest import build_dataset
 from tests.geodata.conftest import create_file_items
 
@@ -61,6 +70,7 @@ def test_properties_follow_fused_time_and_keep_common_attrs(observation):
         groupby="time",
         chunks={},
         with_properties=["eo:cloud_cover", {"key": "platform", "dtype": "str"}],
+        stamps=[stamp_properties],
     )
     # ODC's default fuser averages numbers and joins text of a fused step;
     # the mark keeps the STAC key.
@@ -85,12 +95,7 @@ def test_signing_happens_at_load_without_mutating_items(observation):
 
     loaded = stac.load_dataset([item], geobox=raster.gs.geobox, patch_url=sign)
     np.testing.assert_array_equal(loaded.red.values[0], raster.red.values)
-    # ODC also patches its virtual property sources; only the asset is signed.
-    signed = []
-    for url in urls:
-        if not url.startswith("virtual://"):
-            signed.append(url)
-    assert signed == ["https://unsigned.test/red.tif"]
+    assert urls == ["https://unsigned.test/red.tif"]
     assert item.assets["red"].href == "https://unsigned.test/red.tif"
 
 
@@ -102,6 +107,40 @@ def test_same_date_items_mosaic_by_default_and_stay_apart_by_id(observation):
     assert mosaic.sizes["time"] == 1
     separate = stac.load_dataset([entry, other], geobox=raster.gs.geobox, groupby="id")
     assert separate.sizes["time"] == 2
+
+
+def test_registered_and_callable_stamps_receive_original_items_in_order(
+    observation, monkeypatch
+):
+    item, raster = observation
+
+    def stamp_source(ds, items, stac_cfg):
+        assert type(items) is list
+        assert items[0] is item
+        return ds.assign_attrs(source_id=items[0].id)
+
+    def stamp_title(ds, items, stac_cfg):
+        assert items[0] is item
+        return ds.assign_attrs(title=f"Acquisition {ds.attrs['source_id']}")
+
+    monkeypatch.setitem(STAMPS, "source_id", stamp_source)
+    loaded = load_dataset(
+        iter([item]),
+        geobox=raster.gs.geobox,
+        stamps=["source_id", stamp_title],
+        chunks={},
+    )
+    assert loaded.attrs == {"source_id": item.id, "title": f"Acquisition {item.id}"}
+    assert "start_datetime" not in loaded
+
+
+def test_unknown_stamp_names_report_the_choices_before_loading():
+    with pytest.raises(KeyError) as error:
+        load_dataset([], stamps=["missing_stamp"])
+    message = error.value.args[0]
+    assert "missing_stamp" in message
+    assert "collection" in message
+    assert "raster" in message
 
 
 @pytest.mark.parametrize("fill", [-9999])
@@ -117,9 +156,47 @@ def test_effective_nodata_follows_loaded_pixels(local_catalog, fill):
     assert isinstance(loaded.red.data, da.Array)
     assert loaded.red.values[0, 0, 0] == np.float32(fill)
     assert loaded.red.attrs["_FillValue"] == np.float32(fill)
+    assert "scale_factor" not in loaded.red.attrs
+    assert "start_datetime" not in loaded
+    assert "end_datetime" not in loaded
+    assert loaded.gs.stac_collection is None
     prepared = loaded.gs.mask_and_scale()
     assert np.isnan(prepared.red.values[0, 0, 0])
-    assert prepared.red.values[0, 1, 1] == pytest.approx(0.2)
+    assert prepared.red.values[0, 1, 1] == 2000
+
+
+@pytest.mark.parametrize("chunks", [None, {"x": 2, "y": 2}])
+def test_odc_resamples_into_requested_dtype(observation, chunks):
+    item, raster = observation
+    grid = raster.gs.geobox
+    shifted = GeoBox((3, 3), grid.transform * Affine.translation(0.25, 0.25), grid.crs)
+
+    loaded = load_dataset(
+        [item],
+        like=shifted,
+        chunks=chunks,
+        dtype="float32",
+        resampling="bilinear",
+        nodata=-9999,
+    )
+
+    assert loaded.red.dtype == np.float32
+    assert loaded.red.values[0, 0, 0] == pytest.approx(1.25)
+    assert loaded.red.attrs["_FillValue"] == -9999
+
+
+def test_native_properties_remain_data_variables_until_stamped(observation):
+    item, raster = observation
+    item.properties["platform"] = "test"
+    loaded = load_dataset(
+        [item],
+        like=raster,
+        chunks={},
+        with_properties=["eo:cloud_cover", {"key": "platform", "dtype": "str"}],
+    )
+    assert set(loaded.data_vars) == {"red", "eo_cloud_cover", "platform"}
+    assert loaded.eo_cloud_cover.dtype == np.float32
+    assert loaded.platform.values.tolist() == ["test"]
 
 
 def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_path):
@@ -136,7 +213,7 @@ def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_
     }
     tasks = []
     with Callback(pretask=lambda *args: tasks.append(args[0])):
-        raw = load_dataset(items, geobox=grid, **options)
+        raw = load_dataset(items, geobox=grid, stamps=[stamp_raster], **options)
         physical = raw.gs.mask_and_scale()
     if lazy:
         assert not tasks
@@ -161,7 +238,9 @@ def test_ingestion_decode_matches_deferred_cf_and_roundtrips(local_catalog, tmp_
 def test_aliases_resolve_each_multiband_asset_index(local_catalog):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    loaded = load_dataset(matched, geobox=grid, **{**options, "chunks": None})
+    loaded = load_dataset(
+        matched, geobox=grid, stamps=[stamp_raster], **{**options, "chunks": None}
+    )
 
     assert isinstance(loaded.red.data, np.ndarray)
     assert loaded.red.dims == ("time", "y", "x")
@@ -171,6 +250,23 @@ def test_aliases_resolve_each_multiband_asset_index(local_catalog):
     assert loaded.nir.attrs["add_offset"] == -0.1
     assert loaded.gs.geobox == grid
     assert loaded.gs.mask_and_scale().nir.values[0, 1, 1] == pytest.approx(1.1)
+
+
+def test_configured_alias_stamps_the_selected_band_on_its_native_grid(local_catalog):
+    client, region, _, _ = local_catalog
+    items = client.search_items(StacQuery(collections=["local"]).set_region(region))
+    cfg = {"local": {"aliases": {"custom_red": ("reflectance", 1)}}}
+
+    ((_, _, loaded),) = stac.load_native_datasets(
+        items,
+        bands=["custom_red"],
+        stac_cfg=cfg,
+        stamps=["raster"],
+        chunks={},
+    )
+
+    assert loaded.custom_red.gs.packing.scale_factor == 0.0001
+    assert loaded.gs.mask_and_scale().custom_red.values[0, 1, 1] == pytest.approx(0.2)
 
 
 def test_a_load_carries_its_collection_and_requested_properties(
@@ -190,6 +286,7 @@ def test_a_load_carries_its_collection_and_requested_properties(
         matched,
         geobox=grid,
         with_properties=[{"key": "constellation", "dtype": "str"}],
+        stamps=[stamp_collection, stamp_properties],
         **options,
     )
 
@@ -218,6 +315,7 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
         load_dataset(
             [first, second],
             geobox=grid,
+            stamps=[stamp_raster],
             **{**options, "chunks": None},
         )
 
@@ -225,6 +323,7 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
     loaded = load_dataset(
         [first, second],
         geobox=grid,
+        stamps=[stamp_raster],
         **{**options, "bands": "nir", "chunks": None},
     ).gs.mask_and_scale()
     np.testing.assert_allclose(loaded.nir.values[:, 1, 1], [1.1, 1.1])
@@ -233,7 +332,7 @@ def test_load_rejects_incompatible_source_conversion(local_catalog, field, value
 def test_observations_to_prepared_index_to_reusable_dataset(local_catalog, tmp_path):
     client, region, grid, options = local_catalog
     matched = client.search_items(StacQuery(collections=["local"]).set_region(region))
-    raw = load_dataset(matched, geobox=grid, **options)
+    raw = load_dataset(matched, geobox=grid, stamps=[stamp_raster], **options)
     reflectance = raw.gs.mask_and_scale()
     derived = reflectance.assign(ndvi=ndvi(reflectance, nir="nir", red="red"))[["ndvi"]]
     composite = derived.median("time", keep_attrs=True)
@@ -260,7 +359,9 @@ def test_loaded_stac_metadata_is_interpretable_without_pixel_reads(local_catalog
     with Callback(
         pretask=lambda *_: pytest.fail("metadata inspection computed pixels")
     ):
-        loaded = load_dataset(matched, geobox=grid, **options)
+        loaded = load_dataset(
+            matched, geobox=grid, stamps=[stamp_raster, stamp_collection], **options
+        )
         assert loaded.gs.spatial_dims == ("y", "x")
         assert loaded.gs.time_coordinate.name == "time"
         mappings = loaded.cf.grid_mappings
@@ -293,7 +394,12 @@ def test_a_step_states_the_period_of_the_items_it_fuses(observation, tmp_path):
     )
 
     loaded = stac.load_dataset(
-        [item, later], geobox=raster.gs.geobox, groupby="solar_day", chunks={}
+        [item, later],
+        geobox=raster.gs.geobox,
+        groupby="solar_day",
+        chunks={},
+        with_properties=PERIOD_REQUESTS,
+        stamps=[stamp_observation_period],
     )
 
     np.testing.assert_array_equal(
@@ -311,7 +417,9 @@ def test_a_step_states_the_period_of_the_items_it_fuses(observation, tmp_path):
 def test_an_item_stating_only_datetime_spans_its_instant(observation):
     item, raster = observation
 
-    loaded = stac.load_dataset([item], geobox=raster.gs.geobox, chunks={})
+    loaded = stac.load_dataset(
+        [item], geobox=raster.gs.geobox, chunks={}, stamps=[stamp_observation_period]
+    )
 
     assert (loaded.start_datetime == loaded.time).all()
     assert (loaded.end_datetime == loaded.time).all()
@@ -364,35 +472,3 @@ def test_a_region_crops_each_native_grid_at_its_own_resolution(observation, tmp_
 
     resolutions = [native.gs.geobox.resolution.x for _, _, native in loaded]
     assert resolutions == [10, 20]
-
-
-def test_property_requests_keep_numbers_exact_and_text_as_text():
-    import pystac
-
-    first = pystac.Item(
-        "first",
-        None,
-        None,
-        dt(2025, 6, 1, tzinfo=timezone.utc),
-        {
-            "eo:cloud_cover": 24.001125,
-            "platform": "sentinel-2b",
-            "start_datetime": "2025-06-01T00:00:00Z",
-            "end_datetime": "2025-06-01T00:05:00Z",
-            "view:valid": True,
-            "instruments": ["msi"],
-        },
-    )
-    second = pystac.Item(
-        "second",
-        None,
-        None,
-        dt(2025, 6, 2, tzinfo=timezone.utc),
-        {"eo:cloud_cover": 40, "sat:relative_orbit": 8},
-    )
-
-    assert stac.list_properties([first, second]) == [
-        {"key": "eo:cloud_cover", "dtype": "float64"},
-        {"key": "platform", "dtype": "str"},
-        {"key": "sat:relative_orbit", "dtype": "float64"},
-    ]

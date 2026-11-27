@@ -48,14 +48,21 @@ from odc.geo.geom import BoundingBox
 grid = GeoBox.from_bbox(
     BoundingBox(*bbox, crs="EPSG:4326").to_crs("EPSG:32610"), resolution=10
 )
+
+
+def stamp_reflectance(scene, items, stac_cfg):
+    source, = items
+    if source.properties.get("earthsearch:boa_offset_applied"):
+        packing = attrs.CFPacking(scale_factor=1e-4, fill_value=scene["red"].gs.nodata)
+        return scene.gs.write_packing(packing)
+
+    return stac.stamps.stamp_raster(scene, items, stac_cfg)
+
+
 scene = stac.load_dataset(
     [item], geobox=grid, bands=["red", "green", "blue", "nir"], chunks={},
+    stamps=(stamp_reflectance,),
 ).isel(time=0)
-# Earth Search's COG conversion has already applied the offset for this Item.
-if item.properties.get("earthsearch:boa_offset_applied"):
-    scene = scene.gs.write_packing(
-        attrs.CFPacking(scale_factor=1e-4, fill_value=scene["red"].gs.nodata)
-    )
 scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 ```
 
@@ -63,8 +70,8 @@ scene.gs.plot(rgb=("red", "green", "blue"), xlabel="")
 
 The result is an xarray Dataset on a 10 metre UTM grid. Selecting `time=0`
 removes the one-date axis. `chunks={}` builds lazy reads; plotting retrieves
-the pixels needed for the view. The loader takes band metadata and the
-Collection from the Item itself, so no search is repeated. The requested bounds are snapped to the output
+the pixels needed for the view. The reflectance stamp reads metadata from the
+selected Item. The requested bounds are snapped to the output
 pixel grid. Preview the image before using it: a low scene-wide cloud score
 does not guarantee a clear crop.
 

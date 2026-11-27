@@ -1,7 +1,7 @@
 # Understand imagery and label values
 
 Imagery stores measurements; labels store categories. Read their metadata so
-you can calculate with reflectance without changing class codes.
+you can calculate with reflectance without changing class IDs.
 
 **You need:** the base package, [training-image.tif](../assets/training-image.tif)
 and [training-labels.tif](../assets/training-labels.tif).
@@ -61,7 +61,7 @@ labels["label"].gs.nodata
 255
 ```
 
-Here, `0` is water and `255` is unannotated. Keep these integer codes separate
+Here, `0` is water and `255` is unannotated. Keep these integer class IDs separate
 from reflectance. The legend also supplies the colors used when
 [plotting the labels](training-chips.md#2-open-the-labels).
 
